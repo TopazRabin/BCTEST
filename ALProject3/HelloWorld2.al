@@ -6,6 +6,6 @@ pageextension 50100 CustomerListExt extends "Customer List"
 {
     trigger OnOpenPage();
     begin
-        Message(' TEST 2: Topaz NAV to BC project says: Hello world');
+        Message(' TEST 2: Topaz NAV to BC project says: Hello world ---- new rabin');
     end;
 }
