@@ -1,0 +1,513 @@
+OBJECT Codeunit 14000589 Calculate Containers
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/27/19;
+    Time=12:00:00 PM;
+    Version List=UBP3.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ContainerDef@1240030002 : Record 14000576;
+      ContainerPlanLine@1240030000 : Record 14097459;
+      InvMgtSetup@1240030013 : Record 14000551;
+      PlanContainerNo@1240030012 : Record 14097457;
+      ProcUnit@1240030028 : Record 14000555;
+      SuggestedOrderLine@1240030001 : Record 14000566;
+      SuggestedOrderLine2@1240030018 : Record 14000566;
+      ContainerNetWeight@1240030003 : Decimal;
+      ContainerGrossWeight@1240030004 : Decimal;
+      ContainerVolume@1240030005 : Decimal;
+      OverCapacity@1240030011 : Boolean;
+      LineWeight@1240030019 : Decimal;
+      LineVolume@1240030021 : Decimal;
+      PrevContainerNo@1240030017 : Code[20];
+      WorkContainerNo@1240030006 : Code[20];
+      Text001@1240030008 : TextConst 'ENU=The Net Weight on the Suggested Order Line %1 %2 %3 %4 %5 is greater than a single container capacity.';
+      Text002@1240030009 : TextConst 'ENU=The Gross Weight on the Suggested Order Line %1 %2 %3 %4 %5 is greater than a single container capacity.';
+      Text003@1240030010 : TextConst 'ENU=The Volume on Suggested Order Line %1 %2 %3 %4 %5 is greater than a single container capacity.';
+      Text004@1240030007 : TextConst 'ENU=Calculate Container(s) for plan?';
+      Text005@1240030014 : TextConst 'ENU=The entire line will overfill container %1.  Do you wish to split the line?';
+      Text006@1240030015 : TextConst 'ENU=Do you wish to move the line anyway?';
+      Text007@1240030016 : TextConst 'ENU=The Weight on the Suggested Order Line %1 %2 %3 %4 %5.  The order multiple weight %6 will not fit into Container Max of %7.';
+      PercentOverWeight@1240030026 : Decimal;
+      PercentOverVolume@1240030027 : Decimal;
+      SplitQuantityBase@1240030022 : Decimal;
+      SplitQuantity@1240030023 : Decimal;
+      RemainingQuantity@1240030029 : Decimal;
+      OverQuantity@1240030030 : Decimal;
+      TempQty@1240020005 : Decimal;
+      OrderMultipleFactor@1240020006 : Decimal;
+      UnitMultipleWeight@1240020007 : Decimal;
+      UnitMultipleVolume@1240020008 : Decimal;
+      WeightSplitQty@1240020009 : Decimal;
+      VolumeSplitQty@1240020010 : Decimal;
+      Text008@1240020000 : TextConst 'ENU=The Volume on the Suggested Order Line %1 %2 %3 %4 %5.  The order multiple volume %6 will not fit into Container Max of %7.';
+      Text009@1240020001 : TextConst 'ENU=The Container Definition %1 must include either a maximum weight or a maximum volume.  Both cannot be zero.';
+
+    PROCEDURE ByPlan@1240030000(CurrContainerPlanHdr@1240030000 : Record 14097458);
+    BEGIN
+      IF NOT CONFIRM(Text004) THEN
+        EXIT;
+
+      InvMgtSetup.GET;
+      CurrContainerPlanHdr.TESTFIELD("Container Definition");
+      ContainerDef.GET(CurrContainerPlanHdr."Container Definition");
+
+      IF (ContainerDef."Maximum Weight" <= 0) AND (ContainerDef."Maximum Volume" <= 0) THEN BEGIN
+        ERROR(Text009, ContainerDef.Code);
+      END;
+
+      ContainerPlanLine.RESET;
+      ContainerPlanLine.SETRANGE("Container Plan No.",CurrContainerPlanHdr."No.");
+      IF ContainerPlanLine.FIND('-') THEN
+        REPEAT
+          SuggestedOrderLine.RESET;
+          SuggestedOrderLine.SETRANGE("Buy-from Vendor No.",ContainerPlanLine."Buy From Vendor No.");
+          SuggestedOrderLine.SETRANGE("Document No.",ContainerPlanLine."Suggested Order No.");
+          SuggestedOrderLine.SETRANGE(Type,SuggestedOrderLine.Type::Item);
+          SuggestedOrderLine.SETRANGE("Split New Line",FALSE);
+          IF SuggestedOrderLine.FIND('-') THEN BEGIN
+            SuggestedOrderLine2.RESET;
+            SuggestedOrderLine2.SETRANGE("Buy-from Vendor No.",ContainerPlanLine."Buy From Vendor No.");
+            SuggestedOrderLine2.SETRANGE(Type,SuggestedOrderLine.Type::Item);
+            SuggestedOrderLine2.SETRANGE("Location Code",SuggestedOrderLine."Location Code");
+            SuggestedOrderLine2.SETRANGE("No.",SuggestedOrderLine."No.");
+            SuggestedOrderLine2.SETRANGE("Variant Code",SuggestedOrderLine."Variant Code");
+            SuggestedOrderLine2.SETRANGE("Split New Line",TRUE);
+            IF SuggestedOrderLine2.FIND('-') THEN BEGIN
+              TempQty := 0;
+              REPEAT
+                TempQty := TempQty + SuggestedOrderLine2.Quantity;
+              UNTIL SuggestedOrderLine2.NEXT = 0;
+              SuggestedOrderLine.VALIDATE(Quantity,SuggestedOrderLine.Quantity + TempQty);
+              SuggestedOrderLine."Container Plan No." := '';
+              SuggestedOrderLine."Container No." := '';
+              SuggestedOrderLine.MODIFY;
+              SuggestedOrderLine2.DELETEALL;
+            END;
+          END;
+        UNTIL ContainerPlanLine.NEXT = 0;
+
+      PlanContainerNo.RESET;
+      PlanContainerNo.SETRANGE("Container Plan No.",CurrContainerPlanHdr."No.");
+      PlanContainerNo.DELETEALL(TRUE);
+
+      // Split lines that are larger than a single continer
+      IF ContainerPlanLine.FINDSET THEN
+        REPEAT
+          SuggestedOrderLine.RESET;
+          SuggestedOrderLine.SETRANGE("Buy-from Vendor No.",ContainerPlanLine."Buy From Vendor No.");
+          SuggestedOrderLine.SETRANGE("Document No.",ContainerPlanLine."Suggested Order No.");
+          SuggestedOrderLine.SETRANGE(Type,SuggestedOrderLine.Type::Item);
+          SuggestedOrderLine.SETRANGE("Split New Line",FALSE);
+          SuggestedOrderLine.SETFILTER(Quantity,'<>%1',0);
+          IF SuggestedOrderLine.FINDSET THEN
+            REPEAT
+              GetSplitInfo(SuggestedOrderLine);
+              IF RemainingQuantity <> 0 THEN BEGIN
+                REPEAT
+                  IF (RemainingQuantity <= SplitQuantity) OR (SplitQuantity <= 0) THEN BEGIN
+                    SuggestedOrderLine."Split New Line" := TRUE;
+                    SuggestedOrderLine.VALIDATE(Quantity,RemainingQuantity);
+                    SuggestedOrderLine."Split New Line" := FALSE;
+                    SuggestedOrderLine.MODIFY(TRUE);
+                    RemainingQuantity := 0;
+                  END ELSE BEGIN
+                    SuggestedOrderLine2.COPY(SuggestedOrderLine);
+                    SuggestedOrderLine2."Split New Line" := TRUE;
+                    SuggestedOrderLine2.VALIDATE(Quantity,SplitQuantity);
+                    SuggestedOrderLine2."Line No." := GetSplitLineNo(SuggestedOrderLine);
+                    SuggestedOrderLine2.INSERT(TRUE);
+                    RemainingQuantity := RemainingQuantity - SplitQuantity;
+                  END;
+                UNTIL RemainingQuantity <= 0;
+              END;
+            UNTIL SuggestedOrderLine.NEXT = 0;
+        UNTIL ContainerPlanLine.NEXT = 0;
+
+      // Load Container
+      ContainerNetWeight := 0;
+      ContainerGrossWeight := 0;
+      ContainerVolume := 0;
+      WorkContainerNo := '1';
+      ContainerPlanLine.RESET;
+      ContainerPlanLine.SETRANGE("Container Plan No.",CurrContainerPlanHdr."No.");
+      IF ContainerPlanLine.FINDSET THEN
+        REPEAT
+          // Split lines that are larger than a single continer
+          SuggestedOrderLine.RESET;
+          SuggestedOrderLine.SETRANGE("Buy-from Vendor No.",ContainerPlanLine."Buy From Vendor No.");
+          SuggestedOrderLine.SETRANGE("Document No.",ContainerPlanLine."Suggested Order No.");
+          SuggestedOrderLine.SETRANGE(Type,SuggestedOrderLine.Type::Item);
+          SuggestedOrderLine.SETFILTER(Quantity,'<>%1',0);
+          IF SuggestedOrderLine.FIND('-') THEN
+            REPEAT
+              // Line Over Container Size Begin
+              CASE InvMgtSetup."Container Plan Weight To Use" OF
+                InvMgtSetup."Container Plan Weight To Use"::"Net Weight":
+                  IF (SuggestedOrderLine."Line Net Weight" > ContainerDef."Maximum Weight") AND (ContainerDef."Maximum Weight" > 0) THEN
+                    ERROR(
+                      STRSUBSTNO(
+                        Text001,SuggestedOrderLine."Buy-from Vendor No.",SuggestedOrderLine."Document No.",
+                        SuggestedOrderLine."Location Code",SuggestedOrderLine."No.",SuggestedOrderLine."Variant Code"));
+                InvMgtSetup."Container Plan Weight To Use"::"Gross Weight":
+                  IF (SuggestedOrderLine."Line Gross Weight" > ContainerDef."Maximum Weight") AND (ContainerDef."Maximum Weight" > 0) THEN
+                    ERROR(
+                      STRSUBSTNO(
+                        Text002,SuggestedOrderLine."Buy-from Vendor No.",SuggestedOrderLine."Document No.",
+                        SuggestedOrderLine."Location Code",SuggestedOrderLine."No.",SuggestedOrderLine."Variant Code"));
+              END;
+              IF (SuggestedOrderLine."Line Volume" > ContainerDef."Maximum Volume") AND (ContainerDef."Maximum Volume" > 0) THEN
+                ERROR(
+                  STRSUBSTNO(
+                    Text003,SuggestedOrderLine."Buy-from Vendor No.",SuggestedOrderLine."Document No.",
+                    SuggestedOrderLine."Location Code",SuggestedOrderLine."No.",SuggestedOrderLine."Variant Code"));
+              // Line Over Container Size End
+
+              CASE InvMgtSetup."Container Plan Weight To Use" OF
+                InvMgtSetup."Container Plan Weight To Use"::"Net Weight":
+                  IF ((ContainerNetWeight + SuggestedOrderLine."Line Net Weight") > ContainerDef."Maximum Weight") AND (ContainerDef."Maximum Weight" > 0) THEN
+                    OverCapacity := TRUE;
+                InvMgtSetup."Container Plan Weight To Use"::"Gross Weight":
+                  IF ((ContainerGrossWeight + SuggestedOrderLine."Line Gross Weight") > ContainerDef."Maximum Weight") AND (ContainerDef."Maximum Weight" > 0) THEN
+                    OverCapacity := TRUE;
+              END;
+              IF (ContainerVolume + SuggestedOrderLine."Line Volume" > ContainerDef."Maximum Volume") AND (ContainerDef."Maximum Volume" > 0) THEN
+                OverCapacity := TRUE;
+
+              IF NOT OverCapacity THEN BEGIN
+                IF PlanContainerNo."Container No." <> WorkContainerNo THEN
+                  CheckContainerNo(CurrContainerPlanHdr,WorkContainerNo);
+                SuggestedOrderLine."Container Plan No." := CurrContainerPlanHdr."No.";
+                SuggestedOrderLine."Container No." := WorkContainerNo;
+                SuggestedOrderLine.MODIFY;
+                CASE InvMgtSetup."Container Plan Weight To Use" OF
+                  InvMgtSetup."Container Plan Weight To Use"::"Net Weight":
+                    ContainerNetWeight := ContainerNetWeight + SuggestedOrderLine."Line Net Weight";
+                  InvMgtSetup."Container Plan Weight To Use"::"Gross Weight":
+                    ContainerGrossWeight := ContainerGrossWeight + SuggestedOrderLine."Line Gross Weight";
+                END;
+                ContainerVolume := ContainerVolume + SuggestedOrderLine."Line Volume";
+              END ELSE BEGIN
+                PrevContainerNo := WorkContainerNo;
+                WorkContainerNo := INCSTR(WorkContainerNo);
+                IF PlanContainerNo."Container No." <> WorkContainerNo THEN
+                  CheckContainerNo(CurrContainerPlanHdr,WorkContainerNo);
+                SuggestedOrderLine."Container Plan No." := CurrContainerPlanHdr."No.";
+                SuggestedOrderLine."Container No." := WorkContainerNo;
+                SuggestedOrderLine.MODIFY;
+                IF InvMgtSetup."Auto-Split Lines to Fill Cont." THEN
+                  MoveToContainer(SuggestedOrderLine,PrevContainerNo,TRUE);
+                SuggestedOrderLine2.GET(
+                  SuggestedOrderLine."Buy-from Vendor No.",SuggestedOrderLine."Document No.",SuggestedOrderLine."Line No.");
+                CASE InvMgtSetup."Container Plan Weight To Use" OF
+                  InvMgtSetup."Container Plan Weight To Use"::"Net Weight":
+                    ContainerNetWeight := SuggestedOrderLine2."Line Net Weight";
+                  InvMgtSetup."Container Plan Weight To Use"::"Gross Weight":
+                    ContainerGrossWeight := SuggestedOrderLine2."Line Gross Weight";
+                END;
+                ContainerVolume := SuggestedOrderLine2."Line Volume";
+                OverCapacity := FALSE;
+              END;
+            UNTIL SuggestedOrderLine.NEXT = 0;
+        UNTIL ContainerPlanLine.NEXT = 0;
+
+      MergeLines(CurrContainerPlanHdr);
+    END;
+
+    PROCEDURE CheckContainerNo@1240030002(CurrContainerPlanHdr@1240030000 : Record 14097458;CurrWorkContainerNo@1240030001 : Code[20]);
+    BEGIN
+      PlanContainerNo.RESET;
+      PlanContainerNo.SETRANGE("Container Plan No.",CurrContainerPlanHdr."No.");
+      PlanContainerNo.SETRANGE("Container No.",CurrWorkContainerNo);
+      IF NOT PlanContainerNo.FIND('-') THEN BEGIN
+        PlanContainerNo.RESET;
+        PlanContainerNo.INIT;
+        PlanContainerNo."Container Plan No." := CurrContainerPlanHdr."No.";
+        PlanContainerNo."Container No." := CurrWorkContainerNo;
+        ContainerDef.GET(CurrContainerPlanHdr."Container Definition");
+        PlanContainerNo."Container Volume" := ContainerDef."Maximum Volume";
+        PlanContainerNo."Container Net Weight" := ContainerDef."Maximum Weight";
+        PlanContainerNo."Container Gross Weight" := ContainerDef."Maximum Weight";
+        PlanContainerNo.INSERT;
+      END;
+    END;
+
+    PROCEDURE MoveToContainer@1240030001(CurrSugOrderLine@1240030000 : Record 14000566;CurrNewLocation@1240030001 : Code[20];CurrQuiet@1240030018 : Boolean);
+    VAR
+      LocItemUOM@1240030011 : Record 5404;
+      LocSugOrderLine@1240030002 : Record 14000566;
+      LocPlanContainerNo@1240030003 : Record 14097457;
+      LocProcUnit@1240030010 : Record 14000555;
+      LineNo@1240030017 : Integer;
+      PrevLineNo@1240030019 : Integer;
+      NewLineNo@1240030020 : Integer;
+      QuantityAdjust@1240030005 : Decimal;
+      QuantityToMove@1240030015 : Decimal;
+      QuantityToStay@1240030016 : Decimal;
+      SplitLine@1240030004 : Boolean;
+      VolumeRemaining@1240030008 : Decimal;
+      WeightRemaining@1240030009 : Decimal;
+      WeightQuantityToMove@1240030021 : Decimal;
+      VolumeQuantityToMove@1240030022 : Decimal;
+    BEGIN
+      LineNo := 0;
+      SplitLine := FALSE;
+      QuantityToMove := 0;
+      QuantityToStay := 0;
+      WeightQuantityToMove := 0;
+      VolumeQuantityToMove := 0;
+
+      InvMgtSetup.GET;
+      LocPlanContainerNo.RESET;
+      LocPlanContainerNo.SETRANGE("Container Plan No.",CurrSugOrderLine."Container Plan No.");
+      LocPlanContainerNo.SETRANGE("Container No.",CurrNewLocation);
+      LocPlanContainerNo.FIND('-');
+      LocPlanContainerNo.CALCFIELDS("Net Weight","Gross Weight",Volume);
+      LocPlanContainerNo."Net Weight Variance" := LocPlanContainerNo."Net Weight" - LocPlanContainerNo."Container Net Weight";
+      LocPlanContainerNo."Gross Weight Variance" := LocPlanContainerNo."Gross Weight" - LocPlanContainerNo."Container Gross Weight";
+      LocPlanContainerNo."Volume Variance" := LocPlanContainerNo.Volume - LocPlanContainerNo."Container Volume";
+      CASE InvMgtSetup."Container Plan Weight To Use" OF
+        InvMgtSetup."Container Plan Weight To Use"::"Net Weight":
+          IF (CurrSugOrderLine."Line Net Weight" + LocPlanContainerNo."Net Weight Variance") > 0 THEN
+            SplitLine := TRUE;
+        InvMgtSetup."Container Plan Weight To Use"::"Gross Weight":
+          IF (CurrSugOrderLine."Line Gross Weight" + LocPlanContainerNo."Gross Weight Variance") > 0 THEN
+            SplitLine := TRUE;
+      END;
+      IF (CurrSugOrderLine."Line Volume" + LocPlanContainerNo."Volume Variance") > 0 THEN
+        SplitLine := TRUE;
+      IF SplitLine THEN BEGIN
+        IF NOT CurrQuiet THEN
+          IF NOT CONFIRM(STRSUBSTNO(Text005,CurrNewLocation,FALSE)) THEN
+            IF NOT CONFIRM(STRSUBSTNO(Text006,FALSE)) THEN
+              EXIT;
+        CASE InvMgtSetup."Container Plan Weight To Use" OF
+          InvMgtSetup."Container Plan Weight To Use"::"Net Weight":
+            WeightQuantityToMove := ROUND(ABS(LocPlanContainerNo."Net Weight Variance") / CurrSugOrderLine."Net Weight",1,'<');
+          InvMgtSetup."Container Plan Weight To Use"::"Gross Weight":
+            WeightQuantityToMove := ROUND(ABS(LocPlanContainerNo."Gross Weight Variance") / CurrSugOrderLine."Gross Weight",1,'<');
+        END;
+        IF CurrSugOrderLine."Unit Volume" <> 0 THEN
+          VolumeQuantityToMove := ROUND(ABS(LocPlanContainerNo."Volume Variance") / CurrSugOrderLine."Unit Volume",1.0,'<');
+        IF WeightQuantityToMove < VolumeQuantityToMove THEN
+          QuantityToMove := WeightQuantityToMove
+        ELSE
+          QuantityToMove := VolumeQuantityToMove;
+        IF QuantityToMove <= 0 THEN
+          EXIT;
+
+        LocProcUnit.GET(CurrSugOrderLine."Location Code",CurrSugOrderLine."No.",CurrSugOrderLine."Variant Code");
+        IF LocProcUnit."Order Multiple" = 0 THEN
+          LocProcUnit."Order Multiple" := 1;
+        IF (CurrSugOrderLine."Qty. per Unit of Measure" <> LocProcUnit."Order Multiple") THEN BEGIN
+          OrderMultipleFactor := LocProcUnit."Order Multiple" / CurrSugOrderLine."Qty. per Unit of Measure";
+          QuantityAdjust := QuantityToMove MOD OrderMultipleFactor;
+          IF QuantityAdjust <> 0 THEN
+            QuantityToMove := QuantityToMove - QuantityAdjust;
+        END ELSE
+          QuantityAdjust := 0;
+
+        QuantityToStay := CurrSugOrderLine.Quantity - QuantityToMove;
+        LocSugOrderLine.RESET;
+        LocSugOrderLine.SETRANGE("Buy-from Vendor No.",CurrSugOrderLine."Buy-from Vendor No.");
+        LocSugOrderLine.SETRANGE("Document No.",CurrSugOrderLine."Document No.");
+        LocSugOrderLine.SETFILTER("Line No.",'%1..',CurrSugOrderLine."Line No.");
+        LocSugOrderLine.FIND('-');
+        IF LocSugOrderLine."Split New Line" THEN BEGIN
+          LocSugOrderLine.VALIDATE(Quantity,QuantityToStay);
+          LocSugOrderLine.MODIFY(TRUE);
+        END ELSE BEGIN
+          LocSugOrderLine."Split New Line" := TRUE;
+          LocSugOrderLine.VALIDATE(Quantity,QuantityToStay);
+          LocSugOrderLine."Split New Line" := FALSE;
+          LocSugOrderLine.MODIFY(TRUE);
+        END;
+        LineNo := LocSugOrderLine."Line No.";
+        LocSugOrderLine.SETFILTER("Line No.",'<%1',CurrSugOrderLine."Line No.");
+        IF LocSugOrderLine.FIND('+') THEN
+          PrevLineNo := LocSugOrderLine."Line No."
+        ELSE
+          PrevLineNo := 0;
+        NewLineNo := LineNo - ROUND((LineNo - PrevLineNo) / 2,1.0);
+        LocSugOrderLine.SETFILTER("Line No.",'%1..',CurrSugOrderLine."Line No.");
+        LocSugOrderLine.FIND('-');
+        LocSugOrderLine."Line No." := NewLineNo;
+        LocSugOrderLine.VALIDATE(Quantity,QuantityToMove);
+        LocSugOrderLine."Container No." := CurrNewLocation;
+        LocSugOrderLine."Split New Line" := TRUE;
+        LocSugOrderLine.INSERT(TRUE);
+      END ELSE BEGIN
+        LocSugOrderLine.GET(
+          CurrSugOrderLine."Buy-from Vendor No.",CurrSugOrderLine."Document No.",CurrSugOrderLine."Line No.");
+        LocSugOrderLine."Container No." := CurrNewLocation;
+        LocSugOrderLine.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE GetSplitLineNo@1240030006(CurrSugOrderLine@1240030000 : Record 14000566) LineNo : Integer;
+    VAR
+      LocSuggestedOrderLine@1240030002 : Record 14000566;
+      LineSpacing@1240020000 : Integer;
+    BEGIN
+      LineSpacing := 0;
+      LocSuggestedOrderLine.SETRANGE("Buy-from Vendor No.",CurrSugOrderLine."Buy-from Vendor No.");
+      LocSuggestedOrderLine.SETRANGE("Document No.",CurrSugOrderLine."Document No.");
+      LocSuggestedOrderLine := CurrSugOrderLine;
+      IF LocSuggestedOrderLine.FIND('>') THEN
+        LineSpacing := (LocSuggestedOrderLine."Line No." - CurrSugOrderLine."Line No.") DIV 2
+      ELSE
+        LineSpacing := 10000;
+
+      IF (LineSpacing > 0) THEN
+        LineNo := CurrSugOrderLine."Line No." + LineSpacing
+          ELSE BEGIN
+        LocSuggestedOrderLine.RESET;
+        LocSuggestedOrderLine.SETRANGE("Buy-from Vendor No.",CurrSugOrderLine."Buy-from Vendor No.");
+        LocSuggestedOrderLine.SETRANGE("Document No.",CurrSugOrderLine."Document No.");
+        IF LocSuggestedOrderLine.FINDLAST THEN
+          LineNo  := LocSuggestedOrderLine."Line No." + 10000;
+          END;
+
+
+      EXIT(LineNo);
+    END;
+
+    PROCEDURE GetSplitInfo@1240020000(CurrSugOrderLine@1240020000 : Record 14000566);
+    BEGIN
+      LineWeight := 0;
+      LineVolume := 0;
+      PercentOverWeight := 0;
+      PercentOverVolume := 0;
+      SplitQuantity := 0;
+      UnitMultipleWeight := 0;
+      WeightSplitQty := 0;
+      VolumeSplitQty := 0;
+      ProcUnit.GET(CurrSugOrderLine."Location Code",CurrSugOrderLine."No.",CurrSugOrderLine."Variant Code");
+      IF ProcUnit."Order Multiple" = 0 THEN
+        ProcUnit."Order Multiple" := 1;
+
+      IF (CurrSugOrderLine."Qty. per Unit of Measure" <> ProcUnit."Order Multiple") THEN
+        OrderMultipleFactor := ProcUnit."Order Multiple" / CurrSugOrderLine."Qty. per Unit of Measure"
+      ELSE
+        OrderMultipleFactor := 1;
+      CASE InvMgtSetup."Container Plan Weight To Use" OF
+        InvMgtSetup."Container Plan Weight To Use"::"Net Weight":
+          IF CurrSugOrderLine."Line Net Weight" > ContainerDef."Maximum Weight" THEN
+            BEGIN
+              LineWeight := CurrSugOrderLine."Line Net Weight";
+              UnitMultipleWeight := CurrSugOrderLine."Net Weight" * OrderMultipleFactor;
+            END;
+        InvMgtSetup."Container Plan Weight To Use"::"Gross Weight":
+          IF CurrSugOrderLine."Line Gross Weight" > ContainerDef."Maximum Weight" THEN
+            BEGIN
+              LineWeight := CurrSugOrderLine."Line Gross Weight";
+              UnitMultipleWeight := CurrSugOrderLine."Gross Weight" * OrderMultipleFactor;
+            END;
+      END;
+      IF CurrSugOrderLine."Line Volume" > ContainerDef."Maximum Volume" THEN BEGIN
+        LineVolume := CurrSugOrderLine."Line Volume";
+        UnitMultipleVolume := CurrSugOrderLine."Unit Volume" * OrderMultipleFactor;
+      END;
+
+      IF (LineWeight <> 0) OR (LineVolume <> 0) THEN BEGIN
+        IF (LineWeight <> 0) AND (ContainerDef."Maximum Weight" > 0) THEN BEGIN
+          WeightSplitQty := ROUND(ContainerDef."Maximum Weight" / UnitMultipleWeight,1,'<');
+          SplitQuantity := WeightSplitQty * OrderMultipleFactor;
+        END;
+        IF (LineVolume <> 0) AND (ContainerDef."Maximum Volume" > 0) THEN BEGIN
+          VolumeSplitQty := ROUND(ContainerDef."Maximum Volume" / UnitMultipleVolume,1,'<');
+          IF WeightSplitQty <> 0 THEN BEGIN
+            IF VolumeSplitQty < WeightSplitQty THEN
+              SplitQuantity := VolumeSplitQty * OrderMultipleFactor;
+          END ELSE
+            SplitQuantity := VolumeSplitQty * OrderMultipleFactor;
+        END;
+
+        IF (SplitQuantity <= 0) THEN BEGIN
+          IF (LineWeight <> 0) AND (WeightSplitQty <= 0) AND (UnitMultipleWeight > 0) AND
+            (ContainerDef."Maximum Weight" > 0) THEN BEGIN
+            IF (ContainerDef."Maximum Weight" < UnitMultipleWeight) THEN
+              ERROR(STRSUBSTNO(
+                      Text007,SuggestedOrderLine."Buy-from Vendor No.",SuggestedOrderLine."Document No.",
+                      SuggestedOrderLine."Location Code",SuggestedOrderLine."No.",
+                      SuggestedOrderLine."Variant Code",UnitMultipleWeight, ContainerDef."Maximum Weight"));
+          END;
+          IF (LineVolume <> 0) AND (VolumeSplitQty <= 0) AND (UnitMultipleVolume > 0) AND
+              (ContainerDef."Maximum Volume" > 0) THEN BEGIN
+            IF (ContainerDef."Maximum Volume" < UnitMultipleVolume) THEN
+              ERROR(STRSUBSTNO(
+                      Text008,SuggestedOrderLine."Buy-from Vendor No.",SuggestedOrderLine."Document No.",
+                      SuggestedOrderLine."Location Code",SuggestedOrderLine."No.",
+                      SuggestedOrderLine."Variant Code",UnitMultipleWeight, ContainerDef."Maximum Volume"));
+          END;
+        END;
+
+        RemainingQuantity := CurrSugOrderLine.Quantity;
+      END;
+    END;
+
+    PROCEDURE MergeLines@1240030003(CurrContainerPlanHdr@1240030000 : Record 14097458);
+    VAR
+      CurrentItemNo@1240030001 : Code[50];
+      CurrentVariant@1240030002 : Code[10];
+      TotalQuantity@1240030003 : Decimal;
+    BEGIN
+      PlanContainerNo.RESET;
+      PlanContainerNo.SETRANGE("Container Plan No.",CurrContainerPlanHdr."No.");
+      IF PlanContainerNo.FIND('-') THEN
+        REPEAT
+          CurrentItemNo := '';
+          CurrentVariant := '';
+          SuggestedOrderLine.RESET;
+          SuggestedOrderLine.SETCURRENTKEY(
+            "Container Plan No.","Buy-from Vendor No.","Document No.","Container No.");
+          SuggestedOrderLine.SETRANGE("Container Plan No.",PlanContainerNo."Container Plan No.");
+          SuggestedOrderLine.SETRANGE("Container No.",PlanContainerNo."Container No.");
+          SuggestedOrderLine.SETRANGE(Type,SuggestedOrderLine.Type::Item);
+          IF SuggestedOrderLine.FIND('-') THEN
+            REPEAT
+              IF (CurrentItemNo <> SuggestedOrderLine."No.") OR
+                 (CurrentVariant <> SuggestedOrderLine."Variant Code")
+              THEN BEGIN
+                CurrentItemNo := SuggestedOrderLine."No.";
+                CurrentVariant := SuggestedOrderLine."Variant Code";
+                TotalQuantity := SuggestedOrderLine.Quantity;
+                SuggestedOrderLine2.RESET;
+                SuggestedOrderLine2.SETRANGE("Buy-from Vendor No.",SuggestedOrderLine."Buy-from Vendor No.");
+                SuggestedOrderLine2.SETRANGE("Document No.",SuggestedOrderLine."Document No.");
+                SuggestedOrderLine2.SETRANGE("No.",SuggestedOrderLine."No.");
+                SuggestedOrderLine2.SETRANGE("Variant Code",SuggestedOrderLine."Variant Code");
+                SuggestedOrderLine2.SETRANGE("Container Plan No.",SuggestedOrderLine."Container Plan No.");
+                SuggestedOrderLine2.SETRANGE("Container No.",SuggestedOrderLine."Container No.");
+                SuggestedOrderLine2.SETFILTER("Line No.",'<>%1',SuggestedOrderLine."Line No.");
+                IF SuggestedOrderLine2.FIND('-') THEN BEGIN
+                  REPEAT
+                    TotalQuantity := TotalQuantity + SuggestedOrderLine2.Quantity;
+                  UNTIL SuggestedOrderLine2.NEXT = 0;
+                  SuggestedOrderLine.VALIDATE(Quantity,TotalQuantity);
+                  SuggestedOrderLine.MODIFY;
+                  SuggestedOrderLine2.DELETEALL;
+                END;
+              END;
+              IF SuggestedOrderLine."Line No." MOD 10000 <> 0 THEN BEGIN
+                SuggestedOrderLine."Split New Line" := TRUE;
+                SuggestedOrderLine.MODIFY;
+              END;
+            UNTIL SuggestedOrderLine.NEXT = 0;
+        UNTIL PlanContainerNo.NEXT = 0;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

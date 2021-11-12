@@ -1,0 +1,1385 @@
+OBJECT Report 14002372 Archive E.D.I. Receive Docs.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/25/19;
+    Time=12:00:00 PM;
+    Version List=SE0.61;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Archive Receive Documents;
+    OnPreReport=BEGIN
+                  CompanyInformation.GET;
+                  IF ArchiveBeforeDate = 0D THEN
+                    ERROR(Text001);
+
+                  "E.D.I. Receive Document Hdr.".SETRANGE("Date Received",0D,CALCDATE('-1D',ArchiveBeforeDate));
+                  ReportFilter := "E.D.I. Receive Document Hdr.".GETFILTERS;
+                  ReportFilter := ReportFilter + ', ' +
+                    Text002 + FORMAT(ArchiveIfDocCre) + ', ' +
+                    Text003 + FORMAT(ArchiveIfCompProc) + ', ' +
+                    Text004 + FORMAT(ArchiveAll);
+                END;
+
+  }
+  DATASET
+  {
+    { 1676;    ;DataItem;                    ;
+               DataItemTable=Table14002358;
+               DataItemTableView=SORTING(Trade Partner No.,Navision Document,EDI Document No.,EDI Version,Internal Doc. No.)
+                                 ORDER(Ascending)
+                                 WHERE(Data Error=CONST(No));
+               OnPreDataItem=BEGIN
+                               SETRANGE("Date Received",0D,CALCDATE('-1D',ArchiveBeforeDate));
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  IF EDITradePartner."No." <> "Trade Partner No." THEN
+                                    IF NOT EDITradePartner.GET("Trade Partner No.") THEN
+                                     EDITradePartner.Name := Text005;
+
+                                  IF ArchiveAll THEN
+                                    ArchiveDoc := TRUE
+                                  ELSE BEGIN
+                                    ArchiveDoc := FALSE;
+                                    CASE "Navision Document" OF
+                                      'I_SLSORD':
+                                        BEGIN
+                                          CASE "EDI Document No." OF
+                                            '810','812':
+                                              BEGIN
+                                                DocumentFound := FALSE;
+                                                PostedDocumentFound := FALSE;
+
+                                                SalesHeader.RESET;
+                                                SalesHeader.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+                                                SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::"Credit Memo");
+                                                SalesHeader.SETRANGE("EDI Order",TRUE);
+                                                SalesHeader.SETRANGE("EDI Internal Doc. No.","Internal Doc. No.");
+                                                DocumentFound := SalesHeader.FIND('-');
+
+                                                SalesCrMemoHeader.RESET;
+                                                SalesCrMemoHeader.SETCURRENTKEY(
+                                                  "EDI Order","EDI Cr. Memo Generated","EDI Trade Partner","EDI Internal Doc. No.");
+                                                SalesCrMemoHeader.SETRANGE("EDI Order",TRUE);
+                                                SalesCrMemoHeader.SETRANGE("EDI Cr. Memo Generated",TRUE);
+                                                SalesCrMemoHeader.SETRANGE("EDI Internal Doc. No.","Internal Doc. No.");
+                                                PostedDocumentFound := SalesCrMemoHeader.FIND('-');
+
+                                                IF DocumentFound = FALSE AND PostedDocumentFound = FALSE THEN BEGIN
+                                                  SalesHeader.RESET;
+                                                  SalesHeader.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+                                                  SalesHeader.SETRANGE("EDI Order",TRUE);
+                                                  SalesHeader.SETRANGE("EDI Internal Doc. No.","Internal Doc. No.");
+                                                  DocumentFound := SalesHeader.FIND('-');
+
+                                                  SalesInvoiceHeader.RESET;
+                                                  SalesInvoiceHeader.SETCURRENTKEY(
+                                                    "EDI Order","EDI Invoice Generated","EDI Trade Partner","EDI Internal Doc. No.");
+                                                  SalesInvoiceHeader.SETRANGE("EDI Order",TRUE);
+                                                  SalesInvoiceHeader.SETRANGE("EDI Invoice Generated",TRUE);
+                                                  SalesInvoiceHeader.SETRANGE("EDI Internal Doc. No.","Internal Doc. No.");
+                                                  PostedDocumentFound := SalesInvoiceHeader.FIND('-');
+                                                END;
+
+                                                IF ArchiveIfDocCre AND DocumentFound THEN
+                                                  ArchiveDoc := TRUE;
+                                                IF ArchiveIfCompProc THEN
+                                                  IF (NOT DocumentFound) AND (PostedDocumentFound) THEN
+                                                    ArchiveDoc := TRUE;
+                                              END;
+                                            '850','862','ORDERS','DELJIT':
+                                              BEGIN
+                                                SlsOrderFound := FALSE;
+                                                SlsInvoiceFound := FALSE;
+
+                                                SalesHeader.RESET;
+                                                SalesHeader.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+                                                SalesHeader.SETRANGE("EDI Order",TRUE);
+                                                SalesHeader.SETRANGE("EDI Internal Doc. No.","Internal Doc. No.");
+                                                SlsOrderFound := SalesHeader.FIND('-');
+
+                                                SalesInvoiceHeader.RESET;
+                                                SalesInvoiceHeader.SETCURRENTKEY(
+                                                  "EDI Order","EDI Invoice Generated","EDI Trade Partner","EDI Internal Doc. No.");
+                                                SalesInvoiceHeader.SETRANGE("EDI Order",TRUE);
+                                                SalesInvoiceHeader.SETRANGE("EDI Invoice Generated",TRUE);
+                                                SalesInvoiceHeader.SETRANGE("EDI Internal Doc. No.","Internal Doc. No.");
+                                                SlsInvoiceFound := SalesInvoiceHeader.FIND('-');
+
+                                                IF ArchiveIfDocCre AND SlsOrderFound THEN
+                                                  ArchiveDoc := TRUE;
+                                                IF ArchiveIfCompProc THEN
+                                                  IF (NOT SlsOrderFound) AND (SlsInvoiceFound) THEN
+                                                    ArchiveDoc := TRUE;
+                                              END;
+                                            '860':
+                                              BEGIN
+                                                IF (ArchiveIfCompProc) AND ("PO Change Updated Date" <> 0D) THEN
+                                                  ArchiveDoc := TRUE;
+                                              END;
+                                            '840','REQOTE':
+                                              IF ArchiveIfCompProc AND "Sales Doc. Created" THEN
+                                                ArchiveDoc := TRUE;
+                                          END;
+                                        END;
+                                        'I_FGTINV':
+                                          BEGIN
+                                            IF ArchiveIfCompProc AND
+                                              "Freight Invoice Created"
+                                            THEN
+                                              ArchiveDoc := TRUE;
+                                          END;
+                                        'I_INVADJ','I_INVRPT':
+                                          BEGIN
+                                            IF ArchiveIfCompProc AND
+                                              "Inventory Advice Processed"
+                                            THEN
+                                              ArchiveDoc := TRUE;
+                                          END;
+                                        'I_PURDOC':
+                                          BEGIN
+                                            IF ArchiveIfCompProc AND
+                                              "Purch. Doc. Created"
+                                            THEN
+                                              ArchiveDoc := TRUE;
+                                          END;
+                                        'I_TFRORD':
+                                          BEGIN
+                                            TransferOrderFound := FALSE;
+                                            TransferReceiptFound := FALSE;
+
+                                            TransferHeader.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+                                            TransferHeader.SETRANGE("EDI Order",TRUE);
+                                            TransferHeader.SETRANGE("EDI Internal Doc. No.","Internal Doc. No.");
+                                            TransferOrderFound := TransferHeader.FIND('-');
+
+                                            TransferReceiptHeader.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+                                            TransferReceiptHeader.SETRANGE("EDI Order",TRUE);
+                                            TransferReceiptHeader.SETRANGE("EDI Internal Doc. No.","Internal Doc. No.");
+                                            TransferReceiptFound := TransferReceiptHeader.FIND('-');
+
+                                            IF ArchiveIfCompProc AND TransferOrderFound THEN
+                                              ArchiveDoc := TRUE;
+                                            IF ArchiveIfCompProc THEN
+                                              IF (NOT TransferOrderFound) AND TransferReceiptFound THEN
+                                                ArchiveDoc := TRUE;
+                                          END;
+                                        'I_SLSASN':
+                                          BEGIN
+                                            IF ArchiveIfCompProc AND
+                                              "ASN Processed"
+                                            THEN
+                                              ArchiveDoc := TRUE;
+                                          END;
+                                        'I_SLSCUS':
+                                          BEGIN
+                                            IF ArchiveIfCompProc AND
+                                              "Org. Relationships Updated" THEN
+                                                ArchiveDoc := TRUE;
+                                          END;
+                                        'I_SLSQUO':
+                                          IF ArchiveIfCompProc AND "Sales Doc. Created" THEN
+                                            ArchiveDoc := TRUE;
+                                        'I_PMTADV':
+                                          IF ArchiveIfCompProc AND
+                                            "Payment Remit Advice Created"
+                                          THEN
+                                            ArchiveDoc := TRUE;
+                                        'U_SLSORD','U_SLSWSA':
+                                          BEGIN
+                                            IF ArchiveIfCompProc AND
+                                              "Sales Order Updated" THEN
+                                                ArchiveDoc := TRUE;
+                                          END;
+                                        'I_PURINV','U_PURWSA','I_PURORD':
+                                          BEGIN
+                                            IF ArchiveIfCompProc AND
+                                              "Purchase Order Updated" THEN
+                                                ArchiveDoc := TRUE;
+                                          END;
+                                        'U_ROUTEREQ':
+                                          BEGIN
+                                            IF ArchiveIfCompProc AND
+                                              "Routing Req. Updated" THEN
+                                                ArchiveDoc := TRUE;
+                                          END;
+                                        'I_FUNCTACK','I_SLSGEN':
+                                          IF "Document Processed" THEN
+                                            ArchiveDoc := TRUE;
+                                    END;
+                                  END;
+
+                                  IF NOT ArchiveDoc THEN
+                                    CurrReport.SKIP;
+
+                                  HdrCount := HdrCount + 1;
+
+                                  EDIArchiveManagement.StoreReceiveDocument("E.D.I. Receive Document Hdr.");
+
+                                  ExportMessage := STRSUBSTNO(Text007,HdrCount);
+                                END;
+
+               ReqFilterFields=Trade Partner No.,Navision Document,Internal Doc. No. }
+
+    { 1   ;1   ;Column  ;CompanyInformation_Name;
+               SourceExpr=CompanyInformation.Name }
+
+    { 2   ;1   ;Column  ;USERID              ;
+               SourceExpr=USERID }
+
+    { 4   ;1   ;Column  ;CurrReport_PAGENO   ;
+               SourceExpr=CurrReport.PAGENO }
+
+    { 5   ;1   ;Column  ;Text006             ;
+               SourceExpr=Text006 }
+
+    { 6   ;1   ;Column  ;FORMAT_TODAY_0_4_   ;
+               SourceExpr=FORMAT(TODAY,0,4) }
+
+    { 7   ;1   ;Column  ;TIME                ;
+               SourceExpr=TIME }
+
+    { 24  ;1   ;Column  ;ReportFilter        ;
+               SourceExpr=ReportFilter }
+
+    { 8   ;1   ;Column  ;E_D_I__Receive_Document_Hdr___Trade_Partner_No__;
+               SourceExpr="Trade Partner No." }
+
+    { 10  ;1   ;Column  ;E_D_I__Receive_Document_Hdr___Navision_Document_;
+               SourceExpr="Navision Document" }
+
+    { 12  ;1   ;Column  ;E_D_I__Receive_Document_Hdr___EDI_Document_No__;
+               SourceExpr="EDI Document No." }
+
+    { 14  ;1   ;Column  ;E_D_I__Receive_Document_Hdr___Internal_Doc__No__;
+               SourceExpr="Internal Doc. No." }
+
+    { 16  ;1   ;Column  ;E_D_I__Receive_Document_Hdr___Date_Received_;
+               SourceExpr="Date Received" }
+
+    { 18  ;1   ;Column  ;E_D_I__Receive_Document_Hdr___Customer_No__;
+               SourceExpr="Customer No." }
+
+    { 20  ;1   ;Column  ;E_D_I__Receive_Document_Hdr___Customer_Name_;
+               SourceExpr="Customer Name" }
+
+    { 3   ;1   ;Column  ;CurrReport_PAGENOCaption;
+               SourceExpr=CurrReport_PAGENOCaptionLbl }
+
+    { 9   ;1   ;Column  ;E_D_I__Receive_Document_Hdr___Trade_Partner_No__Caption;
+               SourceExpr=FIELDCAPTION("Trade Partner No.") }
+
+    { 11  ;1   ;Column  ;E_D_I__Receive_Document_Hdr___Navision_Document_Caption;
+               SourceExpr=FIELDCAPTION("Navision Document") }
+
+    { 13  ;1   ;Column  ;E_D_I__Receive_Document_Hdr___EDI_Document_No__Caption;
+               SourceExpr=FIELDCAPTION("EDI Document No.") }
+
+    { 15  ;1   ;Column  ;E_D_I__Receive_Document_Hdr___Internal_Doc__No__Caption;
+               SourceExpr=FIELDCAPTION("Internal Doc. No.") }
+
+    { 17  ;1   ;Column  ;E_D_I__Receive_Document_Hdr___Date_Received_Caption;
+               SourceExpr=FIELDCAPTION("Date Received") }
+
+    { 19  ;1   ;Column  ;E_D_I__Receive_Document_Hdr___Customer_No__Caption;
+               SourceExpr=FIELDCAPTION("Customer No.") }
+
+    { 21  ;1   ;Column  ;E_D_I__Receive_Document_Hdr___Customer_Name_Caption;
+               SourceExpr=FIELDCAPTION("Customer Name") }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=ENU=Options }
+
+      { 1   ;2   ;Field     ;
+                  CaptionML=ENU=Archive Before Date;
+                  SourceExpr=ArchiveBeforeDate }
+
+      { 3   ;2   ;Field     ;
+                  CaptionML=ENU=Archive If Comp. Processed;
+                  SourceExpr=ArchiveIfCompProc;
+                  OnValidate=BEGIN
+                               IF ArchiveIfCompProc THEN
+                                 BEGIN
+                                   IF ArchiveIfDocCre THEN
+                                     ArchiveIfDocCre := FALSE;
+                                   IF ArchiveAll THEN
+                                     ArchiveAll:= FALSE;
+                                 END;
+                             END;
+                              }
+
+      { 9   ;2   ;Field     ;
+                  CaptionML=ENU=Archive If Doc. Created;
+                  SourceExpr=ArchiveIfDocCre;
+                  OnValidate=BEGIN
+                               IF ArchiveIfDocCre THEN
+                                 BEGIN
+                                   IF ArchiveIfCompProc THEN
+                                     ArchiveIfCompProc := FALSE;
+                                   IF ArchiveAll THEN
+                                     ArchiveAll := FALSE;
+                                 END;
+                             END;
+                              }
+
+      { 11  ;2   ;Field     ;
+                  CaptionML=ENU=Archive All;
+                  SourceExpr=ArchiveAll;
+                  OnValidate=BEGIN
+                               IF ArchiveAll THEN
+                                 BEGIN
+                                   IF ArchiveIfDocCre THEN
+                                     ArchiveIfDocCre:= FALSE;
+                                   IF ArchiveIfCompProc THEN
+                                     ArchiveIfCompProc := FALSE;
+                                 END;
+                             END;
+                              }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      CompanyInformation@1240030000 : Record 79;
+      EDITradePartner@1240030001 : Record 14002360;
+      SalesHeader@1240030002 : Record 36;
+      SalesInvoiceHeader@1240030003 : Record 112;
+      SalesCrMemoHeader@1240030017 : Record 114;
+      TransferHeader@1240020002 : Record 5740;
+      TransferReceiptHeader@1240020003 : Record 5746;
+      EDIArchiveManagement@1240030013 : Codeunit 14000378;
+      ArchiveDoc@1240030004 : Boolean;
+      SlsOrderFound@1240030005 : Boolean;
+      SlsInvoiceFound@1240030006 : Boolean;
+      DocumentFound@1240030012 : Boolean;
+      PostedDocumentFound@1240030016 : Boolean;
+      ArchiveBeforeDate@1240030007 : Date;
+      ArchiveIfDocCre@1240030008 : Boolean;
+      ArchiveIfCompProc@1240030009 : Boolean;
+      ArchiveAll@1240030010 : Boolean;
+      ReportFilter@1240030011 : Text[200];
+      Text001@1001 : TextConst 'ENU=You must specify a Archive Before Date.';
+      Text002@1002 : TextConst 'ENU="Archive If Doc. Created = "';
+      Text003@1003 : TextConst 'ENU="Archive If Comp. Processed = "';
+      Text004@1004 : TextConst 'ENU="Archive All = "';
+      Text005@1005 : TextConst 'ENU=Trading Partner Not Found';
+      Text006@1006 : TextConst 'ENU=Archive Receive Documents';
+      Text007@1240030014 : TextConst 'ENU=%1 Receive Documents Archived.';
+      ExportMessage@1240030015 : Text[100];
+      HdrCount@1240030018 : Integer;
+      CurrReport_PAGENOCaptionLbl@8565 : TextConst 'ENU=Page';
+      TransferOrderFound@1240020000 : Boolean;
+      TransferReceiptFound@1240020001 : Boolean;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+    <?xml version="1.0" encoding="utf-8"?>
+<Report xmlns="http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition" xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner">
+  <AutoRefresh>0</AutoRefresh>
+  <DataSources>
+    <DataSource Name="DataSource">
+      <ConnectionProperties>
+        <DataProvider>SQL</DataProvider>
+        <ConnectString />
+      </ConnectionProperties>
+      <rd:SecurityType>None</rd:SecurityType>
+    </DataSource>
+  </DataSources>
+  <DataSets>
+    <DataSet Name="DataSet_Result">
+      <Query>
+        <DataSourceName>DataSource</DataSourceName>
+        <CommandText />
+      </Query>
+      <Fields>
+        <Field Name="CompanyInformation_Name">
+          <DataField>CompanyInformation_Name</DataField>
+        </Field>
+        <Field Name="USERID">
+          <DataField>USERID</DataField>
+        </Field>
+        <Field Name="CurrReport_PAGENO">
+          <DataField>CurrReport_PAGENO</DataField>
+        </Field>
+        <Field Name="Text006">
+          <DataField>Text006</DataField>
+        </Field>
+        <Field Name="FORMAT_TODAY_0_4_">
+          <DataField>FORMAT_TODAY_0_4_</DataField>
+        </Field>
+        <Field Name="TIME">
+          <DataField>TIME</DataField>
+        </Field>
+        <Field Name="ReportFilter">
+          <DataField>ReportFilter</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___Trade_Partner_No__">
+          <DataField>E_D_I__Receive_Document_Hdr___Trade_Partner_No__</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___Navision_Document_">
+          <DataField>E_D_I__Receive_Document_Hdr___Navision_Document_</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___EDI_Document_No__">
+          <DataField>E_D_I__Receive_Document_Hdr___EDI_Document_No__</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___Internal_Doc__No__">
+          <DataField>E_D_I__Receive_Document_Hdr___Internal_Doc__No__</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___Date_Received_">
+          <DataField>E_D_I__Receive_Document_Hdr___Date_Received_</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___Customer_No__">
+          <DataField>E_D_I__Receive_Document_Hdr___Customer_No__</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___Customer_Name_">
+          <DataField>E_D_I__Receive_Document_Hdr___Customer_Name_</DataField>
+        </Field>
+        <Field Name="CurrReport_PAGENOCaption">
+          <DataField>CurrReport_PAGENOCaption</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___Trade_Partner_No__Caption">
+          <DataField>E_D_I__Receive_Document_Hdr___Trade_Partner_No__Caption</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___Navision_Document_Caption">
+          <DataField>E_D_I__Receive_Document_Hdr___Navision_Document_Caption</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___EDI_Document_No__Caption">
+          <DataField>E_D_I__Receive_Document_Hdr___EDI_Document_No__Caption</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___Internal_Doc__No__Caption">
+          <DataField>E_D_I__Receive_Document_Hdr___Internal_Doc__No__Caption</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___Date_Received_Caption">
+          <DataField>E_D_I__Receive_Document_Hdr___Date_Received_Caption</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___Customer_No__Caption">
+          <DataField>E_D_I__Receive_Document_Hdr___Customer_No__Caption</DataField>
+        </Field>
+        <Field Name="E_D_I__Receive_Document_Hdr___Customer_Name_Caption">
+          <DataField>E_D_I__Receive_Document_Hdr___Customer_Name_Caption</DataField>
+        </Field>
+      </Fields>
+    </DataSet>
+  </DataSets>
+  <ReportSections>
+    <ReportSection>
+      <Body>
+        <ReportItems>
+          <Tablix Name="Table1">
+            <TablixBody>
+              <TablixColumns>
+                <TablixColumn>
+                  <Width>3.80952cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>5.39683cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>4.725cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>3.49206cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>4.12698cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.22222cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.22222cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.2cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.2cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.2cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.2cm</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.2cm</Width>
+                </TablixColumn>
+              </TablixColumns>
+              <TablixRows>
+                <TablixRow>
+                  <Height>0.846cm</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___Trade_Partner_No__Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!E_D_I__Receive_Document_Hdr___Trade_Partner_No__Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>19</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.15cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___Customer_No__Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!E_D_I__Receive_Document_Hdr___Customer_No__Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>18</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.15cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___Customer_Name_Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!E_D_I__Receive_Document_Hdr___Customer_Name_Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>17</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.15cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___Navision_Document_Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!E_D_I__Receive_Document_Hdr___Navision_Document_Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>16</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.15cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___EDI_Document_No__Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!E_D_I__Receive_Document_Hdr___EDI_Document_No__Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>15</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___Internal_Doc__No__Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!E_D_I__Receive_Document_Hdr___Internal_Doc__No__Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>14</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___Date_Received_Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!E_D_I__Receive_Document_Hdr___Date_Received_Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Right</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>13</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox16">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>12</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                        <ColSpan>5</ColSpan>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell />
+                    <TablixCell />
+                    <TablixCell />
+                    <TablixCell />
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.423cm</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___Trade_Partner_No__">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!E_D_I__Receive_Document_Hdr___Trade_Partner_No__.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>11</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.15cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___Customer_No__">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!E_D_I__Receive_Document_Hdr___Customer_No__.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>10</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.15cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___Customer_Name_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!E_D_I__Receive_Document_Hdr___Customer_Name_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>9</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.15cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___Navision_Document_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!E_D_I__Receive_Document_Hdr___Navision_Document_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>8</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.15cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___EDI_Document_No__">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!E_D_I__Receive_Document_Hdr___EDI_Document_No__.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>7</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___Internal_Doc__No__">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!E_D_I__Receive_Document_Hdr___Internal_Doc__No__.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>6</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="E_D_I__Receive_Document_Hdr___Date_Received_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!E_D_I__Receive_Document_Hdr___Date_Received_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>5</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="CompanyInformation_Name">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!CompanyInformation_Name.Value</Value>
+                                  <Style>
+                                    <Color>#ff0000</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>4</ZIndex>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Text006">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Text006.Value</Value>
+                                  <Style>
+                                    <Color>#ff0000</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>3</ZIndex>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TIME">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!TIME.Value</Value>
+                                  <Style>
+                                    <Color>#ff0000</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>2</ZIndex>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ReportFilter">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ReportFilter.Value</Value>
+                                  <Style>
+                                    <Color>#ff0000</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>1</ZIndex>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="CurrReport_PAGENOCaption">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!CurrReport_PAGENOCaption.Value</Value>
+                                  <Style>
+                                    <Color>#ff0000</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                            </Paragraph>
+                          </Paragraphs>
+                          <Visibility>
+                            <Hidden>true</Hidden>
+                          </Visibility>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+              </TablixRows>
+            </TablixBody>
+            <TablixColumnHierarchy>
+              <TablixMembers>
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+              </TablixMembers>
+            </TablixColumnHierarchy>
+            <TablixRowHierarchy>
+              <TablixMembers>
+                <TablixMember>
+                  <KeepWithGroup>After</KeepWithGroup>
+                  <RepeatOnNewPage>true</RepeatOnNewPage>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+                <TablixMember>
+                  <Group Name="Table1_Details_Group">
+                    <DataElementName>Detail</DataElementName>
+                  </Group>
+                  <TablixMembers>
+                    <TablixMember />
+                  </TablixMembers>
+                  <DataElementName>Detail_Collection</DataElementName>
+                  <DataElementOutput>Output</DataElementOutput>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+              </TablixMembers>
+            </TablixRowHierarchy>
+            <DataSetName>DataSet_Result</DataSetName>
+            <Height>1.269cm</Height>
+          </Tablix>
+        </ReportItems>
+        <Height>1.269cm</Height>
+      </Body>
+      <Width>26.99484cm</Width>
+      <Page>
+        <PageHeader>
+          <Height>2.0103cm</Height>
+          <PrintOnFirstPage>true</PrintOnFirstPage>
+          <PrintOnLastPage>true</PrintOnLastPage>
+          <ReportItems>
+            <Textbox Name="PageNumberTextBox">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=Globals!PageNumber</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                  <Style>
+                    <TextAlign>Right</TextAlign>
+                  </Style>
+                </Paragraph>
+              </Paragraphs>
+              <Top>0.63492cm</Top>
+              <Left>17.77778cm</Left>
+              <Height>0.423cm</Height>
+              <Width>1.26984cm</Width>
+              <ZIndex>6</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="UserIdTextBox">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=User!UserID</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                  <Style>
+                    <TextAlign>Right</TextAlign>
+                  </Style>
+                </Paragraph>
+              </Paragraphs>
+              <Top>0.95238cm</Top>
+              <Left>14.92063cm</Left>
+              <Height>0.423cm</Height>
+              <Width>4.12698cm</Width>
+              <ZIndex>5</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="ExecutionTimeTextBox">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=Globals!ExecutionTime</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                        <Format>g</Format>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                  <Style>
+                    <TextAlign>Right</TextAlign>
+                  </Style>
+                </Paragraph>
+              </Paragraphs>
+              <Left>14.92063cm</Left>
+              <Height>0.63492cm</Height>
+              <Width>4.12699cm</Width>
+              <ZIndex>4</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="CompanyInformation_Name1">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=ReportItems!CompanyInformation_Name.Value</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                </Paragraph>
+              </Paragraphs>
+              <Top>0.423cm</Top>
+              <Height>0.423cm</Height>
+              <Width>7.5cm</Width>
+              <ZIndex>3</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="Text0061">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=ReportItems!Text006.Value</Value>
+                      <Style>
+                        <FontSize>8pt</FontSize>
+                        <FontWeight>Bold</FontWeight>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                </Paragraph>
+              </Paragraphs>
+              <Height>0.423cm</Height>
+              <Width>7.5cm</Width>
+              <ZIndex>2</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="ReportFilter1">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=ReportItems!ReportFilter.Value</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                  <Style>
+                    <TextAlign>Center</TextAlign>
+                  </Style>
+                </Paragraph>
+              </Paragraphs>
+              <Top>1.5873cm</Top>
+              <Width>18cm</Width>
+              <ZIndex>1</ZIndex>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+            <Textbox Name="CurrReport_PAGENOCaption1">
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>=ReportItems!CurrReport_PAGENOCaption.Value</Value>
+                      <Style>
+                        <FontSize>7pt</FontSize>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                  <Style>
+                    <TextAlign>Right</TextAlign>
+                  </Style>
+                </Paragraph>
+              </Paragraphs>
+              <Top>0.63492cm</Top>
+              <Left>17.02778cm</Left>
+              <Height>0.423cm</Height>
+              <Width>0.75cm</Width>
+              <Style>
+                <VerticalAlign>Middle</VerticalAlign>
+              </Style>
+            </Textbox>
+          </ReportItems>
+        </PageHeader>
+        <PageHeight>29.7cm</PageHeight>
+        <PageWidth>20.8cm</PageWidth>
+        <LeftMargin>2.1cm</LeftMargin>
+        <RightMargin>0cm</RightMargin>
+        <TopMargin>2cm</TopMargin>
+        <BottomMargin>2cm</BottomMargin>
+      </Page>
+    </ReportSection>
+  </ReportSections>
+  <Code>Public Function BlankZero(ByVal Value As Decimal)
+    if Value = 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+Public Function BlankPos(ByVal Value As Decimal)
+    if Value &gt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+Public Function BlankZeroAndPos(ByVal Value As Decimal)
+    if Value &gt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+Public Function BlankNeg(ByVal Value As Decimal)
+    if Value &lt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+Public Function BlankNegAndZero(ByVal Value As Decimal)
+    if Value &lt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+</Code>
+  <Language>=User!Language</Language>
+  <ConsumeContainerWhitespace>true</ConsumeContainerWhitespace>
+  <rd:ReportUnitType>Invalid</rd:ReportUnitType>
+</Report>
+    END_OF_RDLDATA
+  }
+}
+

@@ -1,0 +1,1228 @@
+OBJECT Codeunit 14002353 E.D.I. File Split
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/13/20;
+    Time=12:00:00 PM;
+    Version List=SE0.62;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            FileList@1240020005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.IList";
+            Directory@1240020004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+            List@1240020003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+            FileInfo@1240020002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo";
+            GSOverride@1240020000 : Boolean;
+            GSTradePartnerNo@1240020001 : Code[20];
+          BEGIN
+            EntryNo := 0;
+            FileFound := FALSE;
+            OverrideDelimiterLine := '';
+            OverrideDelimiters := FALSE;
+            GSOverride := FALSE;
+            OverrideSegDelimDec := 10;
+            OverrideElementDelim := '~';
+            OverrideElemDelimDec := 126;
+
+            EDISetup.LOCKTABLE;
+            EDISetup.GET;
+            IF EDISetup."Common Rename String" = '' THEN BEGIN
+              EDISetup."Common Rename String" := '0000000001';
+              EDISetup.MODIFY;
+            END;
+
+            Count := 0;
+            FileList := Directory.EnumerateFiles(EDISetup."Common Receive Path");
+            List := List.List;
+            List.AddRange(FileList);
+            IF List.Count > 0 THEN BEGIN
+              LoopCount := List.Count;
+              IF CurrentFileName <> '' THEN
+                GetCurrentFile(List)
+              ELSE
+                FileFound  := TRUE;
+            END ELSE
+              FileFound := FALSE;
+            IF FileFound THEN BEGIN
+              IF GUIALLOWED THEN
+                DispWindow.OPEN(
+                  Text001 +
+                  Text002 +
+                  Text003 +
+                  Text004 +
+                  Text005);
+              REPEAT
+                FileInfo := FileInfo.FileInfo(FORMAT(List.Item(Count)));
+                XMLFile := FALSE;
+                ISAFound := FALSE;
+                FileNo := 0;
+                EDIFileProcess.RESET;
+                EDIFileProcess.DELETEALL;
+                IF GUIALLOWED THEN
+                  DispWindow.UPDATE(1,FORMAT(List.Item(Count)));
+                CommonInpFile.TEXTMODE(FALSE);
+                CommonInpFile.OPEN(FORMAT(List.Item(Count)));
+                ClearAllTempFiles;
+                DecComponentDelimiter := 58;
+                DecElementDelimiter := 43;
+                DecSegmentDelimiter := 39;
+                GetISASegment;
+                IF ISAFound THEN BEGIN
+                  REPEAT
+                    CurrSegment := COPYSTR(DocLine[1],1,3);
+                    IF ((CurrSegment[3] < '0') AND
+                        (CurrSegment[3] <> ' ')) OR
+                       ((CurrSegment[3] > '9') AND
+                        (CurrSegment[3] < 'A')) OR
+                       ((CurrSegment[3] > 'Z') AND
+                        (CurrSegment[3] < 'a')) OR
+                       (CurrSegment[3] > 'z') THEN
+                      CurrSegment[3] := ' ';
+                    BEGIN
+                      CASE CurrSegment OF
+                        'ISA':
+                          BEGIN
+                            ISALine := DocLine[1];
+                            WriteLine := FALSE;
+                          END;
+                        'UNA':
+                          BEGIN
+                            ISALine := DocLine[1];
+                            WriteLine := FALSE;
+                          END;
+                        'GS ':
+                          BEGIN
+                            GSOverride := FALSE;
+                            GSLine := DocLine[1];
+                            ENVGSTradePtnrNo := GetElement(DocLine[1],2);
+                            ENVGSMyTradePtnrNo := GetElement(DocLine[1],3);
+                            EDITradePtnr.RESET;
+                            EDITradePtnr.SETCURRENTKEY(
+                              EDITradePtnr."ISA Trade Ptnr. No.",
+                              EDITradePtnr."ISA My Trade Ptnr. No.",
+                              EDITradePtnr."GS Trade Ptnr. No.",
+                              EDITradePtnr."GS My Trade Ptnr. No.");
+                            EDITradePtnr.SETRANGE("ISA Trade Ptnr. No.",ENVISATradePtnrNo);
+                            EDITradePtnr.SETRANGE("ISA My Trade Ptnr. No.",EnvISAMyTradePtnrNo);
+                            EDITradePtnr.SETRANGE("GS Trade Ptnr. No.",ENVGSTradePtnrNo);
+                            EDITradePtnr.SETRANGE("GS My Trade Ptnr. No.",ENVGSMyTradePtnrNo);
+                            IF EDITradePtnr.FIND('-') THEN
+                              TradePtnrNo := EDITradePtnr."No."
+                            ELSE BEGIN
+                              EDIDocument2.RESET;
+                              EDIDocument2.SETCURRENTKEY("GS Trade Partner No. Override",Type);
+                              EDIDocument2.SETRANGE("GS Trade Partner No. Override",GetElement(GSLine,2));
+                              EDIDocument2.SETRANGE(Type,EDIDocument2.Type::Export);
+                              IF EDIDocument2.FIND('-') THEN BEGIN
+                                TradePtnrNo := EDIDocument2."Trade Partner No.";
+                                GSOverride := TRUE;
+                                GSTradePartnerNo := GetElement(GSLine,2);
+                              END ELSE
+                                TradePtnrNo := GetElement(GSLine,2);
+                            END;
+                            WriteLine := FALSE;
+                          END;
+                        'UNB':
+                          BEGIN
+                            GSLine := DocLine[1];
+                            ENVUNBTradePtnrNo := GetElement(GSLine,2);
+                            ENVUNBMyTradePtnrNo := GetElement(GSLine,3);
+                            EDITradePtnr.RESET;
+                            EDITradePtnr.SETCURRENTKEY("UNB Trade Partner No.","UNB My Trade Partner No.");
+                            EDITradePtnr.SETRANGE("UNB Trade Partner No.",ENVUNBTradePtnrNo);
+                            EDITradePtnr.SETRANGE("UNB My Trade Partner No.",ENVUNBMyTradePtnrNo);
+                            IF EDITradePtnr.FIND('-') THEN
+                              TradePtnrNo := EDITradePtnr."No."
+                            ELSE
+                              TradePtnrNo := ENVUNBTradePtnrNo;
+                            WriteLine := FALSE;
+                          END;
+                        'ST ':
+                          BEGIN
+                            STLine := DocLine[1];
+                            IF GSOverride THEN BEGIN
+                              EDIDocument.RESET;
+                              EDIDocument.SETRANGE("Trade Partner No.",TradePtnrNo);
+                              EDIDocument.SETRANGE("EDI Document No.",COPYSTR(STLine,4,3));
+                              EDIDocument.SETRANGE(Type,EDIDocument.Type::Import);
+                              EDIDocument.SETRANGE("Navision Document",'I_FUNCTACK');
+                              IF NOT EDIDocument.FIND('-') THEN BEGIN
+                                EDIDocument.RESET;
+                                EDIDocument.SETRANGE("Trade Partner No.",GSTradePartnerNo);
+                                EDIDocument.SETRANGE("EDI Document No.",COPYSTR(STLine,4,3));
+                                EDIDocument.SETRANGE(Type,EDIDocument.Type::Import);
+                                IF NOT EDIDocument.FIND('-') THEN
+                                  ERROR(
+                                    Text006,
+                                      GSTradePartnerNo,COPYSTR(STLine,4,3));
+                              END;
+                            END ELSE BEGIN
+                              EDIDocument.RESET;
+                              EDIDocument.SETRANGE("Trade Partner No.",TradePtnrNo);
+                              EDIDocument.SETRANGE("EDI Document No.",COPYSTR(STLine,4,3));
+                              EDIDocument.SETRANGE(Type,EDIDocument.Type::Import);
+                              IF NOT EDIDocument.FIND('-') THEN
+                                ERROR(
+                                  Text006,
+                                   TradePtnrNo,COPYSTR(STLine,4,3));
+                            END;
+                            IF EDIDocument.COUNT > 1 THEN BEGIN
+                              EDIDocument.SETRANGE("My GS Trade Partner ID Match",TRUE);
+                              IF EDIDocument.FIND('-') THEN BEGIN
+                                MyGSMatchFound := FALSE;
+                                EDIDocument.RESET;
+                                EDIDocument.SETRANGE("Trade Partner No.",TradePtnrNo);
+                                EDIDocument.SETRANGE("EDI Document No.",COPYSTR(STLine,4,3));
+                                EDIDocument.SETRANGE(Type,EDIDocument.Type::Import);
+                                EDIDocument.SETRANGE("My GS Trade Partner ID Match",TRUE);
+                                IF EDIDocument.FIND('-') THEN
+                                  REPEAT
+                                    EDITemplate.GET(EDIDocument."EDI Template Code");
+                                    IF EDITemplate."My GS Trade Ptnr. Override" <> '' THEN
+                                      IF EDITemplate."My GS Trade Ptnr. Override" = ENVGSMyTradePtnrNo THEN
+                                        MyGSMatchFound := TRUE;
+                                  UNTIL (EDIDocument.NEXT = 0) OR (MyGSMatchFound);
+                                  IF NOT MyGSMatchFound THEN BEGIN
+                                    EDIDocument.RESET;
+                                    EDIDocument.SETRANGE("Trade Partner No.",TradePtnrNo);
+                                    EDIDocument.SETRANGE("EDI Document No.",COPYSTR(STLine,4,3));
+                                    EDIDocument.SETRANGE(Type,EDIDocument.Type::Import);
+                                    EDIDocument.SETRANGE("My GS Trade Partner ID Match",FALSE);
+                                    IF NOT EDIDocument.FIND('-') THEN
+                                      ERROR(
+                                        Text010,COPYSTR(STLine,4,3),TradePtnrNo);
+                                  END;
+                              END ELSE BEGIN
+                                EDIDocument.SETRANGE("My GS Trade Partner ID Match");
+                                EDIDocument.SETRANGE("My GS Trade Partner ID Match",FALSE);
+                                IF NOT EDIDocument.FIND('-') THEN
+                                  ERROR(
+                                    Text010,COPYSTR(STLine,4,3),TradePtnrNo);
+                              END;
+                            END;
+                            EDIDocument.TESTFIELD(EDIDocument."Interface File");
+                            IF GUIALLOWED THEN
+                              DispWindow.UPDATE(2,TradePtnrNo);
+                            EDITemplate.GET(EDIDocument."EDI Template Code");
+                            NewFileName :=
+                              EDIDocument."Interface File" + '-' + EDIDocument."EDI Document No." + '-' +
+                              EDISetup."Last Import Sequence No." + '.edi';
+                            IF GUIALLOWED THEN
+                              DispWindow.UPDATE(3,NewFileName);
+                            FileNo := FileNo + 1;
+                            IF GUIALLOWED THEN
+                              DispWindow.UPDATE(4,FileNo);
+                            EDIFileProcess.RESET;
+                            IF EDIFileProcess.FIND('+') THEN
+                              EntryNo := EntryNo + 1
+                            ELSE
+                              EntryNo := 1;
+                            EDIFileProcess.RESET;
+                            EDIFileProcess."Entry No." := EntryNo;
+                            EDIFileProcess.Directory := EDITemplate."Interface File Path" + '\Inbox\';
+                            EDIFileProcess.File := NewFileName;
+                            EDIFileProcess.INSERT;
+                            EDISetup."Last Import Sequence No." := INCSTR(EDISetup."Last Import Sequence No.");
+                            EDISetup.MODIFY;
+                            COMMIT;
+                            OutFile.TEXTMODE(TRUE);
+                            OutFile.CREATE(EDISetup."Common Receive Path" + 'Temp\' + NewFileName);
+                            IF OverrideDelimiters THEN
+                              OutFile.WRITE(OverrideDelimiterLine)
+                            ELSE
+                              OutFile.WRITE(DelimiterLine);
+                            OutFile.WRITE(ISALine);
+                            OutFile.WRITE(GSLine);
+                            WriteLine := TRUE;
+                          END;
+                        'UNH':
+                          BEGIN
+                            STLine := DocLine[1];
+                            EDIDocument.RESET;
+                            EDIDocument.SETRANGE("Trade Partner No.",TradePtnrNo);
+                            EDIDocument.SETRANGE("EDI Document No.",GetElement(STLine,2));
+                            EDIDocument.SETRANGE(Type,EDIDocument.Type::Import);
+                            IF NOT EDIDocument.FIND('-') THEN
+                              ERROR(Text007,TradePtnrNo,GetElement(STLine,2));
+                            EDIDocument.TESTFIELD(EDIDocument."Interface File");
+                            IF GUIALLOWED THEN
+                              DispWindow.UPDATE(2,TradePtnrNo);
+                            EDITemplate.GET(EDIDocument."EDI Template Code");
+                            NewFileName :=
+                              EDIDocument."Interface File" + '-' + EDIDocument."EDI Document No." + '-' +
+                              EDISetup."Last Import Sequence No." + '.edi';
+                            IF GUIALLOWED THEN
+                              DispWindow.UPDATE(3,NewFileName);
+                            FileNo := FileNo + 1;
+                            IF GUIALLOWED THEN
+                              DispWindow.UPDATE(4,FileNo);
+                            EDIFileProcess.RESET;
+                            IF EDIFileProcess.FIND('+') THEN
+                              EntryNo := EntryNo + 1
+                            ELSE
+                              EntryNo := 1;
+                            EDIFileProcess.RESET;
+                            EDIFileProcess."Entry No." := EntryNo;
+                            EDIFileProcess.Directory := EDITemplate."Interface File Path" + '\Inbox\';
+                            EDIFileProcess.File := NewFileName;
+                            EDIFileProcess.INSERT;
+                            EDISetup."Last Import Sequence No." := INCSTR(EDISetup."Last Import Sequence No.");
+                            EDISetup.MODIFY;
+                            COMMIT;
+                            OutFile.TEXTMODE(TRUE);
+                            OutFile.CREATE(EDISetup."Common Receive Path" + 'Temp\' + NewFileName);
+                            OutFile.WRITE(DelimiterLine);
+                            IF NOT EDIFACT THEN
+                              OutFile.WRITE(ISALine);
+                            OutFile.WRITE(GSLine);
+                            WriteLine := TRUE;
+                          END;
+                        'SE ':
+                          BEGIN
+                            OutFile.WRITE(DocLine[1]);
+                            GESegmentOut := 'GE ';
+                            IF OverrideDelimiters THEN
+                              GESegmentOut[3] := OverrideSegDelimDec
+                            ELSE
+                              GESegmentOut[3] := DecSegmentDelimiter;
+                            OutFile.WRITE(GESegmentOut);
+                            IEASegmentOut := 'IEA';
+                            IF OverrideDelimiters THEN
+                              IEASegmentOut[4] := OverrideSegDelimDec
+                            ELSE
+                              IEASegmentOut[4] := DecSegmentDelimiter;
+                            OutFile.WRITE(IEASegmentOut);
+                            OutFile.CLOSE;
+                            WriteLine := FALSE;
+                          END;
+                        'UNT':
+                          IF EDIFACT THEN BEGIN
+                            IF EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::"EDIFACT Delimited" THEN BEGIN
+                              OutFile.WRITE(DocLine[1]);
+                              OutFile.WRITE('UNZ');
+                              OutFile.CLOSE;
+                              WriteLine := FALSE;
+                            END ELSE
+                              ERROR(Text009,EDITemplate.Code);
+                          END;
+                        'GE ':
+                          BEGIN
+                            CLEAR(GSLine);
+                            WriteLine := FALSE;
+                          END;
+                        'UNE':
+                          IF EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::"EDIFACT Delimited" THEN BEGIN
+                            CLEAR(GSLine);
+                            WriteLine := FALSE;
+                          END;
+                        'IEA':
+                          BEGIN
+                            CLEAR(ISALine);
+                            ISAFound := FALSE;
+                            DecComponentDelimiter := 0;
+                            DecElementDelimiter := 0;
+                            DecSegmentDelimiter := 0;
+                            OverrideDelimiters := FALSE;
+                            GSOverride := FALSE;
+                            WriteLine := FALSE;
+                          END;
+                        'UNZ':
+                          IF EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::"EDIFACT Delimited" THEN BEGIN
+                            CLEAR(ISALine);
+                            ISAFound := FALSE;
+                            DecComponentDelimiter := 0;
+                            DecElementDelimiter := 0;
+                            DecSegmentDelimiter := 0;
+                            WriteLine := FALSE;
+                          END;
+                      END;
+                      IF WriteLine THEN BEGIN
+                        OutFile.WRITE(DocLine[1] + DocLine[2] + DocLine[3] + DocLine[4] + DocLine[5]);
+                        CLEAR(DocLine);
+                      END;
+                    END;
+                  UNTIL GetSegment = FALSE;
+                END ELSE BEGIN
+                  NonXML := XMLFileCheck(FileInfo);
+                  IF NonXML THEN BEGIN
+                    CommonInpFile.CLOSE;
+                    ERROR(Text008,CurrentFileName,EDISetup."Common Receive Path");
+                  END ELSE
+                    ReceiveXML;
+                END;
+                EDIFileProcess.RESET;
+                IF EDIFileProcess.FIND('-') THEN
+                  REPEAT
+                    COPY(
+                      EDISetup."Common Receive Path" + 'Temp\' + EDIFileProcess.File,
+                      EDIFileProcess.Directory + EDIFileProcess.File);
+                    FILE.ERASE(EDISetup."Common Receive Path" + '\Temp\' + EDIFileProcess.File);
+                  UNTIL EDIFileProcess.NEXT = 0
+                ELSE
+                  ERROR(Text008,CurrentFileName,EDISetup."Common Receive Path");
+                IF NOT XMLFile THEN
+                  CommonInpFile.CLOSE;
+                RenameImportFile := FORMAT(FileInfo.Name);
+                IF STRPOS(RenameImportFile,'.') > 0 THEN
+                  RenameImportFile := INSSTR(RenameImportFile,EDISetup."Common Rename String",STRPOS(RenameImportFile,'.'))
+                ELSE
+                  RenameImportFile := INSSTR(RenameImportFile,EDISetup."Common Rename String",STRLEN(RenameImportFile) + 1);
+                COPY(
+                  EDISetup."Common Receive Path" + FORMAT(FileInfo.Name),
+                  EDISetup."Common Receive Path" + '\Archive\' + RenameImportFile);
+                ERASE(EDISetup."Common Receive Path" + FORMAT(FileInfo.Name));
+                EDISetup."Common Rename String" := INCSTR(EDISetup."Common Rename String");
+                EDISetup.MODIFY;
+                Count += 1;
+              UNTIL (Count = LoopCount) OR (Finished = TRUE);
+
+              IF GUIALLOWED THEN
+                DispWindow.CLOSE;
+            END;
+
+            EDIFileProcess.RESET;
+            EDIFileProcess.DELETEALL;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EDISetup@1240030000 : Record 14002367;
+      EDITemplate@1240030001 : Record 14002350;
+      EDITradePtnr@1240030029 : Record 14002360;
+      EDIDocument@1240030002 : Record 14002353;
+      EDIDocument2@1240030044 : Record 14002353;
+      EDIFileProcess@1240020002 : TEMPORARY Record 14002385;
+      CommonInpFile@1240030005 : File;
+      OutFile@1240030006 : File;
+      DispWindow@1240030007 : Dialog;
+      Char@1240030008 : Char;
+      CharCount@1240030009 : Integer;
+      ComponentDelimiter@1240030031 : Text[1];
+      CurrSegment@1240030032 : Text[3];
+      DecComponentDelimiter@1240030033 : Integer;
+      DecElementDelimiter@1240030010 : Integer;
+      DecSegmentDelimiter@1240030011 : Integer;
+      DelimiterLine@1240030035 : Text[30];
+      DocLine@1240030015 : ARRAY [5] OF Text[1024];
+      EDIFACT@1240030036 : Boolean;
+      ElementDelimiter@1240030037 : Char;
+      ENVISATradePtnrNo@1240030038 : Code[20];
+      EnvISAMyTradePtnrNo@1240030039 : Code[20];
+      ENVGSTradePtnrNo@1240030040 : Code[20];
+      ENVGSMyTradePtnrNo@1240030041 : Code[20];
+      NewFileName@1240030016 : Text[100];
+      FileNo@1240030018 : Integer;
+      GSLine@1240030019 : Text[250];
+      ISAFound@1240030020 : Boolean;
+      ISALine@1240030021 : Text[108];
+      i@1240030022 : Integer;
+      j@1240030023 : Integer;
+      RenameImportFile@1240030024 : Text[250];
+      SegBegin@1240030042 : Boolean;
+      SegmentDelimiter@1240030043 : Text[1];
+      STLine@1240030025 : Text[250];
+      TempDocLine@1240030026 : Text[1024];
+      TradePtnrNo@1240030027 : Code[20];
+      WriteLine@1240030028 : Boolean;
+      GESegmentOut@1240030045 : Text[3];
+      IEASegmentOut@1240030046 : Text[4];
+      Text001@1001 : TextConst 'ENU=Common Receive File #1######################################################\';
+      Text002@1002 : TextConst 'ENU=Trading Partner     #2##################\';
+      Text003@1003 : TextConst 'ENU=New File            #3######################################################\';
+      Text004@1004 : TextConst 'ENU=Files Created       #4########\';
+      Text005@1005 : TextConst 'ENU=Segment             #5###############################################################################';
+      Text006@1006 : TextConst 'ENU=Trading Partner %1 EDI Document %2 not found.';
+      Text007@1007 : TextConst 'ENU=Trading Partner %1 EDI Document %2 type Import not found.';
+      CurrentFileName@1240020001 : Text[250];
+      EntryNo@1240020003 : Integer;
+      ENVUNBTradePtnrNo@1240020000 : Code[35];
+      ENVUNBMyTradePtnrNo@1240020005 : Code[35];
+      FileFound@1240020006 : Boolean;
+      Finished@1240020007 : Boolean;
+      Text008@1240020008 : TextConst 'ENU=File %1 in directory %2 cannot be processed.\ Verify file meets data format standards.';
+      Text009@1240020004 : TextConst 'ENU=EDI Template %1 does not have an Interface File Type of  EDIFACT Delimited.\Update template and reprocess.';
+      Text010@1240020009 : TextConst 'ENU=Multiple %1 EDI Documents were found for %2 Trade Partner.';
+      MyGSMatchFound@1240020010 : Boolean;
+      XMLFile@1240020012 : Boolean;
+      XMLSenderID@1240020020 : Code[50];
+      XMLReceiverID@1240020019 : Code[50];
+      FileOpen@1240020015 : Boolean;
+      CreateFile@1240020016 : Boolean;
+      DeclarationFound@1240020017 : Boolean;
+      Text301@1240020018 : TextConst 'ENU=Processing file %1 failed. Trade Partner could not be found.';
+      Text302@1240020011 : TextConst 'ENU=EDI Template %1 does not have an Interface File Type of  XML.\Update template and reprocess.';
+      Text303@1240020013 : TextConst 'ENU=EDI Document not found using node list %1 for Trade Partner %2.';
+      NumFiles@1240020030 : Integer;
+      Count@1240020031 : Integer;
+      LoopCount@1240020032 : Integer;
+      NonXML@1240020014 : Boolean;
+      OverrideSegDelim@1240020022 : Char;
+      OverrideElementDelim@1240020024 : Char;
+      OverrideDelimiterLine@1240020023 : Text[30];
+      OverrideDelimiters@1240020025 : Boolean;
+      XMLNodeCount@1240020027 : Integer;
+      OverrideSegDelimDec@1240020034 : Integer;
+      OverrideElemDelimDec@1240020036 : Integer;
+
+    PROCEDURE GetSegment@2() Resp@1240030000 : Boolean;
+    BEGIN
+      i := 1;
+      j := 1;
+      CLEAR(DocLine);
+      CLEAR(TempDocLine);
+      SegBegin := FALSE;
+      IF NOT ISAFound THEN BEGIN
+        GetISASegment;
+        EXIT(ISAFound);
+      END ELSE BEGIN
+        REPEAT
+          IF CommonInpFile.READ(Char) = 0 THEN
+            EXIT(FALSE);
+          IF NOT SegBegin THEN BEGIN
+            IF (Char = 10) OR (Char = 13) THEN
+              REPEAT
+                IF CommonInpFile.READ(Char) = 0 THEN
+                  EXIT(FALSE);
+              UNTIL (Char <> 10) AND (Char <> 13);
+            SegBegin := TRUE;
+          END;
+          IF EDIFACT THEN BEGIN
+            IF Char = DecSegmentDelimiter THEN
+              IF TempDocLine[i-1] <> '?' THEN BEGIN
+                TempDocLine[i] := Char;
+                DocLine[j] := TempDocLine;
+                IF GUIALLOWED THEN
+                  DispWindow.UPDATE(5,DocLine[j]);
+                EXIT(TRUE);
+              END
+          END ELSE
+            IF Char = DecSegmentDelimiter THEN BEGIN
+              IF OverrideDelimiters THEN
+                TempDocLine[i] := OverrideSegDelimDec
+              ELSE
+                TempDocLine[i] := Char;
+              DocLine[j] := TempDocLine;
+              IF GUIALLOWED THEN
+                DispWindow.UPDATE(5,DocLine[j]);
+              EXIT(TRUE);
+            END;
+          IF (OverrideDelimiters) AND (Char = DecElementDelimiter) THEN
+            TempDocLine[i] := OverrideElementDelim
+          ELSE
+            TempDocLine[i] := Char;
+          i := i + 1;
+          IF i = 1025 THEN BEGIN
+            DocLine[j] := TempDocLine;
+            CLEAR(TempDocLine);
+            i := 1;
+            j := j + 1;
+          END;
+        UNTIL j = 5;
+      END;
+    END;
+
+    PROCEDURE GetISASegment@1();
+    VAR
+      FilePos@1240020000 : Integer;
+    BEGIN
+      CLEAR(TempDocLine);
+      i := 1;
+      j := 0;
+
+      REPEAT
+        IF (CommonInpFile.READ(Char) = 0) THEN
+          EXIT;
+      UNTIL Char > 32;
+      TempDocLine[i] := Char;
+
+      FilePos := CommonInpFile.POS;
+      CommonInpFile.SEEK(3);
+      CommonInpFile.READ(Char);
+      IF Char > 127 THEN
+        OverrideDelimiters := TRUE
+      ELSE BEGIN
+        CommonInpFile.SEEK(105);
+        CommonInpFile.READ(Char);
+        IF Char > 127 THEN
+          OverrideDelimiters := TRUE;
+      END;
+      CommonInpFile.SEEK(FilePos);
+      FilePos := CommonInpFile.POS;
+
+      REPEAT
+        i := i + 1;
+        CharCount := CommonInpFile.READ(Char);
+        TempDocLine[i] := Char;
+        CASE i OF
+          3:
+            BEGIN
+              IF COPYSTR(TempDocLine,1,3) = 'UNA' THEN BEGIN
+                REPEAT
+                  i := i + 1;
+                  CharCount := CommonInpFile.READ(Char);
+                  TempDocLine[i] := Char;
+                UNTIL i = 9;
+                DecComponentDelimiter := TempDocLine[4];
+                DecElementDelimiter := TempDocLine[5];
+                DecSegmentDelimiter := TempDocLine[9];
+                REPEAT
+                  IF CommonInpFile.READ(Char) = 0 THEN
+                    EXIT;
+                UNTIL (Char <> 10) AND (Char <> 13);
+                CLEAR(TempDocLine);
+                i := 1;
+                TempDocLine[i] := Char;
+                REPEAT
+                  i := i + 1;
+                  IF CommonInpFile.READ(Char) = 0 THEN
+                    EXIT;
+                  TempDocLine[i] := Char;
+                UNTIL i = 3;
+              END;
+              IF COPYSTR(TempDocLine,1,3) = 'UNB' THEN BEGIN
+                DecComponentDelimiter := 58;
+                DecElementDelimiter := 43;
+                DecSegmentDelimiter := 39;
+                REPEAT
+                  i := i + 1;
+                  IF CommonInpFile.READ(Char) = 0 THEN
+                    EXIT;
+                  TempDocLine[i] := Char;
+                UNTIL TempDocLine[i] = DecSegmentDelimiter;
+                ISAFound := TRUE;
+                EDIFACT := TRUE;
+                DocLine[1] := TempDocLine;
+                SetupDelimiterLine;
+                EXIT;
+              END ELSE
+                EDIFACT := FALSE;
+            END;
+          4:
+            BEGIN
+              DecElementDelimiter := TempDocLine[i];
+              IF OverrideDelimiters THEN BEGIN
+                IF Char > 127 THEN
+                  TempDocLine[i] := OverrideElementDelim
+                ELSE BEGIN
+                  OverrideElemDelimDec := Char;
+                  OverrideElementDelim := Char;
+                  TempDocLine[i] := Char;
+                END;
+              END ELSE
+                TempDocLine[i] := Char;
+            END;
+          105:
+            DecComponentDelimiter := TempDocLine[i];
+          106:
+            BEGIN
+              DecSegmentDelimiter := TempDocLine[i];
+              IF OverrideDelimiters THEN
+                TempDocLine[i] := OverrideSegDelimDec
+              ELSE
+                TempDocLine[i] := Char;
+            END;
+          ELSE
+            IF Char = DecElementDelimiter THEN
+              IF OverrideDelimiters THEN
+                TempDocLine[i] := OverrideElemDelimDec;
+        END;
+      UNTIL i = 106;
+
+      SetupDelimiterLine;
+
+      IF COPYSTR(TempDocLine,1,3) = 'ISA' THEN BEGIN
+        ISAFound := TRUE;
+        DocLine[1] := TempDocLine;
+        ENVISATradePtnrNo := GetElement(TempDocLine,6);
+        EnvISAMyTradePtnrNo := GetElement(TempDocLine,8);
+        IF GUIALLOWED THEN
+          DispWindow.UPDATE(5,DocLine[1]);
+      END;
+    END;
+
+    PROCEDURE SetupDelimiterLine@5();
+    BEGIN
+      CLEAR(DelimiterLine);
+      IF EDIFACT THEN
+        DelimiterLine :=
+          'DELIMITERS(' +
+          CONVERTSTR(FORMAT(DecSegmentDelimiter,3),' ','0') +
+          ',' +
+          CONVERTSTR(FORMAT(DecElementDelimiter,3),' ','0') +
+          ',' +
+          CONVERTSTR(FORMAT(DecComponentDelimiter,3),' ','0') +
+          ')'
+      ELSE BEGIN
+        IF OverrideDelimiters THEN
+          OverrideDelimiterLine :=
+            'DELIMITERS(' +
+            CONVERTSTR(FORMAT(OverrideSegDelimDec,3),' ','0') +
+            ',' +
+            CONVERTSTR(FORMAT(OverrideElemDelimDec,3),' ','0') +
+            ',' +
+            CONVERTSTR(FORMAT(DecComponentDelimiter,3),' ','0') + ')'
+        ELSE
+          DelimiterLine :=
+            'DELIMITERS(' +
+            CONVERTSTR(FORMAT(DecSegmentDelimiter,3),' ','0') +
+            ',' +
+            CONVERTSTR(FORMAT(DecElementDelimiter,3),' ','0')+
+            ',' +
+            CONVERTSTR(FORMAT(DecComponentDelimiter,3),' ','0') +
+            ')';
+      END;
+    END;
+
+    PROCEDURE ClearAllTempFiles@6();
+    VAR
+      FileInfo@1240020001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo";
+      Count@1240020002 : Integer;
+      LoopCount@1240020003 : Integer;
+      FileList@1240020005 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.IList";
+      Directory@1240020004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+      List@1240020000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+    BEGIN
+      Count := 0;
+      FileList := Directory.EnumerateFiles(EDISetup."Common Receive Path" + 'Temp\');
+      List := List.List;
+      List.AddRange(FileList);
+      IF List.Count > 0 THEN BEGIN
+        LoopCount := List.Count;
+        REPEAT
+          CLEAR(FileInfo);
+          FileInfo := FileInfo.FileInfo(FORMAT(List.Item(Count)));
+          FileInfo.Delete;
+          Count += 1;
+        UNTIL Count = LoopCount;
+      END;
+    END;
+
+    PROCEDURE GetElement@8(SegmentLine@1240030001 : Text[250];ElementNumber@1240030002 : Integer) ElementValue@1240030000 : Text[250];
+    VAR
+      DelimCount@1240030003 : Integer;
+      x@1240030004 : Integer;
+      y@1240030005 : Integer;
+      CurrentElementDelim@1240020000 : Char;
+    BEGIN
+      ElementValue := '';
+      x := 1;
+      y := 1;
+      REPEAT
+        IF OverrideDelimiters THEN
+          CurrentElementDelim := OverrideElementDelim
+        ELSE
+          CurrentElementDelim := DecElementDelimiter;
+        IF SegmentLine[x] = CurrentElementDelim THEN BEGIN
+          DelimCount := DelimCount + 1;
+          x := x + 1;
+        END;
+        IF DelimCount = ElementNumber THEN BEGIN
+          IF SegmentLine[x]  = DecComponentDelimiter THEN
+            DelimCount := DelimCount + 1
+          ELSE BEGIN
+            ElementValue[y] := SegmentLine[x];
+            y := y + 1;
+          END;
+        END;
+        x := x + 1;
+      UNTIL DelimCount > ElementNumber;
+    END;
+
+    PROCEDURE GetFile@1240020000(List@1240020000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";NumFiles@1240020001 : Integer);
+    VAR
+      FileInfo@1240020002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo";
+    BEGIN
+      CurrentFileName := FORMAT(List.Item(NumFiles));
+      CLEAR(FileInfo);
+      FileInfo := FileInfo.FileInfo(CurrentFileName);
+      CurrentFileName := FORMAT(FileInfo.Name);
+    END;
+
+    PROCEDURE GetCurrentFile@1240020001(List@1240020000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1");
+    VAR
+      FileInfo@1240020001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo";
+    BEGIN
+      REPEAT
+        FileInfo := FileInfo.FileInfo(FORMAT(List.Item(Count)));
+        IF FORMAT(FileInfo.Name) = CurrentFileName THEN BEGIN
+          FileFound := TRUE;
+          Finished := TRUE;
+          EXIT;
+        END;
+        Count += 1;
+      UNTIL Count = LoopCount;
+    END;
+
+    LOCAL PROCEDURE XMLFileCheck@1240020003(FileInfo@1240020001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo") : Boolean;
+    VAR
+      CommentString@1240020000 : Text[250];
+      NewFileName@1240020002 : Text;
+    BEGIN
+      CommonInpFile.SEEK(0);
+      CommonInpFile.READ(Char);
+      IF (Char = 0) OR (Char <>  '<')  THEN
+        EXIT(TRUE);
+
+      CommonInpFile.CLOSE;
+
+      FileNo := FileNo + 1;
+      EDISetup.GET;
+      EDISetup."Last Import Sequence No." := INCSTR(EDISetup."Last Import Sequence No.");
+      EDISetup.MODIFY;
+      COMMIT;
+
+      NewFileName :=
+        'XMLFile' + '-' + FORMAT(FileNo) + '-' +
+        EDISetup."Last Import Sequence No." + '.xml';
+      COPY(
+        EDISetup."Common Receive Path" + FORMAT(FileInfo.Name),
+        EDISetup."Common Receive Path" + 'Temp\' + NewFileName);
+
+      EDIFileProcess.RESET;
+      IF EDIFileProcess.FIND('+') THEN
+        EntryNo := FileNo;
+      EDIFileProcess.RESET;
+      EDIFileProcess."Entry No." := EntryNo;
+      EDIFileProcess.Directory := EDISetup."Common Receive Path" + 'Temp\';
+      EDIFileProcess.File := NewFileName;
+      EDIFileProcess."Import Sequence No." := EDISetup."Last Import Sequence No.";
+      EDIFileProcess.INSERT;
+      COMMIT;
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE ReceiveXML@1240020002();
+    VAR
+      XMLDocIn@1240020005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      FileName@1240020006 : Text[250];
+    BEGIN
+      EDIFileProcess.RESET;
+      EDIFileProcess.FIND('-');
+      REPEAT
+        FileName := EDIFileProcess.Directory + EDIFileProcess.File;
+        LoadXMLDocument(FileName,XMLDocIn);
+      UNTIL EDIFileProcess.NEXT = 0;
+    END;
+
+    PROCEDURE LoadXMLDocument@1000000000(FileName@1000000000 : Text[250];XMLDocIn@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument");
+    VAR
+      EDIDocument@1240020004 : Record 14002353;
+      EDIDocument2@1240020012 : Record 14002353;
+      EDITradePartner@1240020008 : Record 14002360;
+      EDITradePartner2@1240020007 : Record 14002360;
+      XMLDocument@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLNodeList@1000000002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      XMLCurrNode@1240020001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      TempXMLAttributeList@1240020006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamedNodeMap";
+      XMLNsMgr@1240020020 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamespaceManager";
+      Window@1000000004 : Dialog;
+      TradePartnerFound@1240020005 : Boolean;
+      AttributeFound@1240020009 : Boolean;
+      XMLEDIDocNo@1240020010 : Code[30];
+      Loop@1240020011 : Integer;
+      LoopCount@1240020013 : Integer;
+      ResponseDoc@1240020002 : Boolean;
+      Nodename@1240020003 : Text[250];
+      ReceiverID@1240020014 : Boolean;
+      SenderID@1240020015 : Boolean;
+      NumberOfNodes@1240020016 : Integer;
+      Counter@1240020018 : Integer;
+      ReceiverIDFound@1240020017 : Boolean;
+      SenderIDFound@1240020019 : Boolean;
+      DocNameSpace@1240020021 : Text[200];
+    BEGIN
+      XMLSenderID := '';
+      XMLReceiverID := '';
+
+      IF ISNULL(XMLDocument) THEN
+        XMLDocument := XMLDocument.XmlDocument;
+      XMLDocument.Load(FileName);
+      XMLNodeList := XMLDocument.ChildNodes;
+      IF XMLNodeList.Count = 0 THEN
+        EXIT
+      ELSE
+        XMLFile := TRUE;
+
+      XMLCurrNode := XMLDocument.SelectSingleNode('//cXML');
+      IF ISNULL(XMLCurrNode) THEN BEGIN
+        TradePartnerFound := FALSE;
+        EDIDocument.RESET;
+        EDIDocument.SETCURRENTKEY("Receiver ID Node List","Sender ID Node List",Type);
+        EDIDocument.SETFILTER("Sender ID Node List",'<>%1','');
+        EDIDocument.SETRANGE(Type,EDIDocument.Type::Import);
+        EDIDocument.SETFILTER(Status,'<>%1',EDIDocument.Status::Inactive);
+        IF EDIDocument.FIND('-') THEN
+          REPEAT
+            XMLReceiverID := '';
+            XMLSenderID := '';
+            XMLEDIDocNo := '';
+            DocNameSpace := '';
+            AttributeFound := FALSE;
+            ReceiverIDFound:= FALSE;
+            NumberOfNodes := 0;
+            Counter := 0;
+
+            XMLNsMgr := XMLNsMgr.XmlNamespaceManager(XMLDocument.NameTable);
+            XMLNsMgr.AddNamespace(EDIDocument."Namespace Prefix",EDIDocument.Namespace);
+            IF EDIDocument."Receiver ID Node List" <> '' THEN BEGIN
+              XMLNodeList := XMLDocument.SelectNodes(EDIDocument."Receiver ID Node List",XMLNsMgr);
+              NumberOfNodes := XMLNodeList.Count;
+              IF NumberOfNodes > 0 THEN
+                REPEAT
+                  XMLCurrNode := XMLNodeList.Item(Counter);
+                  IF NOT ISNULL(XMLCurrNode) THEN BEGIN
+                    IF EDIDocument."Receiver ID Attribute" = '' THEN BEGIN
+                      XMLReceiverID := XMLCurrNode.InnerText;
+                      IF XMLReceiverID   = EDIDocument."Receiver ID" THEN
+                         ReceiverIDFound := TRUE
+                      ELSE
+                        XMLReceiverID := '';
+                    END ELSE BEGIN
+                      TempXMLAttributeList := XMLCurrNode.Attributes;
+                      Loop := 0;
+                      LoopCount := TempXMLAttributeList.Count;
+                      REPEAT
+                        XMLCurrNode := TempXMLAttributeList.Item(Loop);
+                        Nodename := XMLCurrNode.Name;
+                        AttributeFound := FALSE;
+                        IF XMLCurrNode.Name = EDIDocument."Receiver ID Attribute" THEN BEGIN
+                          XMLReceiverID := XMLCurrNode.InnerText;
+                          IF XMLReceiverID = EDIDocument."Receiver ID" THEN BEGIN
+                            AttributeFound := TRUE;
+                            ReceiverIDFound := TRUE;
+                          END ELSE
+                            XMLReceiverID := '';
+                        END ELSE
+                          XMLReceiverID := '';
+                        Loop += 1
+                      UNTIL (AttributeFound) OR (Loop = LoopCount);
+                    END;
+                  END;
+                  Counter += 1;
+                UNTIL (ReceiverIDFound) OR (Counter = NumberOfNodes);
+            END;
+
+            Counter := 0;
+            NumberOfNodes := 0;
+            AttributeFound := FALSE;
+            SenderIDFound := FALSE;
+
+            XMLNodeList := XMLDocument.SelectNodes(EDIDocument."Sender ID Node List",XMLNsMgr);
+            NumberOfNodes := XMLNodeList.Count;
+            IF NumberOfNodes > 0 THEN
+              REPEAT
+                XMLCurrNode := XMLNodeList.Item(Counter);
+                IF NOT ISNULL(XMLCurrNode) THEN BEGIN
+                  IF EDIDocument."Sender ID Attribute" = '' THEN BEGIN
+                    XMLSenderID := XMLCurrNode.InnerText;
+                    IF XMLSenderID = EDIDocument."Sender ID" THEN
+                      SenderIDFound := TRUE
+                    ELSE
+                      XMLSenderID := '';
+                  END ELSE BEGIN
+                    TempXMLAttributeList := XMLCurrNode.Attributes;
+                    Loop := 0;
+                    LoopCount := TempXMLAttributeList.Count;
+                    REPEAT
+                      XMLCurrNode := TempXMLAttributeList.Item(Loop);
+                      Nodename := XMLCurrNode.Name;
+                      AttributeFound := FALSE;
+                      IF XMLCurrNode.Name = EDIDocument."Sender ID Attribute" THEN BEGIN
+                        XMLSenderID := XMLCurrNode.InnerText;
+                        IF XMLSenderID = EDIDocument."Sender ID" THEN BEGIN
+                          AttributeFound := TRUE;
+                          SenderIDFound := TRUE;
+                        END ELSE
+                          XMLSenderID := '';
+                      END ELSE
+                        XMLSenderID := '';
+                      Loop += 1;
+                    UNTIL (AttributeFound) OR (Loop = LoopCount);
+                  END;
+                END;
+                Counter += 1;
+              UNTIL (SenderIDFound) OR (Counter = NumberOfNodes);
+
+              XMLCurrNode :=
+                XMLDocument.SelectSingleNode(EDIDocument."EDI Document No. Node List",XMLNsMgr);
+              IF ISNULL(XMLCurrNode) THEN
+                XMLEDIDocNo := EDIDocument."EDI Document No. Node List"
+              ELSE
+                XMLEDIDocNo := XMLCurrNode.Name;
+
+              IF (XMLReceiverID = EDIDocument."Receiver ID") AND
+                 (XMLSenderID = EDIDocument."Sender ID") AND
+                 (XMLEDIDocNo = EDIDocument."EDI Document No.")
+              THEN BEGIN
+                TradePartnerFound := TRUE;
+                EDIDocument2.COPY(EDIDocument);
+               TradePtnrNo := EDIDocument2."Trade Partner No."
+              END;
+          UNTIL (TradePartnerFound) OR (EDIDocument.NEXT = 0);
+          IF NOT TradePartnerFound THEN BEGIN
+            EDITradePartner.RESET;
+            EDITradePartner.SETCURRENTKEY("Receiver ID Node List","Sender ID Node List");
+            EDITradePartner.SETFILTER("Receiver ID Node List",'<>%1','');
+            EDITradePartner.SETFILTER("Sender ID Node List",'<>%1','');
+            IF EDITradePartner.FIND('-') THEN
+              REPEAT
+                XMLReceiverID := '';
+                XMLSenderID := '';
+                ReceiverIDFound := FALSE;
+                NumberOfNodes := 0;
+                Counter := 0;
+
+                XMLNsMgr := XMLNsMgr.XmlNamespaceManager(XMLDocument.NameTable);
+                XMLNsMgr.AddNamespace(EDITradePartner."Namespace Prefix",EDITradePartner.Namespace);
+                IF EDITradePartner."Receiver ID Node List" <> '' THEN BEGIN
+                  XMLNodeList := XMLDocument.SelectNodes(EDITradePartner."Receiver ID Node List",XMLNsMgr);
+                  NumberOfNodes := XMLNodeList.Count;
+                  IF NumberOfNodes > 0 THEN
+                    REPEAT
+                      XMLCurrNode := XMLNodeList.Item(Counter);
+                      IF NOT ISNULL(XMLCurrNode) THEN BEGIN
+                        IF EDITradePartner."Receiver ID Attribute" = '' THEN BEGIN
+                          XMLReceiverID := XMLCurrNode.InnerText;
+                          IF XMLReceiverID   = EDITradePartner."Receiver ID" THEN
+                            ReceiverIDFound := TRUE
+                          ELSE
+                            XMLReceiverID := '';
+                        END ELSE BEGIN
+                          TempXMLAttributeList := XMLCurrNode.Attributes;
+                          Loop := 0;
+                          LoopCount := TempXMLAttributeList.Count;
+                          REPEAT
+                            XMLCurrNode := TempXMLAttributeList.Item(Loop);
+                            Nodename := XMLCurrNode.Name;
+                            AttributeFound := FALSE;
+                            IF XMLCurrNode.Name = EDITradePartner."Receiver ID Attribute" THEN BEGIN
+                              XMLReceiverID := XMLCurrNode.InnerText;
+                              IF XMLReceiverID = EDIDocument."Receiver ID" THEN BEGIN
+                                AttributeFound := TRUE;
+                                ReceiverIDFound := TRUE;
+                              END ELSE
+                                XMLReceiverID := '';
+                            END ELSE
+                              XMLReceiverID := '';
+                            Loop += 1;
+                          UNTIL (AttributeFound) OR (Loop = LoopCount);
+                        END;
+                      END;
+                      Counter += 1;
+                    UNTIL (ReceiverIDFound) OR (Counter = NumberOfNodes);
+                END;
+
+                NumberOfNodes := 0;
+                Counter := 0;
+                SenderIDFound := FALSE;
+
+                XMLNodeList := XMLDocument.SelectNodes(EDITradePartner."Sender ID Node List",XMLNsMgr);
+                NumberOfNodes := XMLNodeList.Count;
+                IF NumberOfNodes > 0 THEN
+                  REPEAT
+                    XMLCurrNode := XMLNodeList.Item(Counter);
+                    IF NOT ISNULL(XMLCurrNode) THEN BEGIN
+                      IF EDITradePartner."Sender ID Attribute" = '' THEN BEGIN
+                        XMLSenderID := XMLCurrNode.InnerText;
+                        IF XMLSenderID = EDITradePartner."Sender ID" THEN
+                          SenderIDFound := TRUE
+                        ELSE
+                          XMLSenderID := '';
+                      END ELSE BEGIN
+                        TempXMLAttributeList := XMLCurrNode.Attributes;
+                        Loop := 0;
+                        LoopCount := TempXMLAttributeList.Count;
+                        REPEAT
+                          XMLCurrNode := TempXMLAttributeList.Item(Loop);
+                          Nodename := XMLCurrNode.Name;
+                          AttributeFound := FALSE;
+                          IF XMLCurrNode.Name = EDITradePartner."Sender ID Attribute" THEN BEGIN
+                            XMLSenderID := XMLCurrNode.InnerText;
+                            IF XMLSenderID = EDITradePartner."Sender ID" THEN BEGIN
+                              AttributeFound := TRUE;
+                              SenderIDFound := TRUE;
+                            END ELSE
+                              XMLSenderID := '';
+                          END ELSE
+                            XMLSenderID := '';
+                          Loop += 1;
+                        UNTIL (AttributeFound) OR (Loop = LoopCount);
+                      END;
+                      Counter += 1;
+                    END;
+                  UNTIL (SenderIDFound) OR (Counter = NumberOfNodes);
+
+                IF (XMLReceiverID = EDITradePartner."Receiver ID") AND
+                   (XMLSenderID = EDITradePartner."Sender ID")
+                THEN BEGIN
+                  TradePartnerFound := TRUE;
+                  EDITradePartner2.COPY(EDITradePartner);
+                  TradePtnrNo := EDITradePartner2."No.";
+                  XMLCurrNode :=
+                    XMLDocument.SelectSingleNode(EDITradePartner."EDI Document No. Node List",XMLNsMgr);
+                  IF ISNULL(XMLCurrNode) THEN
+                    XMLEDIDocNo := EDITradePartner."EDI Document No. Node List"
+                  ELSE
+                    XMLEDIDocNo := XMLCurrNode.Name;
+                  EDIDocument2.RESET;
+                  EDIDocument2.SETRANGE("Trade Partner No.",EDITradePartner2."No.");
+                  EDIDocument2.SETRANGE("EDI Document No.",XMLEDIDocNo);
+                  EDIDocument2.SETRANGE(Type,EDIDocument2.Type::Import);
+                  EDIDocument2.SETFILTER(Status,'<>%1',EDIDocument2.Status::Inactive);
+                  IF NOT EDIDocument2.FIND('-') THEN
+                    IF ISNULL(XMLCurrNode) THEN
+                      ERROR(Text303,XMLEDIDocNo,TradePtnrNo)
+                    ELSE
+                      ERROR(Text006,TradePtnrNo,XMLEDIDocNo);
+                END;
+              UNTIL (TradePartnerFound) OR (EDITradePartner.NEXT = 0);
+          END;
+          IF TradePartnerFound THEN BEGIN
+            EDIDocument2.TESTFIELD(EDIDocument2."Interface File");
+            IF GUIALLOWED THEN
+              DispWindow.UPDATE(2,TradePtnrNo);
+            EDITemplate.GET(EDIDocument2."EDI Template Code");
+            IF EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::XML THEN BEGIN
+              NewFileName :=
+                EDIDocument2."Interface File" + '-' + EDIDocument2."EDI Document No." + '-' +
+                EDIFileProcess."Import Sequence No." + '.xml';
+              IF GUIALLOWED THEN
+                DispWindow.UPDATE(3,NewFileName);
+              FileNo := EDIFileProcess."Entry No.";
+              IF GUIALLOWED THEN
+                DispWindow.UPDATE(4,FileNo);
+              EDIFileProcess.Directory := EDITemplate."Interface File Path" + '\Inbox\';
+              EDIFileProcess.File := DELCHR(NewFileName,'=',':');
+              EDIFileProcess.MODIFY;
+              COMMIT;
+              COPY(
+                FileName,
+                EDISetup."Common Receive Path" + 'Temp\' + EDIFileProcess.File);
+            END ELSE
+              ERROR(Text302,EDITemplate.Code);
+          END ELSE
+            ERROR(Text301,CurrentFileName);
+      END ELSE BEGIN
+        ResponseDoc := FALSE;
+        XMLNodeList := XMLCurrNode.ChildNodes;
+        IF XMLNodeList.Count > 0 THEN BEGIN
+          XMLCurrNode := XMLDocument.SelectSingleNode('//Response');
+          IF NOT ISNULL(XMLCurrNode) THEN BEGIN
+            ResponseDoc := TRUE;
+            GetCXMLResponseTP(XMLDocument,XMLCurrNode,TradePtnrNo);
+          END ELSE BEGIN;
+            XMLCurrNode := XMLDocument.SelectSingleNode('//cXML');
+            XMLNodeList := XMLCurrNode.ChildNodes;
+            XMLCurrNode := XMLDocument.SelectSingleNode('//Header/From/Credential/Identity');
+            IF NOT ISNULL(XMLCurrNode) THEN
+              XMLSenderID := XMLCurrNode.InnerText;
+              XMLCurrNode := XMLDocument.SelectSingleNode('//Header/To/Credential/Identity');
+              IF NOT ISNULL(XMLCurrNode) THEN
+                XMLReceiverID := XMLCurrNode.InnerText;
+              EDITradePtnr.RESET;
+              EDITradePtnr.SETCURRENTKEY("To Identifier","From Identifier");
+              EDITradePtnr.SETRANGE("To Identifier",XMLReceiverID);
+              EDITradePtnr.SETRANGE("From Identifier",XMLSenderID);
+              IF EDITradePtnr.FIND('-') THEN
+                TradePtnrNo := EDITradePtnr."No."
+              ELSE
+                TradePtnrNo := XMLSenderID;
+          END;
+        END;
+        IF ResponseDoc THEN
+          XMLCurrNode := XMLDocument.SelectSingleNode('//Response')
+        ELSE
+          XMLCurrNode := XMLDocument.SelectSingleNode('//Request');
+        IF NOT ResponseDoc THEN BEGIN
+          XMLNodeList := XMLCurrNode.ChildNodes;
+          IF XMLNodeList.Count > 0 THEN
+            XMLCurrNode := XMLNodeList.ItemOf(0);
+        END;
+        Nodename := XMLCurrNode.Name;
+        EDIDocument.RESET;
+        EDIDocument.SETRANGE("Trade Partner No.",TradePtnrNo);
+        EDIDocument.SETRANGE("EDI Document No.",XMLCurrNode.Name);
+        EDIDocument.SETRANGE(Type,EDIDocument.Type::Import);
+        EDIDocument.SETFILTER(Status,'<>%1',EDIDocument.Status::Inactive);
+        IF NOT EDIDocument.FIND('-') THEN
+          ERROR(Text006,TradePtnrNo,XMLCurrNode.Name);
+        EDIDocument.TESTFIELD(EDIDocument."Interface File");
+        IF GUIALLOWED THEN
+          DispWindow.UPDATE(2,TradePtnrNo);
+        EDITemplate.GET(EDIDocument."EDI Template Code");
+        NewFileName :=
+          EDIDocument."Interface File" + '-' + EDIDocument."EDI Document No." + '-' +
+          EDIFileProcess."Import Sequence No." + '.xml';
+        IF GUIALLOWED THEN
+          DispWindow.UPDATE(3,NewFileName);
+        FileNo := EDIFileProcess."Entry No.";
+        IF GUIALLOWED THEN
+          DispWindow.UPDATE(4,FileNo);
+        EDIFileProcess.Directory := EDITemplate."Interface File Path" + '\Inbox\';
+        EDIFileProcess.File := DELCHR(NewFileName,'=',':');
+        EDIFileProcess.MODIFY;
+        COMMIT;
+        COPY(
+          FileName,
+          EDISetup."Common Receive Path" + 'Temp\' + EDIFileProcess.File);
+       END;
+    END;
+
+    LOCAL PROCEDURE GetFileName@1240020006(VAR CurrentFileName@1240020000 : Text[250]);
+    VAR
+      EndPosition@1240020003 : Integer;
+      FileName@1240020002 : Text[250];
+      ImportFilePath@1240020001 : Text[250];
+    BEGIN
+      EndPosition := 0;
+      WHILE STRPOS(COPYSTR(CurrentFileName,EndPosition + 1),'\') > 0 DO
+        EndPosition := EndPosition + STRPOS(COPYSTR(CurrentFileName,EndPosition + 1),'\');
+      ImportFilePath := COPYSTR(CurrentFileName,1,EndPosition);
+      CurrentFileName := COPYSTR(CurrentFileName,EndPosition + 1);
+    END;
+
+    LOCAL PROCEDURE GetCXMLResponseTP@1240020008(XMLDocument@1240020007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";VAR XMLCurrNode@1240020001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";VAR TradePtnrNo@1240020008 : Code[20]);
+    VAR
+      EDISendDocHdr@1240020000 : Record 14002369;
+      TempXMLAttributeList@1240020004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNamedNodeMap";
+      Loop@1240020003 : Integer;
+      LoopCount@1240020002 : Integer;
+      PayloadID@1240020005 : Text[250];
+      AttributeFound@1240020006 : Boolean;
+      NodeName@1240020009 : Text[250];
+    BEGIN
+      XMLCurrNode := XMLDocument.SelectSingleNode('//cXML');
+      NodeName := XMLCurrNode.Name;
+      TempXMLAttributeList := XMLCurrNode.Attributes;
+      Loop := 0;
+      LoopCount := TempXMLAttributeList.Count;
+      REPEAT
+        XMLCurrNode := TempXMLAttributeList.Item(Loop);
+        NodeName := XMLCurrNode.Name;
+        AttributeFound := FALSE;
+        IF XMLCurrNode.Name = 'payloadID'THEN BEGIN
+          AttributeFound := TRUE;
+          PayloadID := XMLCurrNode.InnerText;
+          EDISendDocHdr.RESET;
+          EDISendDocHdr.SETRANGE("cXML Payload ID",PayloadID);
+          IF EDISendDocHdr.FIND('-') THEN
+            TradePtnrNo := EDISendDocHdr."Trade Partner No."
+          ELSE
+            TradePtnrNo := '';
+        END ELSE
+          PayloadID := '';
+        Loop += 1
+      UNTIL (AttributeFound) OR (Loop = LoopCount);
+    END;
+
+    BEGIN
+    {
+      // This codeunit reads an EDI raw import file and creates multiple files by document type.
+    }
+    END.
+  }
+}
+

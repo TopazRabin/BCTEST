@@ -1,0 +1,1653 @@
+OBJECT Table 14000793 FedEx Option Page Extended
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/13/20;
+    Time=12:00:00 PM;
+    Version List=SE0.62;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               CASE Type OF
+                 Type::Package:
+                   BEGIN
+                     Package.TESTFIELD("No.");
+
+                     DocumentOptionPageFound := FALSE;
+                     IF Package."Source ID" <> '' THEN
+                       IF FedExOptionPageExt.GET(
+                            FedExOptionPageExt.Type::Document,Package."Source ID",
+                            Package."Source Type",Package."Source Subtype")
+                       THEN BEGIN
+                         DocumentOptionPageFound := TRUE;
+
+                         Rec := FedExOptionPageExt;
+                       END;
+
+                     "Shipping Agent Code" := Package."Shipping Agent Code";
+                     "Shipping Agent Service" := Package."Shipping Agent Service";
+                     "World Wide Service" := Package."World Wide Service";
+
+                     IF NOT DocumentOptionPageFound THEN BEGIN
+                       FedExOptionPageExt.RESET;
+                       FedExOptionPageExt.SETCURRENTKEY(
+                         Type,"Shipping Agent Code","Shipping Agent Service","World Wide Service");
+                       FedExOptionPageExt.SETRANGE(Type,FedExOptionPageExt.Type::Setup);
+                       FedExOptionPageExt.SETRANGE("Shipping Agent Code",Package."Shipping Agent Code");
+                       FedExOptionPageExt.SETRANGE("Shipping Agent Service",Package."Shipping Agent Service");
+                       FedExOptionPageExt.SETRANGE("World Wide Service",Package."World Wide Service");
+                       IF FedExOptionPageExt.FIND('-') THEN
+                         Rec := FedExOptionPageExt;
+
+                       IF Package."Source Type" <> 0 THEN BEGIN
+                         PackingControl.TransferFromSource(
+                           Package."Source Type",Package."Source Subtype",Package."Source ID");
+
+                         TransferFromPackingControl(PackingControl);
+                       END;
+                     END;
+
+                     Type := Type::Package;
+                     "Source ID" := Package."No.";
+                     "Source Type" := 0;
+                     "Source Subtype" := 0;
+                     "Second Source ID" := '';
+
+                     IF (Package."Ship-to No." <> '') AND
+                        ((Package."Source ID" = '') OR NOT DocumentOptionPageFound)
+                     THEN BEGIN
+                       CLEAR(FedExOptionPageExt);
+                       CASE TRUE OF
+                         Package."Ship-to Type" = Package."Ship-to Type"::Customer:
+                           IF FedExOptionPageExt.GET(
+                                FedExOptionPageExt.Type::"Master Data",Package."Ship-to No.",DATABASE::Customer,
+                                0,Package."Ship-to Code")
+                           THEN
+                             ;
+                         Package."Ship-to Type" = Package."Ship-to Type"::Vendor:
+                           IF FedExOptionPageExt.GET(
+                                FedExOptionPageExt.Type::"Master Data",Package."Ship-to No.",DATABASE::Vendor,
+                                0,Package."Ship-to Code")
+                           THEN
+                             ;
+                         Package."Ship-to Type" = Package."Ship-to Type"::Location:
+                           IF FedExOptionPageExt.GET(
+                                FedExOptionPageExt.Type::"Master Data",Package."Ship-to No.",DATABASE::Location,
+                                0,'')
+                           THEN
+                             ;
+                       END;
+
+                       IF FedExOptionPageExt."Source ID" <> '' THEN
+                         MergeOptionPageExt(FedExOptionPageExt);
+                     END;
+
+                     IF GetShippingAccount(
+                          Package."Ship-to Type",Package."Ship-to No.",Package."Ship-to Code",
+                          Package."Shipping Agent Code",Package."Third Party Ship. Account No.")
+                     THEN
+                       TransferFromShippingAccount(ShippingAccount);
+                   END;
+                 Type::Document:
+                   BEGIN
+                     TESTFIELD("Source ID");
+                     TESTFIELD("Source Type");
+
+                     PackingControl.TransferFromSource("Source Type","Source Subtype","Source ID");
+                     TransferFromPackingControl(PackingControl);
+
+                     IF GetShippingAccount(
+                          PackingControl."Ship-to Type",PackingControl."Ship-to No.",PackingControl."Ship-to Code",
+                          PackingControl."Shipping Agent Code",PackingControl."Third Party Ship. Account No.")
+                     THEN
+                       TransferFromShippingAccount(ShippingAccount);
+                   END;
+                 Type::"Bill of Lading":
+                   BEGIN
+                     TESTFIELD("Source ID");
+
+                     BillOfLading.GET("Source ID");
+                     BillOfLading.TESTFIELD(Released,FALSE);
+                     TransferFromBillOfLading(BillOfLading);
+
+                     IF GetShippingAccount(
+                          BillOfLading."Ship-to Type",BillOfLading."Ship-to No.",BillOfLading."Ship-to Code",
+                          BillOfLading."Shipping Agent Code",BillOfLading."Third Party Ship. Account No.")
+                     THEN
+                       TransferFromShippingAccount(ShippingAccount);
+                   END;
+                 Type::"Master Data":
+                    BEGIN
+                     TESTFIELD("Source ID");
+                     TESTFIELD("Source Type");
+                    END;
+                 ELSE
+                   TESTFIELD("Source ID");
+               END;
+             END;
+
+    OnModify=BEGIN
+               CASE Type OF
+                 Type::Package:
+                   BEGIN
+                     Package.GET("Source ID");
+                     Package.TESTFIELD(Closed,FALSE);
+                   END;
+                 Type::"Bill of Lading":
+                   BEGIN
+                     BillOfLading.GET("Source ID");
+                     BillOfLading.TESTFIELD(Released,FALSE);
+                   END;
+               END;
+             END;
+
+    OnDelete=BEGIN
+               CASE Type OF
+                 Type::Package:
+                   BEGIN
+                     IF Package.GET("Source ID") THEN
+                       Package.TESTFIELD(Closed,FALSE);
+                   END;
+                 Type::"Bill of Lading":
+                   BEGIN
+                     BillOfLading.GET("Source ID");
+                     BillOfLading.TESTFIELD(Released,FALSE);
+                   END;
+               END;
+             END;
+
+    CaptionML=ENU=FedEx Option Page Extended;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Type                ;Option        ;CaptionML=ENU=Type;
+                                                   OptionCaptionML=ENU=Package,Document,Setup,Rate Shop,Item,Resource,Standard Option,Bill of Lading,Master Data;
+                                                   OptionString=Package,Document,Setup,Rate Shop,Item,Resource,Standard Option,Bill of Lading,Master Data;
+                                                   Editable=No }
+    { 2   ;   ;Source ID           ;Code20        ;TableRelation=IF (Type=CONST(Package)) Package
+                                                                 ELSE IF (Type=CONST(Item)) Item
+                                                                 ELSE IF (Type=CONST(Resource)) Resource
+                                                                 ELSE IF (Type=CONST(Standard Option)) "Standard Option Setup";
+                                                   TestTableRelation=No;
+                                                   CaptionML=ENU=Source ID;
+                                                   NotBlank=No;
+                                                   Editable=No }
+    { 3   ;   ;Source Type         ;Integer       ;CaptionML=ENU=Source Type }
+    { 4   ;   ;Source Subtype      ;Integer       ;CaptionML=ENU=Source Subtype }
+    { 5   ;   ;Second Source ID    ;Code20        ;CaptionML=ENU=Second Source ID;
+                                                   Editable=No }
+    { 6   ;   ;Shipping Agent Code ;Code10        ;TableRelation="Shipping Agent".Code;
+                                                   CaptionML=ENU=Shipping Agent Code;
+                                                   Editable=No }
+    { 7   ;   ;World Wide Service  ;Boolean       ;CaptionML=ENU=World Wide Service;
+                                                   Editable=No }
+    { 8   ;   ;Shipping Agent Service;Code30      ;TableRelation="E-Ship Agent Service".Code WHERE (Shipping Agent Code=FIELD(Shipping Agent Code));
+                                                   CaptionML=ENU=Shipping Agent Service;
+                                                   Editable=No }
+    { 46  ;   ;Recipient Customs ID Type;Code20   ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Recipient Customs ID Type"));
+                                                              END;
+
+                                                   CaptionML=ENU=Recipient Customs ID Type }
+    { 47  ;   ;Recipient Customs ID;Code20        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Recipient Customs ID"));
+                                                              END;
+
+                                                   CaptionML=ENU=Recipient Customs ID }
+    { 48  ;   ;Commercial Invoice Comments;Text50 ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Commercial Invoice Comments"));
+                                                              END;
+
+                                                   CaptionML=ENU=Commercial Invoice Comments }
+    { 54  ;   ;Commodity Unit Value Currency;Code10;
+                                                   OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Commodity Unit Value Currency"));
+                                                              END;
+
+                                                   CaptionML=ENU=Commodity Unit Value Currency }
+    { 55  ;   ;Export B13A Filing Option;Code20   ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Export B13A Filing Option"));
+                                                              END;
+
+                                                   CaptionML=ENU=Export B13A Filing Option }
+    { 56  ;   ;Export Compliance Statement;Text30 ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Export Compliance Statement"));
+                                                              END;
+
+                                                   CaptionML=ENU=Export Compliance Statement }
+    { 57  ;   ;NAFTA Preference Criterion;Code10  ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("NAFTA Preference Criterion"));
+                                                              END;
+
+                                                   CaptionML=ENU=NAFTA Preference Criterion }
+    { 58  ;   ;NAFTA Producer Determination;Code10;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("NAFTA Producer Determination"));
+                                                              END;
+
+                                                   CaptionML=ENU=NAFTA Producer Determination }
+    { 59  ;   ;NAFTA Producer ID   ;Code10        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("NAFTA Producer ID"));
+                                                              END;
+
+                                                   CaptionML=ENU=NAFTA Producer ID }
+    { 60  ;   ;NAFTA Net Cost Method;Code10       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("NAFTA Net Cost Method"));
+                                                              END;
+
+                                                   CaptionML=ENU=NAFTA Net Cost Method }
+    { 92  ;   ;FX Freight Comment  ;Text50        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("FX Freight Comment"));
+                                                              END;
+
+                                                   CaptionML=ENU=FX Freight Comment }
+    { 112 ;   ;Long Description    ;Text250       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Long Description"));
+                                                              END;
+
+                                                   CaptionML=ENU=Long Description }
+    { 115 ;   ;Shipping Document Type;Code50      ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Shipping Document Type"));
+                                                              END;
+
+                                                   CaptionML=ENU=Shipping Document Type }
+    { 116 ;   ;Shipping Document Image Type;Code10;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Shipping Document Image Type"));
+                                                              END;
+
+                                                   CaptionML=ENU=Shipping Document Image Type }
+    { 117 ;   ;Shipping Document Stock Type;Code20;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Shipping Document Stock Type"));
+                                                              END;
+
+                                                   CaptionML=ENU=Shipping Document Stock Type }
+    { 120 ;   ;Electronic Trade Documents;Boolean ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Electronic Trade Documents"));
+                                                              END;
+
+                                                   CaptionML=ENU=Electronic Trade Documents }
+    { 121 ;   ;Create Certificate of Origin;Boolean;
+                                                   OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Create Certificate of Origin"));
+                                                              END;
+
+                                                   CaptionML=ENU=Create Certificate of Origin }
+    { 122 ;   ;Create Gen. Agency Agreement;Boolean;
+                                                   OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Create Gen. Agency Agreement"));
+                                                              END;
+
+                                                   CaptionML=ENU=Create Gen. Agency Agreement }
+    { 123 ;   ;Create NAFTA Cert. of Origin;Boolean;
+                                                   OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Create NAFTA Cert. of Origin"));
+                                                              END;
+
+                                                   CaptionML=ENU=Create NAFTA Cert. of Origin }
+    { 124 ;   ;Create Pro Forma Invoice;Boolean   ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Create Pro Forma Invoice"));
+                                                              END;
+
+                                                   CaptionML=ENU=Create Pro Forma Invoice }
+    { 125 ;   ;Create Commercial Invoice;Boolean  ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Create Commercial Invoice"));
+                                                              END;
+
+                                                   CaptionML=ENU=Create Commercial Invoice }
+    { 126 ;   ;ETD Certificate of Origin ID;Text30;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("ETD Certificate of Origin ID"));
+                                                              END;
+
+                                                   CaptionML=ENU=ETD Certificate of Origin ID }
+    { 127 ;   ;ETD Gen. Agency Agreement ID;Text30;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("ETD Gen. Agency Agreement ID"));
+                                                              END;
+
+                                                   CaptionML=ENU=ETD Gen. Agency Agreement ID }
+    { 128 ;   ;ETD NAFTA Cert. of Origin ID;Text30;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("ETD NAFTA Cert. of Origin ID"));
+                                                              END;
+
+                                                   CaptionML=ENU=ETD NAFTA Cert. of Origin ID }
+    { 129 ;   ;ETD Pro Forma Invoice ID;Text30    ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("ETD Pro Forma Invoice ID"));
+                                                              END;
+
+                                                   CaptionML=ENU=ETD Pro Forma Invoice ID }
+    { 130 ;   ;ETD Commercial Invoice ID;Text30   ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("ETD Commercial Invoice ID"));
+                                                              END;
+
+                                                   CaptionML=ENU=ETD Commercial Invoice ID }
+    { 131 ;   ;ETD Reference ID    ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("ETD Reference ID"));
+                                                              END;
+
+                                                   CaptionML=ENU=ETD Reference ID }
+    { 215 ;   ;Express Label TC No.;Code10        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Express Label TC No."));
+                                                              END;
+
+                                                   CaptionML=ENU=Express Label TC No. }
+    { 221 ;   ;CI Freight Charge   ;Decimal       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("CI Freight Charge"));
+                                                              END;
+
+                                                   CaptionML=ENU=CI Freight Charge }
+    { 222 ;   ;CI Freight Charge Currency;Code10  ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("CI Freight Charge Currency"));
+                                                              END;
+
+                                                   CaptionML=ENU=CI Freight Charge Currency }
+    { 223 ;   ;CI Insurance Charge ;Decimal       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("CI Insurance Charge"));
+                                                              END;
+
+                                                   CaptionML=ENU=CI Insurance Charge }
+    { 224 ;   ;CI Insurance Charge Currency;Code10;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("CI Insurance Charge Currency"));
+                                                              END;
+
+                                                   CaptionML=ENU=CI Insurance Charge Currency }
+    { 225 ;   ;CI Misc Charge      ;Decimal       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("CI Misc Charge"));
+                                                              END;
+
+                                                   CaptionML=ENU=CI Misc Charge }
+    { 226 ;   ;CI Misc Charge Currency;Code10     ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("CI Misc Charge Currency"));
+                                                              END;
+
+                                                   CaptionML=ENU=CI Misc Charge Currency }
+    { 227 ;   ;CI Purpose of Shipment;Text35      ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("CI Purpose of Shipment"));
+                                                              END;
+
+                                                   CaptionML=ENU=CI Purpose of Shipment }
+    { 237 ;   ;Return Shipment Return No.;Text30  ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Return Shipment Return No."));
+                                                              END;
+
+                                                   CaptionML=ENU=Return Shipment Return No. }
+    { 241 ;   ;Customer Reference  ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Customer Reference"));
+                                                              END;
+
+                                                   CaptionML=ENU=Customer Reference }
+    { 244 ;   ;Palletized          ;Boolean       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO(Palletized));
+                                                                IF Palletized THEN
+                                                                  IF "FX Freight Pallet Weight Value" = 0 THEN
+                                                                    BEGIN
+                                                                      ShippingSetup.GET;
+                                                                      "FX Freight Pallet Weight Value" := ShippingSetup."Default Pallet Weight";
+                                                                      "FX Freight Pallet Weight Units" := ShippingSetup."Default Weight Units";
+                                                                      "FX Freight Pallet Length" := ShippingSetup."Default Pallet Length";
+                                                                      "FX Freight Pallet Width" := ShippingSetup."Default Pallet Width";
+                                                                      "FX Freight Pallet Height" := ShippingSetup."Default Pallet Height (Packed)";
+                                                                      "No. of Pallets" := 1;
+                                                                    END
+                                                                  ELSE
+                                                                    BEGIN
+                                                                      "FX Freight Pallet Weight Value" := 0;
+                                                                      "FX Freight Pallet Length" := 0;
+                                                                      "FX Freight Pallet Width" := 0;
+                                                                      "FX Freight Pallet Height" := 0;
+                                                                      "No. of Pallets" := 0;
+                                                                    END;
+                                                              END;
+
+                                                   CaptionML=ENU=Palletized }
+    { 245 ;   ;FX Freight Pallet Weight Units;Option;
+                                                   OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("FX Freight Pallet Weight Units"));
+                                                              END;
+
+                                                   CaptionML=ENU=Pallet Weight Units;
+                                                   OptionCaptionML=ENU=LBS,KGS;
+                                                   OptionString=LBS,KGS }
+    { 246 ;   ;FX Freight Pallet Weight Value;Decimal;
+                                                   OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("FX Freight Pallet Weight Value"));
+                                                              END;
+
+                                                   CaptionML=ENU=Pallet Weight }
+    { 247 ;   ;No. of Pallets      ;Integer       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("No. of Pallets"));
+                                                              END;
+
+                                                   CaptionML=ENU=No. of Pallets }
+    { 248 ;   ;Special Delivery Instructions;Text50;
+                                                   OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Special Delivery Instructions"));
+                                                              END;
+
+                                                   CaptionML=ENU=Special Delivery Instructions }
+    { 249 ;   ;FX Freight Pallet Length;Integer   ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("FX Freight Pallet Length"));
+                                                              END;
+
+                                                   CaptionML=ENU=Pallet Length }
+    { 250 ;   ;FX Freight Pallet Width;Integer    ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("FX Freight Pallet Width"));
+                                                              END;
+
+                                                   CaptionML=ENU=Pallet Width }
+    { 251 ;   ;FX Freight Pallet Height;Integer   ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("FX Freight Pallet Height"));
+                                                              END;
+
+                                                   CaptionML=ENU=Pallet Height }
+    { 255 ;   ;Do Not Break Down Pallets;Boolean  ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Do Not Break Down Pallets"));
+                                                              END;
+
+                                                   CaptionML=ENU=Do Not Break Down Pallets }
+    { 256 ;   ;Do Not Stack Pallets;Boolean       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Do Not Stack Pallets"));
+                                                              END;
+
+                                                   CaptionML=ENU=Do Not Stack Pallets }
+    { 257 ;   ;Physical Packaging Type;Option     ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Physical Packaging Type"));
+                                                              END;
+
+                                                   CaptionML=ENU=Physical Packaging Type;
+                                                   OptionCaptionML=ENU=" ,BAG,BARREL,BASKET,BOX,BUCKET,BUNDLE,CARTON,CASE,CONTAINER,CRATE,CYLINDER,DRUM,ENVELOPE,HAMPER,OTHER,PAIL,PALLET,PIECE,REEL,ROLL,SKID,TANK,TUBE";
+                                                   OptionString=[ ,BAG,BARREL,BASKET,BOX,BUCKET,BUNDLE,CARTON,CASE,CONTAINER,CRATE,CYLINDER,DRUM,ENVELOPE,HAMPER,OTHER,PAIL,PALLET,PIECE,REEL,ROLL,SKID,TANK,TUBE] }
+    { 348 ;   ;Collect Terms Type  ;Option        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Collect Terms Type"));
+                                                              END;
+
+                                                   CaptionML=ENU=Collect Terms Type;
+                                                   OptionCaptionML=ENU=" ,STANDARD,NON_RECOURSE_SHIPPER_SIGNED";
+                                                   OptionString=[ ,STANDARD,NON_RECOURSE_SHIPPER_SIGNED] }
+    { 349 ;   ;Liability Coverage Amount;Decimal  ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Liability Coverage Amount"));
+                                                              END;
+
+                                                   CaptionML=ENU=Liability Coverage Amount }
+    { 350 ;   ;Liability Coverage Currency;Code3  ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Liability Coverage Currency"));
+                                                              END;
+
+                                                   CaptionML=ENU=Liability Coverage Currency }
+    { 351 ;   ;Liability Coverage Type;Option     ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Liability Coverage Type"));
+                                                              END;
+
+                                                   CaptionML=ENU=Liability Coverage Type;
+                                                   OptionCaptionML=ENU=" ,New,Used or Reconditioned";
+                                                   OptionString=[ ,New,Used or Reconditioned] }
+    { 352 ;   ;Shipment Dimension Units;Option    ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Shipment Dimension Units"));
+                                                              END;
+
+                                                   CaptionML=ENU=Shipment Dimension Units;
+                                                   OptionCaptionML=ENU=IN,CM;
+                                                   OptionString=IN,CM }
+    { 353 ;   ;Shipment Height     ;Decimal       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Shipment Height"));
+                                                              END;
+
+                                                   CaptionML=ENU=Shipment Height }
+    { 354 ;   ;Shipment Length     ;Decimal       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Shipment Length"));
+                                                              END;
+
+                                                   CaptionML=ENU=Shipment Length }
+    { 355 ;   ;Shipment Width      ;Decimal       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Shipment Width"));
+                                                              END;
+
+                                                   CaptionML=ENU=Shipment Width }
+    { 356 ;   ;Shipment Role       ;Option        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Shipment Role"));
+                                                              END;
+
+                                                   CaptionML=ENU=Shipment Role;
+                                                   OptionCaptionML=ENU=Shipper,Consignee;
+                                                   OptionString=Shipper,Consignee }
+    { 400 ;   ;Customer Reference Type 1;Option   ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Customer Reference Type 1"));
+                                                              END;
+
+                                                   CaptionML=ENU=Customer Reference Type 1;
+                                                   OptionCaptionML=ENU=" ,BILL_OF_LADING,CUSTOMER_REFERENCE,DEPARTMENT_NUMBER,ELECTRONIC_PRODUCT_CODE,INTRACOUNTRY_REGULATORY_REFERENCE,INVOICE_NUMBER,P_O_NUMBER,RMA_ASSOCIATION,SHIPMENT_INTEGRITY,STORE_NUMBER";
+                                                   OptionString=[ ',Bill of Lading,Customer Reference,Department No.,Electronic Product Code,IntraCountry Regulatory Reference,Invoice No.,Purchase Order No.,RMA Association,Shipment Integrity,Store Number] }
+    { 401 ;   ;Customer Reference Value 1;Text30  ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Customer Reference Value 1"));
+                                                              END;
+
+                                                   CaptionML=ENU=Customer Reference Value 1 }
+    { 402 ;   ;Customer Reference Type 2;Option   ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Customer Reference Type 2"));
+                                                              END;
+
+                                                   CaptionML=ENU=Customer Reference Type 2;
+                                                   OptionCaptionML=ENU=" ,BILL_OF_LADING,CUSTOMER_REFERENCE,DEPARTMENT_NUMBER,ELECTRONIC_PRODUCT_CODE,INTRACOUNTRY_REGULATORY_REFERENCE,INVOICE_NUMBER,P_O_NUMBER,RMA_ASSOCIATION,SHIPMENT_INTEGRITY,STORE_NUMBER";
+                                                   OptionString=[ ',Bill of Lading,Customer Reference,Department No.,Electronic Product Code,IntraCountry Regulatory Reference,Invoice No.,Purchase Order No.,RMA Association,Shipment Integrity,Store Number] }
+    { 403 ;   ;Customer Reference Value 2;Text30  ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Customer Reference Value 2"));
+                                                              END;
+
+                                                   CaptionML=ENU=Customer Reference Value 2 }
+    { 404 ;   ;Customer Reference Type 3;Option   ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Customer Reference Type 3"));
+                                                              END;
+
+                                                   CaptionML=ENU=Customer Reference Type 3;
+                                                   OptionCaptionML=ENU=" ,BILL_OF_LADING,CUSTOMER_REFERENCE,DEPARTMENT_NUMBER,ELECTRONIC_PRODUCT_CODE,INTRACOUNTRY_REGULATORY_REFERENCE,INVOICE_NUMBER,P_O_NUMBER,RMA_ASSOCIATION,SHIPMENT_INTEGRITY,STORE_NUMBER";
+                                                   OptionString=[ ',Bill of Lading,Customer Reference,Department No.,Electronic Product Code,IntraCountry Regulatory Reference,Invoice No.,Purchase Order No.,RMA Association,Shipment Integrity,Store Number] }
+    { 405 ;   ;Customer Reference Value 3;Text30  ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Customer Reference Value 3"));
+                                                              END;
+
+                                                   CaptionML=ENU=Customer Reference Value 3 }
+    { 406 ;   ;Customer Reference Type 4;Option   ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Customer Reference Type 4"));
+                                                              END;
+
+                                                   CaptionML=ENU=Customer Reference Type 4;
+                                                   OptionCaptionML=ENU=" ,BILL_OF_LADING,CUSTOMER_REFERENCE,DEPARTMENT_NUMBER,ELECTRONIC_PRODUCT_CODE,INTRACOUNTRY_REGULATORY_REFERENCE,INVOICE_NUMBER,P_O_NUMBER,RMA_ASSOCIATION,SHIPMENT_INTEGRITY,STORE_NUMBER";
+                                                   OptionString=[ ',Bill of Lading,Customer Reference,Department No.,Electronic Product Code,IntraCountry Regulatory Reference,Invoice No.,Purchase Order No.,RMA Association,Shipment Integrity,Store Number] }
+    { 407 ;   ;Customer Reference Value 4;Text30  ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Customer Reference Value 4"));
+                                                              END;
+
+                                                   CaptionML=ENU=Customer Reference Value 4 }
+    { 424 ;   ;Rate Request Type   ;Code10        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Rate Request Type"));
+                                                              END;
+
+                                                   CaptionML=ENU=Rate Request Type }
+    { 692 ;   ;Importer Residential;Boolean       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Importer Residential"));
+                                                              END;
+
+                                                   CaptionML=ENU=Importer Residential }
+    { 700 ;   ;Duties Payor Contact Id;Text30     ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Duties Payor Contact Id"));
+                                                              END;
+
+                                                   CaptionML=ENU=Duties Payor Contact Id }
+    { 710 ;   ;Duties Payor Name   ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Duties Payor Name"));
+                                                              END;
+
+                                                   CaptionML=ENU=Duties Payor Name }
+    { 720 ;   ;Duties Payor Address;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Duties Payor Address"));
+                                                              END;
+
+                                                   CaptionML=ENU=Duties Payor Address }
+    { 730 ;   ;Duties Payor City   ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Duties Payor City"));
+                                                              END;
+
+                                                   CaptionML=ENU=Duties Payor City }
+    { 740 ;   ;Duties Payor State  ;Text10        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Duties Payor State"));
+                                                              END;
+
+                                                   CaptionML=ENU=Duties Payor State }
+    { 750 ;   ;Duties Payor Postal ;Text10        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Duties Payor Postal"));
+                                                              END;
+
+                                                   CaptionML=ENU=Duties Payor Postal }
+    { 760 ;   ;Duties Payor Residential;Text10    ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Duties Payor Residential"));
+                                                              END;
+
+                                                   CaptionML=ENU=Duties Payor Residential }
+    { 770 ;   ;Duties Payor Phone  ;Text10        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Duties Payor Phone"));
+                                                              END;
+
+                                                   CaptionML=ENU=Duties Payor Phone }
+    { 780 ;   ;Duties Payor Email  ;Text50        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Duties Payor Email"));
+                                                              END;
+
+                                                   CaptionML=ENU=Duties Payor Email }
+    { 790 ;   ;Duties Payor Tins No;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Duties Payor Tins No"));
+                                                              END;
+
+                                                   CaptionML=ENU=Duties Payor Tins No }
+    { 800 ;   ;Duties Payor Tins Type;Option      ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Duties Payor Tins Type"));
+                                                              END;
+
+                                                   CaptionML=ENU=Duties Payor Tins Type;
+                                                   OptionCaptionML=ENU=PERSONAL_NATIONAL,BUSINESS_NATIONAL;
+                                                   OptionString=PERSONAL_NATIONAL,BUSINESS_NATIONAL }
+    { 1000;   ;Reserved for Future ;Text1         ;CaptionML=ENU=Reserved for Future;
+                                                   Description=Fields 1000-1999 Reserved }
+    { 2010;   ;Hazmat DOT Class or Division;Text10;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Hazmat DOT Class or Division"));
+                                                              END;
+
+                                                   CaptionML=ENU=Hazmat DOT Class or Division;
+                                                   Description=From Pre-SE0.60.12 Versions }
+    { 2020;   ;Hazmat DOT ID No.   ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Hazmat DOT ID No."));
+                                                              END;
+
+                                                   CaptionML=ENU=Hazmat DOT ID No. }
+    { 2030;   ;Hazmat DOT Label Codes;Text30      ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Hazmat DOT Label Codes"));
+                                                              END;
+
+                                                   CaptionML=ENU=Hazmat DOT Label Codes }
+    { 2040;   ;Hazmat Packing Group;Text10        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Hazmat Packing Group"));
+                                                              END;
+
+                                                   CaptionML=ENU=Hazmat Packing Group }
+    { 2050;   ;Hazmat Contact Phone No.;Text30    ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Hazmat Contact Phone No."));
+                                                              END;
+
+                                                   CaptionML=ENU=Hazmat Contact Phone No. }
+    { 2060;   ;Hazmat Contact Name ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Hazmat Contact Name"));
+                                                              END;
+
+                                                   CaptionML=ENU=Hazmat Contact Name }
+    { 2070;   ;Hazmat Shipment Description;Text150;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Hazmat Shipment Description"));
+                                                              END;
+
+                                                   CaptionML=ENU=Hazmat Shipment Description }
+    { 2080;   ;Hazmat Quantity     ;Integer       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Hazmat Quantity"));
+                                                              END;
+
+                                                   CaptionML=ENU=Hazmat Quantity }
+    { 2090;   ;Hazmat Units        ;Code10        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Hazmat Units"));
+                                                              END;
+
+                                                   CaptionML=ENU=Hazmat Units }
+    { 2100;   ;Hazmat Technical Name;Text150      ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Hazmat Technical Name"));
+                                                              END;
+
+                                                   CaptionML=ENU=Hazmat Technical Name }
+    { 2165;   ;Call Tag Request    ;Boolean       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Request"));
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Request"));
+                                                                IF "Call Tag Request" THEN BEGIN
+                                                                  IF Type = Type::Package THEN BEGIN
+                                                                    Package.GET("Source ID");
+                                                                    IF CONFIRM('Use Package Ship-to Address?',TRUE) THEN BEGIN
+                                                                      "Call Tag Contact" := Package."Ship-to Contact";
+                                                                      "Call Tag Company Name" := Package."Ship-to Name";
+                                                                      "Call Tag Address" := Package."Ship-to Address";
+                                                                      "Call Tag Address 2" := Package."Ship-to Address 2";
+                                                                      "Call Tag City" := Package."Ship-to City";
+                                                                      "Call Tag State" := Package."Ship-to State";
+                                                                      "Call Tag ZIP Code" := Package."Ship-to ZIP Code";
+                                                                      "Call Tag Country Code" := Package."Ship-to Country Code";
+                                                                      "Call Tag Phone No." := Package."Ship-to Phone No.";
+                                                                      "Call Tag Residential" := Package."Residential Delivery";
+                                                                    END;
+                                                                  END;
+                                                                END ELSE BEGIN
+                                                                  "Call Tag Contact" := '';
+                                                                  "Call Tag Company Name" := '';
+                                                                  "Call Tag Address" := '';
+                                                                  "Call Tag City" := '';
+                                                                  "Call Tag State" := '';
+                                                                  "Call Tag Address 2" := '';
+                                                                  "Call Tag ZIP Code" := '';
+                                                                  "Call Tag Country Code" := '';
+                                                                  "Call Tag Phone No." := '';
+                                                                  "Call Tag Residential" := FALSE;
+                                                                END;
+                                                                "Call Tag Request Source" := "Call Tag Request Source"::Automation;
+                                                                "Call Tag Request Type" := "Call Tag Request Type"::"Future Day";
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag Request }
+    { 2166;   ;Call Tag Courier Instructions;Text250;
+                                                   OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Courier Instructions"));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag Courier Instructions }
+    { 2167;   ;Call Tag Contact    ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Contact"));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag Contact }
+    { 2168;   ;Call Tag Company Name;Text30       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Company Name"));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag Company Name }
+    { 2169;   ;Call Tag Address    ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Address"));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag Address }
+    { 2170;   ;Call Tag Address 2  ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Address 2"));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag Address 2 }
+    { 2171;   ;Call Tag City       ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag City"));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag City }
+    { 2172;   ;Call Tag State      ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag State"));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag State }
+    { 2173;   ;Call Tag ZIP Code   ;Code20        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag ZIP Code"));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag ZIP Code }
+    { 2174;   ;Call Tag Country Code;Code10       ;TableRelation=Country/Region.Code;
+                                                   OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Country Code"));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag Country Code }
+    { 2175;   ;Call Tag Phone No.  ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Phone No."));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag Phone No. }
+    { 2176;   ;Call Tag Residential;Boolean       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Residential"));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag Residential }
+    { 2177;   ;Call Tag Request Date;Date         ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Request Date"));
+                                                                VALIDATE("Call Tag Latest Pickup Date","Call Tag Request Date");
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag Ready Date }
+    { 2178;   ;Call Tag Latest Pickup Date;Date   ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Latest Pickup Date"));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag Latest Pickup Date }
+    { 2179;   ;Call Tag Request Type;Option       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Request Type"));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag Request Type;
+                                                   OptionCaptionML=ENU=" ,Future Day,Same Day";
+                                                   OptionString=[ ,Future Day,Same Day] }
+    { 2180;   ;Call Tag Request Source;Option     ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Call Tag Request Source"));
+                                                              END;
+
+                                                   CaptionML=ENU=Call Tag Request Source;
+                                                   OptionCaptionML=ENU=Automation,Customer Service;
+                                                   OptionString=Automation,Customer Service }
+    { 2300;   ;HAL Location Country;Code10        ;TableRelation=Country/Region.Code;
+                                                   OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Location Country"));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL FedEx Location Country }
+    { 2310;   ;HAL Recipient Name  ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Recipient Name"));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL Recipient Name }
+    { 2320;   ;HAL FedEx Location Type;Option     ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL FedEx Location Type"));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL FedEx Location Type;
+                                                   OptionCaptionML=ENU=FedEx Express Station,FedEx Ground Terminal,FedEx Office,FedEx Facility,FedEx Freight Service Center,FedEx Home Delivery Station,FedEx Shipsite,FedEx SmartPost Hub;
+                                                   OptionString=FEDEX_EXPRESS_STATION, FEDEX_GROUND_TERMINAL, FEDEX_OFFICE,FEDEX_FACILITY,FEDEX_FREIGHT_SERVICE_CENTER,FEDEX_HOME_DELIVERY_STATION,FEDEX_SHIPSITE,FEDEX_SMART_POST_HUB }
+    { 2330;   ;HAL Company         ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Company"));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL Company }
+    { 2340;   ;HAL Contact Id      ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Contact Id"));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL Contact Id }
+    { 2350;   ;HAL Contact Title   ;Text30        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Contact Title"));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL Contact Title }
+    { 2360;   ;HAL Location Email Address;Text30  ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Location Email Address"));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL Location Email Address }
+    { 2370;   ;HAL Location FAX No.;Text15        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Location FAX No."));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL Location FAX No. }
+    { 2380;   ;HAL Location Pager No.;Text15      ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Location Pager No."));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL Location Pager No. }
+    { 2390;   ;HAL Location Phone Ext.;Text10     ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Location Phone Ext."));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL Location Phone Ext. }
+    { 2400;   ;HAL Location Urbanization Code;Code6;
+                                                   OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Location Urbanization Code"));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL Location Urbanization Code }
+    { 2410;   ;HAL Fedex Phone No. ;Text15        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Fedex Phone No."));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL Fedex Phone No. }
+    { 2420;   ;Hold At Location    ;Boolean       ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("Hold At Location"));
+                                                              END;
+
+                                                   CaptionML=ENU=Hold At Location }
+    { 2430;   ;HAL Location Address;Text35        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Location Address"));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL FedEx Location Address }
+    { 2440;   ;HAL Location City   ;Text35        ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Location City"));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL FedEx Location City }
+    { 2450;   ;HAL Location State  ;Text2         ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Location State"));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL FedEx Location State }
+    { 2460;   ;HAL Location Zip    ;Code9         ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Location Zip"));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL FedEx Location Zip }
+    { 2470;   ;HAL Location Phone No.;Code15      ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Location Phone No."));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL FedEx Location Phone No. }
+    { 2480;   ;HAL Recipient Phone No.;Code15     ;OnValidate=BEGIN
+                                                                TestFieldIsEditable(FIELDNO("HAL Recipient Phone No."));
+                                                              END;
+
+                                                   CaptionML=ENU=HAL Recipient Phone No. }
+    { 3000;   ;Upload Document     ;Boolean       ;CaptionML=ENU=Upload Document }
+    { 4000;   ;Upload Image        ;Boolean       ;CaptionML=ENU=Upload Image }
+  }
+  KEYS
+  {
+    {    ;Type,Source ID,Source Type,Source Subtype,Second Source ID;
+                                                   Clustered=Yes }
+    {    ;Type,Shipping Agent Code,World Wide Service,Shipping Agent Service }
+    {    ;Type,Shipping Agent Code,Shipping Agent Service,World Wide Service }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Package@1000000000 : Record 14000701;
+      FedExOptionPageExt@1000000001 : Record 14000793;
+      PackingControl@1240030000 : Record 14000717;
+      ShippingAccount@1000000005 : Record 14000714;
+      BillOfLading@1000000006 : Record 14000822;
+      Text001@1001 : TextConst 'ENU=This packaging type is no longer supported by FedEx.';
+      Text002@1002 : TextConst 'ENU="Only regular pickup, request courier, or drop at station is available "';
+      Text003@1003 : TextConst 'ENU=for international shipment.';
+      DocumentOptionPageFound@1240030001 : Boolean;
+      Text006@1006 : TextConst 'ENU=Unknown type %1.';
+      Text007@1007 : TextConst 'ENU=Field is not available in current API version.';
+      Text008@1008 : TextConst 'ENU=Cannot be changed when %1 is %2';
+      ShippingSetup@1240030002 : Record 14000707;
+
+    LOCAL PROCEDURE TransferFromPackingControl@12(FromPackingControl@1240030000 : Record 14000717);
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE TransferFromBillOfLading@3(FromBillOfLading@1000000000 : Record 14000822);
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE TransferFromShippingAccount@6(CurrentShippingAccount@1000000000 : Record 14000714);
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE GetShippingAccount@5(ShipToType@1240030000 : 'Customer,Vendor,Bank,Prospect,Resource,Employee,,Location';ShipToNo@1240030001 : Code[20];ShipToCode@1240030002 : Code[20];ShippingAgentCode@1240030004 : Code[10];ThirdPartyAccountNo@1240030003 : Code[20]) : Boolean;
+    BEGIN
+      EXIT(
+        ShippingAccount.GetShippingAccountOptionPage(
+          ShipToType,ShipToNo,ShipToCode,ShippingAgentCode,ThirdPartyAccountNo));
+    END;
+
+    PROCEDURE MergeOptionPageExt@1240031006(MergeOptionPageExt@1240030000 : Record 14000793);
+    VAR
+      InitOptionPageExt@1240030001 : Record 14000793;
+    BEGIN
+      InitOptionPageExt.INIT;
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Source ID")) THEN
+        IF MergeOptionPageExt."Source ID" <> InitOptionPageExt."Source ID" THEN
+          VALIDATE("Source ID",MergeOptionPageExt."Source ID");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Source Type")) THEN
+        IF MergeOptionPageExt."Source Type" <> InitOptionPageExt."Source Type" THEN
+          VALIDATE("Source Type",MergeOptionPageExt."Source Type");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Source Subtype")) THEN
+        IF MergeOptionPageExt."Source Subtype" <> InitOptionPageExt."Source Subtype" THEN
+          VALIDATE("Source Subtype",MergeOptionPageExt."Source Subtype");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Second Source ID")) THEN
+        IF MergeOptionPageExt."Second Source ID" <> InitOptionPageExt."Second Source ID" THEN
+          VALIDATE("Second Source ID",MergeOptionPageExt."Second Source ID");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Shipping Agent Code")) THEN
+        IF MergeOptionPageExt."Shipping Agent Code" <> InitOptionPageExt."Shipping Agent Code" THEN
+          VALIDATE("Shipping Agent Code",MergeOptionPageExt."Shipping Agent Code");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("World Wide Service")) THEN
+        IF MergeOptionPageExt."World Wide Service" <> InitOptionPageExt."World Wide Service" THEN
+          VALIDATE("World Wide Service",MergeOptionPageExt."World Wide Service");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Shipping Agent Service")) THEN
+        IF MergeOptionPageExt."Shipping Agent Service" <> InitOptionPageExt."Shipping Agent Service" THEN
+          VALIDATE("Shipping Agent Service",MergeOptionPageExt."Shipping Agent Service");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Recipient Customs ID Type")) THEN
+        IF MergeOptionPageExt."Recipient Customs ID Type" <> InitOptionPageExt."Recipient Customs ID Type" THEN
+          VALIDATE("Recipient Customs ID Type",MergeOptionPageExt."Recipient Customs ID Type");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Recipient Customs ID")) THEN
+        IF MergeOptionPageExt."Recipient Customs ID" <> InitOptionPageExt."Recipient Customs ID" THEN
+          VALIDATE("Recipient Customs ID",MergeOptionPageExt."Recipient Customs ID");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Commercial Invoice Comments")) THEN
+        IF MergeOptionPageExt."Commercial Invoice Comments" <> InitOptionPageExt."Commercial Invoice Comments" THEN
+          VALIDATE("Commercial Invoice Comments",MergeOptionPageExt."Commercial Invoice Comments");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Commodity Unit Value Currency")) THEN
+        IF MergeOptionPageExt."Commodity Unit Value Currency" <> InitOptionPageExt."Commodity Unit Value Currency" THEN
+          VALIDATE("Commodity Unit Value Currency",MergeOptionPageExt."Commodity Unit Value Currency");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Export B13A Filing Option")) THEN
+        IF MergeOptionPageExt."Export B13A Filing Option" <> InitOptionPageExt."Export B13A Filing Option" THEN
+          VALIDATE("Export B13A Filing Option",MergeOptionPageExt."Export B13A Filing Option");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Export Compliance Statement")) THEN
+        IF MergeOptionPageExt."Export Compliance Statement" <> InitOptionPageExt."Export Compliance Statement" THEN
+          VALIDATE("Export Compliance Statement",MergeOptionPageExt."Export Compliance Statement");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("NAFTA Preference Criterion")) THEN
+        IF MergeOptionPageExt."NAFTA Preference Criterion" <> InitOptionPageExt."NAFTA Preference Criterion" THEN
+          VALIDATE("NAFTA Preference Criterion",MergeOptionPageExt."NAFTA Preference Criterion");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("NAFTA Producer Determination")) THEN
+        IF MergeOptionPageExt."NAFTA Producer Determination" <> InitOptionPageExt."NAFTA Producer Determination" THEN
+          VALIDATE("NAFTA Producer Determination",MergeOptionPageExt."NAFTA Producer Determination");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("NAFTA Producer ID")) THEN
+        IF MergeOptionPageExt."NAFTA Producer ID" <> InitOptionPageExt."NAFTA Producer ID" THEN
+          VALIDATE("NAFTA Producer ID",MergeOptionPageExt."NAFTA Producer ID");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("NAFTA Net Cost Method")) THEN
+        IF MergeOptionPageExt."NAFTA Net Cost Method" <> InitOptionPageExt."NAFTA Net Cost Method" THEN
+          VALIDATE("NAFTA Net Cost Method",MergeOptionPageExt."NAFTA Net Cost Method");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("FX Freight Comment")) THEN
+        IF MergeOptionPageExt."FX Freight Comment" <> InitOptionPageExt."FX Freight Comment" THEN
+          VALIDATE("FX Freight Comment",MergeOptionPageExt."FX Freight Comment");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Long Description")) THEN
+        IF MergeOptionPageExt."Long Description" <> InitOptionPageExt."Long Description" THEN
+          VALIDATE("Long Description",MergeOptionPageExt."Long Description");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Shipping Document Type")) THEN
+        IF MergeOptionPageExt."Shipping Document Type" <> InitOptionPageExt."Shipping Document Type" THEN
+          VALIDATE("Shipping Document Type",MergeOptionPageExt."Shipping Document Type");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Shipping Document Image Type")) THEN
+        IF MergeOptionPageExt."Shipping Document Image Type" <> InitOptionPageExt."Shipping Document Image Type" THEN
+          VALIDATE("Shipping Document Image Type",MergeOptionPageExt."Shipping Document Image Type");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Shipping Document Stock Type")) THEN
+        IF MergeOptionPageExt."Shipping Document Stock Type" <> InitOptionPageExt."Shipping Document Stock Type" THEN
+          VALIDATE("Shipping Document Stock Type",MergeOptionPageExt."Shipping Document Stock Type");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Electronic Trade Documents")) THEN
+        IF MergeOptionPageExt."Electronic Trade Documents" <> InitOptionPageExt."Electronic Trade Documents" THEN
+          VALIDATE("Electronic Trade Documents",MergeOptionPageExt."Electronic Trade Documents");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Create Certificate of Origin")) THEN
+        IF MergeOptionPageExt."Create Certificate of Origin" <> InitOptionPageExt."Create Certificate of Origin" THEN
+          VALIDATE("Create Certificate of Origin",MergeOptionPageExt."Create Certificate of Origin");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Create Gen. Agency Agreement")) THEN
+        IF MergeOptionPageExt."Create Gen. Agency Agreement" <> InitOptionPageExt."Create Gen. Agency Agreement" THEN
+          VALIDATE("Create Gen. Agency Agreement",MergeOptionPageExt."Create Gen. Agency Agreement");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Create NAFTA Cert. of Origin")) THEN
+        IF MergeOptionPageExt."Create NAFTA Cert. of Origin" <> InitOptionPageExt."Create NAFTA Cert. of Origin" THEN
+          VALIDATE("Create NAFTA Cert. of Origin",MergeOptionPageExt."Create NAFTA Cert. of Origin");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Create Pro Forma Invoice")) THEN
+        IF MergeOptionPageExt."Create Pro Forma Invoice" <> InitOptionPageExt."Create Pro Forma Invoice" THEN
+          VALIDATE("Create Pro Forma Invoice",MergeOptionPageExt."Create Pro Forma Invoice");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Create Commercial Invoice")) THEN
+        IF MergeOptionPageExt."Create Commercial Invoice" <> InitOptionPageExt."Create Commercial Invoice" THEN
+          VALIDATE("Create Commercial Invoice",MergeOptionPageExt."Create Commercial Invoice");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("ETD Certificate of Origin ID")) THEN
+        IF MergeOptionPageExt."ETD Certificate of Origin ID" <> InitOptionPageExt."ETD Certificate of Origin ID" THEN
+          VALIDATE("ETD Certificate of Origin ID",MergeOptionPageExt."ETD Certificate of Origin ID");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("ETD Gen. Agency Agreement ID")) THEN
+        IF MergeOptionPageExt."ETD Gen. Agency Agreement ID" <> InitOptionPageExt."ETD Gen. Agency Agreement ID" THEN
+          VALIDATE("ETD Gen. Agency Agreement ID",MergeOptionPageExt."ETD Gen. Agency Agreement ID");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("ETD NAFTA Cert. of Origin ID")) THEN
+        IF MergeOptionPageExt."ETD NAFTA Cert. of Origin ID" <> InitOptionPageExt."ETD NAFTA Cert. of Origin ID" THEN
+          VALIDATE("ETD NAFTA Cert. of Origin ID",MergeOptionPageExt."ETD NAFTA Cert. of Origin ID");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("ETD Pro Forma Invoice ID")) THEN
+        IF MergeOptionPageExt."ETD Pro Forma Invoice ID" <> InitOptionPageExt."ETD Pro Forma Invoice ID" THEN
+          VALIDATE("ETD Pro Forma Invoice ID",MergeOptionPageExt."ETD Pro Forma Invoice ID");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("ETD Commercial Invoice ID")) THEN
+        IF MergeOptionPageExt."ETD Commercial Invoice ID" <> InitOptionPageExt."ETD Commercial Invoice ID" THEN
+          VALIDATE("ETD Commercial Invoice ID",MergeOptionPageExt."ETD Commercial Invoice ID");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Express Label TC No.")) THEN
+        IF MergeOptionPageExt."Express Label TC No." <> InitOptionPageExt."Express Label TC No." THEN
+          VALIDATE("Express Label TC No.",MergeOptionPageExt."Express Label TC No.");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("CI Freight Charge")) THEN
+        IF MergeOptionPageExt."CI Freight Charge" <> InitOptionPageExt."CI Freight Charge" THEN
+          VALIDATE("CI Freight Charge",MergeOptionPageExt."CI Freight Charge");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("CI Freight Charge Currency")) THEN
+        IF MergeOptionPageExt."CI Freight Charge Currency" <> InitOptionPageExt."CI Freight Charge Currency" THEN
+          VALIDATE("CI Freight Charge Currency",MergeOptionPageExt."CI Freight Charge Currency");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("CI Insurance Charge")) THEN
+        IF MergeOptionPageExt."CI Insurance Charge" <> InitOptionPageExt."CI Insurance Charge" THEN
+          VALIDATE("CI Insurance Charge",MergeOptionPageExt."CI Insurance Charge");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("CI Insurance Charge Currency")) THEN
+        IF MergeOptionPageExt."CI Insurance Charge Currency" <> InitOptionPageExt."CI Insurance Charge Currency" THEN
+          VALIDATE("CI Insurance Charge Currency",MergeOptionPageExt."CI Insurance Charge Currency");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("CI Misc Charge")) THEN
+        IF MergeOptionPageExt."CI Misc Charge" <> InitOptionPageExt."CI Misc Charge" THEN
+          VALIDATE("CI Misc Charge",MergeOptionPageExt."CI Misc Charge");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("CI Misc Charge Currency")) THEN
+        IF MergeOptionPageExt."CI Misc Charge Currency" <> InitOptionPageExt."CI Misc Charge Currency" THEN
+          VALIDATE("CI Misc Charge Currency",MergeOptionPageExt."CI Misc Charge Currency");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("CI Purpose of Shipment")) THEN
+        IF MergeOptionPageExt."CI Purpose of Shipment" <> InitOptionPageExt."CI Purpose of Shipment" THEN
+          VALIDATE("CI Purpose of Shipment",MergeOptionPageExt."CI Purpose of Shipment");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Return Shipment Return No.")) THEN
+        IF MergeOptionPageExt."Return Shipment Return No." <> InitOptionPageExt."Return Shipment Return No." THEN
+          VALIDATE("Return Shipment Return No.",MergeOptionPageExt."Return Shipment Return No.");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Customer Reference")) THEN
+        IF MergeOptionPageExt."Customer Reference" <> InitOptionPageExt."Customer Reference" THEN
+          VALIDATE("Customer Reference",MergeOptionPageExt."Customer Reference");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO(Palletized)) THEN
+        IF MergeOptionPageExt.Palletized <> InitOptionPageExt.Palletized THEN
+          VALIDATE(Palletized,MergeOptionPageExt.Palletized);
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("FX Freight Pallet Weight Units")) THEN
+        IF MergeOptionPageExt."FX Freight Pallet Weight Units" <> InitOptionPageExt."FX Freight Pallet Weight Units" THEN
+          VALIDATE("FX Freight Pallet Weight Units",MergeOptionPageExt."FX Freight Pallet Weight Units");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("FX Freight Pallet Weight Value")) THEN
+        IF MergeOptionPageExt."FX Freight Pallet Weight Value" <> InitOptionPageExt."FX Freight Pallet Weight Value" THEN
+          VALIDATE("FX Freight Pallet Weight Value",MergeOptionPageExt."FX Freight Pallet Weight Value");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("No. of Pallets")) THEN
+        IF MergeOptionPageExt."No. of Pallets" <> InitOptionPageExt."No. of Pallets" THEN
+          VALIDATE("No. of Pallets",MergeOptionPageExt."No. of Pallets");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Special Delivery Instructions")) THEN
+        IF MergeOptionPageExt."Special Delivery Instructions" <> InitOptionPageExt."Special Delivery Instructions" THEN
+          VALIDATE("Special Delivery Instructions",MergeOptionPageExt."Special Delivery Instructions");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("FX Freight Pallet Length")) THEN
+        IF MergeOptionPageExt."FX Freight Pallet Length" <> InitOptionPageExt."FX Freight Pallet Length" THEN
+          VALIDATE("FX Freight Pallet Length",MergeOptionPageExt."FX Freight Pallet Length");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("FX Freight Pallet Width")) THEN
+        IF MergeOptionPageExt."FX Freight Pallet Width" <> InitOptionPageExt."FX Freight Pallet Width" THEN
+          VALIDATE("FX Freight Pallet Width",MergeOptionPageExt."FX Freight Pallet Width");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("FX Freight Pallet Height")) THEN
+        IF MergeOptionPageExt."FX Freight Pallet Height" <> InitOptionPageExt."FX Freight Pallet Height" THEN
+          VALIDATE("FX Freight Pallet Height",MergeOptionPageExt."FX Freight Pallet Height");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Do Not Break Down Pallets")) THEN
+        IF MergeOptionPageExt."Do Not Break Down Pallets" <> InitOptionPageExt."Do Not Break Down Pallets" THEN
+          VALIDATE("Do Not Break Down Pallets",MergeOptionPageExt."Do Not Break Down Pallets");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Do Not Stack Pallets")) THEN
+        IF MergeOptionPageExt."Do Not Stack Pallets" <> InitOptionPageExt."Do Not Stack Pallets" THEN
+          VALIDATE("Do Not Stack Pallets",MergeOptionPageExt."Do Not Stack Pallets");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Physical Packaging Type")) THEN
+        IF MergeOptionPageExt."Physical Packaging Type" <> InitOptionPageExt."Physical Packaging Type" THEN
+          VALIDATE("Physical Packaging Type",MergeOptionPageExt."Physical Packaging Type");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Collect Terms Type")) THEN
+        IF MergeOptionPageExt."Collect Terms Type" <> InitOptionPageExt."Collect Terms Type" THEN
+          VALIDATE("Collect Terms Type",MergeOptionPageExt."Collect Terms Type");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Liability Coverage Amount")) THEN
+        IF MergeOptionPageExt."Liability Coverage Amount" <> InitOptionPageExt."Liability Coverage Amount" THEN
+          VALIDATE("Liability Coverage Amount",MergeOptionPageExt."Liability Coverage Amount");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Liability Coverage Currency")) THEN
+        IF MergeOptionPageExt."Liability Coverage Currency" <> InitOptionPageExt."Liability Coverage Currency" THEN
+          VALIDATE("Liability Coverage Currency",MergeOptionPageExt."Liability Coverage Currency");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Liability Coverage Type")) THEN
+        IF MergeOptionPageExt."Liability Coverage Type" <> InitOptionPageExt."Liability Coverage Type" THEN
+          VALIDATE("Liability Coverage Type",MergeOptionPageExt."Liability Coverage Type");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Shipment Dimension Units")) THEN
+        IF MergeOptionPageExt."Shipment Dimension Units" <> InitOptionPageExt."Shipment Dimension Units" THEN
+          VALIDATE("Shipment Dimension Units",MergeOptionPageExt."Shipment Dimension Units");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Shipment Height")) THEN
+        IF MergeOptionPageExt."Shipment Height" <> InitOptionPageExt."Shipment Height" THEN
+          VALIDATE("Shipment Height",MergeOptionPageExt."Shipment Height");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Shipment Length")) THEN
+        IF MergeOptionPageExt."Shipment Length" <> InitOptionPageExt."Shipment Length" THEN
+          VALIDATE("Shipment Length",MergeOptionPageExt."Shipment Length");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Shipment Width")) THEN
+        IF MergeOptionPageExt."Shipment Width" <> InitOptionPageExt."Shipment Width" THEN
+          VALIDATE("Shipment Width",MergeOptionPageExt."Shipment Width");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Shipment Role")) THEN
+        IF MergeOptionPageExt."Shipment Role" <> InitOptionPageExt."Shipment Role" THEN
+          VALIDATE("Shipment Role",MergeOptionPageExt."Shipment Role");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Customer Reference Type 1")) THEN
+        IF MergeOptionPageExt."Customer Reference Type 1" <> InitOptionPageExt."Customer Reference Type 1" THEN
+          VALIDATE("Customer Reference Type 1",MergeOptionPageExt."Customer Reference Type 1");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Customer Reference Value 1")) THEN
+        IF MergeOptionPageExt."Customer Reference Value 1" <> InitOptionPageExt."Customer Reference Value 1" THEN
+          VALIDATE("Customer Reference Value 1",MergeOptionPageExt."Customer Reference Value 1");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Customer Reference Type 2")) THEN
+        IF MergeOptionPageExt."Customer Reference Type 2" <> InitOptionPageExt."Customer Reference Type 2" THEN
+          VALIDATE("Customer Reference Type 2",MergeOptionPageExt."Customer Reference Type 2");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Customer Reference Value 2")) THEN
+        IF MergeOptionPageExt."Customer Reference Value 2" <> InitOptionPageExt."Customer Reference Value 2" THEN
+          VALIDATE("Customer Reference Value 2",MergeOptionPageExt."Customer Reference Value 2");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Customer Reference Type 3")) THEN
+        IF MergeOptionPageExt."Customer Reference Type 3" <> InitOptionPageExt."Customer Reference Type 3" THEN
+          VALIDATE("Customer Reference Type 3",MergeOptionPageExt."Customer Reference Type 3");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Customer Reference Value 3")) THEN
+        IF MergeOptionPageExt."Customer Reference Value 3" <> InitOptionPageExt."Customer Reference Value 3" THEN
+          VALIDATE("Customer Reference Value 3",MergeOptionPageExt."Customer Reference Value 3");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Customer Reference Type 4")) THEN
+        IF MergeOptionPageExt."Customer Reference Type 4" <> InitOptionPageExt."Customer Reference Type 4" THEN
+          VALIDATE("Customer Reference Type 4",MergeOptionPageExt."Customer Reference Type 4");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Customer Reference Value 4")) THEN
+        IF MergeOptionPageExt."Customer Reference Value 4" <> InitOptionPageExt."Customer Reference Value 4" THEN
+          VALIDATE("Customer Reference Value 4",MergeOptionPageExt."Customer Reference Value 4");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Rate Request Type")) THEN
+        IF MergeOptionPageExt."Rate Request Type" <> InitOptionPageExt."Rate Request Type" THEN
+          VALIDATE("Rate Request Type",MergeOptionPageExt."Rate Request Type");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Duties Payor Contact Id")) THEN
+        IF MergeOptionPageExt."Duties Payor Contact Id" <> InitOptionPageExt."Duties Payor Contact Id" THEN
+          VALIDATE("Duties Payor Contact Id",MergeOptionPageExt."Duties Payor Contact Id");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Duties Payor Name")) THEN
+        IF MergeOptionPageExt."Duties Payor Name" <> InitOptionPageExt."Duties Payor Name" THEN
+          VALIDATE("Duties Payor Name",MergeOptionPageExt."Duties Payor Name");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Duties Payor Address")) THEN
+        IF MergeOptionPageExt."Duties Payor Address" <> InitOptionPageExt."Duties Payor Address" THEN
+          VALIDATE("Duties Payor Address",MergeOptionPageExt."Duties Payor Address");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Duties Payor City")) THEN
+        IF MergeOptionPageExt."Duties Payor City" <> InitOptionPageExt."Duties Payor City" THEN
+          VALIDATE("Duties Payor City",MergeOptionPageExt."Duties Payor City");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Duties Payor State")) THEN
+        IF MergeOptionPageExt."Duties Payor State" <> InitOptionPageExt."Duties Payor State" THEN
+          VALIDATE("Duties Payor State",MergeOptionPageExt."Duties Payor State");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Duties Payor Postal")) THEN
+        IF MergeOptionPageExt."Duties Payor Postal" <> InitOptionPageExt."Duties Payor Postal" THEN
+          VALIDATE("Duties Payor Postal",MergeOptionPageExt."Duties Payor Postal");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Duties Payor Residential")) THEN
+        IF MergeOptionPageExt."Duties Payor Residential" <> InitOptionPageExt."Duties Payor Residential" THEN
+          VALIDATE("Duties Payor Residential",MergeOptionPageExt."Duties Payor Residential");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Duties Payor Phone")) THEN
+        IF MergeOptionPageExt."Duties Payor Phone" <> InitOptionPageExt."Duties Payor Phone" THEN
+          VALIDATE("Duties Payor Phone",MergeOptionPageExt."Duties Payor Phone");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Duties Payor Email")) THEN
+        IF MergeOptionPageExt."Duties Payor Email" <> InitOptionPageExt."Duties Payor Email" THEN
+          VALIDATE("Duties Payor Email",MergeOptionPageExt."Duties Payor Email");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Duties Payor Tins No")) THEN
+        IF MergeOptionPageExt."Duties Payor Tins No" <> InitOptionPageExt."Duties Payor Tins No" THEN
+          VALIDATE("Duties Payor Tins No",MergeOptionPageExt."Duties Payor Tins No");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Duties Payor Tins Type")) THEN
+        IF MergeOptionPageExt."Duties Payor Tins Type" <> InitOptionPageExt."Duties Payor Tins Type" THEN
+          VALIDATE("Duties Payor Tins Type",MergeOptionPageExt."Duties Payor Tins Type");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Hazmat DOT Class or Division")) THEN
+        IF MergeOptionPageExt."Hazmat DOT Class or Division" <> InitOptionPageExt."Hazmat DOT Class or Division" THEN
+          VALIDATE("Hazmat DOT Class or Division",MergeOptionPageExt."Hazmat DOT Class or Division");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Hazmat DOT ID No.")) THEN
+        IF MergeOptionPageExt."Hazmat DOT ID No." <> InitOptionPageExt."Hazmat DOT ID No." THEN
+          VALIDATE("Hazmat DOT ID No.",MergeOptionPageExt."Hazmat DOT ID No.");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Hazmat DOT Label Codes")) THEN
+        IF MergeOptionPageExt."Hazmat DOT Label Codes" <> InitOptionPageExt."Hazmat DOT Label Codes" THEN
+          VALIDATE("Hazmat DOT Label Codes",MergeOptionPageExt."Hazmat DOT Label Codes");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Hazmat Packing Group")) THEN
+        IF MergeOptionPageExt."Hazmat Packing Group" <> InitOptionPageExt."Hazmat Packing Group" THEN
+          VALIDATE("Hazmat Packing Group",MergeOptionPageExt."Hazmat Packing Group");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Hazmat Contact Phone No.")) THEN
+        IF MergeOptionPageExt."Hazmat Contact Phone No." <> InitOptionPageExt."Hazmat Contact Phone No." THEN
+          VALIDATE("Hazmat Contact Phone No.",MergeOptionPageExt."Hazmat Contact Phone No.");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Hazmat Contact Name")) THEN
+        IF MergeOptionPageExt."Hazmat Contact Name" <> InitOptionPageExt."Hazmat Contact Name" THEN
+          VALIDATE("Hazmat Contact Name",MergeOptionPageExt."Hazmat Contact Name");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Hazmat Shipment Description")) THEN
+        IF MergeOptionPageExt."Hazmat Shipment Description" <> InitOptionPageExt."Hazmat Shipment Description" THEN
+          VALIDATE("Hazmat Shipment Description",MergeOptionPageExt."Hazmat Shipment Description");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Hazmat Quantity")) THEN
+        IF MergeOptionPageExt."Hazmat Quantity" <> InitOptionPageExt."Hazmat Quantity" THEN
+          VALIDATE("Hazmat Quantity",MergeOptionPageExt."Hazmat Quantity");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Hazmat Units")) THEN
+        IF MergeOptionPageExt."Hazmat Units" <> InitOptionPageExt."Hazmat Units" THEN
+          VALIDATE("Hazmat Units",MergeOptionPageExt."Hazmat Units");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Hazmat Technical Name")) THEN
+        IF MergeOptionPageExt."Hazmat Technical Name" <> InitOptionPageExt."Hazmat Technical Name" THEN
+          VALIDATE("Hazmat Technical Name",MergeOptionPageExt."Hazmat Technical Name");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag Request")) THEN
+        IF MergeOptionPageExt."Call Tag Request" <> InitOptionPageExt."Call Tag Request" THEN
+          VALIDATE("Call Tag Request",MergeOptionPageExt."Call Tag Request");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag Courier Instructions")) THEN
+        IF MergeOptionPageExt."Call Tag Courier Instructions" <> InitOptionPageExt."Call Tag Courier Instructions" THEN
+          VALIDATE("Call Tag Courier Instructions",MergeOptionPageExt."Call Tag Courier Instructions");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag Contact")) THEN
+        IF MergeOptionPageExt."Call Tag Contact" <> InitOptionPageExt."Call Tag Contact" THEN
+          VALIDATE("Call Tag Contact",MergeOptionPageExt."Call Tag Contact");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag Company Name")) THEN
+        IF MergeOptionPageExt."Call Tag Company Name" <> InitOptionPageExt."Call Tag Company Name" THEN
+          VALIDATE("Call Tag Company Name",MergeOptionPageExt."Call Tag Company Name");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag Address")) THEN
+        IF MergeOptionPageExt."Call Tag Address" <> InitOptionPageExt."Call Tag Address" THEN
+          VALIDATE("Call Tag Address",MergeOptionPageExt."Call Tag Address");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag Address 2")) THEN
+        IF MergeOptionPageExt."Call Tag Address 2" <> InitOptionPageExt."Call Tag Address 2" THEN
+          VALIDATE("Call Tag Address 2",MergeOptionPageExt."Call Tag Address 2");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag City")) THEN
+        IF MergeOptionPageExt."Call Tag City" <> InitOptionPageExt."Call Tag City" THEN
+          VALIDATE("Call Tag City",MergeOptionPageExt."Call Tag City");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag State")) THEN
+        IF MergeOptionPageExt."Call Tag State" <> InitOptionPageExt."Call Tag State" THEN
+          VALIDATE("Call Tag State",MergeOptionPageExt."Call Tag State");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag ZIP Code")) THEN
+        IF MergeOptionPageExt."Call Tag ZIP Code" <> InitOptionPageExt."Call Tag ZIP Code" THEN
+          VALIDATE("Call Tag ZIP Code",MergeOptionPageExt."Call Tag ZIP Code");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag Country Code")) THEN
+        IF MergeOptionPageExt."Call Tag Country Code" <> InitOptionPageExt."Call Tag Country Code" THEN
+          VALIDATE("Call Tag Country Code",MergeOptionPageExt."Call Tag Country Code");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag Phone No.")) THEN
+        IF MergeOptionPageExt."Call Tag Phone No." <> InitOptionPageExt."Call Tag Phone No." THEN
+          VALIDATE("Call Tag Phone No.",MergeOptionPageExt."Call Tag Phone No.");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag Residential")) THEN
+        IF MergeOptionPageExt."Call Tag Residential" <> InitOptionPageExt."Call Tag Residential" THEN
+          VALIDATE("Call Tag Residential",MergeOptionPageExt."Call Tag Residential");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag Request Date")) THEN
+        IF MergeOptionPageExt."Call Tag Request Date" <> InitOptionPageExt."Call Tag Request Date" THEN
+          VALIDATE("Call Tag Request Date",MergeOptionPageExt."Call Tag Request Date");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag Latest Pickup Date")) THEN
+        IF MergeOptionPageExt."Call Tag Latest Pickup Date" <> InitOptionPageExt."Call Tag Latest Pickup Date" THEN
+          VALIDATE("Call Tag Latest Pickup Date",MergeOptionPageExt."Call Tag Latest Pickup Date");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag Request Type")) THEN
+        IF MergeOptionPageExt."Call Tag Request Type" <> InitOptionPageExt."Call Tag Request Type" THEN
+          VALIDATE("Call Tag Request Type",MergeOptionPageExt."Call Tag Request Type");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Call Tag Request Source")) THEN
+        IF MergeOptionPageExt."Call Tag Request Source" <> InitOptionPageExt."Call Tag Request Source" THEN
+          VALIDATE("Call Tag Request Source",MergeOptionPageExt."Call Tag Request Source");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Hold At Location")) THEN
+        IF MergeOptionPageExt."Hold At Location" <> InitOptionPageExt."Hold At Location" THEN
+          VALIDATE("Hold At Location",MergeOptionPageExt."Hold At Location");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Location Address")) THEN
+        IF MergeOptionPageExt."HAL Location Address" <> InitOptionPageExt."HAL Location Address" THEN
+          VALIDATE("HAL Location Address",MergeOptionPageExt."HAL Location Address");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Location City")) THEN
+        IF MergeOptionPageExt."HAL Location City" <> InitOptionPageExt."HAL Location City" THEN
+          VALIDATE("HAL Location City",MergeOptionPageExt."HAL Location City");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Location State")) THEN
+        IF MergeOptionPageExt."HAL Location State" <> InitOptionPageExt."HAL Location State" THEN
+          VALIDATE("HAL Location State",MergeOptionPageExt."HAL Location State");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Location Zip")) THEN
+        IF MergeOptionPageExt."HAL Location Zip" <> InitOptionPageExt."HAL Location Zip" THEN
+          VALIDATE("HAL Location Zip",MergeOptionPageExt."HAL Location Zip");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Location Phone No.")) THEN
+        IF MergeOptionPageExt."HAL Location Phone No." <> InitOptionPageExt."HAL Location Phone No." THEN
+          VALIDATE("HAL Location Phone No.",MergeOptionPageExt."HAL Location Phone No.");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Location Country")) THEN
+        IF MergeOptionPageExt."HAL Location Country" <> InitOptionPageExt."HAL Location Country" THEN
+          VALIDATE("HAL Location Country",MergeOptionPageExt."HAL Location Country");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Recipient Name")) THEN
+        IF MergeOptionPageExt."HAL Recipient Name" <> InitOptionPageExt."HAL Recipient Name" THEN
+          VALIDATE("HAL Recipient Name",MergeOptionPageExt."HAL Recipient Name");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL FedEx Location Type")) THEN
+        IF MergeOptionPageExt."HAL FedEx Location Type" <> InitOptionPageExt."HAL FedEx Location Type" THEN
+          VALIDATE("HAL FedEx Location Type",MergeOptionPageExt."HAL FedEx Location Type");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Company")) THEN
+        IF MergeOptionPageExt."HAL Company" <> InitOptionPageExt."HAL Company" THEN
+          VALIDATE("HAL Company",MergeOptionPageExt."HAL Company");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Contact Id")) THEN
+        IF MergeOptionPageExt."HAL Contact Id" <> InitOptionPageExt."HAL Contact Id" THEN
+          VALIDATE("HAL Contact Id",MergeOptionPageExt."HAL Contact Id");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Contact Title")) THEN
+        IF MergeOptionPageExt."HAL Contact Title" <> InitOptionPageExt."HAL Contact Title" THEN
+          VALIDATE("HAL Contact Title",MergeOptionPageExt."HAL Contact Title");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Location Email Address")) THEN
+        IF MergeOptionPageExt."HAL Location Email Address" <> InitOptionPageExt."HAL Location Email Address" THEN
+          VALIDATE("HAL Location Email Address",MergeOptionPageExt."HAL Location Email Address");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Location FAX No.")) THEN
+        IF MergeOptionPageExt."HAL Location FAX No." <> InitOptionPageExt."HAL Location FAX No." THEN
+          VALIDATE("HAL Location FAX No.",MergeOptionPageExt."HAL Location FAX No.");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Location Pager No.")) THEN
+        IF MergeOptionPageExt."HAL Location Pager No." <> InitOptionPageExt."HAL Location Pager No." THEN
+          VALIDATE("HAL Location Pager No.",MergeOptionPageExt."HAL Location Pager No.");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Location Phone Ext.")) THEN
+        IF MergeOptionPageExt."HAL Location Phone Ext." <> InitOptionPageExt."HAL Location Phone Ext." THEN
+          VALIDATE("HAL Location Phone Ext.",MergeOptionPageExt."HAL Location Phone Ext.");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Location Urbanization Code")) THEN
+        IF MergeOptionPageExt."HAL Location Urbanization Code" <> InitOptionPageExt."HAL Location Urbanization Code" THEN
+          VALIDATE("HAL Location Urbanization Code",MergeOptionPageExt."HAL Location Urbanization Code");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("HAL Fedex Phone No.")) THEN
+        IF MergeOptionPageExt."HAL Fedex Phone No." <> InitOptionPageExt."HAL Fedex Phone No." THEN
+          VALIDATE("HAL Fedex Phone No.",MergeOptionPageExt."HAL Fedex Phone No.");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Upload Document")) THEN
+        IF MergeOptionPageExt."Upload Document" <> InitOptionPageExt."Upload Document" THEN
+          VALIDATE("Upload Document",MergeOptionPageExt."Upload Document");
+      IF MergeOptionPageExt.FieldIsAvailable(FIELDNO("Upload Image")) THEN
+        IF MergeOptionPageExt."Upload Image" <> InitOptionPageExt."Upload Image" THEN
+          VALIDATE("Upload Image",MergeOptionPageExt."Upload Image");
+    END;
+
+    LOCAL PROCEDURE TestFieldIsEditable@1240031005(TestFieldNo@1240030000 : Integer);
+    BEGIN
+      IF NOT FieldIsAvailable(TestFieldNo) THEN
+        ERROR(Text008,FIELDNAME(Type),Type);
+    END;
+
+    PROCEDURE FieldIsAvailable@1240031002(TestFieldNo@1240030000 : Integer) : Boolean;
+    BEGIN
+      CASE TestFieldNo OF
+        FIELDNO("Shipping Agent Code"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,TRUE,FALSE));
+        FIELDNO("World Wide Service"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Shipping Agent Service"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Recipient Customs ID Type"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Recipient Customs ID"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Commercial Invoice Comments"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Commodity Unit Value Currency"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Export B13A Filing Option"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Export Compliance Statement"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("NAFTA Preference Criterion"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("NAFTA Producer Determination"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("NAFTA Producer ID"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("NAFTA Net Cost Method"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("FX Freight Comment"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Long Description"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Shipping Document Type"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Shipping Document Image Type"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Shipping Document Stock Type"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Electronic Trade Documents"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Create Certificate of Origin"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Create Gen. Agency Agreement"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Create NAFTA Cert. of Origin"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Create Pro Forma Invoice"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Create Commercial Invoice"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("ETD Certificate of Origin ID"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("ETD Gen. Agency Agreement ID"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("ETD NAFTA Cert. of Origin ID"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("ETD Pro Forma Invoice ID"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("ETD Commercial Invoice ID"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Express Label TC No."):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("CI Freight Charge"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("CI Freight Charge Currency"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("CI Insurance Charge"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("CI Insurance Charge Currency"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("CI Misc Charge"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("CI Misc Charge Currency"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("CI Purpose of Shipment"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Return Shipment Return No."):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO("Customer Reference"):
+          EXIT(TypeIsAvailable(FALSE,FALSE,FALSE,FALSE,FALSE,FALSE));
+        FIELDNO(Palletized):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("FX Freight Pallet Weight Units"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("FX Freight Pallet Weight Value"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("No. of Pallets"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Special Delivery Instructions"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("FX Freight Pallet Length"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("FX Freight Pallet Width"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("FX Freight Pallet Height"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Do Not Break Down Pallets"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Do Not Stack Pallets"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Physical Packaging Type"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Collect Terms Type"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Liability Coverage Amount"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Liability Coverage Currency"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Liability Coverage Type"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Shipment Dimension Units"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Shipment Height"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Shipment Length"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Shipment Width"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Shipment Role"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Customer Reference Type 1"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Customer Reference Value 1"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Customer Reference Type 2"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Customer Reference Value 2"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Customer Reference Type 3"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Customer Reference Value 3"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Customer Reference Type 4"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Customer Reference Value 4"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Rate Request Type"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Duties Payor Contact Id"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Duties Payor Name"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Duties Payor Address"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Duties Payor City"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Duties Payor State"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Duties Payor Postal"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Duties Payor Residential"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Duties Payor Phone"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Duties Payor Email"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Duties Payor Tins No"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+        FIELDNO("Duties Payor Tins Type"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,TRUE,TRUE));
+         FIELDNO("Hazmat DOT Class or Division"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,FALSE,TRUE,FALSE,FALSE));
+        FIELDNO("Hazmat DOT ID No."):
+          EXIT(TypeIsAvailable(TRUE,TRUE,FALSE,TRUE,FALSE,FALSE));
+        FIELDNO("Hazmat DOT Label Codes"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,FALSE,TRUE,FALSE,FALSE));
+        FIELDNO("Hazmat Packing Group"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,FALSE,TRUE,FALSE,FALSE));
+        FIELDNO("Hazmat Contact Phone No."):
+          EXIT(TypeIsAvailable(TRUE,TRUE,FALSE,TRUE,FALSE,FALSE));
+        FIELDNO("Hazmat Contact Name"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,FALSE,TRUE,FALSE,FALSE));
+        FIELDNO("Hazmat Shipment Description"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,FALSE,TRUE,FALSE,FALSE));
+        FIELDNO("Hazmat Quantity"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,FALSE,TRUE,FALSE,FALSE));
+        FIELDNO("Hazmat Units"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,FALSE,TRUE,FALSE,FALSE));
+        FIELDNO("Hazmat Technical Name"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,FALSE,TRUE,FALSE,FALSE));
+        FIELDNO("Call Tag Request"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag Courier Instructions"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag Contact"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag Company Name"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag Address"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag Address 2"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag City"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag State"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag ZIP Code"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag Country Code"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag Phone No."):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag Residential"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag Request Date"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag Latest Pickup Date"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag Request Type"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Call Tag Request Source"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,FALSE));
+        FIELDNO("Hold At Location"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,TRUE));
+        FIELDNO("HAL Location Address"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,TRUE));
+        FIELDNO("HAL Location City"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,TRUE));
+        FIELDNO("HAL Location State"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,TRUE));
+        FIELDNO("HAL Location Zip"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,TRUE));
+        FIELDNO("HAL Location Phone No."):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,FALSE,TRUE));
+        FIELDNO("HAL Location Country"):
+          EXIT(TypeIsAvailable(TRUE,FALSE,TRUE,FALSE,FALSE,TRUE));
+        FIELDNO("HAL Recipient Name"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,FALSE,TRUE,FALSE,FALSE));
+        FIELDNO("HAL FedEx Location Type"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,FALSE,TRUE,FALSE,FALSE));
+        FIELDNO("HAL Company"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,FALSE,FALSE));
+        FIELDNO("HAL Contact Id"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,FALSE,FALSE));
+        FIELDNO("HAL Contact Title"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,FALSE,FALSE));
+        FIELDNO("HAL Location Email Address"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,FALSE,FALSE));
+        FIELDNO("HAL Location FAX No."):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,FALSE,FALSE));
+        FIELDNO("HAL Location Pager No."):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,FALSE,FALSE));
+        FIELDNO("HAL Location Phone Ext."):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,FALSE,FALSE));
+        FIELDNO("HAL Location Urbanization Code"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,FALSE,FALSE));
+        FIELDNO("HAL Fedex Phone No."):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,FALSE,TRUE));
+        FIELDNO("HAL Recipient Phone No."):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,FALSE,TRUE));
+        FIELDNO("Upload Document"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,FALSE,FALSE));
+        FIELDNO("Upload Image"):
+          EXIT(TypeIsAvailable(TRUE,TRUE,TRUE,TRUE,FALSE,FALSE));
+      END;
+    END;
+
+    LOCAL PROCEDURE TypeIsAvailable@1240031003(RegularOptionPage@1240030004 : Boolean;SetupOptionPage@1240030000 : Boolean;DocumentOptionPage@1240030005 : Boolean;ItemResourceOptionPage@1240030001 : Boolean;StandardOptionPage@1240030002 : Boolean;MasterDataOptionPage@1240030003 : Boolean) : Boolean;
+    BEGIN
+      CASE Type OF
+        Type::Package,
+        Type::"Bill of Lading":
+          EXIT(RegularOptionPage);
+        Type::Document,
+        Type::"Rate Shop":
+          EXIT(DocumentOptionPage);
+        Type::Setup:
+          EXIT(SetupOptionPage);
+        Type::Item,
+        Type::Resource:
+          EXIT(ItemResourceOptionPage);
+        Type::"Standard Option":
+          EXIT(StandardOptionPage);
+        Type::"Master Data":
+          EXIT(MasterDataOptionPage);
+        ELSE
+          ERROR(Text006,Type);
+      END;
+    END;
+
+    PROCEDURE SetPackage@4(CurrentPackage@1000000000 : Record 14000701);
+    BEGIN
+      Package := CurrentPackage;
+    END;
+
+    PROCEDURE CaptionText@1240030000() : Text[250];
+    VAR
+      PackingControl@1240030000 : Record 14000717;
+    BEGIN
+      EXIT(
+        PackingControl.FormatOptionPageCaption(
+          Type,"Source Type","Source Subtype","Source ID","Second Source ID",
+          FORMAT(Type),"Shipping Agent Code","Shipping Agent Service"));
+    END;
+
+    PROCEDURE FindFedExLocation@1240020001();
+    VAR
+      ShippingAgent@1240020000 : Record 291;
+    BEGIN
+      ShippingAgent.GET("Shipping Agent Code");
+      HYPERLINK(STRSUBSTNO(ShippingAgent."Location Lookup Address"));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

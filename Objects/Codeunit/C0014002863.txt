@@ -1,0 +1,1658 @@
+OBJECT Codeunit 14002863 Outbound Whse. Request Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/01/21;
+    Time=[ 7:24:39 AM];
+    Modified=Yes;
+    Version List=RF1.50.13,RF1.50.03,001;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1240040012 : TextConst 'ENU=&Ship,Ship &and Invoice';
+      Text001@1240040004 : TextConst 'ENU=Do you want to create the Pick?';
+      Text002@1240040003 : TextConst 'ENU=Shipment %1 and Pick %2 Created.';
+      Text003@1240040002 : TextConst 'ENU=%1 Picks created from %2 Warehouse Request .';
+      Text004@1240040008 : TextConst 'ENU=%1 Shipments of %2 posted.';
+      Text005@1240040005 : TextConst 'ENU=Wave Pick created';
+      Text006@1240040001 : TextConst 'ENU=Wave Pick creation failed';
+      Text009@1240040011 : TextConst 'ENU=Only Filters on %1 %2 used.';
+      Text010@1240040010 : TextConst 'ENU=Filter on %1 required.';
+      Text011@1240040009 : TextConst 'ENU=%1 Picks created.';
+      Text012@1240040007 : TextConst 'ENU=Do you want to create the Combined Pick?';
+      Text013@1240040006 : TextConst 'ENU=Do you want to create the Extra Pick(s)?';
+      Text014@1240020000 : TextConst 'ENU=No Picks Created.';
+      Text015@1240020001 : TextConst 'ENU=Pick %1 created.';
+      Text016@1240020002 : TextConst 'ENU=Shipment %1 created.';
+      Text017@1240020003 : TextConst 'ENU=Do you want to create a Demand Replenishment?';
+      Text018@1240020004 : TextConst 'ENU=Do you want to create a Top Off Replenishment?';
+      Text019@1240020005 : TextConst 'ENU=Replenishment process complete.';
+      Text020@1240020006 : TextConst 'ENU=This Location configuration for %1 does not support Wave Picks.';
+      Text021@1240020007 : TextConst 'ENU=This Location configuration for %1 does not support Combined Picks.';
+      Text022@1240020008 : TextConst 'ENU=This Location configuration for %1 does not support Extra Picks.';
+      Text023@1240020009 : TextConst 'ENU=Are you sure you want to clear the Completely Handled flag for this order?';
+      Text024@1240020010 : TextConst 'ENU=Are you sure you want to print these pick documents?';
+      Text025@1240020011 : TextConst 'ENU=User ID %1 is not setup as a Warehouse Employee for this Location.';
+
+    [External]
+    PROCEDURE OpenOutboundWarehouseRequest@1240040019(VAR WarehouseRequest@1240040004 : Record 5765;VAR OutboundWhseRequestFilter@1240040000 : Record 14002863;VAR AssignedID@1240040001 : Code[50]);
+    VAR
+      RFSetup@1240040003 : Record 14002801;
+      RFEmployeeSetup@1240040002 : Record 14002802;
+    BEGIN
+      RFSetup.GET;
+      RFEmployeeSetup.GetRFEmployeeSetup(USERID);
+      IF OutboundWhseRequestFilter.Code = '' THEN
+        OutboundWhseRequestFilter.GetOutboundWhseRequestFilter(RFSetup,RFEmployeeSetup);
+      IF AssignedID = '' THEN
+        AssignedID := RFEmployeeSetup."Assigned User ID";
+      IF RFEmployeeSetup."Action Created By Filter" <> '' THEN
+        WarehouseRequest.SETFILTER("Action Created By Filter",RFEmployeeSetup.GetFilter);
+    END;
+
+    [External]
+    PROCEDURE CreatePick@1240040001(VAR WarehouseRequest@1240040000 : Record 5765;VAR OutboundWhseRequestFilter@1240040006 : Record 14002863;AssignedID@1240040007 : Code[50];AssignedWhseGroupCode@1240020004 : Code[20]);
+    VAR
+      Location@1240020001 : Record 14;
+      CreatePickMgt@1240040005 : Codeunit 14002861;
+      RFMgt@1240020000 : Codeunit 14002801;
+      ShipmentNo@1240040004 : Code[20];
+      PickNo@1240040003 : Code[20];
+      NoOfWarehouseRequests@1240040002 : Integer;
+      PicksCreated@1240040001 : Integer;
+      ShipmentsCreated@1240020003 : Integer;
+    BEGIN
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(Text001) THEN
+          EXIT;
+
+      WarehouseRequest.FIND('-');
+
+      Location.GET(WarehouseRequest."Location Code");
+      IF (NOT Location."Require Pick") AND (NOT Location."Require Shipment") THEN BEGIN
+        CreatePickRequest(
+          WarehouseRequest,OutboundWhseRequestFilter,
+          AssignedID,AssignedWhseGroupCode,PickNo,
+          NoOfWarehouseRequests,PicksCreated,FALSE,FALSE);
+
+        IF GUIALLOWED THEN BEGIN
+          IF PicksCreated <= 0 THEN
+            MESSAGE(Text014);
+        END;
+
+      //<TPZ1307>
+      //WarehouseRequest.FIND('-');
+      IF WarehouseRequest.FIND('-') = FALSE THEN BEGIN
+        MESSAGE('No Picks Created. Please refresh OWR and try again.');
+        EXIT;
+      END;
+      END;
+      //</TPZ1307>
+
+      IF (Location."Require Pick") AND (NOT Location."Require Shipment") THEN BEGIN
+        CreatePickMgt.CreateInventoryPick(
+          WarehouseRequest,OutboundWhseRequestFilter,
+          AssignedID,AssignedWhseGroupCode,ShipmentNo,PickNo,NoOfWarehouseRequests,
+          PicksCreated);
+
+        IF GUIALLOWED THEN BEGIN
+          IF NoOfWarehouseRequests > 1 THEN
+            MESSAGE(Text003,PicksCreated,NoOfWarehouseRequests)
+          ELSE
+            IF (NoOfWarehouseRequests = 1) AND (PicksCreated > 0) THEN
+              MESSAGE(Text015,PickNo)
+            ELSE
+              MESSAGE(Text014);
+        END;
+      END ELSE BEGIN
+        CreatePickMgt.CreateWhseShipAndPick(
+          WarehouseRequest,OutboundWhseRequestFilter,
+          AssignedID,AssignedWhseGroupCode,ShipmentNo,PickNo,NoOfWarehouseRequests,
+          PicksCreated);
+
+        IF GUIALLOWED THEN BEGIN
+        //TM BEG 070615 - Change display message to always tell user how many picks were created.
+        //IF NoOfWarehouseRequests > 1 THEN
+        IF (NoOfWarehouseRequests >= 1) AND (PicksCreated > 0) THEN
+        //TM END 070615
+            MESSAGE(Text003,PicksCreated,NoOfWarehouseRequests)
+          ELSE
+            IF (NoOfWarehouseRequests = 1) AND
+               (PicksCreated > 0)
+            THEN BEGIN
+              IF (Location."Require Shipment") AND (NOT Location."Require Pick") THEN
+                MESSAGE(Text016,ShipmentNo)
+              ELSE
+                MESSAGE(Text002,ShipmentNo,PickNo);
+            END ELSE
+              MESSAGE(Text014);
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE CreateWavePick@1240040002(VAR WarehouseRequest@1240040000 : Record 5765;VAR OutboundWhseRequestFilter@1240040001 : Record 14002863;AssignedID@1240040002 : Code[50];AssignedWhseEmplGroup@1240020000 : Code[20]);
+    VAR
+      Location@1240020001 : Record 14;
+      WavePickMgt@1240040003 : Codeunit 14002961;
+    BEGIN
+      WarehouseRequest.FIND('-');
+
+      Location.GET(WarehouseRequest."Location Code");
+      IF Location."Directed Put-away and Pick" THEN BEGIN
+        IF WavePickMgt.CreateWavePick(
+             WarehouseRequest,OutboundWhseRequestFilter,AssignedID,AssignedWhseEmplGroup)
+        THEN BEGIN
+          IF GUIALLOWED THEN
+            MESSAGE(Text005);
+        END ELSE
+          IF GUIALLOWED THEN
+            MESSAGE(Text006);
+      END ELSE
+        IF GUIALLOWED THEN
+          ERROR(STRSUBSTNO(Text020,Location.Code));
+    END;
+
+    [External]
+    PROCEDURE CreateCombinedPick@1240040003(VAR WarehouseRequest@1240040003 : Record 5765;VAR OutboundWhseRequestFilter@1240040004 : Record 14002863;AssignedID@1240040005 : Code[50];AssignedWhseEmplGroup@1240020000 : Code[20]);
+    VAR
+      Location@1240020001 : Record 14;
+      CombinedPickMgt@1240040002 : Codeunit 14002964;
+      ShipmentNo@1240040001 : Code[20];
+      PickNo@1240040000 : Code[20];
+      NoOfWarehouseRequests@1240020002 : Integer;
+      PicksCreated@1240020003 : Integer;
+    BEGIN
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(Text012) THEN
+          EXIT;
+
+      WarehouseRequest.FIND('-');
+
+      Location.GET(WarehouseRequest."Location Code");
+      IF (NOT Location."Require Pick") AND (NOT Location."Require Shipment") THEN BEGIN
+        CreatePickRequest(
+          WarehouseRequest,OutboundWhseRequestFilter,
+          AssignedID,AssignedWhseEmplGroup,PickNo,
+          NoOfWarehouseRequests,PicksCreated,TRUE,FALSE);
+
+        IF GUIALLOWED THEN BEGIN
+          IF PicksCreated <= 0 THEN
+            MESSAGE(Text014);
+        END;
+        EXIT;
+      END;
+
+      IF Location."Require Shipment" THEN BEGIN
+        CombinedPickMgt.CreateWhseShipAndPick(
+          WarehouseRequest,OutboundWhseRequestFilter,AssignedID,
+          AssignedWhseEmplGroup,ShipmentNo,PickNo,TRUE);
+
+        IF GUIALLOWED THEN BEGIN
+          IF (ShipmentNo <> '') AND (PickNo <> '')  THEN
+            MESSAGE(Text002,ShipmentNo,PickNo);
+
+          IF (ShipmentNo <> '') AND (PickNo = '') THEN
+            MESSAGE(Text016,ShipmentNo);
+        END;
+      END ELSE
+        IF GUIALLOWED THEN
+          ERROR(STRSUBSTNO(Text021,Location.Code));
+    END;
+
+    [External]
+    PROCEDURE CreateExtraPick@1240040004(VAR WarehouseRequest@1240040000 : Record 5765;VAR OutboundWhseRequestFilter@1240040001 : Record 14002863;AssignedID@1240040002 : Code[50]);
+    VAR
+      Location@1240020000 : Record 14;
+      ExtraPickMgt@1240040003 : Codeunit 14002965;
+    BEGIN
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(Text013) THEN
+          EXIT;
+
+      WarehouseRequest.FIND('-');
+
+      Location.GET(WarehouseRequest."Location Code");
+
+      IF Location."Require Pick" AND Location."Require Shipment" THEN BEGIN
+        ExtraPickMgt.CreateExtraPick(
+          WarehouseRequest,OutboundWhseRequestFilter,AssignedID,TRUE);
+      END ELSE
+        IF GUIALLOWED THEN
+          ERROR(STRSUBSTNO(Text022,Location.Code));
+    END;
+
+    [External]
+    PROCEDURE CreateReplenishment@1240020006(VAR WarehouseRequest@1240020003 : Record 5765;VAR OutboundWhseRequestFilter@1240020002 : Record 14002863;TopOff@1240020006 : Boolean);
+    VAR
+      RFSetup@1240020000 : Record 14002801;
+      OWRReplenMgt@1240020005 : Codeunit 14002865;
+      AutoCreateMovement@1240020001 : Boolean;
+    BEGIN
+      IF GUIALLOWED THEN
+        IF NOT TopOff THEN BEGIN
+          IF NOT CONFIRM(Text017) THEN
+            EXIT;
+        END ELSE
+          IF NOT CONFIRM(Text018) THEN
+            EXIT;
+
+      IF WarehouseRequest.FIND('-') THEN
+        OWRReplenMgt.CreateReplenUsingFilters(
+          WarehouseRequest."Location Code",'','','',OutboundWhseRequestFilter."Pick-from Zone Filter",
+          OutboundWhseRequestFilter."Pick-from Bin Filter",'','','',0,0,TopOff,TRUE);
+
+      IF GUIALLOWED THEN
+        MESSAGE(Text019);
+    END;
+
+    [External]
+    PROCEDURE CreateWarehouseShipment@1240020014(VAR WarehouseRequest@1240020002 : Record 5765;VAR OutboundWhseRequestFilter@1240020001 : Record 14002863;VAR WhseShptHeader@1240020015 : Record 7320;AssignedID@1240020000 : Code[50]);
+    VAR
+      WhseShptHeader2@1240020013 : Record 7320;
+      WhseShptLine@1240020014 : Record 7321;
+      Location@1240020005 : Record 14;
+      Customer@1240020008 : Record 18;
+      Item@1240020010 : Record 27;
+      SalesHeader@1240020006 : Record 36;
+      SalesLine@1240020007 : Record 37;
+      PurchaseHeader@1240020009 : Record 38;
+      PurchaseLine@1240020016 : Record 39;
+      TransferHeader@1240020017 : Record 5740;
+      TransferLine@1240020018 : Record 5741;
+      ServiceHeader@1240020019 : Record 5900;
+      ServiceLine@1240020020 : Record 5902;
+      WhseActivityCreate@1240020011 : Codeunit 5750;
+      LineCreated@1240020003 : Boolean;
+      HeaderCreated@1240020004 : Boolean;
+      ErrorOccurred@1240020012 : Boolean;
+      CustomDestinationShipBin@1240020021 : Code[20];
+    BEGIN
+      LineCreated := FALSE;
+      HeaderCreated := FALSE;
+
+      IF WhseShptHeader."No." <> '' THEN
+        IF WhseShptHeader2.GET(WhseShptHeader."No.") THEN
+          HeaderCreated := TRUE;
+
+      WarehouseRequest.FIND('-');
+      REPEAT
+        IF Location.GET(WarehouseRequest."Location Code") THEN
+          IF (Location."Require Shipment") AND (WarehouseRequest.Type = WarehouseRequest.Type::Outbound) THEN BEGIN
+            FindDestinationShipBinEvent(WarehouseRequest,OutboundWhseRequestFilter,AssignedID,CustomDestinationShipBin);
+
+            CASE WarehouseRequest."Source Type" OF
+              DATABASE::"Sales Line":
+                BEGIN
+                  IF SalesHeader.GET(WarehouseRequest."Source Subtype",WarehouseRequest."Source No.") THEN BEGIN
+                    IF Customer.GET(SalesHeader."Sell-to Customer No.") THEN
+                      Customer.CheckBlockedCustOnDocs(Customer,SalesHeader."Document Type",FALSE,FALSE);
+                  END;
+
+                  IF Customer.Blocked = Customer.Blocked::" " THEN BEGIN
+                    SalesLine.RESET;
+                    SalesLine.SETRANGE("Document Type",WarehouseRequest."Source Subtype");
+                    SalesLine.SETRANGE("Document No.",WarehouseRequest."Source No.");
+                    SalesLine.SETRANGE("Location Code",WarehouseRequest."Location Code");
+                    SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+                    SalesLine.SETRANGE("Drop Shipment",FALSE);
+                    SalesLine.SETRANGE("Job No.",'');
+                    SalesLine.SETFILTER("Outstanding Quantity",'>0');
+                    IF SalesLine.FINDSET(FALSE) THEN BEGIN
+                      REPEAT
+                        Item.GET(SalesLine."No.");
+                        IF NOT Item.Blocked THEN BEGIN
+                          IF WhseActivityCreate.CheckIfFromSalesLine2ShptLine(SalesLine) THEN BEGIN
+                            IF NOT HeaderCreated THEN BEGIN
+                              WhseShptHeader.INIT;
+                              WhseShptHeader."No." := '';
+                              WhseShptHeader."Location Code" := WarehouseRequest."Location Code";
+                              WhseShptLine.LOCKTABLE;
+                              WhseShptHeader.INSERT(TRUE);
+
+                              IF CustomDestinationShipBin <> '' THEN
+                                WhseShptHeader."Bin Code" := CustomDestinationShipBin
+                              ELSE
+                                WhseShptHeader."Bin Code" :=
+                                  SetShipBin(Location.Code,OutboundWhseRequestFilter."Destination Ship Bin");
+                              WhseShptHeader.MODIFY;
+
+                              HeaderCreated := TRUE;
+                            END;
+                            IF NOT WhseActivityCreate.FromSalesLine2ShptLine(WhseShptHeader,SalesLine) THEN
+                              ErrorOccurred := TRUE;
+                            LineCreated := TRUE;
+                          END;
+                        END;
+                      UNTIL SalesLine.NEXT = 0;
+                    END;
+
+                    IF HeaderCreated THEN
+                      WhseShptHeader.SortWhseDoc;
+                  END;
+                END;
+              DATABASE::"Purchase Line":
+                BEGIN
+                  IF PurchaseHeader.GET(WarehouseRequest."Source Subtype",WarehouseRequest."Source No.") THEN BEGIN
+                    PurchaseLine.RESET;
+                    PurchaseLine.SETRANGE("Document Type",WarehouseRequest."Source Subtype");
+                    PurchaseLine.SETRANGE("Document No.",WarehouseRequest."Source No.");
+                    PurchaseLine.SETRANGE("Location Code",WarehouseRequest."Location Code");
+                    PurchaseLine.SETRANGE(Type,PurchaseLine.Type::Item);
+                    PurchaseLine.SETRANGE("Drop Shipment",FALSE);
+                    PurchaseLine.SETRANGE("Job No.",'');
+                    PurchaseLine.SETFILTER("Outstanding Quantity",'>0');
+                    IF PurchaseLine.FINDSET(FALSE) THEN BEGIN
+                      REPEAT
+                        Item.GET(PurchaseLine."No.");
+                        IF NOT Item.Blocked THEN BEGIN
+                          IF WhseActivityCreate.CheckIfFromPurchLine2ShptLine(PurchaseLine) THEN BEGIN
+                            IF NOT HeaderCreated THEN BEGIN
+                              WhseShptHeader.INIT;
+                              WhseShptHeader."No." := '';
+                              WhseShptHeader."Location Code" := WarehouseRequest."Location Code";
+                              WhseShptLine.LOCKTABLE;
+                              WhseShptHeader.INSERT(TRUE);
+
+                              IF CustomDestinationShipBin <> '' THEN
+                                WhseShptHeader."Bin Code" := CustomDestinationShipBin
+                              ELSE
+                                WhseShptHeader."Bin Code" :=
+                                  SetShipBin(Location.Code,OutboundWhseRequestFilter."Destination Ship Bin");
+                              WhseShptHeader.MODIFY;
+
+                              HeaderCreated := TRUE;
+                            END;
+                            IF NOT WhseActivityCreate.FromPurchLine2ShptLine(WhseShptHeader,PurchaseLine) THEN
+                              ErrorOccurred := TRUE;
+                            LineCreated := TRUE;
+                          END;
+                        END;
+                      UNTIL PurchaseLine.NEXT = 0;
+                    END;
+
+                    IF HeaderCreated THEN
+                      WhseShptHeader.SortWhseDoc;
+                  END;
+                END;
+              DATABASE::"Transfer Line":
+                BEGIN
+                  IF TransferHeader.GET(WarehouseRequest."Source No.") THEN BEGIN
+                    TransferLine.RESET;
+                    TransferLine.SETRANGE("Document No.",WarehouseRequest."Source No.");
+                    TransferLine.SETFILTER("Outstanding Quantity",'>0');
+                    IF TransferLine.FINDSET(FALSE) THEN BEGIN
+                      REPEAT
+                        IF WhseActivityCreate.CheckIfFromTransLine2ShptLine(TransferLine) THEN BEGIN
+                          IF NOT HeaderCreated THEN BEGIN
+                            WhseShptHeader.INIT;
+                            WhseShptHeader."No." := '';
+                            WhseShptHeader."Location Code" := WarehouseRequest."Location Code";
+                            WhseShptLine.LOCKTABLE;
+                            WhseShptHeader.INSERT(TRUE);
+
+                            IF CustomDestinationShipBin <> '' THEN
+                              WhseShptHeader."Bin Code" := CustomDestinationShipBin
+                            ELSE
+                              WhseShptHeader."Bin Code" :=
+                                SetShipBin(Location.Code,OutboundWhseRequestFilter."Destination Ship Bin");
+                            WhseShptHeader.MODIFY;
+
+                            HeaderCreated := TRUE;
+                          END;
+                          IF NOT WhseActivityCreate.FromTransLine2ShptLine(WhseShptHeader,TransferLine) THEN
+                            ErrorOccurred := TRUE;
+                          LineCreated := TRUE;
+                        END;
+                      UNTIL TransferLine.NEXT = 0;
+                    END;
+
+                    IF HeaderCreated THEN
+                      WhseShptHeader.SortWhseDoc;
+                  END;
+                END;
+              DATABASE::"Service Line":
+                BEGIN
+                  IF ServiceHeader.GET(WarehouseRequest."Source Subtype",WarehouseRequest."Source No.") THEN BEGIN
+                    IF Customer.GET(ServiceHeader."Bill-to Customer No.") THEN
+                      Customer.CheckBlockedCustOnDocs(Customer,ServiceHeader."Document Type",FALSE,FALSE);
+                  END;
+
+                  IF Customer.Blocked = Customer.Blocked::" " THEN BEGIN
+                    ServiceLine.RESET;
+                    ServiceLine.SETRANGE("Document Type",WarehouseRequest."Source Subtype");
+                    ServiceLine.SETRANGE("Document No.",WarehouseRequest."Source No.");
+                    ServiceLine.SETRANGE("Location Code",WarehouseRequest."Location Code");
+                    ServiceLine.SETRANGE(Type,SalesLine.Type::Item);
+                    ServiceLine.SETRANGE("Job No.",'');
+                    ServiceLine.SETFILTER("Outstanding Quantity",'>0');
+                    IF ServiceLine.FINDSET(FALSE) THEN BEGIN
+                      REPEAT
+                        IF WhseActivityCreate.CheckIfFromServiceLine2ShptLin(ServiceLine) THEN BEGIN
+                          IF NOT HeaderCreated THEN BEGIN
+                            WhseShptHeader.INIT;
+                            WhseShptHeader."No." := '';
+                            WhseShptHeader."Location Code" := WarehouseRequest."Location Code";
+                            WhseShptLine.LOCKTABLE;
+                            WhseShptHeader.INSERT(TRUE);
+
+                            IF CustomDestinationShipBin <> '' THEN
+                              WhseShptHeader."Bin Code" := CustomDestinationShipBin
+                            ELSE
+                              WhseShptHeader."Bin Code" :=
+                                SetShipBin(Location.Code,OutboundWhseRequestFilter."Destination Ship Bin");
+                            WhseShptHeader.MODIFY;
+
+                            HeaderCreated := TRUE;
+                          END;
+                          IF NOT WhseActivityCreate.FromServiceLine2ShptLine(WhseShptHeader,ServiceLine) THEN
+                            ErrorOccurred := TRUE;
+                          LineCreated := TRUE;
+                        END;
+                      UNTIL ServiceLine.NEXT = 0;
+                    END;
+
+                    IF HeaderCreated THEN
+                      WhseShptHeader.SortWhseDoc;
+                  END;
+                END;
+            END;
+          END;
+      UNTIL WarehouseRequest.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE MarkRecords@1240030001(VAR CurrentRec@1240040001 : Record 5765;VAR WarehouseRequest@1240030004 : Record 5765;VAR OutboundWhseRequestFilter@1240040006 : Record 14002863;ValueType@1240030000 : Integer;SetAction@1240040000 : Boolean);
+    VAR
+      WarehouseRequestTmp@1240040002 : TEMPORARY Record 5765;
+      WarehouseRequest2@1240030003 : Record 5765;
+      RFStatEntryTotal2@1240030002 : Record 14002804;
+      OutboundWhseRequestAction@1240040003 : Record 14002864;
+      OutbWhseReqActionEntry@1240040004 : Record 14002865;
+      RFEmployeeSetup@1240020000 : Record 14002802;
+      WarehouseStreamlineMgt@1240040005 : Codeunit 14002809;
+      CalculatedCorrectly2@1240030001 : Boolean;
+    BEGIN
+      RFEmployeeSetup.GetRFEmployeeSetup(USERID);
+      WarehouseRequest2 := CurrentRec;
+
+      IF SetAction THEN BEGIN
+        OutboundWhseRequestAction.RESET;
+        CASE ValueType OF
+          0,10:
+            OutboundWhseRequestAction.SETRANGE("Outstanding Quantity",TRUE);
+          1,11:
+            OutboundWhseRequestAction.SETRANGE("Available Quantity",TRUE);
+          2,12:
+            OutboundWhseRequestAction.SETRANGE("Total Available Quantity",TRUE);
+          3,13:
+            OutboundWhseRequestAction.SETRANGE("All Available Quantity",TRUE);
+          4,14:
+            OutboundWhseRequestAction.SETRANGE("Total > Available Quantity",TRUE);
+          5,15:
+            OutboundWhseRequestAction.SETRANGE("Reserved Inventory",TRUE);
+          6,16:
+            OutboundWhseRequestAction.SETRANGE("New Orders",TRUE);
+          7,17:
+            OutboundWhseRequestAction.SETRANGE("Back Orders",TRUE);
+          8,18:
+            OutboundWhseRequestAction.SETRANGE("ATO Orders",TRUE);
+        END;
+        OutboundWhseRequestAction.FIND('-');
+      END;
+
+      IF WarehouseRequest.FIND('-') THEN BEGIN
+        REPEAT
+          WarehouseRequestTmp := WarehouseRequest;
+          WarehouseRequestTmp.INSERT;
+        UNTIL WarehouseRequest.NEXT = 0;
+
+        WarehouseRequestTmp.FIND('-');
+        REPEAT
+          WarehouseRequest := WarehouseRequestTmp;
+
+          CalculatedCorrectly2 :=
+            WarehouseStreamlineMgt.CalculateStatisticsSingle(
+              WarehouseRequest,RFStatEntryTotal2,OutboundWhseRequestFilter);
+
+          IF CalculatedCorrectly2 AND
+             ((RFStatEntryTotal2."Outstanding Quantity" <> 0) OR
+               RFEmployeeSetup."Ignore Action Outst. Qty of 0") AND
+             ((RFStatEntryTotal2."Available Volume" >=
+                 OutboundWhseRequestFilter."Minimum Avail. Volume") AND
+              ((RFStatEntryTotal2."Available Volume" <=
+                 OutboundWhseRequestFilter."Maximum Avail. Volume") OR
+               (OutboundWhseRequestFilter."Maximum Avail. Volume" = 0))) AND
+             ((RFStatEntryTotal2."Available Gross Weight" >=
+                 OutboundWhseRequestFilter."Minimum Avail. Gross Weight") AND
+              ((RFStatEntryTotal2."Available Gross Weight" <=
+                 OutboundWhseRequestFilter."Minimum Avail. Gross Weight") OR
+               (OutboundWhseRequestFilter."Maximum Avail. Gross Weight" = 0))) AND
+             ((RFStatEntryTotal2."Net Weight (Base)" >=
+                 OutboundWhseRequestFilter."Minimum Avail. Net Weight") AND
+              ((RFStatEntryTotal2."Net Weight (Base)" <=
+                 OutboundWhseRequestFilter."Maximum Avail. Net Weight") OR
+               (OutboundWhseRequestFilter."Maximum Avail. Net Weight" = 0))) AND
+             ((RFStatEntryTotal2."Available Qty. (Base)" >=
+                 OutboundWhseRequestFilter."Minimum Avail. Qty. (Base)") AND
+              ((RFStatEntryTotal2."Available Qty. (Base)" <=
+                 OutboundWhseRequestFilter."Maximum Avail. Qty. (Base)") OR
+               (OutboundWhseRequestFilter."Maximum Avail. Qty. (Base)" = 0))) AND
+             ((RFStatEntryTotal2."Available Amount" >=
+                 OutboundWhseRequestFilter."Minimum Avail. Amount") AND
+              ((RFStatEntryTotal2."Available Amount" <=
+                 OutboundWhseRequestFilter."Maximum Avail. Amount") OR
+               (OutboundWhseRequestFilter."Maximum Avail. Amount" = 0))) AND
+             ((RFStatEntryTotal2."Outstanding No. of Lines" >=
+                 OutboundWhseRequestFilter."Minimum Outst. No. of Lines") AND
+              ((RFStatEntryTotal2."Outstanding No. of Lines" <=
+                 OutboundWhseRequestFilter."Maximum Outst. No. of Lines") OR
+               (OutboundWhseRequestFilter."Maximum Outst. No. of Lines" = 0))) AND
+             (((ValueType = 0) AND (RFStatEntryTotal2."Outstanding Quantity" <> 0)) OR
+              ((ValueType = 1) AND (RFStatEntryTotal2."Available Quantity" <> 0)) OR
+              ((ValueType = 2) AND (RFStatEntryTotal2."Total Available Quantity" <> 0)) OR
+              ((ValueType = 3) AND
+               (RFStatEntryTotal2."Outstanding Quantity" = RFStatEntryTotal2."Available Quantity")) OR
+              ((ValueType = 4) AND
+               (RFStatEntryTotal2."Total Available Quantity" > RFStatEntryTotal2."Available Quantity"))) OR
+              ((ValueType = 5) AND (RFStatEntryTotal2."Inv. Reserved Quantity" <> 0)) OR
+              ((ValueType = 6) AND
+               (RFStatEntryTotal2."Outstanding Quantity" <> 0) AND
+               (RFStatEntryTotal2.Quantity = RFStatEntryTotal2."Outstanding Quantity")) OR
+              ((ValueType = 7) AND
+               (RFStatEntryTotal2."Outstanding Quantity" <> 0) AND
+               (WarehouseRequestTmp."Shipment Date" < WORKDATE)) OR
+              ((ValueType = 8) AND
+               (RFStatEntryTotal2."ATO Quantity" <> 0)) OR
+              ((ValueType = 10) AND
+               (RFStatEntryTotal2."Outstanding No. of Lines" = 1) AND
+               (RFStatEntryTotal2."Outstanding Quantity" <> 0)) OR
+              ((ValueType = 11) AND
+               (RFStatEntryTotal2."Outstanding No. of Lines" = 1) AND
+               (RFStatEntryTotal2."Available Quantity" <> 0)) OR
+              ((ValueType = 12) AND
+               (RFStatEntryTotal2."Outstanding No. of Lines" = 1) AND
+               (RFStatEntryTotal2."Total Available Quantity" <> 0)) OR
+              ((ValueType = 13) AND
+               (RFStatEntryTotal2."Outstanding No. of Lines" = 1) AND
+               (RFStatEntryTotal2."Outstanding Quantity" = RFStatEntryTotal2."Available Quantity")) OR
+              ((ValueType = 14) AND
+               (RFStatEntryTotal2."Outstanding No. of Lines" = 1) AND
+               (RFStatEntryTotal2."Total Available Quantity" > RFStatEntryTotal2."Available Quantity")) OR
+              ((ValueType = 15) AND
+               (RFStatEntryTotal2."Outstanding No. of Lines" = 1) AND
+               (RFStatEntryTotal2."Inv. Reserved Quantity" <> 0)) OR
+              ((ValueType = 16) AND
+               (RFStatEntryTotal2."Outstanding No. of Lines" = 1) AND
+               (RFStatEntryTotal2."Outstanding Quantity" <> 0) AND
+               (RFStatEntryTotal2.Quantity = RFStatEntryTotal2."Outstanding Quantity")) OR
+              ((ValueType = 17) AND
+               (RFStatEntryTotal2."Outstanding No. of Lines" = 1) AND
+               (RFStatEntryTotal2."Outstanding Quantity" <> 0) AND
+               (WarehouseRequestTmp."Shipment Date" < WORKDATE)) OR
+              ((ValueType = 18) AND
+               (RFStatEntryTotal2."Outstanding No. of Lines" = 1) AND
+               (RFStatEntryTotal2."ATO Quantity" <> 0))
+          THEN BEGIN
+            IF SetAction THEN BEGIN
+              IF ValueType < 10 THEN BEGIN
+                OutbWhseReqActionEntry.InsertModifyFromWhseRequest(
+                  WarehouseRequest,USERID,OutboundWhseRequestAction.Code,FALSE,'',FALSE);
+              END ELSE BEGIN
+                OutbWhseReqActionEntry.InsertModifyFromWhseRequest2(
+                  WarehouseRequest,USERID,FALSE,'',FALSE);
+              END;
+            END ELSE BEGIN
+              CurrentRec := WarehouseRequest;
+              CurrentRec.MARK(TRUE);
+            END;
+          END;
+        UNTIL WarehouseRequestTmp.NEXT = 0;
+      END;
+
+      CurrentRec := WarehouseRequest2;
+    END;
+
+    [External]
+    PROCEDURE SetPriority@1240030002(VAR WarehouseRequest@1240040000 : Record 5765;Decending@1240030004 : Boolean);
+    VAR
+      WarehouseRequest2@1240030002 : Record 5765;
+      EnterpickingPriority@1240020000 : Page 14002870;
+      PickingPriority@1240030000 : Integer;
+    BEGIN
+      CLEAR(EnterpickingPriority);
+      EnterpickingPriority.LOOKUPMODE(TRUE);
+      IF EnterpickingPriority.RUNMODAL <> ACTION::LookupOK THEN
+        EXIT;
+      EnterpickingPriority.GetFields(PickingPriority);
+
+      IF WarehouseRequest.FIND('-') THEN
+        REPEAT
+          IF WarehouseRequest."Picking Priority" <> PickingPriority THEN BEGIN
+            WarehouseRequest2 := WarehouseRequest;
+            WarehouseRequest2.VALIDATE("Picking Priority",PickingPriority);
+            WarehouseRequest2.MODIFY(TRUE);
+          END;
+
+          IF Decending THEN
+            PickingPriority := PickingPriority - 1;
+        UNTIL (WarehouseRequest.NEXT = 0) OR (Decending AND (PickingPriority <= 0));
+    END;
+
+    [External]
+    PROCEDURE ClearPriority@1240040005(VAR WarehouseRequest@1240040001 : Record 5765);
+    VAR
+      WarehouseRequest2@1240040000 : Record 5765;
+    BEGIN
+      IF WarehouseRequest.FIND('-') THEN
+        REPEAT
+          IF WarehouseRequest."Picking Priority" <> 0 THEN BEGIN
+            WarehouseRequest2 := WarehouseRequest;
+            WarehouseRequest2.VALIDATE("Picking Priority",0);
+            WarehouseRequest2.MODIFY(TRUE);
+          END;
+        UNTIL WarehouseRequest.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE CreatePrioritizedPicks@1240040006(VAR CurrentWarehouseRequest@1240040001 : Record 5765;VAR OutboundWhseRequestFilter@1240040002 : Record 14002863;AssignedID@1240040003 : Code[50];AssignedWarehouseEmployeeGroup@1240020000 : Code[20]);
+    VAR
+      WarehouseRequest@1240040000 : Record 5765;
+      CreatePickMgt@1240040004 : Codeunit 14002861;
+      RFMgt@1240020003 : Codeunit 14002801;
+      PickNo@1240020006 : Code[20];
+      PrioritizedPicksCreated@1240020001 : Integer;
+      NoOfWarehouseRequests@1240020004 : Integer;
+    BEGIN
+      IF CurrentWarehouseRequest.GETFILTER("Location Code") = '' THEN
+        ERROR(Text010,CurrentWarehouseRequest.FIELDCAPTION("Location Code"));
+
+      WarehouseRequest.RESET;
+      WarehouseRequest.SETCURRENTKEY(Type,"Location Code","Picking Priority");
+      CurrentWarehouseRequest.COPYFILTER("Location Code",WarehouseRequest."Location Code");
+      IF WarehouseRequest.GETFILTER("Location Code") <> CurrentWarehouseRequest."Location Code" THEN
+        MESSAGE(Text009,CurrentWarehouseRequest.FIELDCAPTION("Location Code"),CurrentWarehouseRequest."Location Code");
+
+      CLEAR(PrioritizedPicksCreated);
+      IF RFMgt.CheckIfCreateOutboundWhseRequest(CurrentWarehouseRequest."Location Code") THEN BEGIN
+        CreatePickRequest(
+          CurrentWarehouseRequest,OutboundWhseRequestFilter,
+          AssignedID,AssignedWarehouseEmployeeGroup,PickNo,
+          NoOfWarehouseRequests,PrioritizedPicksCreated,
+          OutboundWhseRequestFilter."Combine Picks Whse. Act. Group",TRUE);
+      END ELSE BEGIN
+        PrioritizedPicksCreated :=
+          CreatePickMgt.CreatePrioritizedPicks(
+            OutboundWhseRequestFilter,CurrentWarehouseRequest."Location Code",
+            AssignedID,AssignedWarehouseEmployeeGroup);
+      END;
+
+      IF GUIALLOWED THEN
+        MESSAGE(Text011,PrioritizedPicksCreated);
+    END;
+
+    [External]
+    PROCEDURE ChangeActionEntries@1240040000(VAR WarehouseRequest@1240040006 : Record 5765;SetAction@1240040002 : Boolean;ClearAction@1240040004 : Boolean;SetResponsible@1240040003 : Boolean;ClearResponsible@1240040005 : Boolean);
+    VAR
+      OutboundWhseRequestAction@1240040000 : Record 14002864;
+      WarehouseRequestTmp@1240040007 : TEMPORARY Record 5765;
+      OutbWhseReqActionEntry@1240040008 : Record 14002865;
+      LoginMgt@1240040009 : Codeunit 418;
+      SelectedUserID@1240040010 : Code[50];
+      UserSID@1240020000 : GUID;
+    BEGIN
+      IF SetAction AND NOT ClearAction THEN
+        IF PAGE.RUNMODAL(0,OutboundWhseRequestAction) <> ACTION::LookupOK THEN
+          EXIT;
+
+      IF SetResponsible AND NOT ClearResponsible THEN
+        IF NOT LoginMgt.LookupUser(SelectedUserID,UserSID) THEN
+          EXIT;
+
+      IF WarehouseRequest.FIND('-') THEN BEGIN
+        REPEAT
+          WarehouseRequestTmp := WarehouseRequest;
+          WarehouseRequestTmp.INSERT;
+        UNTIL WarehouseRequest.NEXT = 0;
+
+        WarehouseRequestTmp.FIND('-');
+        REPEAT
+          WarehouseRequest := WarehouseRequestTmp;
+
+          OutbWhseReqActionEntry.InsertModifyFromWhseRequest(
+            WarehouseRequest,USERID,OutboundWhseRequestAction.Code,ClearAction,
+            SelectedUserID,ClearResponsible);
+        UNTIL WarehouseRequestTmp.NEXT = 0;
+      END;
+    END;
+
+    [External]
+    PROCEDURE FilterFinished@1240040008(VAR CurrentWarehouseRequest@1240040000 : Record 5765);
+    BEGIN
+      WITH CurrentWarehouseRequest DO BEGIN
+        SETRANGE("Whse. Completely Handled",TRUE);
+        SETRANGE("Warehouse Shipment  Exists");
+        SETRANGE("Wave Pick Whse. Request Exists");
+        SETRANGE("Pick Exists");
+        SETRANGE("Shipment Date");
+      END;
+    END;
+
+    [External]
+    PROCEDURE FilterOpen@1240040007(VAR CurrentWarehouseRequest@1240040000 : Record 5765);
+    BEGIN
+      WITH CurrentWarehouseRequest DO BEGIN
+        SETRANGE("Whse. Completely Handled",FALSE);
+        SETRANGE("Warehouse Shipment  Exists");
+        SETRANGE("Wave Pick Whse. Request Exists");
+        SETRANGE("Pick Exists");
+        SETRANGE("Shipment Date");
+      END;
+    END;
+
+    [External]
+    PROCEDURE FilterOpenNotProcessing@1240040009(VAR CurrentWarehouseRequest@1240040000 : Record 5765);
+    BEGIN
+      WITH CurrentWarehouseRequest DO BEGIN
+        SETRANGE("Whse. Completely Handled",FALSE);
+        SETRANGE("Warehouse Shipment  Exists",FALSE);
+        SETRANGE("Wave Pick Whse. Request Exists",FALSE);
+        SETRANGE("Pick Exists",FALSE);
+        SETRANGE("Shipment Date");
+      END;
+    END;
+
+    [External]
+    PROCEDURE FilterOpenNotProcBackorders@1240040010(VAR CurrentWarehouseRequest@1240040000 : Record 5765);
+    BEGIN
+      WITH CurrentWarehouseRequest DO BEGIN
+        SETRANGE("Whse. Completely Handled",FALSE);
+        SETRANGE("Warehouse Shipment  Exists",FALSE);
+        SETRANGE("Wave Pick Whse. Request Exists",FALSE);
+        SETRANGE("Pick Exists",FALSE);
+        SETRANGE("Shipment Date",0D,WORKDATE - 1);
+      END;
+    END;
+
+    [External]
+    PROCEDURE FilterOpenWithPick@1240040011(VAR CurrentWarehouseRequest@1240040000 : Record 5765);
+    BEGIN
+      WITH CurrentWarehouseRequest DO BEGIN
+        SETRANGE("Whse. Completely Handled",FALSE);
+        SETRANGE("Warehouse Shipment  Exists",TRUE);
+        SETRANGE("Wave Pick Whse. Request Exists",FALSE);
+        SETRANGE("Pick Exists",TRUE);
+        SETRANGE("Shipment Date");
+      END;
+    END;
+
+    [External]
+    PROCEDURE FilterOpenWithWavePick@1240040012(VAR CurrentWarehouseRequest@1240040000 : Record 5765);
+    BEGIN
+      WITH CurrentWarehouseRequest DO BEGIN
+        SETRANGE("Whse. Completely Handled",FALSE);
+        SETRANGE("Warehouse Shipment  Exists",TRUE);
+        SETRANGE("Wave Pick Whse. Request Exists",TRUE);
+        SETRANGE("Pick Exists",FALSE);
+        SETRANGE("Shipment Date");
+      END;
+    END;
+
+    [External]
+    PROCEDURE FilterOpenFinishedPick@1240040013(VAR CurrentWarehouseRequest@1240040000 : Record 5765);
+    BEGIN
+      WITH CurrentWarehouseRequest DO BEGIN
+        SETRANGE("Whse. Completely Handled",FALSE);
+        SETRANGE("Warehouse Shipment  Exists",TRUE);
+        SETRANGE("Wave Pick Whse. Request Exists",FALSE);
+        SETRANGE("Pick Exists",FALSE);
+        SETRANGE("Shipment Date");
+      END;
+    END;
+
+    [External]
+    PROCEDURE FilterNoFilter@1240040014(VAR CurrentWarehouseRequest@1240040000 : Record 5765);
+    BEGIN
+      WITH CurrentWarehouseRequest DO BEGIN
+        SETRANGE("Whse. Completely Handled");
+        SETRANGE("Warehouse Shipment  Exists");
+        SETRANGE("Wave Pick Whse. Request Exists");
+        SETRANGE("Pick Exists",FALSE);
+        SETRANGE("Shipment Date");
+        SETRANGE("Location Code");
+      END;
+    END;
+
+    [External]
+    PROCEDURE ClearFilter@1240020001(VAR CurrentWarehouseRequest@1240040000 : Record 5765);
+    BEGIN
+      CurrentWarehouseRequest.RESET;
+    END;
+
+    [External]
+    PROCEDURE ShowSource@1240040017(VAR CurrentWarehouseRequest@1240040000 : Record 5765);
+    VAR
+      SalesHeader@1240040003 : Record 36;
+      PurchaseHeader@1240040002 : Record 38;
+      TransferHeader@1240040001 : Record 5740;
+    BEGIN
+      WITH CurrentWarehouseRequest DO BEGIN
+        CASE "Source Type" OF
+          37:
+            BEGIN
+              IF SalesHeader.GET("Source Subtype","Source No.") THEN
+                PAGE.RUNMODAL(PAGE::"Sales Order",SalesHeader);
+            END;
+          39:
+            BEGIN
+              IF PurchaseHeader.GET("Source Subtype","Source No.") THEN
+                PAGE.RUNMODAL(PAGE::"Purchase Return Order",PurchaseHeader);
+            END;
+          5741:
+            BEGIN
+              IF TransferHeader.GET("Source No.") THEN
+                PAGE.RUNMODAL(PAGE::"Transfer Order",TransferHeader);
+            END;
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE OpenStatistics@1240040016(VAR CurrentWarehouseRequest@1240040001 : Record 5765;VAR OutboundWhseRequestFilter@1240040000 : Record 14002863);
+    VAR
+      WarehouseRequest@1240040003 : Record 5765;
+      WarehouseRequestStatistics@1240020000 : Page 14002806;
+    BEGIN
+      CLEAR(WarehouseRequestStatistics);
+      WarehouseRequest := CurrentWarehouseRequest;
+      WarehouseRequestStatistics.SetWarehouseRequest(WarehouseRequest,OutboundWhseRequestFilter);
+      WarehouseRequestStatistics.RUNMODAL;
+    END;
+
+    [External]
+    PROCEDURE OpenMultipleStatistics@1240040015(VAR WarehouseRequest@1240040001 : Record 5765;VAR OutboundWhseRequestFilter@1240040002 : Record 14002863);
+    VAR
+      MultipleWhseReqStatistics@1240020000 : Page 14002808;
+    BEGIN
+      CLEAR(MultipleWhseReqStatistics);
+      WarehouseRequest.FIND('-');
+        REPEAT
+          MultipleWhseReqStatistics.AddWarehouseRequest(WarehouseRequest,OutboundWhseRequestFilter);
+        UNTIL WarehouseRequest.NEXT = 0;
+
+      MultipleWhseReqStatistics.RUNMODAL;
+    END;
+
+    [External]
+    PROCEDURE PostShipment@1240040018(VAR WarehouseRequest@1240040000 : Record 5765;Print@1240040005 : Boolean);
+    VAR
+      WarehouseStreamlineMgt@1240040006 : Codeunit 14002809;
+      Selection@1240040004 : Integer;
+      NoOfWarehouseRequests@1240040003 : Integer;
+      NoOfShipmentsPosted@1240040002 : Integer;
+      Invoice@1240040001 : Boolean;
+    BEGIN
+      Selection := STRMENU(Text000,1);
+      IF Selection = 0 THEN
+        EXIT;
+      Invoice := Selection IN [2];
+
+      WarehouseStreamlineMgt.PostMultipleWarehouseShipment(
+        WarehouseRequest,NoOfWarehouseRequests,NoOfShipmentsPosted,Invoice,Print);
+
+      IF NoOfWarehouseRequests > 0 THEN
+        MESSAGE(Text004,NoOfShipmentsPosted,NoOfWarehouseRequests);
+    END;
+
+    [External]
+    PROCEDURE DeleteShipAndPick@1240020000(CurrentWarehouseRequest@1240020000 : Record 5765;VAR PickDeleted@1240020014 : Integer;VAR ShipmentDeleted@1240020015 : Integer) : Boolean;
+    VAR
+      RFEmployeeSetup@1240020009 : Record 14002802;
+      WarehouseActivityHeader@1240020002 : Record 5766;
+      WarehouseActivityLine@1240020003 : Record 5767;
+      WarehouseActivityLine2@1240020010 : Record 5767;
+      WarehouseShipmentHeader@1240020004 : Record 7320;
+      WarehouseShipmentHeader2@1240020007 : Record 7320;
+      WarehouseShipmentLine@1240020005 : Record 7321;
+      WarehouseShipmentLine2@1240020008 : Record 7321;
+      ATOLink@1240020011 : Record 904;
+      WavePickWhseReq@1240020001 : Record 14002961;
+      Bin@1240020012 : Record 7354;
+      WhseShipmentRelease@1240020006 : Codeunit 7310;
+      WhseActGroupDeleted@1240020013 : Boolean;
+      PickInProgress@1240020016 : Boolean;
+    BEGIN
+      RFEmployeeSetup.GetRFEmployeeSetup(USERID);
+      IF NOT RFEmployeeSetup."Enable Delete Ship and Pick" THEN
+        EXIT(FALSE);
+
+      PickDeleted := 0;
+      ShipmentDeleted := 0;
+      WhseActGroupDeleted := FALSE;
+      PickInProgress := FALSE;
+
+      CurrentWarehouseRequest.TESTFIELD(Type,CurrentWarehouseRequest.Type::Outbound);
+
+      OnBeforeDeleteShipAndPick(CurrentWarehouseRequest,PickDeleted,ShipmentDeleted);
+
+      WavePickWhseReq.RESET;
+      WavePickWhseReq.SETCURRENTKEY("Source Type","Source Subtype","Source No.","Location Code");
+      WavePickWhseReq.SETRANGE("Source Type",CurrentWarehouseRequest."Source Type");
+      WavePickWhseReq.SETRANGE("Source Subtype",CurrentWarehouseRequest."Source Subtype");
+      WavePickWhseReq.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+      WavePickWhseReq.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+      IF WavePickWhseReq.FINDFIRST THEN BEGIN
+        WarehouseActivityLine.RESET;
+        WarehouseActivityLine.SETCURRENTKEY("Activity Type","No.","Line No.");
+        WarehouseActivityLine.SETRANGE("Activity Type",WavePickWhseReq."Activity Type");
+        WarehouseActivityLine.SETRANGE("No.",WavePickWhseReq."No.");
+        IF WarehouseActivityLine.FINDSET(FALSE) THEN BEGIN
+          WarehouseActivityLine2.RESET;
+          WarehouseActivityLine2.SETCURRENTKEY("Activity Type","No.","Line No.");
+          WarehouseActivityLine2.SETRANGE("Activity Type",WarehouseActivityLine."Activity Type");
+          WarehouseActivityLine2.SETRANGE("No.",WarehouseActivityLine."No.");
+          IF WarehouseActivityLine2.FINDSET(FALSE) THEN BEGIN
+            REPEAT
+              IF WarehouseActivityLine2."First Scan Date" <> 0D THEN
+                EXIT(FALSE);
+              OnBeforeDeletePick(WarehouseActivityLine2,PickInProgress);
+              IF PickInProgress THEN
+                EXIT;
+            UNTIL WarehouseActivityLine2.NEXT = 0;
+          END;
+
+          REPEAT
+            WarehouseActivityHeader.GET(WarehouseActivityLine."Activity Type",WarehouseActivityLine."No.");
+            WarehouseActivityHeader.DELETE(TRUE);
+            PickDeleted += 1;
+          UNTIL WarehouseActivityLine.NEXT = 0;
+        END;
+      END;
+
+      WarehouseActivityLine.RESET;
+      WarehouseActivityLine.SETCURRENTKEY("Source Type","Source Subtype","Source No.");
+      WarehouseActivityLine.SETRANGE("Source Type",CurrentWarehouseRequest."Source Type");
+      WarehouseActivityLine.SETRANGE("Source Subtype",CurrentWarehouseRequest."Source Subtype");
+      WarehouseActivityLine.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+      WarehouseActivityLine.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+      IF WarehouseActivityLine.FINDSET(FALSE) THEN BEGIN
+        WarehouseActivityLine2.RESET;
+        WarehouseActivityLine2.SETCURRENTKEY("Activity Type","No.","Line No.");
+        WarehouseActivityLine2.SETRANGE("Activity Type",WarehouseActivityLine."Activity Type");
+        WarehouseActivityLine2.SETRANGE("No.",WarehouseActivityLine."No.");
+        IF WarehouseActivityLine2.FINDSET(FALSE) THEN BEGIN
+          REPEAT
+            IF WarehouseActivityLine2."First Scan Date" <> 0D THEN
+              EXIT(FALSE);
+            OnBeforeDeletePick(WarehouseActivityLine2,PickInProgress);
+            IF PickInProgress THEN
+              EXIT;
+
+            IF WarehouseActivityLine."Action Type" = WarehouseActivityLine."Action Type"::Take THEN
+              IF Bin.GET(WarehouseActivityLine2."Location Code",WarehouseActivityLine2."Bin Code") THEN
+                IF Bin."Wave Pick Bin" THEN
+                  EXIT(FALSE);
+          UNTIL WarehouseActivityLine2.NEXT = 0;
+        END;
+
+        REPEAT
+          WarehouseActivityHeader.GET(WarehouseActivityLine."Activity Type",WarehouseActivityLine."No.");
+          WarehouseActivityHeader.DELETE(TRUE);
+          PickDeleted += 1;
+
+          IF NOT WhseActGroupDeleted THEN
+            IF DeleteWhseActivityGroup(CurrentWarehouseRequest) THEN
+              WhseActGroupDeleted := TRUE;
+        UNTIL WarehouseActivityLine.NEXT = 0;
+      END;
+
+      IF CurrentWarehouseRequest."ATO Pick Required" THEN BEGIN
+        ATOLink.RESET;
+        ATOLink.SETCURRENTKEY(Type,"Document Type","Document No.","Document Line No.");
+        ATOLink.SETRANGE(Type,ATOLink.Type::Sale);
+        ATOLink.SETRANGE("Document Type",ATOLink."Document Type"::Order);
+        ATOLink.SETRANGE("Document No.",CurrentWarehouseRequest."Source No.");
+        IF ATOLink.FINDSET(FALSE) THEN BEGIN
+          REPEAT
+            WarehouseActivityLine.RESET;
+            WarehouseActivityLine.SETCURRENTKEY("Source Type","Source Subtype","Source No.");
+            WarehouseActivityLine.SETRANGE("Source Type",DATABASE::"Assembly Line");
+            WarehouseActivityLine.SETRANGE("Source Subtype",1);
+            WarehouseActivityLine.SETRANGE("Source No.",ATOLink."Assembly Document No.");
+            WarehouseActivityLine.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+            IF WarehouseActivityLine.FINDSET(FALSE) THEN BEGIN
+              WarehouseActivityLine2.RESET;
+              WarehouseActivityLine2.SETCURRENTKEY("Activity Type","No.","Line No.");
+              WarehouseActivityLine2.SETRANGE("Activity Type",WarehouseActivityLine."Activity Type");
+              WarehouseActivityLine2.SETRANGE("No.",WarehouseActivityLine."No.");
+              IF WarehouseActivityLine2.FINDSET(FALSE) THEN BEGIN
+                REPEAT
+                  IF WarehouseActivityLine2."First Scan Date" <> 0D THEN
+                    EXIT(FALSE);
+                  OnBeforeDeletePick(WarehouseActivityLine2,PickInProgress);
+                  IF PickInProgress THEN
+                    EXIT;
+                UNTIL WarehouseActivityLine2.NEXT = 0;
+              END;
+
+              REPEAT
+                WarehouseActivityHeader.GET(WarehouseActivityLine."Activity Type",WarehouseActivityLine."No.");
+                WarehouseActivityHeader.DELETE(TRUE);
+                PickDeleted += 1;
+
+                IF NOT WhseActGroupDeleted THEN
+                  IF DeleteWhseActivityGroup(CurrentWarehouseRequest) THEN
+                    WhseActGroupDeleted := TRUE;
+              UNTIL WarehouseActivityLine.NEXT = 0;
+            END;
+
+          UNTIL ATOLink.NEXT = 0;
+        END;
+      END;
+
+      WarehouseShipmentLine.RESET;
+      WarehouseShipmentLine.SETCURRENTKEY("Source Type","Source Subtype","Source No.");
+      WarehouseShipmentLine.SETRANGE("Source Type",CurrentWarehouseRequest."Source Type");
+      WarehouseShipmentLine.SETRANGE("Source Subtype",CurrentWarehouseRequest."Source Subtype");
+      WarehouseShipmentLine.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+      WarehouseShipmentLine.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+      IF WarehouseShipmentLine.FIND('-') THEN BEGIN
+        WarehouseActivityLine.RESET;
+        WarehouseActivityLine.SETCURRENTKEY(
+            "Activity Type","No.","Whse. Document Type","Whse. Document No.","Whse. Document Line No.");
+        WarehouseActivityLine.SETRANGE("Whse. Document Type",WarehouseActivityLine."Whse. Document Type"::Shipment);
+        WarehouseActivityLine.SETRANGE("Whse. Document No.",WarehouseShipmentLine."No.");
+        IF NOT WarehouseActivityLine.FIND('-') THEN BEGIN
+          REPEAT
+            WarehouseShipmentHeader.GET(WarehouseShipmentLine."No.");
+            IF WarehouseShipmentHeader.Status = WarehouseShipmentHeader.Status::Released THEN
+              WhseShipmentRelease.Reopen(WarehouseShipmentHeader);
+
+            WarehouseShipmentLine2.RESET;
+            WarehouseShipmentLine2.SETRANGE("No.",WarehouseShipmentHeader."No.");
+            WarehouseShipmentLine2.SETFILTER(WarehouseShipmentLine2."Qty. Picked (Base)",'<>%1',0);
+            IF WarehouseShipmentLine2.FIND('-') THEN
+              EXIT(FALSE);
+
+            WarehouseShipmentLine2.RESET;
+            WarehouseShipmentLine2.SETRANGE("No.",WarehouseShipmentHeader."No.");
+            IF WarehouseShipmentLine2.FIND('-') THEN
+              REPEAT
+                WarehouseShipmentLine2.DELETE;
+              UNTIL WarehouseShipmentLine2.NEXT = 0;
+
+            WarehouseShipmentLine2.RESET;
+            WarehouseShipmentLine2.SETRANGE("No.",WarehouseShipmentHeader."No.");
+            IF WarehouseShipmentLine2.ISEMPTY THEN BEGIN
+              WarehouseShipmentHeader2.RESET;
+              IF WarehouseShipmentHeader2.GET(WarehouseShipmentHeader."No.") THEN
+                IF WarehouseShipmentHeader2.Status = WarehouseShipmentHeader2.Status::Open THEN BEGIN
+                  WarehouseShipmentHeader2.DELETE;
+                  ShipmentDeleted += 1;
+
+                  IF NOT WhseActGroupDeleted THEN
+                    IF DeleteWhseActivityGroup(CurrentWarehouseRequest) THEN
+                      WhseActGroupDeleted := TRUE;
+                END;
+            END;
+          UNTIL WarehouseShipmentLine.NEXT = 0;
+
+          COMMIT;
+
+        END ELSE
+          IF PickDeleted > 0 THEN
+            EXIT(TRUE)
+          ELSE
+            EXIT(FALSE);
+      END ELSE
+        IF PickDeleted > 0 THEN
+          EXIT(TRUE)
+        ELSE
+          EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE DeleteWhseActivityGroup@1240020002(CurrentWarehouseRequest@1240020000 : Record 5765) : Boolean;
+    VAR
+      WhseActivityGroupHeader@1240020002 : Record 14002861;
+      WhseActivityGroupLine@1240020001 : Record 14002862;
+    BEGIN
+      WhseActivityGroupLine.RESET;
+      WhseActivityGroupLine.SETCURRENTKEY(
+        Type,"Location Code","Source Type","Source Subtype","Source No.");
+      WhseActivityGroupLine.SETRANGE(Type,WhseActivityGroupLine.Type::Outbound);
+      WhseActivityGroupLine.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+      WhseActivityGroupLine.SETRANGE("Source Type",CurrentWarehouseRequest."Source Type");
+      WhseActivityGroupLine.SETRANGE("Source Subtype",CurrentWarehouseRequest."Source Subtype");
+      WhseActivityGroupLine.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+      IF WhseActivityGroupLine.FIND('-') THEN BEGIN
+        REPEAT
+          WhseActivityGroupHeader.RESET;
+          IF WhseActivityGroupHeader.GET(WhseActivityGroupLine."Warehouse Activity Group No.") THEN
+            WhseActivityGroupHeader.DELETE(TRUE);
+        UNTIL WhseActivityGroupLine.NEXT = 0;
+
+        EXIT(TRUE);
+      END ELSE
+        EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE SetWhseCompletelyHandled@1240020003(SourceType@1240020000 : Integer;SourceSubtype@1240020001 : Integer;SourceNo@1240020002 : Code[20];LocationCode@1240020004 : Code[10]);
+    VAR
+      WarehouseRequest@1240020003 : Record 5765;
+    BEGIN
+      WarehouseRequest.RESET;
+      WarehouseRequest.SETCURRENTKEY("Source Type","Source Subtype","Source No.");
+      WarehouseRequest.SETRANGE(Type,WarehouseRequest.Type::Outbound);
+      WarehouseRequest.SETRANGE("Source Type",SourceType);
+      WarehouseRequest.SETRANGE("Source Subtype",SourceSubtype);
+      WarehouseRequest.SETRANGE("Source No.",SourceNo);
+      WarehouseRequest.SETRANGE("Location Code",LocationCode);
+      IF WarehouseRequest.FINDSET(FALSE) THEN BEGIN
+        UpdateWarehouseRequest(WarehouseRequest);
+        WarehouseRequest.MODIFY;
+      END;
+    END;
+
+    [External]
+    PROCEDURE UpdateWarehouseRequest@1240020004(VAR WarehouseRequest@1240020000 : Record 5765);
+    VAR
+      SalesLine@1240020001 : Record 37;
+      PurchLine@1240020002 : Record 39;
+      TransferLine@1240020003 : Record 5741;
+      "Picking Priority from SO"@1240020004 : Boolean;
+    BEGIN
+      WITH WarehouseRequest DO BEGIN
+        CASE "Source Type" OF
+          37:
+            BEGIN
+              SalesLine.RESET;
+              SalesLine.SETRANGE("Document Type","Source Subtype");
+              SalesLine.SETRANGE("Document No.","Source No.");
+              SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+              SalesLine.SETFILTER("No.",'<>%1','');
+              SalesLine.SETRANGE("Location Code","Location Code");
+              SalesLine.SETFILTER("Outstanding Quantity",'<>0');
+              SalesLine.SETRANGE("Drop Shipment",FALSE);
+              "Whse. Completely Handled" := NOT SalesLine.FIND('-');
+
+              SalesLine.SETRANGE("Outstanding Quantity");
+              SalesLine.SETFILTER("Quantity Shipped",'<>0');
+              "Lines Shipped" := SalesLine.FIND('-');
+              "Picking Priority from SO" := TRUE;
+            END;
+          39:
+            BEGIN
+              PurchLine.RESET;
+              PurchLine.SETRANGE("Document Type","Source Subtype");
+              PurchLine.SETRANGE("Document No.","Source No.");
+              PurchLine.SETRANGE(Type,PurchLine.Type::Item);
+              PurchLine.SETFILTER("No.",'<>%1','');
+              PurchLine.SETRANGE("Location Code","Location Code");
+              PurchLine.SETFILTER("Outstanding Quantity",'<>0');
+              PurchLine.SETRANGE("Drop Shipment",FALSE);
+              "Whse. Completely Handled" := NOT PurchLine.FIND('-');
+
+              PurchLine.SETRANGE("Outstanding Quantity");
+              PurchLine.SETFILTER("Quantity Received",'<>0');
+              "Lines Shipped" := PurchLine.FIND('-');
+            END;
+          5741:
+            BEGIN
+              TransferLine.RESET;
+              TransferLine.SETRANGE("Document No.","Source No.");
+              TransferLine.SETFILTER("Item No.",'<>%1','');
+              TransferLine.SETRANGE("Transfer-from Code","Location Code");
+              TransferLine.SETFILTER("Outstanding Quantity",'<>0');
+              "Whse. Completely Handled" := NOT TransferLine.FIND('-');
+
+              TransferLine.SETRANGE("Outstanding Quantity");
+              TransferLine.SETFILTER("Quantity Shipped",'<>0');
+              "Lines Shipped" := TransferLine.FIND('-');
+            END;
+          ELSE
+            "Whse. Completely Handled" := FALSE;
+        END;
+
+        IF NOT "Picking Priority from SO" THEN
+          "Picking Priority" := 0;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ClearCompletelyHandledFlag@1240020005(VAR WarehouseRequest@1240020000 : Record 5765);
+    BEGIN
+      IF CONFIRM(Text023,FALSE) THEN
+        WITH WarehouseRequest DO BEGIN
+          "Completely Handled" := FALSE;
+          MODIFY;
+        END;
+    END;
+
+    [External]
+    PROCEDURE PrintDocument@1240020007(VAR WarehouseRequest@1240020000 : Record 5765);
+    VAR
+      Location@1240020004 : Record 14;
+      ATOLink@1240020014 : Record 904;
+      WhseActivHeader@1240020006 : Record 5766;
+      WhseActivHeaderTmp@1240020010 : TEMPORARY Record 5766;
+      WhseActivLine@1240020012 : Record 5767;
+      WhseShptHeader@1240020005 : Record 7320;
+      WhseShptHeaderTmp@1240020011 : TEMPORARY Record 7320;
+      WhseShptLine@1240020013 : Record 7321;
+      WhsePick@1240020008 : Report 5752;
+      WhseShptReport@1240020009 : Report 7317;
+      PickNo@1240020003 : Code[20];
+      PrintComplete@1240020001 : Boolean;
+      NonATOPickAlsoExists@1240020002 : Boolean;
+    BEGIN
+      IF CONFIRM(Text024,FALSE) THEN
+        IF WarehouseRequest.FIND('-') THEN BEGIN
+          Location.GET(WarehouseRequest."Location Code");
+          WhseActivHeaderTmp.RESET;
+          WhseActivHeaderTmp.DELETEALL;
+          WhseShptHeaderTmp.RESET;
+          WhseShptHeaderTmp.DELETEALL;
+          REPEAT
+            PrintComplete := FALSE;
+            IF Location."Require Pick" THEN BEGIN
+              NonATOPickAlsoExists := FALSE;
+              WarehouseRequest.CALCFIELDS("Put-away / Pick No.","Assembly Pick No.");
+              IF (WarehouseRequest."Assembly Pick No." <> '') AND
+                  (WarehouseRequest."Assembly Pick No." <> WarehouseRequest."Put-away / Pick No.")
+              THEN
+                NonATOPickAlsoExists := TRUE;
+
+              IF WarehouseRequest."ATO Pick Required" THEN BEGIN
+                ATOLink.RESET;
+                ATOLink.SETCURRENTKEY(Type,"Document Type","Document No.","Document Line No.");
+                ATOLink.SETRANGE(Type,ATOLink.Type::Sale);
+                ATOLink.SETRANGE("Document Type",ATOLink."Document Type"::Order);
+                ATOLink.SETRANGE("Document No.",WarehouseRequest."Source No.");
+                IF ATOLink.FINDSET(FALSE) THEN BEGIN
+                  WhseActivLine.RESET;
+                  WhseActivLine.SETRANGE("Location Code",WarehouseRequest."Location Code");
+                  WhseActivLine.SETRANGE("Source No.",ATOLink."Assembly Document No.");
+                  WhseActivLine.SETRANGE("Source Type",DATABASE::"Assembly Line");
+                  WhseActivLine.SETRANGE("Source Subtype",1);
+                END;
+              END ELSE BEGIN
+                WhseActivLine.RESET;
+                WhseActivLine.SETRANGE("Location Code",WarehouseRequest."Location Code");
+                WhseActivLine.SETRANGE("Source No.",WarehouseRequest."Source No.");
+                WhseActivLine.SETRANGE("Source Type",WarehouseRequest."Source Type");
+                WhseActivLine.SETRANGE("Source Subtype",WarehouseRequest."Source Subtype");
+                IF Location."Require Shipment" THEN
+                  WhseActivLine.SETRANGE("Action Type",WhseActivLine."Action Type"::Take);
+              END;
+              IF WhseActivLine.FINDSET(FALSE) THEN BEGIN
+                REPEAT
+                  PrintComplete := FALSE;
+                  WhseActivHeaderTmp.RESET;
+                  IF NOT WhseActivHeaderTmp.GET(WhseActivLine."Activity Type",WhseActivLine."No.") THEN BEGIN
+                    WhseActivHeader.RESET;
+                    WhseActivHeader.SETRANGE(Type,WhseActivLine."Activity Type");
+                    WhseActivHeader.SETRANGE("No.",WhseActivLine."No.");
+                    IF WhseActivHeader.FIND('-') THEN BEGIN
+                      PrintDocumentEvent(WarehouseRequest,WhseActivHeader."No.",PrintComplete);
+                      IF NOT PrintComplete THEN BEGIN
+                        CLEAR(WhsePick);
+                        WhsePick.SETTABLEVIEW(WhseActivHeader);
+                        IF Location."Require Pick" AND Location."Require Shipment" THEN
+                          WhsePick.SetBreakbulkFilter(WhseActivHeader."Breakbulk Filter")
+                        ELSE BEGIN
+                          WhsePick.SetInventory(TRUE);
+                          WhsePick.SetBreakbulkFilter(FALSE);
+                        END;
+                        WhsePick.USEREQUESTPAGE(FALSE);
+                        WhsePick.RUNMODAL;
+                        PrintComplete := TRUE;
+                      END;
+                    END;
+
+                    IF PrintComplete THEN BEGIN
+                      WhseActivHeaderTmp.INIT;
+                      WhseActivHeaderTmp.Type := WhseActivLine."Activity Type";
+                      WhseActivHeaderTmp."No." := WhseActivLine."No.";
+                      WhseActivHeaderTmp.INSERT;
+                    END;
+                  END;
+                UNTIL WhseActivLine.NEXT = 0;
+              END;
+
+              IF NonATOPickAlsoExists THEN BEGIN
+                WhseActivLine.RESET;
+                WhseActivLine.SETRANGE("Location Code",WarehouseRequest."Location Code");
+                WhseActivLine.SETRANGE("Source No.",WarehouseRequest."Source No.");
+                WhseActivLine.SETRANGE("Source Type",WarehouseRequest."Source Type");
+                WhseActivLine.SETRANGE("Source Subtype",WarehouseRequest."Source Subtype");
+                IF Location."Require Shipment" THEN
+                  WhseActivLine.SETRANGE("Action Type",WhseActivLine."Action Type"::Take);
+                IF WhseActivLine.FINDSET(FALSE) THEN BEGIN
+                  REPEAT
+                    PrintComplete := FALSE;
+                    WhseActivHeaderTmp.RESET;
+                    IF NOT WhseActivHeaderTmp.GET(WhseActivLine."Activity Type",WhseActivLine."No.") THEN BEGIN
+                      WhseActivHeader.RESET;
+                      WhseActivHeader.SETRANGE(Type,WhseActivLine."Activity Type");
+                      WhseActivHeader.SETRANGE("No.",WhseActivLine."No.");
+                      IF WhseActivHeader.FIND('-') THEN BEGIN
+                        PrintDocumentEvent(WarehouseRequest,WhseActivHeader."No.",PrintComplete);
+                        IF NOT PrintComplete THEN BEGIN
+                          CLEAR(WhsePick);
+                          WhsePick.SETTABLEVIEW(WhseActivHeader);
+                          IF Location."Require Pick" AND Location."Require Shipment" THEN
+                            WhsePick.SetBreakbulkFilter(WhseActivHeader."Breakbulk Filter")
+                          ELSE BEGIN
+                            WhsePick.SetInventory(TRUE);
+                            WhsePick.SetBreakbulkFilter(FALSE);
+                          END;
+                          WhsePick.USEREQUESTPAGE(FALSE);
+                          WhsePick.RUNMODAL;
+                          PrintComplete := TRUE;
+                        END;
+                      END;
+
+                      IF PrintComplete THEN BEGIN
+                        WhseActivHeaderTmp.INIT;
+                        WhseActivHeaderTmp.Type := WhseActivLine."Activity Type";
+                        WhseActivHeaderTmp."No." := WhseActivLine."No.";
+                        WhseActivHeaderTmp.INSERT;
+                      END;
+                    END;
+                  UNTIL WhseActivLine.NEXT = 0;
+                END;
+              END;
+            END;
+
+            IF Location."Require Shipment" AND (NOT Location."Require Pick") THEN BEGIN
+              WarehouseRequest.CALCFIELDS("Warehouse Shipment No.");
+              WhseShptHeaderTmp.RESET;
+              IF NOT WhseShptHeaderTmp.GET(WarehouseRequest."Warehouse Shipment No.") THEN BEGIN
+                WhseShptHeader.RESET;
+                WhseShptHeader.SETRANGE("No.",WarehouseRequest."Warehouse Shipment No.");
+                IF WhseShptHeader.FIND('-') THEN BEGIN
+                  PrintDocumentEvent(WarehouseRequest,WhseShptHeader."No.",PrintComplete);
+                  IF NOT PrintComplete THEN BEGIN
+                    CLEAR(WhseShptReport);
+                    WhseShptReport.SETTABLEVIEW(WhseShptHeader);
+                    WhseShptReport.USEREQUESTPAGE(FALSE);
+                    WhseShptReport.RUNMODAL;
+                    PrintComplete := TRUE;
+                  END;
+                END;
+
+                IF PrintComplete THEN BEGIN
+                  WhseShptHeaderTmp.INIT;
+                  WhseShptHeaderTmp."No." := WarehouseRequest."Warehouse Shipment No.";
+                  WhseShptHeaderTmp.INSERT;
+                END;
+              END;
+            END;
+
+            IF NOT PrintComplete THEN
+              PrintDocumentEvent(WarehouseRequest,PickNo,PrintComplete);
+          UNTIL WarehouseRequest.NEXT = 0;
+        END;
+
+      WhseActivHeaderTmp.RESET;
+      WhseActivHeaderTmp.DELETEALL;
+      WhseShptHeaderTmp.RESET;
+      WhseShptHeaderTmp.DELETEALL;
+    END;
+
+    [External]
+    PROCEDURE UpdatePickAssignedUserID@1240020012(VAR WarehouseRequest@1240020001 : Record 5765;AssignedID@1240020000 : Code[50];ClearUserID@1240020005 : Boolean);
+    VAR
+      WarehouseStreamlineMgt@1240020004 : Codeunit 14002809;
+    BEGIN
+      IF ClearUserID THEN
+        AssignedID := '';
+
+      WarehouseStreamlineMgt.UpdatePickAssignedUserID(WarehouseRequest,AssignedID);
+    END;
+
+    [External]
+    PROCEDURE SetShipBin@1240020016(LocationCode@1240020000 : Code[10];DestinationShipBin@1240020001 : Code[20]) : Code[20];
+    VAR
+      Location@1240020002 : Record 14;
+      Bin@1240020003 : Record 7354;
+      BinType@1240020004 : Record 7303;
+    BEGIN
+      IF NOT Location.GET(LocationCode) THEN
+        EXIT;
+
+      IF DestinationShipBin <> '' THEN
+        IF Bin.GET(Location.Code,DestinationShipBin) THEN
+          IF BinType.GET(Bin."Bin Type Code") THEN
+            IF BinType.Ship THEN BEGIN
+              EXIT(Bin.Code);
+            END;
+
+      EXIT(Location."Shipment Bin Code");
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE CreatePickRequest@1240020011(VAR WarehouseRequest@1240020008 : Record 5765;VAR OutboundWhseRequestFilter@1240020007 : Record 14002863;VAR AssignedID@1240020006 : Code[50];VAR AssignedWhseGroupCode@1240020005 : Code[20];VAR PickNo@1240020004 : Code[20];VAR NoOfWarehouseRequests@1240020003 : Integer;VAR PicksCreated@1240020002 : Integer;CombinePicks@1240020001 : Boolean;PriorityPick@1240020000 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnBeforeDeleteShipAndPick@1240020010(VAR CurrentWarehouseRequest@1240020002 : Record 5765;VAR PickDeleted@1240020001 : Integer;VAR ShipmentDeleted@1240020000 : Integer);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnBeforeDeletePick@1240020013(VAR WarehouseActivityLine2@1240020000 : Record 5767;VAR PickInProgress@1240020001 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE PrintDocumentEvent@1240020008(VAR WarehouseRequest@1240020000 : Record 5765;VAR PickNo@1240020002 : Code[20];VAR PrintComplete@1240020001 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE EShipInstalledEvent@1240020009(VAR EShipInstalledConfirmed@1240020000 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE FindDestinationShipBinEvent@1240020015(WarehouseRequest@1240020000 : Record 5765;OutboundWhseRequestFilter@1240020002 : Record 14002863;VAR AssignedID@1240020001 : Code[50];VAR CustomDestinationShipBin@1240020003 : Code[20]);
+    BEGIN
+    END;
+
+    PROCEDURE CaclTotalPickedQty@1000000005(SourceType@1000000000 : Integer;SourceSubtype@1000000001 : Integer;SourceNo@1000000002 : Code[20];SourceLineNo@1000000007 : Integer;VAR QtyPicked@1000000005 : Decimal;VAR QtyPickedBase@1000000006 : Decimal);
+    VAR
+      WarehouseShipLine@1000000003 : Record 7321;
+      TotalPickedQty@1000000004 : Decimal;
+    BEGIN
+      //TM BEG 070215
+      QtyPicked := 0;
+      QtyPickedBase := 0;
+
+      WITH WarehouseShipLine DO BEGIN
+        SETCURRENTKEY("Source Type","Source Subtype","Source No.","Source Line No.","Location Code");
+        SETRANGE("Source Type", SourceType);
+        SETRANGE("Source Subtype", SourceSubtype);
+        SETRANGE("Source No.", SourceNo);
+        SETRANGE("Source Line No.", SourceLineNo);
+        IF FINDSET THEN
+        REPEAT
+          QtyPicked := QtyPicked + "Qty. Picked";
+          QtyPickedBase := QtyPickedBase + "Qty. Picked (Base)";
+        UNTIL NEXT = 0;
+      END;
+      //TM END 070215
+    END;
+
+    PROCEDURE CaclTotalPickQty@1000000003(SourceType@1000000004 : Integer;SourceSubtype@1000000003 : Integer;SourceNo@1000000002 : Code[20];SourceLineNo@1000000008 : Integer;VAR PickQty@1000000001 : Decimal;VAR PickQtyBase@1000000000 : Decimal;IncludeCrossDock@1000000007 : Boolean) : Decimal;
+    VAR
+      WhseActivityLine@1000000005 : Record 5767;
+    BEGIN
+      //TM BEG 070215
+      PickQty := 0;
+      PickQtyBase := 0;
+
+      WITH WhseActivityLine DO BEGIN
+        SETCURRENTKEY("Source Type","Source Subtype","Source No.","Source Line No.","Source Subline No.",
+                      "Unit of Measure Code","Action Type","Breakbulk No.","Original Breakbulk","Location Code");
+
+        SETRANGE("Source Type", SourceType);
+        SETRANGE("Source Subtype", SourceSubtype);
+        SETRANGE("Source No.", SourceNo);
+        SETRANGE("Source Line No.", SourceLineNo);
+        SETRANGE("Action Type", "Action Type"::Take);
+
+        IF FINDSET THEN
+        REPEAT
+          IF IncludeCrossDock = FALSE THEN BEGIN
+            IF IsCrossDockBin("Location Code", "Bin Code") = FALSE THEN BEGIN
+              PickQty := PickQty + "Qty. Outstanding";
+              PickQtyBase := PickQtyBase + "Qty. Outstanding (Base)";
+            END;
+          END ELSE BEGIN
+            PickQty := PickQty + "Qty. Outstanding";
+            PickQtyBase := PickQtyBase + "Qty. Outstanding (Base)";
+          END;
+        UNTIL NEXT = 0;
+      END;
+      //TM END 070215
+    END;
+
+    PROCEDURE IsCrossDockBin@1000000007(LocationCode@1000000000 : Code[20];BinCode@1000000001 : Code[10]) : Boolean;
+    VAR
+      Bin@1000000002 : Record 7354;
+    BEGIN
+      //TM BEG 070215
+      IF Bin.GET(LocationCode, BinCode) THEN
+        EXIT(Bin."Cross-Dock Bin")
+      ELSE
+        EXIT(FALSE);
+      //TM END 070215
+    END;
+
+    PROCEDURE UpdateWRShippingAgentInfo@1000000009(VAR SalesHeader@1000000000 : Record 36);
+    VAR
+      WhseRqst@1000000001 : Record 5765;
+      ModifyRec@1000000002 : Boolean;
+    BEGIN
+      //<TPZ1556>
+      WhseRqst.RESET;
+      WhseRqst.SETCURRENTKEY("Source Type","Source Subtype","Source No.");
+      //WhseRqst.SETRANGE(Type,WhseRqst.Type); //<TPZ3334>
+      WhseRqst.SETRANGE("Source Type",DATABASE::"Sales Line");
+      WhseRqst.SETRANGE("Source Subtype",SalesHeader."Document Type");
+      WhseRqst.SETRANGE("Source No.",SalesHeader."No.");
+      IF WhseRqst.FINDSET THEN
+      REPEAT
+        ModifyRec := FALSE;
+        IF WhseRqst."Shipping Agent Code" <> SalesHeader."Shipping Agent Code" THEN BEGIN
+          WhseRqst."Shipping Agent Code" := SalesHeader."Shipping Agent Code";
+          ModifyRec := TRUE;
+        END;
+
+        IF WhseRqst."E-Ship Agent Service" <> SalesHeader."E-Ship Agent Service" THEN BEGIN
+          WhseRqst."E-Ship Agent Service" := SalesHeader."E-Ship Agent Service";
+          ModifyRec := TRUE;
+        END;
+
+        IF ModifyRec THEN
+          WhseRqst.MODIFY;
+      UNTIL WhseRqst.NEXT = 0;
+      //</TPZ1556>
+    END;
+
+    PROCEDURE SetWhseActivStatusToBlank@1000000008(VAR WhseRequest@1000000000 : Record 5765);
+    BEGIN
+      //TM BEG 061115
+      WhseRequest."Activity Status" := WhseRequest."Activity Status"::" ";
+      //TM END 061115
+    END;
+
+    PROCEDURE SetWhseActivStatusToPickCreated@1000000000(VAR WhseRequest@1000000000 : Record 5765);
+    BEGIN
+      //TM BEG 061115
+      WhseRequest."Activity Status" := WhseRequest."Activity Status"::"Pick Created";
+      //TM END 061115
+    END;
+
+    PROCEDURE SetWhseActivStatusToPickRegistered@1000000002(VAR WhseRequest@1000000000 : Record 5765);
+    BEGIN
+      //TM BEG 061115
+      WhseRequest."Activity Status" := WhseRequest."Activity Status"::"Pick Registered";
+      //TM END 061115
+    END;
+
+    PROCEDURE SetWhseActivStatusToPacking@1000000004(VAR WhseRequest@1000000000 : Record 5765);
+    BEGIN
+      //TM BEG 061115
+      WhseRequest."Activity Status" := WhseRequest."Activity Status"::Packing;
+      //TM END 061115
+    END;
+
+    PROCEDURE SetWhseActivStatusToPacked@1000000006(VAR WhseRequest@1000000000 : Record 5765);
+    BEGIN
+      //TM BEG 061115
+      WhseRequest."Activity Status" := WhseRequest."Activity Status"::Packed;
+      //TM END 061115
+    END;
+
+    PROCEDURE SetWhseActivStatusToShipped@1000000001(VAR WhseRequest@1000000000 : Record 5765);
+    BEGIN
+      //TM BEG 061115
+      WhseRequest."Activity Status" := WhseRequest."Activity Status"::Shipped;
+      //TM END 061115
+    END;
+
+    PROCEDURE SetSourceDocumentChange@1000000018(SourceType@1000000001 : Integer;SourceSubtype@1000000002 : Integer;SourceNo@1000000003 : Code[20];LocationCode@1000000005 : Code[10];SourceChanged@1000000000 : Boolean);
+    VAR
+      WhseReq@1000000004 : Record 5765;
+    BEGIN
+      //TM BEG 070215
+      WhseReq.SETCURRENTKEY("Source Type","Source Subtype","Source No.");
+      WhseReq.SETRANGE("Location Code", LocationCode);
+      WhseReq.SETRANGE("Source Type", SourceType);
+      WhseReq.SETRANGE("Source Subtype", SourceSubtype);
+      WhseReq.SETRANGE("Source No.", SourceNo);
+      IF WhseReq.FINDFIRST THEN BEGIN
+        WhseReq."Order Changed" := SourceChanged;
+        WhseReq.MODIFY;
+      END;
+      //TM BEG 070215
+    END;
+
+    BEGIN
+    {
+      TM 070615 added these new functions:
+        SetSourceDocumentChange
+        CaclTotalPickedQty
+        CaclTotalPickQty
+        IsCrossDockBin
+      2015-11-25 TPZ1307, Added codes to prevent unhandled exception when trying to create pick.
+      2016-07-07 TPZ1556 TMEI
+        Add codes to update shipping agent fields in Whse Request to avoid
+        reopening/releasing SO every time when whse change Shipping Agent during packing
+
+      001 TPZ3334 UTK 10-01-2021 Comment code to fix the bug.
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,194 @@
+OBJECT Codeunit 51753 Table83EventSubscriber
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/07/20;
+    Time=[ 3:42:26 PM];
+    Modified=Yes;
+    Version List=NAVEVENT;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    [EventSubscriber(Table,83,OnAfterOnValidateItemNoAssignByEntryType)]
+    LOCAL PROCEDURE Tb83_ItemNo_OnValidate@1170000001(VAR ItemJournalLine@1170000001 : Record 83;VAR Item@1170000000 : Record 27);
+    VAR
+      ProdOrderLine@1170000002 : Record 5406;
+      ProdOrderComp@1170000003 : Record 5407;
+    BEGIN
+      WITH ItemJournalLine DO BEGIN
+        CASE "Entry Type" OF
+          "Entry Type"::Purchase: "Alt. UOM Code" := Item."Alt. Purch. Unit of Measure";//TOP050 KT ABCSI Modification to Item Cards 01222015
+          "Entry Type"::Sale : "Alt. UOM Code" := Item."Alt. Sales Unit of Measure"; //TOP050 KT ABCSI Modification to Item Cards 01222015
+          "Entry Type"::Output : BEGIN
+            ProdOrderLine.SetFilterByReleasedOrderNo("Order No.");
+            ProdOrderLine.SETRANGE("Item No.","Item No.");
+            IF ProdOrderLine.COUNT <> 1 THEN
+              "Alt. UOM Code" := Item."Alt. Base Unit of Measure";
+          END;
+          "Entry Type"::Consumption : BEGIN
+            ProdOrderComp.SetFilterByReleasedOrderNo("Order No.");
+            ProdOrderComp.SETRANGE("Item No.","Item No.");
+            IF ProdOrderComp.COUNT <> 1 THEN
+              "Alt. UOM Code" := Item."Alt. Base Unit of Measure"; //TOP050 KT ABCSI Modification to Item Cards 01222015
+          END ELSE
+            "Alt. UOM Code" := Item."Alt. Base Unit of Measure";//TOP050 KT ABCSI Modification to Item Cards 01222015
+        END;
+        IF "Value Entry Type" = "Value Entry Type"::Revaluation THEN
+          "Alt. UOM Code" := Item."Alt. Base Unit of Measure"; //TOP050 KT ABCSI Modification to Item Cards 01222015
+        VALIDATE("Alt. UOM Code");  //TOP050 KT ABCSI Modification to Item Cards 01222015 //NAVEVENT
+      END;
+    END;
+
+    [EventSubscriber(Table,83,OnAfterValidateEvent,Quantity)]
+    LOCAL PROCEDURE TB83_Quantity_OnValidate@1170000000(VAR Rec@1170000000 : Record 83;VAR xRec@1170000001 : Record 83;CurrFieldNo@1170000002 : Integer);
+    BEGIN
+      WITH Rec DO BEGIN
+        //TOP050 KT ABCSI Modification to Item Cards 01222015
+        IF "Alt. UOM Code" <> '' THEN
+          "Alt. UOM Quantity" := Tb83_CalcAltUOMQty(Quantity,Rec);
+        //TOP050 KT ABCSI Modification to Item Cards 01222015
+      END;
+    END;
+
+    [EventSubscriber(Table,83,OnAfterValidateEvent,"Unit Cost")]
+    LOCAL PROCEDURE Tb83_UnitCost_OnValidate@1170000002(VAR Rec@1170000000 : Record 83;VAR xRec@1170000001 : Record 83;CurrFieldNo@1170000002 : Integer);
+    BEGIN
+      WITH Rec DO BEGIN
+        //TOP050 KT ABCSI Modification to Item Cards 01222015
+        IF "Alt. UOM Code" <> '' THEN
+          "Alt. UOM Unit Cost" := Tb83_CalcAltUOMUnitCost("Unit Cost",Rec);
+        //TOP050 KT ABCSI Modification to Item Cards 01222015
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,51754,Tb83_OnUnitOfMeasureCode_OnValidate)]
+    LOCAL PROCEDURE Tb83_UnitOfMeasureCode_OnValidate@1170000004(VAR Sender@1170000000 : Codeunit 51754;VAR Rec@1170000001 : Record 83;VAR UnitCost@1170000002 : Decimal);
+    VAR
+      GLSetup@1000000001 : Record 98;
+    BEGIN
+      WITH Rec DO BEGIN
+        GLSetup.GET;
+        //TOP050 KT ABCSI Modification to Item Cards 01222015
+        IF "Alt. UOM Code" <> '' THEN BEGIN
+          IF "Value Entry Type" = "Value Entry Type"::Revaluation THEN
+            "Alt. UOM Unit Cost" := Tb83_CalcAltUOMUnitCost("Unit Cost (Revalued)",Rec)
+          ELSE
+            "Alt. UOM Unit Cost" := Tb83_CalcAltUOMUnitCost(ROUND(UnitCost * "Qty. per Unit of Measure",GLSetup."Unit-Amount Rounding Precision"),Rec);
+        END;
+        //TOP050 KT ABCSI Modification to Item Cards 01222015
+      END;
+    END;
+
+    [EventSubscriber(Table,83,OnAfterValidateEvent,"Inventory Value (Revalued)")]
+    LOCAL PROCEDURE "Tb83_InventoryValue(Revalued)_OnValidate"@1170000006(VAR Rec@1170000000 : Record 83;VAR xRec@1170000001 : Record 83;CurrFieldNo@1170000002 : Integer);
+    VAR
+      GLSetup@1170000003 : Record 98;
+    BEGIN
+      WITH Rec DO BEGIN
+        GLSetup.GET;
+        IF ("Unit Cost (Revalued)" <> xRec."Unit Cost (Revalued)") OR
+         ("Inventory Value (Revalued)" <> xRec."Inventory Value (Revalued)")
+        THEN BEGIN
+          //TOP050 KT ABCSI Modification to Item Cards 01302015
+          IF "Alt. UOM Code" <> '' THEN
+            "Alt. UOM Unit Cost" := Tb83_CalcAltUOMUnitCost(ROUND("Inventory Value (Revalued)" / Quantity,GLSetup."Unit-Amount Rounding Precision"),Rec);
+          //TOP050 KT ABCSI Modification to Item Cards 01302015
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,83,OnAfterValidateEvent,"Unit Cost (Calculated)")]
+    LOCAL PROCEDURE "TB83_UnitCost(Calculated)_OnValidate"@1170000008(VAR Rec@1170000000 : Record 83;VAR xRec@1170000001 : Record 83;CurrFieldNo@1170000002 : Integer);
+    BEGIN
+      WITH Rec DO BEGIN
+          //TOP050 KT ABCSI Modification to Item Cards 01302015
+        IF "Alt. UOM Code" <> '' THEN
+          "Alt. UOM Unit Cost" := Tb83_CalcAltUOMUnitCost("Unit Cost (Revalued)",Rec);
+        //TOP050 KT ABCSI Modification to Item Cards 01302015
+      END;
+    END;
+
+    PROCEDURE Tb83_CalcAltUOMQty@1000000034(Qty@1000000000 : Decimal;Rec@1170000000 : Record 83) : Decimal;
+    BEGIN
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+      WITH Rec DO BEGIN
+        IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+          IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+            IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+              EXIT(ROUND(Qty / "Qty. per Alt. UOM",0.00001))
+            ELSE
+              EXIT(ROUND(Qty * "Qty. per Unit of Measure",0.00001));
+          END ELSE
+            EXIT(Qty);
+        END ELSE
+          EXIT(0);
+      END;
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+    END;
+
+    PROCEDURE Tb83_CalcQtyFromAltUOMQty@1000000033(Qty@1000000000 : Decimal;Rec@1170000000 : Record 83) : Decimal;
+    BEGIN
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+      WITH Rec DO BEGIN
+        IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+          IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+            IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+              EXIT(ROUND(Qty * "Qty. per Alt. UOM",0.00001))
+            ELSE
+              EXIT(ROUND(Qty / "Qty. per Unit of Measure",0.00001));
+          END ELSE
+            EXIT(Qty);
+        END ELSE
+          EXIT(0);
+      END;
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+    END;
+
+    PROCEDURE Tb83_CalcAltUOMUnitCost@1000000032(LocalUnitCost@1000000000 : Decimal;Rec@1170000000 : Record 83) : Decimal;
+    BEGIN
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+      WITH Rec DO BEGIN
+        IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+          IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+            IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+              EXIT(ROUND(LocalUnitCost * "Qty. per Alt. UOM",0.00001))
+            ELSE
+              EXIT(ROUND(LocalUnitCost / "Qty. per Unit of Measure",0.00001));
+          END ELSE
+            EXIT(LocalUnitCost);
+        END ELSE
+          EXIT(0);
+      END;
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+    END;
+
+    PROCEDURE Tb83_CalcUnitCostFromAltUOMUnitCost@1000000031(LocalUnitCost@1000000000 : Decimal;Rec@1170000000 : Record 83) : Decimal;
+    BEGIN
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+      WITH Rec DO BEGIN
+        IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+          IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+            IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+              EXIT(ROUND(LocalUnitCost / "Qty. per Alt. UOM",0.00001))
+            ELSE
+              EXIT(ROUND(LocalUnitCost / "Qty. per Unit of Measure",0.00001));
+          END ELSE
+            EXIT(LocalUnitCost);
+        END ELSE
+          EXIT(0);
+      END;
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

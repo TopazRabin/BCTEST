@@ -1,0 +1,332 @@
+OBJECT Report 14000587 Create Item Forecast Review
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Create Item Usage Review;
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   AdvForSetup.GET;
+                   ForecastPeriods := AdvForSetup."Periods to Forecast";
+                 END;
+
+    OnPreReport=BEGIN
+                  IF ForecastPeriods <= 0 THEN
+                    ForecastPeriods := 1;
+                END;
+
+  }
+  DATASET
+  {
+    { 1   ;    ;DataItem;                    ;
+               DataItemTable=Table14097469;
+               DataItemTableView=SORTING(Batch Type,Batch Name);
+               OnPreDataItem=BEGIN
+                               // retrieve the batch and name
+                               BatchType := "Item Usage Review Batch".GETFILTER("Batch Type");
+                               BatchName := "Item Usage Review Batch".GETFILTER("Batch Name");
+                               CurrReport.BREAK;
+                             END;
+
+               OnPostDataItem=VAR
+                                Location2@1240020000 : Record 14;
+                                LocInvPer@1240020001 : Record 14000553;
+                              BEGIN
+                                IF NOT ItemUsageReviewBatch.GET(BatchType, BatchName) THEN
+                                  ERROR(STRSUBSTNO(Text015,ItemUsageReviewBatch.FIELDCAPTION("Batch Type"), BatchType,
+                                    ItemUsageReviewBatch.FIELDCAPTION("Batch Name"),BatchName));
+
+                                ItemUsageReviewBatch."Total Columns" := HistoryPeriods + ForecastPeriods;
+                                ItemUsageReviewBatch.MODIFY(FALSE);
+
+                                Location2.SETRANGE("Enable Adv. Forecasting",TRUE);
+                                Location2.FINDFIRST;
+
+                                // check all locations to make sure the first fc date is the same
+
+                                LocInvPer.RESET;
+                                LocInvPer.ASCENDING(FALSE);
+                                LocInvPer.SETRANGE("Location Code",Location2.Code);
+                                LocInvPer.SETRANGE("Period End Closed",TRUE);
+                                LocInvPer.FINDFIRST;
+                                StartingDate := LocInvPer."Ending Date" + 1;
+
+                                // check closed periods
+                                ForecastInventoryPeriod.RESET;
+                                ForecastInventoryPeriod.SETRANGE(Type,ForecastInventoryPeriod.Type::" ");
+                                IF NOT ForecastInventoryPeriod.FIND('-') THEN
+                                  ERROR(Text003,StartingDate);
+
+                                ItemUsageReview.RESET;
+                                ItemUsageReview.SETCURRENTKEY(Changed);
+                                ItemUsageReview.SETRANGE("Batch Type", BatchType);
+                                ItemUsageReview.SETRANGE("Batch Name", BatchName);
+                                ItemUsageReview.SETRANGE(Changed,TRUE);
+                                ChangedCount := ItemUsageReview.COUNT;
+                                IF ChangedCount > 0 THEN
+                                  IF NOT CONFIRM(Text006,FALSE,ChangedCount) THEN
+                                    ERROR(Text005);
+
+                                ItemUsageReview.RESET;
+                                ItemUsageReview.SETRANGE("Batch Type", BatchType);
+                                ItemUsageReview.SETRANGE("Batch Name", BatchName);
+                                ItemUsageReview.DELETEALL(TRUE);
+
+                                Period := 0;
+                                ForecastInventoryPeriod.RESET;
+                                //ForecastInventoryPeriod.SETRANGE(Type,ForecastInventoryPeriod.Type::" ");
+                                ForecastInventoryPeriod.SETRANGE(Type, ForecastInventoryPeriod.Type::Calculate);
+                                ForecastInventoryPeriod.SETFILTER("Starting Date",'%1..',StartingDate);
+                                IF ForecastInventoryPeriod.FINDSET THEN
+                                  REPEAT
+                                    Period := Period + 1;
+                                    IF Period = 1 THEN
+                                      FirstFCStartDate := ForecastInventoryPeriod."Starting Date";
+                                    StartngDateArray[Period] := ForecastInventoryPeriod."Starting Date";
+                                  UNTIL (ForecastInventoryPeriod.NEXT = 0) OR
+                                        (Period = 52);
+                              END;
+                               }
+
+    { 4564;    ;DataItem;                    ;
+               DataItemTable=Table14000555;
+               PrintOnlyIfDetail=Yes;
+               OnPreDataItem=BEGIN
+                               IF GUIALLOWED THEN
+                                 ProgWindow.OPEN(
+                                   PADSTR(Text001,15) + '#1########\' +
+                                   PADSTR(Text002,15) + '#2####################################');
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  ForcastQty@1240020000 : Decimal;
+                                  FrozenForcastQty@1240020001 : Decimal;
+                                  Formula@1240020002 : Record 14002652;
+                                BEGIN
+                                  IF "Procurement Unit"."Location Code" <> Location.Code THEN BEGIN
+                                    Location.GET("Procurement Unit"."Location Code");
+                                    IF GUIALLOWED THEN
+                                      ProgWindow.UPDATE(1, "Procurement Unit"."Location Code");
+                                  END;
+
+                                  IF NOT Location."Enable Adv. Forecasting" THEN
+                                    CurrReport.SKIP;
+
+                                  IF GUIALLOWED THEN BEGIN
+                                    ProgWindow.UPDATE(2,"Procurement Unit"."Item No.");
+                                  END;
+
+                                  ItemUsageReview.INIT;
+                                  ItemUsageReview."Location Code" := "Procurement Unit"."Location Code";
+                                  ItemUsageReview."Item No." := "Procurement Unit"."Item No.";
+                                  ItemUsageReview."Variant Code" := "Procurement Unit"."Variant Code";
+                                  ItemUsageReview.Type := ItemUsageReview.Type::"Usage Adjust";
+                                  ItemUsageReview."Starting Date" := FirstFCStartDate;//StartingDate;
+                                  ItemUsageReview."Batch Type" := BatchType;
+                                  ItemUsageReview."Batch Name" := BatchName;
+                                  ItemUsageReview."Replenishment Source Code" := "Procurement Unit"."Replenishment Source Code";
+                                  // if not bring in cost for batch
+                                  ItemUsageReview."Unit Cost" := UBP.GetUnitCost("Procurement Unit"."Location Code", "Procurement Unit"."Item No.", "Procurement Unit"."Variant Code");
+
+                                  ItemUsageReview."Nonstock Unit" := "Procurement Unit"."Nonstock Unit";
+                                  ItemUsageReview."Item Class Description" := "Procurement Unit"."Item Class Description";
+                                  ItemUsageReview."Ranking Code" := "Procurement Unit"."Ranking Code";
+                                  ItemUsageReview."Periods With Sales" := "Procurement Unit"."Periods With Sales";
+                                  ItemUsageReview."Stocking Rule" := "Procurement Unit"."Stocking Rule Code";
+                                  IF "Procurement Unit"."Sporadic Rule" <> '' THEN
+                                    ItemUsageReview."Sporadic Rule" := "Procurement Unit"."Sporadic Rule"
+                                  ELSE
+                                    ItemUsageReview."Sporadic Rule" := AdvForSetup."Def. Sporadic Rule";
+                                  ItemUsageReview."First Stocked Date" := "Procurement Unit"."First Stocked Date";
+                                  ItemUsageReview."Reforecast Item" := "Procurement Unit"."Reforecast Item";
+                                  ItemUsageReview."Replenishment Hierarchy" := "Procurement Unit"."Replenishment Hierarchy";
+                                  ItemUsageReview."Replenishment Model" := "Procurement Unit"."Replenishment Model";
+                                  ItemUsageReview."Replenishment Source Type" :=
+                                      FORMAT("Procurement Unit"."Replenishment Source Type");
+                                  ItemUsageReview."Replenishment Source Code" := "Procurement Unit"."Replenishment Source Code";
+                                  ItemUsageReview."History Periods" := HistoryPeriods;
+                                  ItemUsageReview."Forecast Periods" := ForecastPeriods;
+
+                                  CLEAR(Forecast);
+                                  Forecast.SetIgnoreFrozenForcAdjust(TRUE);
+                                  Forecast.CalcPeriodStartingDates(Location, ForecastPeriods);
+                                  Forecast.CalcForecast("Procurement Unit", ForecastPeriods,'',FALSE,TRUE);
+                                  Forecast.CalcCustForecast("Procurement Unit", ForecastPeriods);
+                                  Forecast.CalcConsumed("Procurement Unit", ForecastPeriods);
+
+                                  ItemUsageReview."Sporadic Target Stock Level" := Forecast.GetTargetStockLevel;
+                                  IF ItemUsageReview."Sporadic Target Stock Level" <> 0 THEN
+                                    ItemUsageReview.Sporadic := TRUE;
+
+                                  ItemUsageReview."Forecast Error %" := Forecast.GetForcastErrorPct;
+
+                                  {
+                                  Forecast.CalcInvPlusExpRec("Procurement Unit",AdvForSetup."Periods to Forecast");
+                                  Forecast.CalcDemand("Procurement Unit",AdvForSetup."Periods to Forecast");
+                                  Forecast.CalcConsumed("Procurement Unit",AdvForSetup."Periods to Forecast");
+                                  Forecast.CalcAutoForcAdjustment("Procurement Unit", UBP.GetLeadTimeHoriz("Procurement Unit"));
+                                  Forecast.CalcInventory("Procurement Unit",AdvForSetup."Periods to Forecast");
+                                  Forecast.CalcNetTransfers("Procurement Unit",AdvForSetup."Periods to Forecast");
+                                  Forecast.CalcPurchOrders("Procurement Unit",AdvForSetup."Periods to Forecast");
+                                  Forecast.GetComp(AdvForSetup."Periods to Forecast");
+                                  Forecast.CalcProdOrders("Procurement Unit",AdvForSetup."Periods to Forecast");
+                                  Forecast.CalcComp("Procurement Unit",AdvForSetup."Periods to Forecast");
+                                  }
+
+                                  ItemUsageReview."Re-For. Formula" := Forecast.GetFormulaCode;
+                                  IF Formula.GET(ItemUsageReview."Re-For. Formula") THEN
+                                    ItemUsageReview."Seasonal Formula" := Formula."Seasonal Formula";
+
+                                  ItemUsageReview.Type := ItemUsageReview.Type::"Forecast Adjust";
+
+                                  IF Item."No." <> ItemUsageReview."Item No." THEN
+                                    Item.GET(ItemUsageReview."Item No.");
+
+                                  ItemUsageReview."Item Category Code" := Item."Item Category Code";
+                                  ItemUsageReview."Summary Code 1" := Item."Summary Code 1";
+                                  ItemUsageReview."Summary Code 2" := Item."Summary Code 2";
+                                  ItemUsageReview."Summary Code 3" := Item."Summary Code 3";
+
+                                  Period := 0;
+                                  REPEAT
+                                    Period := Period + 1;
+                                    ForcastQty := Forecast.GetPeriodForecastUsage(Period);
+                                    Forecast.RoundValueForForecast("Procurement Unit", ForcastQty);
+                                    ItemUsageReview.SetField(Period, ForcastQty);
+
+                                    // find existing frozen forecast
+                                    FrozenForcastQty := FindFrozenForecast("Procurement Unit", StartngDateArray[Period]);
+                                    Forecast.RoundValueForForecast("Procurement Unit", FrozenForcastQty);
+                                    IF (FrozenForcastQty > 0) THEN BEGIN
+                                      ItemUsageReview."Existing Frozen Forecast" := TRUE;
+                                      ItemUsageReview.SetComparisonField(Period, FrozenForcastQty);
+                                    END ELSE
+                                      ItemUsageReview.SetComparisonField(Period, ForcastQty);
+
+                                  UNTIL Period > AdvForSetup."Periods to Forecast";
+
+                                  ItemUsageReview."Entry No." := 0;
+                                  ItemUsageReview.INSERT(TRUE);
+                                END;
+
+               OnPostDataItem=BEGIN
+                                ProgWindow.CLOSE;
+                              END;
+
+               ReqFilterFields=Replenishment Source Type,Location Code,Item No.,Item Class Description,Ranking Code,Periods With Sales }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      OnInit=BEGIN
+               IF AdvForSetup.GET THEN
+                 ForecastPeriods := AdvForSetup."Periods to Forecast";
+             END;
+
+    }
+    CONTROLS
+    {
+      { 1240020001;;Container;
+                  ContainerType=ContentArea }
+
+      { 1240020002;1;Group  ;
+                  CaptionML=ENU=Options;
+                  GroupType=Group }
+
+      { 1240020003;2;Field  ;
+                  CaptionML=ENU=Forecast Periods;
+                  ApplicationArea=#All;
+                  SourceExpr=ForecastPeriods }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      InvMgtSetup@1240020011 : Record 14000551;
+      AdvForSetup@1240020012 : Record 14002651;
+      ForecastInventoryPeriod@1240020004 : Record 14000552;
+      ItemUsageReview@1240020001 : Record 14097467;
+      ItemUsageReviewPrev@1240020010 : Record 14097467;
+      Location@1240020013 : Record 14;
+      Item@1240020016 : Record 27;
+      Forecast@1240020029 : Codeunit 14000567;
+      UBP@1240020028 : Codeunit 14000564;
+      ProgWindow@1240020005 : Dialog;
+      ChangedCount@1240020018 : Integer;
+      FirstFCStartDate@1240020034 : Date;
+      ItemUsageFound@1240020008 : Boolean;
+      Period@1240020002 : Integer;
+      FCPeriod@1240020030 : Integer;
+      PrevForecastUsage@1240020021 : Decimal;
+      StartingDate@1240020000 : Date;
+      StartngDateArray@1240020003 : ARRAY [52] OF Date;
+      Text001@1240020006 : TextConst 'ENU=Location';
+      Text002@1240020007 : TextConst 'ENU=Item';
+      Text003@1240020009 : TextConst 'ENU=You must enter a valid start date.';
+      Text004@1240020014 : TextConst 'ENU=You have included Spoke Procurement Units, do you wish to continue?';
+      Text005@1240020015 : TextConst 'ENU=Creation of Usage Review terminated.';
+      Text006@1240020017 : TextConst 'ENU=There are %1 Changes Pending.  Do you wish to continure?';
+      ItemUsageArray@1240020019 : ARRAY [52] OF Decimal;
+      ForecastUsageArray@1240020020 : ARRAY [52] OF Decimal;
+      EntryNo@1240020027 : Integer;
+      HistoryPeriods@1240020031 : Integer;
+      Text007@1240020033 : TextConst 'ENU=There are only %1 closed periods.';
+      Text008@1240020035 : TextConst 'ENU=You must specify the number of History Periods.';
+      ForecastPeriods@1240020022 : Integer;
+      ThresholdErrorPct@1240020037 : Decimal;
+      ShowAllForecastable@1240020038 : Boolean;
+      ShowAllSporadic@1240020039 : Boolean;
+      Forecastable@1240020040 : Boolean;
+      Text009@1240020042 : TextConst 'ENU=Must Reforecast Item Before Adj.';
+      Text012@1240020045 : TextConst 'ENU=Stockout days %1';
+      Text013@1240020044 : TextConst 'ENU=Below Min. Annual Usage %1';
+      Text014@1240020043 : TextConst 'ENU="Curr. Period Usage %1 is > or = the last %2 periods total usage %3"';
+      BatchType@1240020047 : Code[10];
+      BatchName@1240020046 : Code[10];
+      Text015@1240020048 : TextConst 'ENU=Error %1 %2 %3 %4 was not found.';
+      ItemUsageReviewBatch@1240020049 : Record 14097469;
+
+    PROCEDURE SetBatch@1240020000(CurrBatchType@1240020000 : Code[10];CurrBatchName@1240020001 : Code[10]);
+    BEGIN
+      BatchType := CurrBatchType;
+      BatchName := CurrBatchName;
+    END;
+
+    LOCAL PROCEDURE FindFrozenForecast@1240020006(VAR CurrProcUnit@1240020000 : Record 14000555;StartingDate@1240020002 : Date) ForAdjQty : Decimal;
+    VAR
+      ForecastAdj@1240020001 : Record 14002707;
+    BEGIN
+      ForAdjQty := 0;
+      ForecastAdj.SETCURRENTKEY("Item No.","Variant Code","Location Code","Starting Date");
+
+      ForecastAdj.SETRANGE("Location Code", CurrProcUnit."Location Code");
+      ForecastAdj.SETRANGE("Item No.",CurrProcUnit."Item No.");
+      IF NOT CurrProcUnit."Summarize Variant Detail" THEN
+        ForecastAdj.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+
+      ForecastAdj.SETRANGE("Starting Date", StartingDate);
+      ForecastAdj.SETRANGE("Frozen Forecast", TRUE);
+      IF ForecastAdj.FINDFIRST THEN
+        ForAdjQty := ForecastAdj.Quantity;
+      EXIT(ForAdjQty);
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

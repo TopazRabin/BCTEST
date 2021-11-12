@@ -1,0 +1,427 @@
+OBJECT Codeunit 14000579 Forecast Summary Adjust
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/27/12;
+    Time=12:00:00 PM;
+    Version List=UBP2.91;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ForInvPer@1240030004 : Record 14000552;
+      ForSum@1240030002 : Record 14000586;
+      ForSumOrig@1240030000 : Record 14000588;
+      ForSumEnt@1240030001 : Record 14000587;
+      ForSumEnt2@1240030022 : Record 14000587;
+      ForAdjust@1240030014 : Record 14002707;
+      ForAdjust2@1240030027 : Record 14002707;
+      ForSummaryView@1240030020 : Record 14000585;
+      ForSummary@1240030006 : Codeunit 14000578;
+      ProgWindow@1240030007 : Dialog;
+      EntryNo@1240030015 : Integer;
+      StartingDateArray@1240030003 : ARRAY [15] OF Date;
+      i@1240030005 : Integer;
+      Text000@1240030008 : TextConst 'ENU=Adjusting Forecast';
+      Text001@1240030009 : TextConst 'ENU=Items';
+      ItemCount@1240030010 : Integer;
+      ProgCount@1240030011 : Integer;
+      Text002@1240030012 : TextConst 'ENU=No forecast adjustments found.';
+      Text003@1240030013 : TextConst 'ENU=Do you wish to adjust the forecast of %1 items?';
+      Text004@1240030016 : TextConst 'ENU=No forecast summary adjustments found.';
+      Text005@1240030017 : TextConst 'ENU=Adjusting Summary Entries';
+      Text006@1240030018 : TextConst 'ENU=Location';
+      Text007@1240030019 : TextConst 'ENU=Item';
+      Text008@1240030021 : TextConst 'ENU=Roll Back version %1 of the Forecast Adjust for all open periods?';
+      Text011@1240030024 : TextConst 'ENU=All forecast adjustments have been rolled back.';
+      Text012@1240030025 : TextConst 'ENU=Forecast Adjustments have been made.';
+      Text013@1240030026 : TextConst 'ENU=Do you wish to delete all Summay Adjustments in open periods for Summary Code %1?';
+      Text015@1240030030 : TextConst 'ENU="Adj. Units %1 = Orig. Units %2 * ((New Value %3 - Orig. Value %4) / Orig. Value %4) ---- Level %5 Summary Code %6"';
+      AdjUnits@1240030028 : Decimal;
+      Level@1240030031 : Integer;
+      SummaryCode@1240030032 : Code[20];
+      Text016@1240030023 : TextConst 'ENU="Adj. Units %1 = Orig. Units 0 + New Units %2 ---- Level %3 Summary Code %4"';
+      Text017@1240030029 : TextConst 'ENU="Average %1 + "';
+
+    PROCEDURE ByView@1240030000(CurrForSumView@1240030000 : Record 14000585);
+    BEGIN
+      ForSumOrig.RESET;
+      ForSumOrig.SETRANGE("Forecast View Code",CurrForSumView."Forecast Summary Code");
+      IF NOT ForSumOrig.FIND('-') THEN
+        ERROR(Text004);
+      CurrForSumView."Last Version No." := CurrForSumView."Last Version No." + 1;
+      ProgWindow.OPEN(
+        Text005 + '\' +
+        PADSTR(Text006,15,' ') + '#1##################\' +
+        PADSTR(Text007,15,' ') + '#2##################');
+      IF ForSumOrig.FIND('-') THEN BEGIN
+        ForInvPer.RESET;
+        ForInvPer.SETFILTER("Starting Date",'>=%1',ForSumOrig."Period 1 Starting Date");
+        ForInvPer.FIND('-');
+        CLEAR(StartingDateArray);
+        i := 0;
+        REPEAT
+          i := i + 1;
+          StartingDateArray[i] := ForInvPer."Starting Date";
+          ForInvPer.NEXT;
+        UNTIL i = CurrForSumView."Forecast Periods";
+        REPEAT
+          ForSum.GET(
+            ForSumOrig."Forecast View Code",ForSumOrig."Summary Code 1",ForSumOrig."Summary Code 2",
+            ForSumOrig."Summary Code 3",ForSumOrig."Summary Code 4",ForSumOrig."Summary Code 5",
+            ForSumOrig."Summary Code 6",TRUE);
+          Level := ForSumOrig.Level;
+          CASE Level OF
+            1: SummaryCode := ForSumOrig."Summary Code 1";
+            2: SummaryCode := ForSumOrig."Summary Code 2";
+            3: SummaryCode := ForSumOrig."Summary Code 3";
+            4: SummaryCode := ForSumOrig."Summary Code 4";
+            5: SummaryCode := ForSumOrig."Summary Code 5";
+            6: SummaryCode := ForSumOrig."Summary Code 6";
+          END;
+          ForSumEnt.RESET;
+          ForSumEnt.SETRANGE("Forecast View Code",ForSum."Forecast View Code");
+          ForSumEnt.SETRANGE("Summary Code 1",ForSum."Summary Code 1");
+          IF ForSum."Summary Code 2" <> '' THEN
+            ForSumEnt.SETRANGE("Summary Code 2",ForSum."Summary Code 2");
+          IF ForSum."Summary Code 3" <> '' THEN
+            ForSumEnt.SETRANGE("Summary Code 3",ForSum."Summary Code 3");
+          IF ForSum."Summary Code 4" <> '' THEN
+            ForSumEnt.SETRANGE("Summary Code 4",ForSum."Summary Code 4");
+          IF ForSum."Summary Code 5" <> '' THEN
+            ForSumEnt.SETRANGE("Summary Code 5",ForSum."Summary Code 5");
+          IF ForSum."Summary Code 6" <> '' THEN
+            ForSumEnt.SETRANGE("Summary Code 6",ForSum."Summary Code 6");
+          i := 0;
+          REPEAT
+            i := i + 1;
+            CASE i OF
+              1:
+                IF ForSumOrig."Period 1 Qty." <> ForSum."Period 1 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 1 Qty.",ForSum."Period 1 Qty.",Level,SummaryCode);
+                END;
+              2:
+                IF ForSumOrig."Period 2 Qty." <> ForSum."Period 2 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 2 Qty.",ForSum."Period 2 Qty.",Level,SummaryCode);
+                END;
+              3:
+                IF ForSumOrig."Period 3 Qty." <> ForSum."Period 3 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 3 Qty.",ForSum."Period 3 Qty.",Level,SummaryCode);
+                END;
+              4:
+                IF ForSumOrig."Period 4 Qty." <> ForSum."Period 4 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 4 Qty.",ForSum."Period 4 Qty.",Level,SummaryCode);
+                END;
+              5:
+                IF ForSumOrig."Period 5 Qty." <> ForSum."Period 5 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 5 Qty.",ForSum."Period 5 Qty.",Level,SummaryCode);
+                END;
+              6:
+                IF ForSumOrig."Period 6 Qty." <> ForSum."Period 6 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 6 Qty.",ForSum."Period 6 Qty.",Level,SummaryCode);
+                END;
+              7:
+                IF ForSumOrig."Period 7 Qty." <> ForSum."Period 7 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 7 Qty.",ForSum."Period 7 Qty.",Level,SummaryCode);
+                END;
+              8:
+                IF ForSumOrig."Period 8 Qty." <> ForSum."Period 8 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 8 Qty.",ForSum."Period 8 Qty.",Level,SummaryCode);
+                END;
+              9:
+                IF ForSumOrig."Period 9 Qty." <> ForSum."Period 9 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 9 Qty.",ForSum."Period 9 Qty.",Level,SummaryCode);
+                END;
+              10:
+                IF ForSumOrig."Period 10 Qty." <> ForSum."Period 10 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 10 Qty.",ForSum."Period 10 Qty.",Level,SummaryCode);
+                END;
+              11:
+                IF ForSumOrig."Period 11 Qty." <> ForSum."Period 11 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 11 Qty.",ForSum."Period 11 Qty.",Level,SummaryCode);
+                END;
+              12:
+                IF ForSumOrig."Period 12 Qty." <> ForSum."Period 12 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 12 Qty.",ForSum."Period 12 Qty.",Level,SummaryCode);
+                END;
+              13:
+                IF ForSumOrig."Period 13 Qty." <> ForSum."Period 13 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 13 Qty.",ForSum."Period 13 Qty.",Level,SummaryCode);
+                END;
+              14:
+                IF ForSumOrig."Period 14 Qty." <> ForSum."Period 14 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 14 Qty.",ForSum."Period 14 Qty.",Level,SummaryCode);
+                END;
+              15:
+                IF ForSumOrig."Period 15 Qty." <> ForSum."Period 15 Qty." THEN BEGIN
+                  ForSumEnt.SETRANGE("Starting Date",StartingDateArray[i]);
+                  AdjustEntries(ForSumOrig."Period 15 Qty.",ForSum."Period 15 Qty.",Level,SummaryCode);
+                END;
+            END;
+          UNTIL i = CurrForSumView."Forecast Periods";
+        UNTIL ForSumOrig.NEXT = 0;
+      END;
+
+      ForSumOrig.DELETEALL;
+      COMMIT;
+      ProgWindow.CLOSE;
+
+      CLEAR(ForSummary);
+      ForSummary.Update(CurrForSumView);
+    END;
+
+    PROCEDURE AdjustEntries@1240030001(CurrOrigQty@1240030000 : Decimal;CurrNewQty@1240030001 : Decimal;CurrLevel@1240030003 : Integer;CurrSummaryCode@1240030004 : Code[20]);
+    VAR
+      PercentAdjust@1240030002 : Decimal;
+    BEGIN
+      IF CurrOrigQty = 0 THEN BEGIN
+        ProgCount := 0;
+        IF ForSumEnt.FIND('-') THEN
+          REPEAT
+            IF GUIALLOWED THEN
+              IF ProgCount MOD 10 = 0 THEN BEGIN
+                ProgWindow.UPDATE(1,ForSumEnt."Location Code");
+                ProgWindow.UPDATE(2,ForSumEnt."Item No.");
+              END;
+            ProgCount := ProgCount + 1;
+            ForSumEnt.Units := CurrNewQty;
+            AdjUnits := ForSumEnt.Units - ForSumEnt."Original Units";
+            ForSumEnt."Cost (LCY)" := ROUND(CurrNewQty * ForSumEnt."Unit Cost (LCY)",1.0);
+            ForSumEnt."Price (LCY)" := ROUND(CurrNewQty * ForSumEnt."Unit Price (LCY)",1.0);
+            ForSumEnt."Adjust Pending" := TRUE;
+            ForSumEnt."Adjustment Note" :=
+              STRSUBSTNO(Text016,AdjUnits,CurrNewQty,CurrLevel,CurrSummaryCode);
+            ForSumEnt.MODIFY;
+          UNTIL ForSumEnt.NEXT = 0;
+        EXIT;
+      END;
+      PercentAdjust := (CurrNewQty - CurrOrigQty) / CurrOrigQty;
+      ProgCount := 0;
+      IF ForSumEnt.FIND('-') THEN
+        REPEAT
+          IF GUIALLOWED THEN
+            IF ProgCount MOD 10 = 0 THEN BEGIN
+              ProgWindow.UPDATE(1,ForSumEnt."Location Code");
+              ProgWindow.UPDATE(2,ForSumEnt."Item No.");
+            END;
+          ProgCount := ProgCount + 1;
+          ForSumEnt.Units := ForSumEnt.Units + ROUND(ForSumEnt.Units * PercentAdjust,1.0);
+          AdjUnits := ForSumEnt.Units - ForSumEnt."Original Units";
+          ForSumEnt."Cost (LCY)" := ROUND(ForSumEnt.Units * ForSumEnt."Unit Cost (LCY)",1.0);
+          ForSumEnt."Price (LCY)" := ROUND(ForSumEnt.Units * ForSumEnt."Unit Price (LCY)",1.0);
+          ForSumEnt."Adjust Pending" := TRUE;
+          ForSumEnt."Adjustment Note" :=
+            STRSUBSTNO(Text015,AdjUnits,ForSumEnt."Original Units",CurrNewQty,CurrOrigQty,CurrLevel,CurrSummaryCode);
+          ForSumEnt.MODIFY;
+        UNTIL ForSumEnt.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateForecast@1240030002(CurrForSumView@1240030000 : Record 14000585);
+    BEGIN
+      ProgWindow.OPEN(
+        Text000 + '\' +
+        PADSTR(Text001,10,' ') + '@1@@@@@@@@@@@@@@@@@@');
+      ForSumEnt.RESET;
+      ForSumEnt.SETCURRENTKEY("Forecast View Code","Adjust Pending");
+      ForSumEnt.SETRANGE("Forecast View Code",CurrForSumView."Forecast Summary Code");
+      ForSumEnt.SETRANGE("Adjust Pending",TRUE);
+      ItemCount := ForSumEnt.COUNT;
+      IF ItemCount = 0 THEN BEGIN
+        MESSAGE(Text002);
+        ProgWindow.CLOSE;
+        EXIT;
+      END;
+      IF NOT CONFIRM(STRSUBSTNO(Text003,ItemCount)) THEN BEGIN
+        ProgWindow.CLOSE;
+        EXIT;
+      END;
+
+      ForAdjust.LOCKTABLE;
+      ForSumEnt.LOCKTABLE;
+      ForAdjust.RESET;
+      IF ForAdjust.FIND('+') THEN
+        EntryNo := ForAdjust."Entry No."
+      ELSE
+        EntryNo := 0;
+      IF ForSumEnt.FIND('-') THEN
+        REPEAT
+          IF ProgCount MOD 10 = 0 THEN
+            ProgWindow.UPDATE(1,ROUND(10000 * ProgCount / ItemCount,1.0));
+          EntryNo := EntryNo + 1;
+          ForAdjust.INIT;
+          ForAdjust."Entry No." := EntryNo;
+          ForAdjust."Location Code" := ForSumEnt."Location Code";
+          ForAdjust."Item No." := ForSumEnt."Item No.";
+          ForAdjust."Variant Code" := ForSumEnt."Variant Code";
+          ForAdjust."Starting Date" := ForSumEnt."Starting Date";
+          IF ForSumEnt."Average Usage" THEN BEGIN
+            ForAdjust2.RESET;
+            ForAdjust2.SETCURRENTKEY(
+              "Item No.","Variant Code","Location Code","Starting Date");
+            ForAdjust2.SETRANGE("Item No.",ForSumEnt."Item No.");
+            ForAdjust2.SETRANGE("Variant Code",ForSumEnt."Variant Code");
+            ForAdjust2.SETRANGE("Location Code",ForSumEnt."Location Code");
+            ForAdjust2.SETRANGE("Starting Date",ForSumEnt."Starting Date");
+            ForAdjust2.CALCSUMS(ForAdjust2.Quantity);
+            ForAdjust.Quantity := ForSumEnt.Units - ForAdjust2.Quantity;
+            IF NOT ForAdjust2.FIND('-') THEN
+              ForSumEnt."Adjustment Note" :=
+                INSSTR(ForSumEnt."Adjustment Note",STRSUBSTNO(Text017,ForSumEnt."Original Units"),1);
+          END ELSE
+            ForAdjust.Quantity := ForSumEnt.Units - ForSumEnt."Original Units";
+          ForAdjust."Forecast Summary Code" := CurrForSumView."Forecast Summary Code";
+          ForAdjust."Version No." := CurrForSumView."Last Version No.";
+          ForAdjust."Adjustment Note" := ForSumEnt."Adjustment Note";
+          ForAdjust."User ID" := USERID;
+          ForAdjust."Date Adjusted" := TODAY;
+          ForAdjust."Time Adjusted" := TIME;
+          IF ForAdjust.Quantity <> 0 THEN
+            ForAdjust.INSERT;
+          ForSumEnt."Original Units" := ForSumEnt.Units;
+          ForSumEnt."Original Cost (LCY)" := ForSumEnt."Cost (LCY)";
+          ForSumEnt."Original Price (LCY)" := ForSumEnt."Price (LCY)";
+          ForSumEnt.MODIFY;
+          SetReviewPending(
+            ForAdjust."Forecast Summary Code",ForAdjust."Starting Date",
+            ForAdjust."Location Code",ForAdjust."Item No.",ForAdjust."Variant Code");
+        UNTIL ForSumEnt.NEXT = 0;
+      ForSumEnt.MODIFYALL("Adjust Pending",FALSE);
+      ProgWindow.CLOSE;
+      MESSAGE(Text012);
+    END;
+
+    PROCEDURE RollBackAdjstment@1240030003(CurrForSumView@1240030000 : Record 14000585);
+    VAR
+      Location@1240030001 : Record 14;
+      LocInvPeriod@1240030002 : Record 14000553;
+      LocForcAdjust@1240030003 : Record 14002707;
+    BEGIN
+      IF CurrForSumView."Last Version No." = 0 THEN
+        ERROR(Text011);
+
+      IF NOT CONFIRM(STRSUBSTNO(Text008,CurrForSumView."Last Version No.")) THEN
+        EXIT;
+
+      Location.RESET;
+      Location.SETRANGE("Enable Adv. Forecasting",TRUE);
+      IF Location.FIND('-') THEN
+        REPEAT
+          LocInvPeriod.RESET;
+          LocInvPeriod.SETCURRENTKEY("Location Code","Starting Date","Period End Closed");
+          LocInvPeriod.SETRANGE("Location Code",Location.Code);
+          LocInvPeriod.SETRANGE("Period End Closed",TRUE);
+          IF LocInvPeriod.FIND('+') THEN BEGIN
+            LocForcAdjust.RESET;
+            LocForcAdjust.SETCURRENTKEY("Forecast Summary Code","Location Code","Starting Date");
+            LocForcAdjust.SETRANGE("Forecast Summary Code",CurrForSumView."Forecast Summary Code");
+            LocForcAdjust.SETRANGE("Location Code",LocInvPeriod."Location Code");
+            LocForcAdjust.SETFILTER("Starting Date",'>%1',LocInvPeriod."Ending Date");
+            LocForcAdjust.SETRANGE("Version No.",CurrForSumView."Last Version No.");
+            IF LocForcAdjust.FIND('-') THEN
+              REPEAT
+                SetReviewPending(
+                  LocForcAdjust."Forecast Summary Code",LocForcAdjust."Starting Date",
+                  LocForcAdjust."Location Code",LocForcAdjust."Item No.",LocForcAdjust."Variant Code");
+              UNTIL LocForcAdjust.NEXT = 0;
+            IF LocForcAdjust.FIND('-') THEN
+              LocForcAdjust.DELETEALL;
+          END;
+        UNTIL Location.NEXT = 0;
+
+      ForSummaryView.RESET;
+      ForSummaryView.GET(CurrForSumView."Forecast Summary Code");
+      ForSummaryView."Last Version No." := ForSummaryView."Last Version No." - 1;
+      ForSummaryView."Re-Calculate Required" := TRUE;
+      ForSummaryView.MODIFY;
+    END;
+
+    PROCEDURE RemoveAllAdjustments@1240030004(CurrForSumView@1240030000 : Record 14000585);
+    BEGIN
+      IF NOT CONFIRM(
+        STRSUBSTNO(Text013,CurrForSumView."Forecast Summary Code"),FALSE)
+      THEN
+        EXIT;
+
+      RemoveSummaryAdj(CurrForSumView);
+
+      ForSummaryView.GET(CurrForSumView."Forecast Summary Code");
+      ForSummaryView."Re-Calculate Required" := TRUE;
+      ForSummaryView."Last Version No." := 0;
+      ForSummaryView.MODIFY;
+    END;
+
+    PROCEDURE SetReviewPending@1240030006(CurrForcSummaryCode@1240030000 : Code[10];CurrStartingDate@1240030004 : Date;CurrLocationCode@1240030001 : Code[10];CurrItemNo@1240030002 : Code[50];CurrVariantCode@1240030003 : Code[10]);
+    BEGIN
+      ForSumEnt2.RESET;
+      ForSumEnt2.SETCURRENTKEY("Location Code","Item No.","Variant Code");
+      ForSumEnt2.SETRANGE("Location Code",CurrLocationCode);
+      ForSumEnt2.SETRANGE("Item No.",CurrItemNo);
+      ForSumEnt2.SETRANGE("Variant Code",CurrVariantCode);
+      ForSumEnt2.SETFILTER("Forecast View Code",'<>%1',CurrForcSummaryCode);
+      ForSumEnt2.SETRANGE("Starting Date",CurrStartingDate);
+      IF ForSumEnt2.FIND('-') THEN
+        REPEAT
+          IF NOT ForSumEnt2."Review Pending" THEN BEGIN
+            ForSumEnt2."Review Pending" := TRUE;
+            ForSumEnt2.MODIFY;
+          END;
+        UNTIL ForSumEnt2.NEXT = 0;
+    END;
+
+    PROCEDURE RemoveSummaryAdj@1240030005(CurrForSumView@1240030000 : Record 14000585);
+    VAR
+      Location@1240030003 : Record 14;
+      LocInvPeriod@1240030002 : Record 14000553;
+      LocForcAdjust@1240030001 : Record 14002707;
+    BEGIN
+      Location.RESET;
+      Location.SETRANGE("Enable Adv. Forecasting",TRUE);
+      IF Location.FIND('-') THEN
+        REPEAT
+          LocInvPeriod.RESET;
+          LocInvPeriod.SETCURRENTKEY("Location Code","Starting Date","Period End Closed");
+          LocInvPeriod.SETRANGE("Location Code",Location.Code);
+          LocInvPeriod.SETRANGE("Period End Closed",TRUE);
+          IF LocInvPeriod.FIND('+') THEN BEGIN
+            LocForcAdjust.RESET;
+            LocForcAdjust.SETCURRENTKEY("Forecast Summary Code","Location Code","Starting Date");
+            LocForcAdjust.SETRANGE("Forecast Summary Code",CurrForSumView."Forecast Summary Code");
+            LocForcAdjust.SETRANGE("Location Code",LocInvPeriod."Location Code");
+            LocForcAdjust.SETFILTER("Starting Date",'>%1',LocInvPeriod."Ending Date");
+            IF LocForcAdjust.FIND('-') THEN
+              REPEAT
+                SetReviewPending(
+                  LocForcAdjust."Forecast Summary Code",LocForcAdjust."Starting Date",
+                  LocForcAdjust."Location Code",LocForcAdjust."Item No.",LocForcAdjust."Variant Code");
+              UNTIL LocForcAdjust.NEXT = 0;
+            IF LocForcAdjust.FIND('-') THEN
+              LocForcAdjust.DELETEALL;
+          END;
+        UNTIL Location.NEXT = 0;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

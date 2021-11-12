@@ -1,0 +1,233 @@
+OBJECT Table 7860 MS- PayPal Standard Account
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/22/17;
+    Time=12:00:00 PM;
+    Version List=NAVW111.00;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 2000000199=rimd;
+    OnModify=BEGIN
+               UpdateWebhookOnModify;
+             END;
+
+    OnDelete=BEGIN
+               DeleteWebhookSubscription("Account ID");
+             END;
+
+    CaptionML=[ENU=MS- PayPal Standard Account;
+               ESM=MS - Cuenta de PayPal Standard;
+               FRC=MS - Compte PayPal Standard;
+               ENC=MS- PayPal Standard Account];
+  }
+  FIELDS
+  {
+    { 1   ;   ;Primary Key         ;Integer       ;AutoIncrement=Yes;
+                                                   CaptionML=[ENU=Primary Key;
+                                                              ESM=Clave principal;
+                                                              FRC=Cl‚ primaire;
+                                                              ENC=Primary Key] }
+    { 2   ;   ;Name                ;Text250       ;CaptionML=[ENU=Name;
+                                                              ESM=Nombre;
+                                                              FRC=Nom;
+                                                              ENC=Name];
+                                                   NotBlank=Yes }
+    { 3   ;   ;Description         ;Text250       ;CaptionML=[ENU=Description;
+                                                              ESM=Descripci¢n;
+                                                              FRC=Description;
+                                                              ENC=Description];
+                                                   NotBlank=Yes }
+    { 4   ;   ;Enabled             ;Boolean       ;OnValidate=BEGIN
+                                                                VerifyAccountID;
+                                                              END;
+
+                                                   CaptionML=[ENU=Enabled;
+                                                              ESM=Habilitado;
+                                                              FRC=Activ‚;
+                                                              ENC=Enabled] }
+    { 5   ;   ;Always Include on Documents;Boolean;OnValidate=VAR
+                                                                MSPayPalStandardAccount@1000 : Record 7860;
+                                                                SalesHeader@1001 : Record 36;
+                                                              BEGIN
+                                                                IF NOT "Always Include on Documents" THEN
+                                                                  EXIT;
+
+                                                                MSPayPalStandardAccount.SETRANGE("Always Include on Documents",TRUE);
+                                                                MSPayPalStandardAccount.SETFILTER("Primary Key",'<>%1',"Primary Key");
+                                                                MSPayPalStandardAccount.MODIFYALL("Always Include on Documents",FALSE,TRUE);
+
+                                                                IF NOT GUIALLOWED THEN
+                                                                  EXIT;
+
+                                                                SalesHeader.SETFILTER("Document Type",STRSUBSTNO('%1|%2|%3',
+                                                                    SalesHeader."Document Type"::Invoice,
+                                                                    SalesHeader."Document Type"::Order,
+                                                                    SalesHeader."Document Type"::Quote));
+
+                                                                IF SalesHeader.FINDFIRST AND NOT HideDialogs THEN
+                                                                  MESSAGE(UpdateOpenInvoicesManuallyMsg);
+                                                              END;
+
+                                                   CaptionML=[ENU=Always Include on Documents;
+                                                              ESM=Incluir siempre en documentos;
+                                                              FRC=Toujours inclure dans les documents;
+                                                              ENC=Always Include on Documents] }
+    { 8   ;   ;Terms of Service    ;Text250       ;ExtendedDatatype=URL;
+                                                   CaptionML=[ENU=Terms of Service;
+                                                              ESM=Condiciones del servicio;
+                                                              FRC=Conditions d'utilisation;
+                                                              ENC=Terms of Service] }
+    { 10  ;   ;Account ID          ;Text250       ;OnValidate=BEGIN
+                                                                VerifyAccountID;
+                                                                "Account ID" := LOWERCASE("Account ID");
+                                                              END;
+
+                                                   CaptionML=[ENU=Account ID;
+                                                              ESM=Id. de cuenta;
+                                                              FRC=Code compte;
+                                                              ENC=Account ID] }
+    { 12  ;   ;Target URL          ;BLOB          ;CaptionML=[ENU=Target URL;
+                                                              ESM=URL de destino;
+                                                              FRC=URL cible;
+                                                              ENC=Target URL];
+                                                   SubType=Bitmap }
+  }
+  KEYS
+  {
+    {    ;Primary Key                             ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      AccountIDCannotBeBlankErr@1000 : TextConst 'ENU=You must specify an account ID for this payment service.;ESM=Debe especificar un id. de cuenta para este servicio de pago.;FRC=Vous devez sp‚cifier un code compte pour ce service de paiement.;ENC=You must specify an account ID for this payment service.';
+      UpdateOpenInvoicesManuallyMsg@1001 : TextConst 'ENU=A link for the PayPal payment service will be included for new sales documents. To add it to existing sales documents, you must manually select it in the Payment Service field on the sales document.;ESM=Se incluir  un v¡nculo del servicio de pago de PayPal para los nuevos documentos de venta. Para agregarlo a los documentos de venta existentes, debe seleccionarlo manualmente en el campo Servicio de pago del documento de venta.;FRC=Un lien pour le service de paiement PayPal sera inclus pour les nouveaux documents vente. Pour l''ajouter … des documents vente existants, vous devez le s‚lectionner manuellement dans le champ Service de paiement sur le document vente.;ENC=A link for the PayPal payment service will be included for new sales documents. To add it to existing sales documents, you must manually select it in the Payment Service field on the sales document.';
+      HideDialogs@1002 : Boolean;
+
+    PROCEDURE GetTargetURL@10() : Text;
+    VAR
+      InStream@1000 : InStream;
+      TargetURL@1002 : Text;
+    BEGIN
+      TargetURL := '';
+      CALCFIELDS("Target URL");
+      IF "Target URL".HASVALUE THEN BEGIN
+        "Target URL".CREATEINSTREAM(InStream);
+        InStream.READ(TargetURL);
+      END;
+      EXIT(TargetURL);
+    END;
+
+    PROCEDURE SetTargetURL@20(TargetURL@1000 : Text);
+    VAR
+      WebRequestHelper@1002 : Codeunit 1299;
+      OutStream@1001 : OutStream;
+    BEGIN
+      WebRequestHelper.IsValidUri(TargetURL);
+      WebRequestHelper.IsHttpUrl(TargetURL);
+      WebRequestHelper.IsSecureHttpUrl(TargetURL);
+
+      "Target URL".CREATEOUTSTREAM(OutStream);
+      OutStream.WRITE(TargetURL);
+      MODIFY;
+    END;
+
+    LOCAL PROCEDURE VerifyAccountID@2();
+    BEGIN
+      IF Enabled THEN
+        IF "Account ID" = '' THEN
+          IF HideDialogs THEN
+            "Account ID" := ''
+          ELSE
+            ERROR(AccountIDCannotBeBlankErr);
+    END;
+
+    PROCEDURE HideAllDialogs@1();
+    BEGIN
+      HideDialogs := TRUE;
+    END;
+
+    LOCAL PROCEDURE UpdateWebhookOnModify@6();
+    VAR
+      PrevMSPayPalStandardAccount@1001 : Record 7860;
+    BEGIN
+      PrevMSPayPalStandardAccount.GET("Primary Key");
+
+      IF PrevMSPayPalStandardAccount."Account ID" <> "Account ID" THEN
+        DeleteWebhookSubscription(PrevMSPayPalStandardAccount."Account ID");
+
+      IF "Account ID" <> '' THEN
+        IF Enabled THEN
+          RegisterWebhookListener("Account ID")
+        ELSE
+          DeleteWebhookSubscription("Account ID");
+    END;
+
+    LOCAL PROCEDURE RegisterWebhookListener@3(AccountID@1002 : Text[250]);
+    VAR
+      WebhookSubscription@1006 : Record 2000000199;
+      MarketingSetup@1003 : Record 5079;
+      WebhookManagement@1001 : Codeunit 5377;
+      EndpointUri@1007 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Uri";
+      WebHooksAdapterUri@1000 : Text[250];
+    BEGIN
+      IF NOT WebhookManagement.IsCurrentClientTypeAllowed THEN
+        EXIT;
+
+      AccountID := LOWERCASE(AccountID);
+      WebhookSubscription.SETRANGE("Subscription ID",AccountID);
+
+      WebHooksAdapterUri := LOWERCASE(WebhookManagement.GetNotificationUrl);
+      EndpointUri := EndpointUri.Uri(WebHooksAdapterUri);
+
+      IF WebhookManagement.FindWebhookSubscriptionMatchingEndPoint(WebhookSubscription,EndpointUri,0,0) THEN
+        EXIT; // subscription already exists
+
+      IF STRLEN(AccountID) > MAXSTRLEN(WebhookSubscription."Subscription ID") THEN
+        EXIT;
+
+      WebhookSubscription."Subscription ID" :=
+        COPYSTR(AccountID,1,MAXSTRLEN(WebhookSubscription."Subscription ID"));
+      WebhookSubscription.Endpoint := WebHooksAdapterUri;
+      WebhookSubscription."Created By" := GetBaseURL;
+      WebhookSubscription."Company Name" := COMPANYNAME;
+      WebhookSubscription."Run Notification As" := MarketingSetup.TrySetWebhookSubscriptionUserAsCurrentUser;
+      IF WebhookSubscription.INSERT THEN;
+    END;
+
+    LOCAL PROCEDURE DeleteWebhookSubscription@5(AccountID@1000 : Text[250]);
+    VAR
+      WebhookSubscription@1001 : Record 2000000199;
+      WebhookManagement@1002 : Codeunit 5377;
+      EndpointUri@1004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Uri";
+      WebHooksAdapterUri@1003 : Text[250];
+    BEGIN
+      WebhookSubscription.SETRANGE("Subscription ID",LOWERCASE(AccountID));
+      WebHooksAdapterUri := LOWERCASE(WebhookManagement.GetNotificationUrl);
+      EndpointUri := EndpointUri.Uri(WebHooksAdapterUri);
+      IF WebhookManagement.FindWebhookSubscriptionMatchingEndPoint(WebhookSubscription,EndpointUri,0,0) THEN
+        WebhookSubscription.DELETE(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetBaseURL@7() PayPalBaseUrl : Text[50];
+    VAR
+      PayPalUrl@1001 : Text;
+      ParametersStartPosition@1002 : Integer;
+    BEGIN
+      PayPalUrl := GetTargetURL;
+      ParametersStartPosition := STRPOS(PayPalUrl,'?');
+      IF ParametersStartPosition > 0 THEN
+        PayPalBaseUrl := COPYSTR(DELSTR(PayPalUrl,ParametersStartPosition),1,MAXSTRLEN(PayPalBaseUrl))
+      ELSE
+        PayPalBaseUrl := COPYSTR(PayPalUrl,1,MAXSTRLEN(PayPalBaseUrl));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

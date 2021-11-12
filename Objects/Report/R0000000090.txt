@@ -1,0 +1,498 @@
+OBJECT Report 90 Import Consolidation from DB
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/30/19;
+    Time=12:00:00 PM;
+    Version List=NAVW111.00.00.29745;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Consolidation Report;
+               ESM=Informe de consolidaci¢n;
+               FRC=Rapport de consolidation;
+               ENC=Consolidation Report];
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  DimSelectionBuf.CompareDimText(
+                    3,REPORT::"Import Consolidation from DB",'',ColumnDim,Text020);
+                END;
+
+    OnPostReport=BEGIN
+                   COMMIT;
+                   REPORT.RUN(REPORT::"Consolidated Trial Balance");
+                 END;
+
+  }
+  DATASET
+  {
+    { 9370;    ;DataItem;                    ;
+               DataItemTable=Table220;
+               DataItemTableView=SORTING(Code)
+                                 WHERE(Consolidate=CONST(Yes));
+               OnPreDataItem=BEGIN
+                               CheckConsolidDates(ConsolidStartDate,ConsolidEndDate);
+
+                               IF GLDocNo = '' THEN
+                                 ERROR(Text000);
+
+                               Window.OPEN(
+                                 Text001 +
+                                 Text002 +
+                                 Text003 +
+                                 Text004);
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  Window.UPDATE(1,Code);
+                                  Window.UPDATE(2,'');
+
+                                  CLEAR(BusUnitConsolidate);
+                                  BusUnitConsolidate.SetDocNo(GLDocNo);
+
+                                  TESTFIELD("Company Name");
+                                  "G/L Entry".CHANGECOMPANY("Company Name");
+                                  "Dimension Set Entry".CHANGECOMPANY("Company Name");
+                                  "G/L Account".CHANGECOMPANY("Company Name");
+                                  "Currency Exchange Rate".CHANGECOMPANY("Company Name");
+                                  Dim.CHANGECOMPANY("Company Name");
+                                  DimVal.CHANGECOMPANY("Company Name");
+
+                                  SelectedDim.SETRANGE("User ID",USERID);
+                                  SelectedDim.SETRANGE("Object Type",3);
+                                  SelectedDim.SETRANGE("Object ID",REPORT::"Import Consolidation from DB");
+                                  BusUnitConsolidate.SetSelectedDim(SelectedDim);
+
+                                  TempDim.RESET;
+                                  TempDim.DELETEALL;
+                                  IF Dim.FIND('-') THEN BEGIN
+                                    REPEAT
+                                      TempDim.INIT;
+                                      TempDim := Dim;
+                                      TempDim.INSERT;
+                                    UNTIL Dim.NEXT = 0;
+                                  END;
+                                  TempDim.RESET;
+                                  TempDimVal.RESET;
+                                  TempDimVal.DELETEALL;
+                                  IF DimVal.FIND('-') THEN BEGIN
+                                    REPEAT
+                                      TempDimVal.INIT;
+                                      TempDimVal := DimVal;
+                                      TempDimVal.INSERT;
+                                    UNTIL DimVal.NEXT = 0;
+                                  END;
+
+                                  AdditionalCurrencyCode := '';
+                                  SubsidCurrencyCode := '';
+                                END;
+
+               ReqFilterFields=Code }
+
+    { 6710;1   ;DataItem;                    ;
+               DataItemTable=Table15;
+               DataItemTableView=SORTING(No.)
+                                 WHERE(Account Type=CONST(Posting));
+               OnAfterGetRecord=BEGIN
+                                  Window.UPDATE(2,"No.");
+                                  Window.UPDATE(3,'');
+
+                                  BusUnitConsolidate.InsertGLAccount("G/L Account");
+                                END;
+                                 }
+
+    { 7069;2   ;DataItem;                    ;
+               DataItemTable=Table17;
+               DataItemTableView=SORTING(G/L Account No.,Posting Date);
+               OnPreDataItem=BEGIN
+                               SETRANGE("Posting Date",ConsolidStartDate,ConsolidEndDate);
+
+                               IF GETRANGEMIN("Posting Date") = NORMALDATE(GETRANGEMIN("Posting Date")) THEN
+                                 CheckClosingPostings("G/L Account"."No.",GETRANGEMIN("Posting Date"),GETRANGEMAX("Posting Date"));
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  GLEntryNo := BusUnitConsolidate.InsertGLEntry("G/L Entry");
+                                END;
+
+               DataItemLink=G/L Account No.=FIELD(No.) }
+
+    { 4925;3   ;DataItem;                    ;
+               DataItemTable=Table480;
+               DataItemTableView=SORTING(Dimension Set ID,Dimension Code);
+               OnPreDataItem=VAR
+                               BusUnitDim@1002 : Record 348;
+                               DimMgt@1000 : Codeunit 408;
+                               ColumnDimFilter@1001 : Text;
+                             BEGIN
+                               IF ColumnDim <> '' THEN BEGIN
+                                 ColumnDimFilter := CONVERTSTR(ColumnDim,';','|');
+                                 BusUnitDim.CHANGECOMPANY("Business Unit"."Company Name");
+                                 SETFILTER("Dimension Code",Codeunit408EventSubscriber.Cu408_GetConsolidatedDimFilterByDimFilter(BusUnitDim,ColumnDimFilter)); //TPZ2830
+                               END;
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  TempDimBuf@1000 : TEMPORARY Record 360;
+                                BEGIN
+                                  TempDimBuf.INIT;
+                                  TempDimBuf."Table ID" := DATABASE::"G/L Entry";
+                                  TempDimBuf."Entry No." := GLEntryNo;
+                                  IF TempDim.GET("Dimension Code") AND
+                                     (TempDim."Consolidation Code" <> '')
+                                  THEN
+                                    TempDimBuf."Dimension Code" := TempDim."Consolidation Code"
+                                  ELSE
+                                    TempDimBuf."Dimension Code" := "Dimension Code";
+                                  IF TempDimVal.GET("Dimension Code","Dimension Value Code") AND
+                                     (TempDimVal."Consolidation Code" <> '')
+                                  THEN
+                                    TempDimBuf."Dimension Value Code" := TempDimVal."Consolidation Code"
+                                  ELSE
+                                    TempDimBuf."Dimension Value Code" := "Dimension Value Code";
+                                  BusUnitConsolidate.InsertEntryDim(TempDimBuf,TempDimBuf."Entry No.");
+                                END;
+
+               DataItemLink=Dimension Set ID=FIELD(Dimension Set ID) }
+
+    { 8685;1   ;DataItem;                    ;
+               DataItemTable=Table330;
+               DataItemTableView=SORTING(Currency Code,Starting Date);
+               OnPreDataItem=VAR
+                               SubsidGLSetup@1000 : Record 98;
+                             BEGIN
+                               IF "Business Unit"."Currency Code" = '' THEN
+                                 CurrReport.BREAK;
+
+                               SubsidGLSetup.CHANGECOMPANY("Business Unit"."Company Name");
+                               SubsidGLSetup.GET;
+                               AdditionalCurrencyCode := SubsidGLSetup."Additional Reporting Currency";
+                               IF SubsidGLSetup."LCY Code" <> '' THEN
+                                 SubsidCurrencyCode := SubsidGLSetup."LCY Code"
+                               ELSE
+                                 SubsidCurrencyCode := "Business Unit"."Currency Code";
+
+                               IF (ParentCurrencyCode = '') AND (AdditionalCurrencyCode = '') THEN
+                                 CurrReport.BREAK;
+
+                               SETFILTER("Currency Code",'%1|%2',ParentCurrencyCode,AdditionalCurrencyCode);
+                               SETRANGE("Starting Date",0D,ConsolidEndDate);
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  BusUnitConsolidate.InsertExchRate("Currency Exchange Rate");
+                                END;
+                                 }
+
+    { 4528;1   ;DataItem;DoTheConsolidation  ;
+               DataItemTable=Table2000000026;
+               DataItemTableView=SORTING(Number)
+                                 WHERE(Number=CONST(1));
+               OnAfterGetRecord=BEGIN
+                                  BusUnitConsolidate.SetGlobals(
+                                    '','',"Business Unit"."Company Name",
+                                    SubsidCurrencyCode,AdditionalCurrencyCode,ParentCurrencyCode,
+                                    0,ConsolidStartDate,ConsolidEndDate);
+                                  BusUnitConsolidate.UpdateGLEntryDimSetID;
+                                  BusUnitConsolidate.RUN("Business Unit");
+                                END;
+                                 }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnOpenPage=BEGIN
+                   IF ConsolidStartDate = 0D THEN
+                     ConsolidStartDate := WORKDATE;
+                   IF ConsolidEndDate = 0D THEN
+                     ConsolidEndDate := WORKDATE;
+
+                   IF ParentCurrencyCode = '' THEN BEGIN
+                     GLSetup.GET;
+                     ParentCurrencyCode := GLSetup."LCY Code";
+                   END;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESM=Opciones;
+                             FRC=Options;
+                             ENC=Options] }
+
+      { 21  ;2   ;Group     ;
+                  CaptionML=[ENU=Consolidation Period;
+                             ESM=Periodo consolidaci¢n;
+                             FRC=P‚riode de consolidation;
+                             ENC=Consolidation Period] }
+
+      { 1   ;3   ;Field     ;
+                  Name=StartingDate;
+                  CaptionML=[ENU=Starting Date;
+                             ESM=Fecha inicial;
+                             FRC=Date d‚but;
+                             ENC=Starting Date];
+                  ToolTipML=[ENU=Specifies the starting date.;
+                             ESM=Especifica la fecha inicial.;
+                             FRC=Sp‚cifie la date d‚but.;
+                             ENC=Specifies the starting date.];
+                  ApplicationArea=#Suite;
+                  ClosingDates=Yes;
+                  SourceExpr=ConsolidStartDate }
+
+      { 2   ;3   ;Field     ;
+                  Name=EndingDate;
+                  CaptionML=[ENU=Ending Date;
+                             ESM=Fecha final;
+                             FRC=Date fin;
+                             ENC=Ending Date];
+                  ToolTipML=[ENU=Specifies the ending date.;
+                             ESM=Especifica la fecha final.;
+                             FRC=Sp‚cifie la date de fin.;
+                             ENC=Specifies the ending date.];
+                  ApplicationArea=#Suite;
+                  ClosingDates=Yes;
+                  SourceExpr=ConsolidEndDate }
+
+      { 4   ;2   ;Group     ;
+                  CaptionML=[ENU=Copy Field Contents;
+                             ESM=Copiar contenidos;
+                             FRC=Copier les champs;
+                             ENC=Copy Field Contents] }
+
+      { 7   ;3   ;Field     ;
+                  CaptionML=[ENU=Copy Dimensions;
+                             ESM=Copiar dimensiones;
+                             FRC=Copier axes;
+                             ENC=Copy Dimensions];
+                  ToolTipML=[ENU=Specifies if you want the entries to be classified by dimensions when they are transferred.;
+                             ESM=Especifica si desea que los movimientos se clasifiquen por dimensiones cuando se transfieran.;
+                             FRC=Sp‚cifie si vous souhaitez que les ‚critures soient class‚es par axe analytique lors de leur transfert.;
+                             ENC=Specifies if you want the entries to be classified by dimensions when they are transferred.];
+                  ApplicationArea=#Suite;
+                  SourceExpr=ColumnDim;
+                  Editable=FALSE;
+                  OnAssistEdit=BEGIN
+                                 DimSelectionBuf.SetDimSelectionMultiple(3,REPORT::"Import Consolidation from DB",ColumnDim);
+                               END;
+                                }
+
+      { 6   ;2   ;Field     ;
+                  Name=DocumentNo;
+                  CaptionML=[ENU=Document No.;
+                             ESM=N§ documento;
+                             FRC=Nø document;
+                             ENC=Document No.];
+                  ToolTipML=[ENU=Specifies the G/L document number.;
+                             ESM=Especifica el n£mero de documento C/G.;
+                             FRC=Sp‚cifie le num‚ro du document grand livre.;
+                             ENC=Specifies the G/L document number.];
+                  ApplicationArea=#Suite;
+                  SourceExpr=GLDocNo }
+
+      { 3   ;2   ;Field     ;
+                  CaptionML=[ENU=Parent Currency Code;
+                             ESM=C¢d. divisa ppal.;
+                             FRC=Code devise parent;
+                             ENC=Parent Currency Code];
+                  ToolTipML=[ENU=Specifies the parent currency code.;
+                             ESM=Especifica el c¢digo de divisa principal;
+                             FRC=Sp‚cifie le code devise parent.;
+                             ENC=Specifies the parent currency code.];
+                  ApplicationArea=#Suite;
+                  SourceExpr=ParentCurrencyCode }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text000@1000 : TextConst 'ENU=Enter a document number.;ESM=Introduzca un n£mero de documento.;FRC=Entrez un num‚ro de document.;ENC=Enter a document number.';
+      Text001@1001 : TextConst 'ENU=Importing Subsidiary Data...\\;ESM=Importando datos relacionados...\\;FRC=Importation des donn‚es filiales...\\;ENC=Importing Subsidiary Data...\\';
+      Text002@1002 : TextConst 'ENU=Business Unit Code   #1##########\;ESM=C¢digo empresa       #1##########\;FRC=Code unit‚ fonctionnelle    #1##########\;ENC=Business Unit Code   #1##########\';
+      Text003@1003 : TextConst 'ENU=G/L Account No.      #2##########\;ESM=N£mero cuenta        #2##########\;FRC=Nø compte GL                #2##########\;ENC=G/L Account No.      #2##########\';
+      Text004@1004 : TextConst 'ENU=Date                 #3######;ESM=Fecha                #3######;FRC=Date                        #3######;ENC=Date                 #3######';
+      Text006@1005 : TextConst 'ENU=Enter the starting date for the consolidation period.;ESM=Introduzca la fecha inicial del periodo de consolidaci¢n.;FRC=Entrez la date de d‚but de la p‚riode de consolidation.;ENC=Enter the starting date for the consolidation period.';
+      Text007@1006 : TextConst 'ENU=Enter the ending date for the consolidation period.;ESM=Introduzca la fecha final del periodo de consolidaci¢n.;FRC=Entrez la date de fin de la p‚riode de consolidation.;ENC=Enter the ending date for the consolidation period.';
+      Text020@1018 : TextConst 'ENU=Copy Dimensions;ESM=Copiar dimensiones;FRC=Copier dimensions;ENC=Copy Dimensions';
+      Text022@1020 : TextConst 'ENU=A %1 with %2 on a closing date (%3) was found while consolidating nonclosing entries (%4 %5).;ESM=Un %1 con %2 en fecha cerrada (%3) fue encontrado mientras consolid. movs. no cerrados (%4 %5).;FRC=Une %1 avec une %2 sur une date de cl“ture (%3) a ‚t‚ trouv‚e pendant la consolidation des ‚critures hors cl“ture (%4 %5).;ENC=A %1 with %2 on a closing date (%3) was found while consolidating nonclosing entries (%4 %5).';
+      Text023@1021 : TextConst 'ENU=Do you want to consolidate in the period from %1 to %2?;ESM=¨Quiere consolidar el periodo de %1 a %2?;FRC=Souhaitez-vous consolider dans la p‚riode du %1 au %2 ?;ENC=Do you want to consolidate in the period from %1 to %2?';
+      Text024@1022 : TextConst 'ENU=There is no %1 to consolidate.;ESM=No hay %1 para consolidar.;FRC=Il n''y a pas de %1 … consolider.;ENC=There is no %1 to consolidate.';
+      Text025@1023 : TextConst 'ENU=The consolidation period %1 .. %2 is not within the fiscal year of one or more of the subsidiaries.\;ESM=El periodo de consolidaci¢n %1 .. %2 no corresponde al ejercicio de una o m s de las subsidiarias.\;FRC=La p‚riode de consolidation %1 .. %2 n''est pas incluse dans l''exercice comptable d''une ou de plusieurs filiale(s).\;ENC=The consolidation period %1 .. %2 is not within the fiscal year of one or more of the subsidiaries.\';
+      Text026@1024 : TextConst 'ENU=Do you want to proceed with the consolidation?;ESM=¨Confirma que desea proceder a la consolidaci¢n?;FRC=Souhaitez-vous poursuivre la consolidation ?;ENC=Do you want to proceed with the consolidation?';
+      Text028@1025 : TextConst 'ENU=You must create a new fiscal year in the consolidated company.;ESM=Debe crear un ejercicio nuevo en la empresa consolidada.;FRC=Vous devez cr‚er un nouvel exercice financier dans la compagnie consolid‚e.;ENC=You must create a new fiscal year in the consolidated company.';
+      Text029@1026 : TextConst 'ENU=The consolidation period %1 .. %2 is not within the fiscal year %3 .. %4 of the consolidated company %5.\;ESM=El periodo de consolidaci¢n %1 .. %2 no corresponde al ejercicio %3 .. %4 de la empresa consolidada %5.\;FRC=La p‚riode de consolidation %1 .. %2 n''est pas incluse dans l''exercice comptable %3 .. %4 de la soci‚t‚ consolid‚e %5.\;ENC=The consolidation period %1 .. %2 is not within the fiscal year %3 .. %4 of the consolidated company %5.\';
+      Text030@1027 : TextConst 'ENU=When using closing dates, the starting and ending dates must be the same.;ESM=Usando fech. cerradas, el principio y final de las fech. debe ser el mismo.;FRC=Lorsque vous utilisez des dates de fermeture, la date de d‚but et la date de fin doivent ˆtre identiques.;ENC=When using closing dates, the starting and ending dates must be the same.';
+      SelectedDim@1034 : Record 369;
+      Dim@1036 : Record 348;
+      DimVal@1037 : Record 349;
+      TempDim@1038 : TEMPORARY Record 348;
+      TempDimVal@1039 : TEMPORARY Record 349;
+      GLSetup@1043 : Record 98;
+      DimSelectionBuf@1047 : Record 368;
+      BusUnitConsolidate@1073 : Codeunit 432;
+      Window@1050 : Dialog;
+      ConsolidStartDate@1051 : Date;
+      ConsolidEndDate@1052 : Date;
+      GLDocNo@1055 : Code[20];
+      ColumnDim@1068 : Text[250];
+      ParentCurrencyCode@1072 : Code[10];
+      SubsidCurrencyCode@1035 : Code[10];
+      AdditionalCurrencyCode@1040 : Code[10];
+      Text032@1007 : TextConst 'ENU=The %1 is later than the %2 in company %3.;ESM=%1 es posterior al valor de %2 para la compa¤¡a %3.;FRC=%1 est ult‚rieur … %2 dans la soci‚t‚ %3.;ENC=The %1 is later than the %2 in company %3.';
+      GLEntryNo@1008 : Integer;
+      Codeunit408EventSubscriber@1000000000 : Codeunit 51908;
+
+    LOCAL PROCEDURE CheckClosingPostings@5(GLAccNo@1000 : Code[20];StartDate@1001 : Date;EndDate@1002 : Date);
+    VAR
+      GLEntry@1003 : Record 17;
+      AccountingPeriod@1004 : Record 50;
+    BEGIN
+      AccountingPeriod.CHANGECOMPANY("Business Unit"."Company Name");
+      AccountingPeriod.SETCURRENTKEY("New Fiscal Year","Date Locked");
+      AccountingPeriod.SETRANGE("New Fiscal Year",TRUE);
+      AccountingPeriod.SETRANGE("Date Locked",TRUE);
+      AccountingPeriod.SETRANGE("Starting Date",StartDate + 1,EndDate);
+      IF AccountingPeriod.FIND('-') THEN BEGIN
+        GLEntry.CHANGECOMPANY("Business Unit"."Company Name");
+        GLEntry.SETRANGE("G/L Account No.",GLAccNo);
+        REPEAT
+          GLEntry.SETRANGE("Posting Date",CLOSINGDATE(AccountingPeriod."Starting Date" - 1));
+          IF NOT GLEntry.ISEMPTY THEN
+            ERROR(
+              Text022,
+              GLEntry.TABLECAPTION,
+              GLEntry.FIELDCAPTION("Posting Date"),
+              GLEntry.GETFILTER("Posting Date"),
+              GLEntry.FIELDCAPTION("G/L Account No."),
+              GLAccNo);
+        UNTIL AccountingPeriod.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckConsolidDates@9(StartDate@1000 : Date;EndDate@1001 : Date);
+    VAR
+      BusUnit@1002 : Record 220;
+      ConsolPeriodInclInFiscalYears@1003 : Boolean;
+    BEGIN
+      IF StartDate = 0D THEN
+        ERROR(Text006);
+      IF EndDate = 0D THEN
+        ERROR(Text007);
+
+      IF NOT
+         CONFIRM(
+           Text023,
+           FALSE,StartDate,EndDate)
+      THEN
+        CurrReport.BREAK;
+
+      CheckClosingDates(StartDate,EndDate);
+
+      BusUnit.COPYFILTERS("Business Unit");
+      BusUnit.SETRANGE(Consolidate,TRUE);
+      IF NOT BusUnit.FIND('-') THEN
+        ERROR(Text024,BusUnit.TABLECAPTION);
+
+      ConsolPeriodInclInFiscalYears := TRUE;
+      REPEAT
+        IF (StartDate = NORMALDATE(StartDate)) OR (EndDate = NORMALDATE(EndDate)) THEN
+          IF (BusUnit."Starting Date" <> 0D) OR (BusUnit."Ending Date" <> 0D) THEN BEGIN
+            CheckBusUnitsDatesToFiscalYear(BusUnit);
+            ConsolPeriodInclInFiscalYears :=
+              ConsolPeriodInclInFiscalYears AND CheckDatesToBusUnitDates(StartDate,EndDate,BusUnit);
+          END;
+      UNTIL BusUnit.NEXT = 0;
+
+      IF NOT ConsolPeriodInclInFiscalYears THEN
+        IF NOT CONFIRM(
+             Text025 +
+             Text026,
+             FALSE,StartDate,EndDate)
+        THEN
+          CurrReport.BREAK;
+
+      CheckDatesToFiscalYear(StartDate,EndDate);
+    END;
+
+    LOCAL PROCEDURE CheckDatesToFiscalYear@17(StartDate@1000 : Date;EndDate@1001 : Date);
+    VAR
+      AccountingPeriod@1002 : Record 50;
+      FiscalYearStartDate@1003 : Date;
+      FiscalYearEndDate@1004 : Date;
+      ConsolPeriodInclInFiscalYear@1005 : Boolean;
+    BEGIN
+      ConsolPeriodInclInFiscalYear := TRUE;
+
+      AccountingPeriod.RESET;
+      AccountingPeriod.SETRANGE(Closed,FALSE);
+      AccountingPeriod.SETRANGE("New Fiscal Year",TRUE);
+      IF AccountingPeriod.FIND('-') THEN BEGIN
+        FiscalYearStartDate := AccountingPeriod."Starting Date";
+        IF AccountingPeriod.FIND('>') THEN
+          FiscalYearEndDate := CALCDATE('<-1D>',AccountingPeriod."Starting Date")
+        ELSE
+          ERROR(Text028);
+
+        ConsolPeriodInclInFiscalYear := (StartDate >= FiscalYearStartDate) AND (EndDate <= FiscalYearEndDate);
+
+        IF NOT ConsolPeriodInclInFiscalYear THEN
+          IF NOT CONFIRM(
+               Text029 +
+               Text026,
+               FALSE,StartDate,EndDate,FiscalYearStartDate,FiscalYearEndDate,COMPANYNAME)
+          THEN
+            CurrReport.BREAK;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckDatesToBusUnitDates@13(StartDate@1000 : Date;EndDate@1001 : Date;BusUnit@1002 : Record 220) : Boolean;
+    VAR
+      ConsolPeriodInclInFiscalYear@1003 : Boolean;
+    BEGIN
+      ConsolPeriodInclInFiscalYear := (StartDate >= BusUnit."Starting Date") AND (EndDate <= BusUnit."Ending Date");
+      EXIT(ConsolPeriodInclInFiscalYear);
+    END;
+
+    LOCAL PROCEDURE CheckClosingDates@20(StartDate@1000 : Date;EndDate@1001 : Date);
+    BEGIN
+      IF (StartDate = CLOSINGDATE(StartDate)) OR
+         (EndDate = CLOSINGDATE(EndDate))
+      THEN BEGIN
+        IF StartDate <> EndDate THEN
+          ERROR(Text030);
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckBusUnitsDatesToFiscalYear@8(VAR BusUnit@1000 : Record 220);
+    BEGIN
+      WITH BusUnit DO
+        IF ("Starting Date" <> 0D) OR ("Ending Date" <> 0D) THEN BEGIN
+          TESTFIELD("Starting Date");
+          TESTFIELD("Ending Date");
+          IF "Starting Date" > "Ending Date" THEN
+            ERROR(
+              Text032,FIELDCAPTION("Starting Date"),
+              FIELDCAPTION("Ending Date"),"Company Name");
+        END;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

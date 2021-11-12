@@ -1,0 +1,1999 @@
+OBJECT Codeunit 23044510 WHI Shipping Mgmt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/21/20;
+    Time=[ 4:43:54 PM];
+    Version List=WHI2.4.7684.0;
+  }
+  PROPERTIES
+  {
+    TableNo=23044511;
+    OnRun=VAR
+            liEventID@1000000002 : Integer;
+            ltxtOutputText@1000000001 : BigText;
+            losReturnMessage@1000000000 : OutStream;
+          BEGIN
+            codRegionCode := Rec.getValue('device_culture');
+
+            liEventID := Rec.getEvent();
+            executeEvent(liEventID, Rec, ltxtOutputText);
+            "Extensibility Blob".CREATEOUTSTREAM( losReturnMessage );
+            ltxtOutputText.WRITE(losReturnMessage);
+            MODIFY();
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      cuCommonFuncs@1000000002 : Codeunit 23044501;
+      cuResMgmt@1000000003 : Codeunit 23044514;
+      cuCustomizedFuncs@1000000004 : Codeunit 23044515;
+      iEventID@1000000013 : Integer;
+      cuPrintingMgmt@1000000006 : Codeunit 23044525;
+      cuDataSetTools@1000000011 : Codeunit 23044535;
+      recWHISetup@1000000015 : Record 23044502;
+      cuActivityLogMgt@1000000017 : Codeunit 23044537;
+      cuCommonBase@1000000023 : Codeunit 23044519;
+      cuLPCommon@1000000000 : Codeunit 23044541;
+      cuLPMgmt@1000000001 : Codeunit 23044520;
+      cuTranslationMgmt@1000000022 : Codeunit 23044526;
+      codRegionCode@1000000008 : Code[10];
+
+    PROCEDURE executeEvent@1000000006(piEventID@1000000000 : Integer;VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000002 : BigText);
+    BEGIN
+      iEventID := piEventID;
+
+      recWHISetup.GET();
+
+      CASE piEventID OF
+        70000:  getSalesOrder(ptrecEventParams, pbsOutput);
+        70001:  updateExtDocNumber(ptrecEventParams, pbsOutput);
+        70002:  getDocList(ptrecEventParams, pbsOutput);
+        70003:  updateSalesLine(ptrecEventParams, pbsOutput);
+        70004:  postSalesOrder(ptrecEventParams, pbsOutput);
+        70005:  getWhseShipment(ptrecEventParams, pbsOutput);
+        70006:  updateShipExtDocNumber(ptrecEventParams, pbsOutput);
+        70007:  updateShipmentLine(ptrecEventParams, pbsOutput);
+        70008:  postWhseShipment(ptrecEventParams, pbsOutput);
+        70009:  GetTextScanDocBarcode(ptrecEventParams,pbsOutput);
+        70011:  getTransferOrder(ptrecEventParams, pbsOutput);
+        70012:  updateTransferLine(ptrecEventParams, pbsOutput);
+        70013:  postTransferOrder(ptrecEventParams, pbsOutput);
+        70015:  cuPrintingMgmt.handlePrint( ptrecEventParams, pbsOutput);
+        70016:  cuPrintingMgmt.handlePrint( ptrecEventParams, pbsOutput);
+        70017:  cuPrintingMgmt.handlePrint( ptrecEventParams, pbsOutput);
+        70018:  ERROR(cuTranslationMgmt.getTranslatedString('ERR_KITS_NOT_SUPPORTED', codRegionCode));
+        70019:  EmptyTote(ptrecEventParams, pbsOutput);
+        70020:  ChangeSalesOrderBin(ptrecEventParams, pbsOutput);
+        70021:  ChangeTransferOrderBin(ptrecEventParams, pbsOutput);
+        70025:  addSalesLine(ptrecEventParams, pbsOutput);
+        70050:  processSalesLPScan(ptrecEventParams, pbsOutput);
+        70051:  processShipmentLPScan(ptrecEventParams, pbsOutput);
+        70052:  processTransferLPScan(ptrecEventParams, pbsOutput);
+        70053:  getSalesPrices(ptrecEventParams, pbsOutput);
+        70054:  getCustomers(ptrecEventParams, pbsOutput);
+        70055:  deleteSalesLine(ptrecEventParams, pbsOutput);
+        70056:  createSalesOrder(ptrecEventParams, pbsOutput);
+        70057:  getSuggestedItemTracking(ptrecEventParams, pbsOutput);
+      END;
+    END;
+
+    PROCEDURE getSalesOrder@1000000000(VAR ptrecEventParams@1000000012 : TEMPORARY Record 23044511;VAR pbsOutput@1000000011 : BigText);
+    VAR
+      lcodLocation@1000000002 : Code[10];
+      lcodSalesOrderNumber@1000000003 : Code[20];
+      lrecSalesHeader@1000000005 : Record 36;
+      lrecSalesLine@1000000006 : Record 37;
+      lrecLocation@1000000008 : Record 14;
+      ldnOutput@1000000010 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      ltxtDocumentType@1000000000 : Text[80];
+      liDocumentType@1000000004 : Integer;
+      lrrefHeader@1000000013 : RecordRef;
+      lrrefLine@1000000009 : RecordRef;
+      lbNeedsItemTrackingTable@1000000007 : Boolean;
+      lcuDataSetTools@1000000001 : Codeunit 23044535;
+    BEGIN
+      // Returns a Sales Order document and lines.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodSalesOrderNumber := ptrecEventParams.getDocumentNo();
+
+
+      ltxtDocumentType := ptrecEventParams.getValue('Document Type');
+      IF (ltxtDocumentType = '') THEN BEGIN
+        liDocumentType := lrecSalesHeader."Document Type"::Order;
+      END ELSE BEGIN
+        EVALUATE(liDocumentType, ltxtDocumentType);
+      END;
+
+      IF ( NOT lrecSalesHeader.GET(liDocumentType, lcodSalesOrderNumber) ) THEN BEGIN
+        // assume sales order, but try other documents after
+        lrecSalesHeader.SETRANGE("No.", lcodSalesOrderNumber);
+        lrecSalesHeader.FINDFIRST();
+      END;
+
+      assignSalesOrder(lrecSalesHeader, ptrecEventParams);
+
+      IF lrecLocation.GET(lcodLocation) THEN ;
+
+      ldnOutput := ldnOutput.StringBuilder();
+      lbNeedsItemTrackingTable := ptrecEventParams.getNeedsItemTrackingTable();
+      lrecSalesLine.SETRANGE("Document Type", liDocumentType);
+      lrecSalesLine.SETRANGE("Document No.",lcodSalesOrderNumber);
+      lrecSalesLine.SETRANGE(Type,lrecSalesLine.Type::Item);
+
+      IF( lrecSalesLine.FINDSET(FALSE) ) THEN;
+      // prepare the recordrefs
+      // if lrecSalesHeader record is from *get* method, there is no filters.
+      lrecSalesHeader.SETRECFILTER();
+      lrrefHeader.GETTABLE( lrecSalesHeader );
+      lrrefLine.GETTABLE( lrecSalesLine );
+
+      lcuDataSetTools.SetFormulaCalcEachRow(
+        iEventID,
+        lrrefLine,
+          -1, //
+        DATABASE::Item, // piLookupTable
+        6500, // piLookupField
+        'WHERE (No.=FILTER(''[No.]''))' ); //
+
+      lcuDataSetTools.SetCalculateFields(iEventID,
+                                        lrrefLine,
+                                        lrecSalesLine.FIELDNO("Outstanding Quantity"),
+                                        lrecSalesLine.FIELDNO(Quantity),
+                                        lrecSalesLine.FIELDNO("Qty. to Ship"),
+                                        lrecSalesLine.FIELDNO("Quantity Shipped")
+                                        );
+
+      lcuDataSetTools.BuildHeaderLineDatasetEmbedRes(
+        iEventID,
+        lrrefHeader,
+        lrrefLine,
+        lbNeedsItemTrackingTable,
+        TRUE,
+        ldnOutput );
+
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Sales Header"));
+      ptrecEventParams.setValue('Document No.', lcodSalesOrderNumber);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE updateExtDocNumber@1000000004(VAR ptrecEventParams@1000000007 : TEMPORARY Record 23044511;VAR pbsOutput@1000000006 : BigText);
+    VAR
+      lcodLocation@1000000002 : Code[10];
+      lcodUserName@1000000001 : Code[20];
+      lcodSalesOrderNumber@1000000003 : Code[20];
+      lcodExtDocNumber@1000000005 : Code[35];
+      lrecSalesHeader@1000000004 : Record 36;
+    BEGIN
+      // Updates the Sales Orders 'External Document No.' field.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodExtDocNumber := ptrecEventParams.getValue('action_result');
+      lcodSalesOrderNumber := ptrecEventParams.getDocumentNo();
+
+      IF ( NOT lrecSalesHeader.GET(lrecSalesHeader."Document Type"::Order,lcodSalesOrderNumber) ) THEN BEGIN
+        // assume sales order, but try other documents after
+        lrecSalesHeader.SETRANGE("No.", lcodSalesOrderNumber);
+        lrecSalesHeader.FINDFIRST();
+      END;
+      lrecSalesHeader."External Document No." := lcodExtDocNumber;
+      lrecSalesHeader.MODIFY;
+      cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Sales Header"));
+      ptrecEventParams.setValue('Document No.', lcodSalesOrderNumber);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE getDocList@1000000001(VAR ptrecEventParams@1000000010 : TEMPORARY Record 23044511;VAR pbsOutput@1000000009 : BigText);
+    VAR
+      lrecConfig@1000000013 : Record 23044504;
+      lrecLocation@1000000012 : Record 14;
+      lcodUserName@1000000011 : Code[20];
+      lcodOptionalItem@1000000008 : Text;
+      lbOnlyAssignedDocs@1000000007 : Boolean;
+      liMaxDocList@1000000006 : Integer;
+      lsFilter@1000000005 : Text[250];
+      ltrecDocList@1000000004 : TEMPORARY Record 23044535;
+      lcuDataSetTools@1000000003 : Codeunit 23044535;
+      lrrefDocListRef@1000000002 : RecordRef;
+      ldnOutput@1000000014 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      liDocCounter@1000000000 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up a list of shipments for the lookup list
+      //  Called From: This codeunit (handheld)
+      //  Side Effect: None
+      //</FUNC>
+
+
+      ldnOutput := ldnOutput.StringBuilder();
+
+      lcodUserName := ptrecEventParams.getValue('user_name');
+      lsFilter := ptrecEventParams.getValue('filter');
+      lcodOptionalItem := ptrecEventParams.getValue('item_number');
+
+      IF( lsFilter <> '' ) THEN BEGIN
+        lsFilter := '*' + lsFilter + '*';
+      END;
+
+      IF lcodOptionalItem <> '' THEN
+        lsFilter := '';
+
+      cuCommonFuncs.getDeviceConfig ( lrecConfig,ptrecEventParams);
+      lbOnlyAssignedDocs := ( lcodUserName<>'' ) AND ( NOT lrecConfig."Show All Documents");
+
+      recWHISetup.GET;
+      liMaxDocList := recWHISetup."Document Max List";
+      IF liMaxDocList = 0 THEN
+        liMaxDocList := 999999;
+
+      lrecLocation.GET(lrecConfig."Location Code");
+
+      IF( lrecLocation."Require Shipment" ) THEN BEGIN
+        searchWhseShipments(ltrecDocList,liDocCounter,lrecConfig,lbOnlyAssignedDocs,lcodUserName,lsFilter,liMaxDocList,lcodOptionalItem);
+      END ELSE BEGIN
+        searchSalesOrders(ltrecDocList,liDocCounter,lrecConfig,lbOnlyAssignedDocs,lcodUserName,lsFilter,liMaxDocList,lcodOptionalItem);
+        searchTransferOrders(ltrecDocList,liDocCounter,lrecConfig,lbOnlyAssignedDocs,lcodUserName,lsFilter,liMaxDocList,lcodOptionalItem);
+      END;
+
+      ltrecDocList.RESET;
+      lrrefDocListRef.GETTABLE( ltrecDocList  );
+      IF ( lrrefDocListRef.FINDFIRST() ) THEN;
+
+      lcuDataSetTools.BuildLinesOnlyDataset(
+        iEventID,
+        lrrefDocListRef,
+        FALSE,
+        ldnOutput);
+
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE searchWhseShipments@1000000043(VAR ptrecDocList@1000000000 : Record 23044535;VAR piLineCounter@1000000001 : Integer;VAR precConfig@1000000002 : Record 23044504;pbOnlyAssignedDocs@1000000003 : Boolean;pcodUser@1000000004 : Code[50];ptxtFilter@1000000007 : Text;piMaxDocCount@1000000013 : Integer;pcodItemNumber@1000000010 : Text);
+    VAR
+      lrecWhseShipmentHeader@1000000005 : Record 7320;
+      lrecWhseShipmentLine@1000000016 : Record 7321;
+      lrecWhseShipHeaderTemp@1000000006 : Record 7320;
+      lrecWhseShipLineTemp@1000000009 : Record 7321;
+      lrecSalesHeader@1000000011 : Record 36;
+      lbIncludeResult@1000000008 : Boolean;
+      lsName@1000000012 : Text;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up a list of whse. shipments for the lookup list
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+
+      lrecWhseShipmentHeader.SETRANGE("Location Code",precConfig."Location Code");
+      IF( pbOnlyAssignedDocs ) THEN
+        lrecWhseShipmentHeader.SETFILTER("Assigned User ID",'%1|%2','','*'+ pcodUser);
+
+      IF( precConfig."Only Show Released Shipments" ) THEN
+        lrecWhseShipmentHeader.SETRANGE(Status,lrecWhseShipmentHeader.Status::Released);
+
+      IF( lrecWhseShipmentHeader.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lbIncludeResult := (ptxtFilter = '');
+
+          // check the shipment lines
+          lrecWhseShipmentLine.RESET;
+          lrecWhseShipmentLine.SETRANGE("No.",lrecWhseShipmentHeader."No.");
+          lrecWhseShipmentLine.SETFILTER("Qty. Outstanding", '>0' );
+
+          IF( pcodItemNumber <> '' ) THEN
+            lrecWhseShipmentLine.SETRANGE("Item No.",pcodItemNumber);
+
+          IF( lrecWhseShipmentLine.FINDSET(FALSE) ) THEN BEGIN
+            REPEAT
+              IF( ptxtFilter <> '' ) THEN BEGIN
+                // check the order number
+                lrecWhseShipHeaderTemp.RESET;
+                lrecWhseShipHeaderTemp.SETFILTER("No.",ptxtFilter);
+                IF lrecWhseShipHeaderTemp.FINDSET(FALSE) THEN BEGIN
+                  REPEAT
+                    lbIncludeResult := lrecWhseShipHeaderTemp."No." = lrecWhseShipmentHeader."No.";
+                  UNTIL( (lrecWhseShipHeaderTemp.NEXT=0) OR lbIncludeResult);
+                END;
+
+                // check the external document number
+                IF( NOT lbIncludeResult ) THEN BEGIN
+                  lrecWhseShipHeaderTemp.RESET;
+                  lrecWhseShipHeaderTemp.SETRANGE("No.", lrecWhseShipmentHeader."No.");
+                  lrecWhseShipHeaderTemp.SETFILTER("External Document No.",ptxtFilter);
+                  lbIncludeResult := lrecWhseShipHeaderTemp.FINDFIRST;
+                END;
+
+                // check the source number
+                IF( NOT lbIncludeResult ) THEN BEGIN
+                  lrecWhseShipHeaderTemp.RESET;
+                  lrecWhseShipLineTemp.RESET;
+                  lrecWhseShipLineTemp.SETRANGE("No.",lrecWhseShipmentHeader."No.");
+                  lrecWhseShipLineTemp.SETFILTER("Source No.", ptxtFilter);
+                  lbIncludeResult := lrecWhseShipLineTemp.FINDFIRST;
+                END;
+              END;
+
+              IF( lbIncludeResult ) THEN BEGIN
+                lsName := '';
+                IF lrecWhseShipmentLine."Source Document" = lrecWhseShipmentLine."Source Document"::"Sales Order" THEN BEGIN
+                  IF lrecSalesHeader.GET(lrecWhseShipmentLine."Source Subtype",lrecWhseShipmentLine."Source No.") THEN BEGIN
+                    lsName := lrecSalesHeader."Sell-to Customer Name";
+                  END;
+                END;
+
+                addDocumentToList(
+                  ptrecDocList,
+                  piLineCounter,
+                  (precConfig."Use Source Doc. - Shipping" = precConfig."Use Source Doc. - Shipping"::Yes),  // use source document
+                  lrecWhseShipmentLine."No.",                      // document no
+                  lrecWhseShipmentLine."Source No.",               // source no
+                  DATABASE::"Warehouse Shipment Header",           // source table
+                  lrecWhseShipmentHeader."External Document No.",  // reference no
+                  lrecWhseShipmentHeader."Assigned User ID",       // assigned user
+                  lrecWhseShipmentLine."Due Date",                 // due date
+                  '',                                              // whse document #
+                  lsName,                                          // custom text 1
+                  '%WS%' + lrecWhseShipmentLine."No."              // barcode
+                );
+              END;
+            UNTIL((lrecWhseShipmentLine.NEXT=0) OR (piLineCounter >= piMaxDocCount) OR lbIncludeResult);
+          END;
+        UNTIL((lrecWhseShipmentHeader.NEXT=0) OR (piLineCounter >= piMaxDocCount))
+      END;
+    END;
+
+    PROCEDURE searchSalesOrders@1000000036(VAR ptrecDocList@1000000000 : Record 23044535;VAR piLineCounter@1000000001 : Integer;VAR precConfig@1000000002 : Record 23044504;pbOnlyAssignedDocs@1000000003 : Boolean;pcodUser@1000000004 : Code[50];ptxtFilter@1000000007 : Text;piMaxDocCount@1000000013 : Integer;pcodItemNumber@1000000010 : Text);
+    VAR
+      lrecSalesHeader@1000000005 : Record 36;
+      lrecSalesLine@1000000012 : Record 37;
+      lrecSalesHeaderTemp@1000000011 : Record 36;
+      lbIncludeResult@1000000008 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up a list of sales orders for the lookup list
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecSalesHeader.SETRANGE("Completely Shipped",FALSE);
+      lrecSalesHeader.SETRANGE("Document Type", lrecSalesHeader."Document Type"::Order);
+      IF( precConfig."Only Show Released Shipments" ) THEN
+        lrecSalesHeader.SETRANGE(Status,lrecSalesHeader.Status::Released);
+      IF( pbOnlyAssignedDocs ) THEN
+        lrecSalesHeader.SETFILTER("Assigned User ID",'%1|%2','','*'+ pcodUser);
+
+      IF( lrecSalesHeader.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lbIncludeResult := (ptxtFilter = '');
+
+          // check the sales lines
+          lrecSalesLine.RESET;
+          lrecSalesLine.SETRANGE("Document Type",lrecSalesHeader."Document Type");
+          lrecSalesLine.SETRANGE("Document No.",lrecSalesHeader."No.");
+          lrecSalesLine.SETRANGE("Location Code",precConfig."Location Code");
+          lrecSalesLine.SETRANGE("Completely Shipped",FALSE);
+          lrecSalesLine.SETRANGE(Type,lrecSalesLine.Type::Item);
+          lrecSalesLine.SETFILTER("No.",'<>%1','');
+
+          IF( pcodItemNumber <> '' ) THEN
+            lrecSalesLine.SETRANGE("No.",pcodItemNumber);
+
+          lrecSalesHeaderTemp.RESET;
+          lrecSalesHeaderTemp.SETRANGE("Document Type",lrecSalesHeader."Document Type");
+
+          IF( lrecSalesLine.FINDSET(FALSE) ) THEN BEGIN
+            REPEAT
+              IF( ptxtFilter <> '' ) THEN BEGIN
+                // check the order number
+                lrecSalesHeaderTemp.SETFILTER("No.",ptxtFilter);
+                IF lrecSalesHeaderTemp.FINDSET(FALSE) THEN BEGIN
+                  REPEAT
+                    lbIncludeResult := lrecSalesHeaderTemp."No." = lrecSalesHeader."No.";
+                  UNTIL( (lrecSalesHeaderTemp.NEXT=0) OR lbIncludeResult);
+                END;
+
+                // check the external document number
+                IF( NOT lbIncludeResult ) THEN BEGIN
+                  lrecSalesHeaderTemp.RESET;
+                  lrecSalesHeaderTemp.SETRANGE("No.", lrecSalesHeader."No.");
+                  lrecSalesHeaderTemp.SETFILTER("External Document No.",ptxtFilter);
+                  lbIncludeResult := lrecSalesHeaderTemp.FINDFIRST;
+                END;
+              END;
+
+              // auto conversion to shipment not supported
+              //IF( lbIncludeResult AND lrecLocation."Require Shipment" ) THEN BEGIN
+              //  make sure not already filled on a warehouse receipt
+              //  lbIncludeResult := canCreateShipment(
+              //    DATABASE::"Sales Line",
+              //    lrecSalesLine."Document Type",
+              //    lrecSalesLine."Document No.",
+              //    lrecSalesLine."Line No.",
+              //    lrecSalesLine."Quantity (Base)" - lrecSalesLine."Qty. Shipped (Base)"
+              //  );
+              //END;
+
+              IF( lbIncludeResult ) THEN BEGIN
+                addDocumentToList(
+                  ptrecDocList,
+                  piLineCounter,
+                  FALSE,                                    // use source document
+                  lrecSalesLine."Document No.",             // document no
+                  '',                                       // source no
+                  DATABASE::"Sales Header",                 // source table
+                  lrecSalesHeader."External Document No.",  // reference no
+                  lrecSalesHeader."Assigned User ID",       // assigned user
+                  lrecSalesHeader."Due Date",               // due date
+                  '',                                       // whse document #
+                  lrecSalesHeader."Sell-to Customer Name",  // custom text 1
+                  '%S%' + lrecSalesLine."Document No."      // barcode
+                );
+              END;
+            UNTIL((lrecSalesLine.NEXT=0) OR (piLineCounter >= piMaxDocCount) OR lbIncludeResult);
+          END;
+        UNTIL((lrecSalesHeader.NEXT=0) OR (piLineCounter >= piMaxDocCount))
+      END;
+    END;
+
+    PROCEDURE searchTransferOrders@1000000025(VAR ptrecDocList@1000000000 : Record 23044535;VAR piLineCounter@1000000001 : Integer;VAR precConfig@1000000002 : Record 23044504;pbOnlyAssignedDocs@1000000003 : Boolean;pcodUser@1000000004 : Code[50];ptxtFilter@1000000007 : Text;piMaxDocCount@1000000013 : Integer;pcodItemNumber@1000000010 : Text);
+    VAR
+      lrecTransferHeader@1000000005 : Record 5740;
+      lrecTransferLine@1000000016 : Record 5741;
+      lrecLocation@1000000014 : Record 14;
+      lrecTransHeaderTemp@1000000011 : Record 5740;
+      lbIncludeResult@1000000008 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up a list of transfer orders for the lookup list
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+
+      lrecLocation.GET(precConfig."Location Code");
+      lrecTransferHeader.SETRANGE("Transfer-from Code",precConfig."Location Code");
+      lrecTransferHeader.SETRANGE("Completely Shipped",FALSE);
+
+
+      IF( precConfig."Only Show Released Shipments" ) THEN
+        lrecTransferHeader.SETRANGE(Status,lrecTransferHeader.Status::Released);
+
+      IF( pbOnlyAssignedDocs ) THEN
+        lrecTransferHeader.SETFILTER("Assigned User ID",'%1|%2','','*'+ pcodUser);
+
+      IF( lrecTransferHeader.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lbIncludeResult := (ptxtFilter = '');
+
+          // check the transfer lines
+          lrecTransferLine.RESET;
+          lrecTransferLine.SETRANGE("Document No.",lrecTransferHeader."No.");
+          lrecTransferLine.SETRANGE("Completely Shipped",FALSE);
+          lrecTransferLine.SETRANGE("Derived From Line No.",0);
+
+          IF( pcodItemNumber <> '' ) THEN
+            lrecTransferLine.SETRANGE("Item No.",pcodItemNumber);
+
+          lrecTransHeaderTemp.RESET;
+
+          IF( lrecTransferLine.FINDSET(FALSE) ) THEN BEGIN
+            REPEAT
+              IF( ptxtFilter <> '' ) THEN BEGIN
+                // check the order number
+                lrecTransHeaderTemp.SETFILTER("No.",ptxtFilter);
+                IF lrecTransHeaderTemp.FINDSET(FALSE) THEN BEGIN
+                  REPEAT
+                    lbIncludeResult := lrecTransHeaderTemp."No." = lrecTransferHeader."No.";
+                  UNTIL( (lrecTransHeaderTemp.NEXT=0) OR lbIncludeResult);
+                END;
+
+                // check the external document number
+                IF( NOT lbIncludeResult ) THEN BEGIN
+                  lrecTransHeaderTemp.RESET;
+                  lrecTransHeaderTemp.SETRANGE("No.", lrecTransferHeader."No.");
+                  lrecTransHeaderTemp.SETFILTER("External Document No.",ptxtFilter);
+                  lbIncludeResult := lrecTransHeaderTemp.FINDFIRST;
+                END;
+              END;
+
+              // auto conversion to shipment not supported
+              //IF( lbIncludeResult AND lrecLocation."Require Receive" ) THEN BEGIN
+              //  make sure not already filled on a warehouse receipt
+              //  lbIncludeResult := canCreateShipment(
+              //    DATABASE::"Transfer Line",
+              //    1,
+              //    lrecTransferLine."Document No.",
+              //    lrecTransferLine."Line No.",
+              //    lrecTransferLine."Quantity (Base)" - lrecTransferLine."Qty. Shipped (Base)"
+              //  );
+              //END;
+
+              IF( lbIncludeResult ) THEN BEGIN
+                addDocumentToList(
+                  ptrecDocList,
+                  piLineCounter,
+                  FALSE,                                          // use source document
+                  lrecTransferLine."Document No.",                // document no
+                  '',                                             // source no
+                  DATABASE::"Transfer Header",                    // source table
+                  lrecTransferHeader."External Document No.",     // reference no
+                  lrecTransferHeader."Assigned User ID",          // assigned user
+                  lrecTransferHeader."Shipment Date",             // due date
+                  '',                                             // whse document #
+                  '',                                             // custom text 1
+                  '%T%' + lrecTransferLine."Document No."         // barcode
+                );
+              END;
+            UNTIL((lrecTransferLine.NEXT=0) OR (piLineCounter >= piMaxDocCount) OR lbIncludeResult);
+          END;
+        UNTIL((lrecTransferHeader.NEXT=0) OR (piLineCounter >= piMaxDocCount))
+      END;
+    END;
+
+    LOCAL PROCEDURE addDocumentToList@1000000037(VAR ptrecDocList@1000000002 : Record 23044535;VAR piLineCounter@1000000001 : Integer;pbUseSourceDocument@1000000000 : Boolean;pcodDocumentNo@1000000003 : Code[20];pcodSourceNo@1000000004 : Code[20];piSourceTable@1000000005 : Integer;pcodRefNumber@1000000006 : Code[50];pcodAssignedUser@1000000007 : Code[50];pdtDueDate@1000000008 : Date;pcodWhseDocNumber@1000000011 : Code[20];psCustomText1@1000000009 : Text[50];psBarcode@1000000010 : Text[100]);
+    BEGIN
+      //<FUNC>
+      //  Description: Wrapper routine for create a lookup list result
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      ptrecDocList.RESET;
+      ptrecDocList.SETRANGE("Document No.",pcodDocumentNo);
+      IF (pbUseSourceDocument) THEN
+        ptrecDocList.SETRANGE("Source Document No.",pcodSourceNo);
+
+      IF( NOT ptrecDocList.FINDFIRST ) THEN BEGIN
+        ptrecDocList.INIT;
+        piLineCounter += 1;
+        ptrecDocList."Entry No." := piLineCounter;
+        ptrecDocList."Source Table" := piSourceTable;
+        ptrecDocList."Reference No." := pcodRefNumber;
+        ptrecDocList."Document No." := pcodDocumentNo;
+        IF( pbUseSourceDocument ) THEN
+          ptrecDocList."No." := pcodSourceNo
+        ELSE
+          ptrecDocList."No." := pcodDocumentNo;
+
+        ptrecDocList."Assigned User ID" := pcodAssignedUser;
+        ptrecDocList."Due Date" := pdtDueDate;
+        ptrecDocList."Whse. Document No." := pcodWhseDocNumber;
+        ptrecDocList."Source Document No." := pcodSourceNo;
+        ptrecDocList."Custom Text 1" := psCustomText1;
+
+        ptrecDocList.Barcode := psBarcode;
+        ptrecDocList.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetTextScanDocBarcode@1000000034(VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      lrecSalesHeader@1000000003 : Record 36;
+      lrecTransferHeader@1000000004 : Record 5740;
+      lrecWhseShipHeader@1000000005 : Record 7320;
+      lsBarcodeText@1000000002 : Text;
+    BEGIN
+      //<FUNC>
+      //  Determines what type of document (if any) was scanned
+      //  on the lookup list.
+      //  Returns the appropriate barcode instead that should be used.
+      //<FUNC>
+
+      lsBarcodeText := ptrecEventParams.getValue('barcode_text');
+      IF lrecSalesHeader.GET(lrecSalesHeader."Document Type"::Order,lsBarcodeText) THEN BEGIN
+        pbsOutput.ADDTEXT('<VALUE>%SO%' + lsBarcodeText + '</VALUE>');
+      END ELSE IF lrecTransferHeader.GET(lsBarcodeText) THEN BEGIN
+        pbsOutput.ADDTEXT('<VALUE>%T%' + lsBarcodeText + '</VALUE>');
+      END ELSE IF lrecWhseShipHeader.GET(lsBarcodeText) THEN BEGIN
+        pbsOutput.ADDTEXT('<VALUE>%WS%' + lsBarcodeText + '</VALUE>');
+      END ELSE BEGIN
+        pbsOutput.ADDTEXT('<VALUE></VALUE>');
+      END;
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE updateSalesLine@1000000003(VAR ptrecEventParams@1000000016 : TEMPORARY Record 23044511;VAR pbsOutput@1000000015 : BigText);
+    VAR
+      lrecLPHeader@100000001 : Record 23044505;
+      lcodBinCode@1000000014 : Code[20];
+      lcodLocation@1000000005 : Code[10];
+      lcodUserName@1000000004 : Code[20];
+      lcodSalesOrderNumber@1000000003 : Code[20];
+      lsSerialNumber@1000000009 : Text;
+      lsLotNumber@1000000010 : Text;
+      liLineNumber@1000000006 : Integer;
+      ldQtyToHandle@1000000011 : Decimal;
+      lrecSalesLine@1000000007 : Record 37;
+      lrecSalesHeader@1000000002 : Record 36;
+      ldChange@1000000008 : Decimal;
+      ltrecCommentLine@1000000013 : TEMPORARY Record 97;
+      lrecCustomExtendedSalesLine@1000000000 : Record 37;
+      lbtIgnored@1000000001 : BigText;
+      ltxtDocumentType@1000000018 : Text[80];
+      liDocumentType@1000000017 : Integer;
+      lrrefLine@1000000019 : RecordRef;
+      ldnOutput@1000000025 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lcuDataSetTools@1000000021 : Codeunit 23044535;
+      lrecNotUsedWhseActivityLine@1000000012 : Record 5767;
+      ldPreviousQuantity@1000000022 : Decimal;
+      lcodLicensePlateNo@1000000023 : Code[20];
+      loptSourceDocument@1000000024 : ' ,Purchase Order,Sales Order,Inbound Transfer,Outbound Transfer,Prod. Order,Put-away,Pick,Movement,Invt. Put-away,Invt. Pick,Receipt,Shipment,Reclass,Purchase Return Order,Assembly,Invt. Movement';
+      ldtExpirationDate@100000000 : Date;
+      lbDecrease@100000002 : Boolean;
+    BEGIN
+      // Updates the Sales Line quantity to ship and tracking
+      // information.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodSalesOrderNumber := ptrecEventParams.getDocumentNo();
+      liLineNumber := ptrecEventParams.getLineNo();
+      lsSerialNumber := ptrecEventParams.getValue('serial_number');
+      lsLotNumber := ptrecEventParams.getValue('lot_number');
+      ldQtyToHandle := ptrecEventParams.getValueAsDecimal('qty_to_ship');
+      lcodBinCode := ptrecEventParams.getValue('bin');
+      lcodLicensePlateNo := ptrecEventParams.getValue('lp_number');
+      ldtExpirationDate := cuCommonFuncs.getExpirationDate(ptrecEventParams);
+
+      ltxtDocumentType := ptrecEventParams.getValue('Document Type');
+      IF (ltxtDocumentType = '') THEN BEGIN
+        liDocumentType := lrecSalesHeader."Document Type"::Order;
+      END ELSE BEGIN
+        EVALUATE(liDocumentType, ltxtDocumentType);
+      END;
+
+      IF ( NOT lrecSalesHeader.GET(liDocumentType, lcodSalesOrderNumber) ) THEN BEGIN
+        // assume sales order, but try other documents after
+        lrecSalesHeader.SETRANGE("No.", lcodSalesOrderNumber);
+        lrecSalesHeader.FINDFIRST();
+      END;
+
+      // get the sales line
+      //
+      // doing this for offline sales order
+      IF ( NOT lrecSalesLine.GET(lrecSalesHeader."Document Type", lcodSalesOrderNumber, liLineNumber) ) THEN BEGIN
+        // should only if allowsync=1
+        liLineNumber := addSalesLine( ptrecEventParams,lbtIgnored );
+        // at this point, this should exist, if it didn't
+        // then the line didn't add, and we need to give back the original response)
+        IF ( NOT lrecSalesLine.GET(lrecSalesHeader."Document Type", lcodSalesOrderNumber, liLineNumber) ) THEN BEGIN
+          pbsOutput := lbtIgnored;
+          EXIT;
+        END;
+      END;
+
+      ldPreviousQuantity := lrecSalesLine."Qty. to Ship";
+      ldChange := ldQtyToHandle - lrecSalesLine."Qty. to Ship";
+      lbDecrease := (ldQtyToHandle < lrecSalesLine."Qty. to Ship");
+
+      IF (lcodLicensePlateNo <> '') AND lbDecrease THEN BEGIN
+        IF lrecLPHeader.GET(lcodLicensePlateNo) THEN BEGIN
+          lrecLPHeader."Processing State" := lrecLPHeader."Processing State"::Removing;
+          lrecLPHeader.MODIFY();
+        END;
+      END;
+
+
+      // set the quantity to handle
+      lrecSalesLine.VALIDATE("Qty. to Ship",ldQtyToHandle);
+      IF( (lcodBinCode <> '') AND (lrecSalesLine."Bin Code" = '')) THEN BEGIN
+        lrecSalesLine.VALIDATE("Bin Code",lcodBinCode);
+      END;
+
+      IF ( cuCustomizedFuncs.OnUpdateSalesLine( iEventID, lrecSalesLine, ptrecEventParams, pbsOutput ) ) THEN BEGIN
+        ptrecEventParams.getExtensibilitySalesLine( lrecCustomExtendedSalesLine );
+        lrecSalesLine.GET( lrecSalesLine."Document Type",lrecSalesLine."Document No.", lrecSalesLine."Line No." );
+        lrecSalesLine := lrecCustomExtendedSalesLine;
+      END;
+
+      lrecSalesLine.MODIFY(TRUE);
+
+      // add/remove the lot/serial number
+      IF( (lsLotNumber <> '') OR (lsSerialNumber <> '') ) THEN BEGIN
+        cuResMgmt.AddRemoveSalesShipTracking(lrecSalesLine,lsSerialNumber, lsLotNumber,ldChange,
+          lrecSalesLine."Unit of Measure Code",
+          ldtExpirationDate,
+          lrecNotUsedWhseActivityLine);
+      END;
+
+      // store this line in the list of changed lines
+      ltrecCommentLine.SETRANGE("Line No.", lrecSalesLine."Line No.");
+      IF( NOT ltrecCommentLine.FINDSET(FALSE) ) THEN BEGIN
+        ltrecCommentLine."Table Name" := ltrecCommentLine."Table Name"::Item;
+        ltrecCommentLine."No." := lrecSalesLine."No.";
+        ltrecCommentLine."Line No." := lrecSalesLine."Line No.";
+        ltrecCommentLine.INSERT;
+      END;
+
+
+      IF (lcodLicensePlateNo <> '') THEN BEGIN
+        loptSourceDocument := loptSourceDocument::"Sales Order";
+
+        cuLPCommon.addRemoveLicensePlateLine(loptSourceDocument,
+                                           lrecSalesLine."Document No.",
+                                           lrecSalesLine."Line No.",
+                                           lcodLicensePlateNo,
+                                           lrecSalesLine."No.",
+                                           lrecSalesLine."Variant Code",
+                                           lsLotNumber,
+                                           lsSerialNumber,
+                                           ldChange,
+                                           lrecSalesLine."Unit of Measure Code",
+                                           ldtExpirationDate,
+                                           lrecSalesLine."Bin Code"
+                                           );
+
+        IF lrecLPHeader.GET(lcodLicensePlateNo) THEN BEGIN
+          lrecLPHeader."Processing State" := lrecLPHeader."Processing State"::" ";
+          lrecLPHeader.MODIFY();
+        END;
+      END;
+
+      // in theory there are modified lines (including the original)
+      // loop through them and return that xml set to the Device for further processing
+      ltrecCommentLine.RESET;
+      ltrecCommentLine.FINDSET(FALSE);
+      lrecSalesLine.GET(lrecSalesHeader."Document Type", lcodSalesOrderNumber,ltrecCommentLine."Line No.");
+
+      lrecSalesLine.SETRECFILTER();
+      lrrefLine.GETTABLE( lrecSalesLine );
+
+      lcuDataSetTools.SetFormulaCalcEachRow(
+        70000,
+        lrrefLine,
+          -1, //
+        DATABASE::Item, // piLookupTable
+        6500, // piLookupField
+        'WHERE (No.=FILTER(''[No.]''))' ); //
+
+      lcuDataSetTools.SetCalculateFields(70000,
+                                        lrrefLine,
+                                        lrecSalesLine.FIELDNO("Outstanding Quantity"),
+                                        lrecSalesLine.FIELDNO(Quantity),
+                                        lrecSalesLine.FIELDNO("Qty. to Ship"),
+                                        lrecSalesLine.FIELDNO("Quantity Shipped")
+                                        );
+
+      ldnOutput := ldnOutput.StringBuilder();
+      lcuDataSetTools.BuildLineTableEmbedRes(70000, lrrefLine, TRUE, ldnOutput);
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Sales Line"));
+      ptrecEventParams.setValue('Document No.', lcodSalesOrderNumber);
+      ptrecEventParams.setValue('Previous Quantity', FORMAT(ldPreviousQuantity));
+      ptrecEventParams.setValue('New Quantity', FORMAT(ldQtyToHandle));
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE postSalesOrder@1000000005(VAR ptrecEventParams@1000000004 : TEMPORARY Record 23044511;VAR pbsOutput@1000000003 : BigText);
+    VAR
+      lrecSalesHeader@1000000002 : Record 36;
+      lrecSalesLine@1000000005 : Record 37;
+      lcodSalesOrderNumber@1000000001 : Code[20];
+      ltxtDetails@1000000000 : Text[250];
+      lbManuallyPosted@1000000006 : Boolean;
+    BEGIN
+      // Posts the Sales Order.
+      lcodSalesOrderNumber := ptrecEventParams.getDocumentNo();
+      lbManuallyPosted := ptrecEventParams.getValueAsBool('manuallyPosted');
+
+      IF ( NOT lrecSalesHeader.GET(lrecSalesHeader."Document Type"::Order,lcodSalesOrderNumber) ) THEN BEGIN
+        // assume sales order, but try other documents after
+        lrecSalesHeader.SETRANGE("No.", lcodSalesOrderNumber);
+        lrecSalesHeader.FINDFIRST();
+      END;
+
+      lrecSalesLine.SETRANGE("Document Type",lrecSalesHeader."Document Type");
+      lrecSalesLine.SETRANGE("Document No.",lrecSalesHeader."No.");
+      IF NOT lbManuallyPosted THEN
+        lrecSalesLine.SETFILTER("Qty. to Ship",'>%1',0);
+
+      IF lrecSalesLine.FINDSET(FALSE) THEN BEGIN
+        lrecSalesHeader.VALIDATE("Posting Date",TODAY);
+        lrecSalesHeader.MODIFY(TRUE);
+        lrecSalesHeader.Ship := TRUE;
+        lrecSalesHeader.Invoice := FALSE;
+        CODEUNIT.RUN(CODEUNIT::"Sales-Post",lrecSalesHeader);
+      END;
+
+      cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+
+      ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_POST_SALES_ORDER', codRegionCode), lcodSalesOrderNumber);
+      ptrecEventParams.setValue('details', ltxtDetails);
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Sales Header"));
+      ptrecEventParams.setValue('Document No.', lcodSalesOrderNumber);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE getWhseShipment@1000000007(VAR ptrecEventParams@1000000011 : TEMPORARY Record 23044511;VAR pbsOutput@1000000010 : BigText);
+    VAR
+      lcodLocation@1000000002 : Code[10];
+      lcodShipmentNumber@1000000003 : Code[20];
+      lrecShipmentHeader@1000000005 : Record 7320;
+      lrecShipmentLine@1000000006 : Record 7321;
+      lrecLocation@1000000008 : Record 14;
+      lrecItemTrackingCode@1000000009 : Record 6502;
+      ldnOutput@1000000007 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      liDocStatus@1000000000 : Integer;
+      lrrefWriter@1000000004 : RecordRef;
+    BEGIN
+      // EVENT 70005
+      // Returns a Warehouse Shipment document and lines.
+      ldnOutput := ldnOutput.StringBuilder();
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodShipmentNumber := ptrecEventParams.getDocumentNo();
+
+      lrecShipmentHeader.GET(lcodShipmentNumber);
+
+
+      assignWhseShipment(lrecShipmentHeader, ptrecEventParams);
+
+
+      IF lrecLocation.GET(lcodLocation) THEN ;
+
+      cuCommonFuncs.checkLocation(lcodLocation, lrecShipmentHeader."Location Code");
+
+      ldnOutput.Append('<DATASET>');
+      ldnOutput.Append('<TABLE id="header">');
+      ldnOutput.Append('<COLS>');
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.addDSColumnsFromConfigDN( ldnOutput,iEventID,'', DATABASE::"Warehouse Shipment Header" );
+      ldnOutput.Append('</COLS>');
+      ldnOutput.Append('<ROWS><R><FIELDS>');
+      lrrefWriter.GETTABLE( lrecShipmentHeader );
+      cuCommonFuncs.addDSFieldsForRecordDN(ldnOutput,lrrefWriter,iEventID,'');
+      ldnOutput.Append('</FIELDS></R></ROWS>');
+      ldnOutput.Append('</TABLE>');
+      ldnOutput.Append('<TABLE id="line">');
+      ldnOutput.Append('<COLS>');
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.setDSFieldVisible(iEventID,'',DATABASE::"Warehouse Shipment Line", lrecShipmentLine.FIELDNO( "Bin Code" ),
+        lrecLocation."Bin Mandatory" );
+      cuCommonFuncs.addDSColumnsFromConfigDN(ldnOutput,iEventID,'', DATABASE::"Warehouse Shipment Line" );
+      cuCommonFuncs.addDSTrackingColumnsDN(ldnOutput);
+      ldnOutput.Append('</COLS>');
+      ldnOutput.Append('<ROWS>');
+      lrecShipmentLine.SETCURRENTKEY("No.","Sorting Sequence No.");
+      lrecShipmentLine.SETRANGE("No.",lcodShipmentNumber);
+
+      IF( lrecShipmentLine.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          getShipmentLine(ldnOutput,lrecShipmentLine);
+        UNTIL(lrecShipmentLine.NEXT=0);
+      END;
+
+      ldnOutput.Append('</ROWS>');
+      ldnOutput.Append('</TABLE>');
+      ldnOutput.Append('</DATASET>');
+
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Warehouse Shipment Header"));
+      ptrecEventParams.setValue('Document No.', lcodShipmentNumber);
+      ptrecEventParams.setValue('Source Document Type', FORMAT(lrecShipmentLine."Source Type"));
+      ptrecEventParams.setValue('Source Document No.', lrecShipmentLine."Source No.");
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    LOCAL PROCEDURE getShipmentLine@1000000011(VAR pdnOutput@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";precShipmentLine@1000000000 : Record 7321);
+    VAR
+      lrecItem@1000000005 : Record 27;
+      lrecItemTrackingCode@1000000004 : Record 6502;
+      liSourceType@1000000002 : Integer;
+      liSourceDocument@1000000003 : Integer;
+      lrrefWriter@1000000006 : RecordRef;
+    BEGIN
+      // Creates the required dataset for a warehouse shipment line
+      pdnOutput.Append('<R>');
+      pdnOutput.Append('<FIELDS>');
+
+      // special field, we calculate as the dataset is produced
+      cuCommonFuncs.setDSFieldOverrideValue(70005,
+        '',
+        DATABASE::"Warehouse Shipment Line",
+        precShipmentLine.FIELDNO("Qty. Outstanding"),
+        STRSUBSTNO('%1',(precShipmentLine.Quantity - precShipmentLine."Qty. Shipped" - precShipmentLine."Qty. to Ship"))
+        );
+
+      // any configured fields to send back
+      lrrefWriter.GETTABLE( precShipmentLine );
+      cuCommonFuncs.addDSFieldsForRecordDN(pdnOutput,lrrefWriter,70005,'');
+
+      // add the item tracking fields.
+      lrecItem.GET(precShipmentLine."Item No.");
+      cuCommonFuncs.addDSTrackingFieldsDN(pdnOutput, lrecItem."Item Tracking Code");
+      pdnOutput.Append('</FIELDS>');
+
+      // get the reservation entries here
+      liSourceType := 0;
+      IF( precShipmentLine."Source Document" = precShipmentLine."Source Document"::"Sales Order" ) THEN
+        liSourceType := DATABASE::"Sales Line"
+      ELSE IF( precShipmentLine."Source Document" = precShipmentLine."Source Document"::"Outbound Transfer" ) THEN
+        liSourceType := DATABASE::"Transfer Line";
+
+      cuCommonFuncs.getReservationEntriesDN(
+        TRUE,
+        pdnOutput,
+        precShipmentLine."Item No.",
+        precShipmentLine."Variant Code",
+        precShipmentLine."Location Code",
+        precShipmentLine."Source No.",
+        precShipmentLine."Source Line No.",
+        FALSE,
+        liSourceType,
+        '',  // Lot No. //
+        ''   // Serial No. //
+        );
+
+      pdnOutput.Append('</R>');
+    END;
+
+    PROCEDURE updateShipExtDocNumber@1000000015(VAR ptrecEventParams@1000000007 : TEMPORARY Record 23044511;VAR pbsOutput@1000000006 : BigText);
+    VAR
+      lcodLocation@1000000002 : Code[10];
+      lcodUserName@1000000001 : Code[20];
+      lcodShipmentNumber@1000000003 : Code[20];
+      lcodExtDocNumber@1000000005 : Code[20];
+      lrecShipmentHeader@1000000004 : Record 7320;
+    BEGIN
+      // Updates the Warehouse Shipment 'External Document No.' field.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodShipmentNumber := ptrecEventParams.getValue('No.');
+      lcodExtDocNumber := ptrecEventParams.getValue('action_result');
+      lrecShipmentHeader.GET(lcodShipmentNumber);
+      lrecShipmentHeader."External Document No." := lcodExtDocNumber;
+      lrecShipmentHeader.MODIFY;
+      cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+    END;
+
+    PROCEDURE updateShipmentLine@1000000009(VAR ptrecEventParams@1000000016 : TEMPORARY Record 23044511;VAR pbsOutput@1000000015 : BigText);
+    VAR
+      lrecLPHeader@100000002 : Record 23044505;
+      lcodLocation@1000000005 : Code[10];
+      lcodUserName@1000000004 : Code[20];
+      lcodShipmentNumber@1000000003 : Code[20];
+      lsSerialNumber@1000000009 : Text;
+      lsLotNumber@1000000010 : Text;
+      liLineNumber@1000000006 : Integer;
+      ldQtyToHandle@1000000011 : Decimal;
+      lrecShipmentLine@1000000007 : Record 7321;
+      lrecShipmentHeader@1000000002 : Record 7320;
+      ldChange@1000000008 : Decimal;
+      ltrecCommentLine@1000000013 : TEMPORARY Record 97;
+      lcodBinCode@1000000014 : Code[20];
+      ldPreviousQuantity@1000000000 : Decimal;
+      lcodLicensePlateNo@1000000001 : Code[20];
+      loptSourceDocument@1000000012 : ' ,Purchase Order,Sales Order,Inbound Transfer,Outbound Transfer,Prod. Order,Put-away,Pick,Movement,Invt. Put-away,Invt. Pick,Receipt,Shipment,Reclass,Purchase Return Order,Assembly,Invt. Movement';
+      ldnOutput@1000000018 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      ldtExpirationDate@100000000 : Date;
+      lbDecrease@100000001 : Boolean;
+    BEGIN
+      // Updates the Whse. Shipment Line quantity to ship and tracking
+      // information.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodShipmentNumber := ptrecEventParams.getDocumentNo();
+      liLineNumber := ptrecEventParams.getLineNo();
+      lsSerialNumber := ptrecEventParams.getSerialNo();
+      lsLotNumber := ptrecEventParams.getLotNo();
+      ldQtyToHandle := ptrecEventParams.getValueAsDecimal('qty_to_handle');
+      lcodBinCode := ptrecEventParams.getValue('bin');
+      lcodLicensePlateNo := ptrecEventParams.getValue('lp_number');
+      ldtExpirationDate := cuCommonFuncs.getExpirationDate(ptrecEventParams);
+
+      lrecShipmentLine.GET(lcodShipmentNumber, liLineNumber);
+      ldChange := ldQtyToHandle - lrecShipmentLine."Qty. to Ship";
+      ldPreviousQuantity := lrecShipmentLine."Qty. to Ship";
+      lbDecrease := (ldQtyToHandle < lrecShipmentLine."Qty. to Ship");
+
+      IF (lcodLicensePlateNo <> '') AND lbDecrease THEN BEGIN
+        IF lrecLPHeader.GET(lcodLicensePlateNo) THEN BEGIN
+          lrecLPHeader."Processing State" := lrecLPHeader."Processing State"::Removing;
+          lrecLPHeader.MODIFY();
+        END;
+      END;
+
+      lrecShipmentLine.VALIDATE("Qty. to Ship",ldQtyToHandle);
+
+      IF( (lcodBinCode <> '') AND (lrecShipmentLine."Bin Code"='') ) THEN BEGIN
+        lrecShipmentLine.VALIDATE("Bin Code",lcodBinCode);
+      END;
+      lrecShipmentLine.MODIFY(TRUE);
+
+      // add/remove the serial number
+      IF( (lsLotNumber <> '') OR (lsSerialNumber <> '') ) THEN BEGIN
+        cuResMgmt.AddRemoveWhseShipTracking(lrecShipmentLine,lsSerialNumber,lsLotNumber,ldChange,
+          lrecShipmentLine."Unit of Measure Code", ldtExpirationDate);
+      END;
+
+      // store this line in the list of changed lines
+      ltrecCommentLine.SETRANGE("Line No.", lrecShipmentLine."Line No.");
+      IF( NOT ltrecCommentLine.FINDSET(FALSE) ) THEN BEGIN
+        ltrecCommentLine."Table Name" := ltrecCommentLine."Table Name"::Item;
+        ltrecCommentLine."No." := lrecShipmentLine."Item No.";
+        ltrecCommentLine."Line No." := lrecShipmentLine."Line No.";
+        ltrecCommentLine.INSERT;
+      END;
+
+      IF (lcodLicensePlateNo <> '') THEN BEGIN
+        loptSourceDocument := loptSourceDocument::Shipment;
+
+        cuLPCommon.addRemoveLicensePlateLine(loptSourceDocument,
+                                           lrecShipmentLine."No.",
+                                           lrecShipmentLine."Line No.",
+                                           lcodLicensePlateNo,
+                                           lrecShipmentLine."Item No.",
+                                           lrecShipmentLine."Variant Code",
+                                           lsLotNumber,
+                                           lsSerialNumber,
+                                           ldChange,
+                                           lrecShipmentLine."Unit of Measure Code",
+                                           ldtExpirationDate,
+                                           lrecShipmentLine."Bin Code"
+                                           );
+
+        IF lrecLPHeader.GET(lcodLicensePlateNo) THEN BEGIN
+          lrecLPHeader."Processing State" := lrecLPHeader."Processing State"::" ";
+          lrecLPHeader.MODIFY();
+        END;
+      END;
+
+
+      ldnOutput := ldnOutput.StringBuilder();
+      ldnOutput.Append('<DATASET>');
+      ldnOutput.Append('<TABLE id="line">');
+      ldnOutput.Append('<COLS>');
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.addDSColumnsFromConfigDN( ldnOutput,70005,'', DATABASE::"Warehouse Shipment Line" );
+      cuCommonFuncs.addDSTrackingColumnsDN(ldnOutput);
+      ldnOutput.Append('</COLS><ROWS>');
+
+      // in theory there are modified lines (including the original)
+      ltrecCommentLine.RESET;
+      ltrecCommentLine.FINDSET(FALSE);
+      REPEAT
+        lrecShipmentLine.GET(lcodShipmentNumber,ltrecCommentLine."Line No.");
+        getShipmentLine(ldnOutput,lrecShipmentLine);
+      UNTIL( ltrecCommentLine.NEXT=0 );
+      ldnOutput.Append('</ROWS></TABLE></DATASET>');
+
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Warehouse Shipment Line"));
+      ptrecEventParams.setValue('Document No.', lcodShipmentNumber);
+      ptrecEventParams.setValue('Source Document Type', FORMAT(lrecShipmentLine."Source Type"));
+      ptrecEventParams.setValue('Source Document No.', lrecShipmentLine."Source No.");
+      ptrecEventParams.setValue('Source Document Line No.', FORMAT(lrecShipmentLine."Source Line No."));
+      ptrecEventParams.setValue('Previous Quantity', FORMAT(ldPreviousQuantity));
+      ptrecEventParams.setValue('New Quantity', FORMAT(ldQtyToHandle));
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE postWhseShipment@1000000010(VAR ptrecEventParams@1000000006 : TEMPORARY Record 23044511;VAR pbsOutput@1000000005 : BigText);
+    VAR
+      lcodShipmentNumber@1000000001 : Code[20];
+      lrecShipmentHeader@1000000002 : Record 7320;
+      lrecWhseShipLine@1000000003 : Record 7321;
+      lcuWhsePostShipment@1000000004 : Codeunit 5763;
+      ltxtDetails@1000000000 : Text[250];
+      lbManuallyPosted@1000000007 : Boolean;
+    BEGIN
+      // Posts the Warehouse Shipment.
+      lcodShipmentNumber := ptrecEventParams.getDocumentNo();
+      lbManuallyPosted := ptrecEventParams.getValueAsBool('manuallyPosted');
+
+      lrecShipmentHeader.GET(lcodShipmentNumber);
+      lrecWhseShipLine.SETRANGE("No.",lrecShipmentHeader."No.");
+
+      IF NOT lbManuallyPosted THEN
+        lrecWhseShipLine.SETFILTER("Qty. to Ship",'>%1',0);
+
+      IF( lrecWhseShipLine.FINDSET(FALSE) ) THEN BEGIN
+        lrecShipmentHeader.VALIDATE("Posting Date",TODAY);
+        lrecShipmentHeader.MODIFY(TRUE);
+        lcuWhsePostShipment.SetPostingSettings(FALSE);
+        lcuWhsePostShipment.SetPrint(FALSE);
+        lcuWhsePostShipment.RUN(lrecWhseShipLine);
+      END;
+      cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+
+      ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_POST_SHIPMENT', codRegionCode), lcodShipmentNumber);
+      ptrecEventParams.setValue('details', ltxtDetails);
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Warehouse Shipment Header"));
+      ptrecEventParams.setValue('Document No.', lcodShipmentNumber);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    LOCAL PROCEDURE getTransferOrder@1000000019(VAR ptrecEventParams@1000000005 : TEMPORARY Record 23044511;VAR pbsOutput@1000000004 : BigText);
+    VAR
+      lcodLocation@1000000014 : Code[10];
+      lcodTransferOrderNumber@1000000013 : Code[20];
+      lrecTransferHeader@1000000012 : Record 5740;
+      lrecTransferLine@1000000011 : Record 5741;
+      lrecLocation@1000000002 : Record 14;
+      ldnOutput@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lrrefHeader@1000000007 : RecordRef;
+      lrrefLine@1000000006 : RecordRef;
+      lbNeedsItemTrackingTable@1000000001 : Boolean;
+      lcuDataSetTools@1000000000 : Codeunit 23044535;
+    BEGIN
+      // Returns a Transfer Order document and lines.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodTransferOrderNumber := ptrecEventParams.getDocumentNo();
+
+
+      lrecTransferHeader.GET(lcodTransferOrderNumber);
+      assignTransferOrder(lrecTransferHeader, ptrecEventParams);
+
+      IF lrecLocation.GET(lcodLocation) THEN ;
+      cuCommonFuncs.checkLocation(lcodLocation, lrecTransferHeader."Transfer-from Code");
+
+      ldnOutput := ldnOutput.StringBuilder();
+      lbNeedsItemTrackingTable := ptrecEventParams.getNeedsItemTrackingTable();
+      lrecTransferLine.SETRANGE("Document No.",lcodTransferOrderNumber);
+      lrecTransferLine.SETFILTER("Item No.",'<>%1','');
+      lrecTransferLine.SETRANGE("Transfer-from Code", lrecTransferHeader."Transfer-from Code");
+      lrecTransferLine.SETRANGE("Transfer-to Code", lrecTransferHeader."Transfer-to Code");
+      IF( lrecTransferLine.FINDSET(FALSE) ) THEN;
+
+      lrecTransferHeader.SETRECFILTER();
+      lrrefHeader.GETTABLE( lrecTransferHeader );
+      lrrefLine.GETTABLE( lrecTransferLine );
+
+      lcuDataSetTools.SetFormulaCalcEachRow(
+        iEventID,
+        lrrefLine,
+          -1, //
+        DATABASE::Item, // piLookupTable
+        6500, // piLookupField
+        'WHERE (No.=FILTER(''[Item No.]''))' );
+
+      lcuDataSetTools.SetCalculateFields(
+                              iEventID,
+                              lrrefLine,
+                              lrecTransferLine.FIELDNO("Outstanding Quantity"),
+                              lrecTransferLine.FIELDNO(Quantity),
+                              lrecTransferLine.FIELDNO("Qty. to Ship"),
+                              lrecTransferLine.FIELDNO("Quantity Shipped")
+                              );
+
+      lcuDataSetTools.BuildHeaderLineDatasetEmbedRes(
+        iEventID,
+        lrrefHeader,
+        lrrefLine,
+        lbNeedsItemTrackingTable,
+        TRUE,
+        ldnOutput );
+
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Transfer Header"));
+      ptrecEventParams.setValue('Document No.', lcodTransferOrderNumber);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    LOCAL PROCEDURE updateTransferLine@1000000017(VAR ptrecEventParams@1000000010 : TEMPORARY Record 23044511;VAR pbsOutput@1000000009 : BigText);
+    VAR
+      lrecLPHeader@100000001 : Record 23044505;
+      lcodLocation@1000000006 : Code[10];
+      lcodTransferOrderNumber@1000000005 : Code[20];
+      ldQtyToShip@1000000004 : Decimal;
+      liLineNumber@1000000003 : Integer;
+      lrecTransferLine@1000000002 : Record 5741;
+      lrecTransferHeader@1000000001 : Record 5740;
+      lcodBinCode@1000000008 : Code[20];
+      lsLotNumber@1000000011 : Text;
+      lsSerialNumber@1000000012 : Text;
+      ltrecCommentLine@1000000014 : TEMPORARY Record 97;
+      ldChange@1000000016 : Decimal;
+      lcuResMgmtOrig@1000000007 : Codeunit 23044504;
+      lrecCustomExtendedTransferLine@1000000000 : Record 5741;
+      lrrefLine@1000000019 : RecordRef;
+      ldnOutput@1000000021 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lcuDataSetTools@1000000015 : Codeunit 23044535;
+      ldPreviousQuantity@1000000013 : Decimal;
+      lcodLicensePlateNo@1000000017 : Code[20];
+      loptSourceDocument@1000000020 : ' ,Purchase Order,Sales Order,Inbound Transfer,Outbound Transfer,Prod. Order,Put-away,Pick,Movement,Invt. Put-away,Invt. Pick,Receipt,Shipment,Reclass,Purchase Return Order,Assembly,Invt. Movement';
+      ldtExpirationDate@100000000 : Date;
+      lbDecrease@100000002 : Boolean;
+    BEGIN
+      // Updates the Transfer Line quantity to ship and tracking
+      // information.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodTransferOrderNumber := ptrecEventParams.getDocumentNo();
+      liLineNumber := ptrecEventParams.getLineNo();
+      ldQtyToShip := ptrecEventParams.getValueAsDecimal('qty_to_ship');
+      lcodBinCode := ptrecEventParams.getValue('bin');
+      lsLotNumber := ptrecEventParams.getLotNo();
+      lsSerialNumber := ptrecEventParams.getSerialNo();
+      lcodLicensePlateNo := ptrecEventParams.getValue('lp_number');
+      ldtExpirationDate := cuCommonFuncs.getExpirationDate(ptrecEventParams);
+
+      lrecTransferHeader.GET(lcodTransferOrderNumber);
+      lrecTransferLine.GET(lcodTransferOrderNumber, liLineNumber);
+
+      ldPreviousQuantity := lrecTransferLine."Qty. to Ship";
+      ldChange := ldQtyToShip - lrecTransferLine."Qty. to Ship";
+      lbDecrease := (ldQtyToShip < lrecTransferLine."Qty. to Ship");
+
+      IF (lcodLicensePlateNo <> '') AND lbDecrease THEN BEGIN
+        IF lrecLPHeader.GET(lcodLicensePlateNo) THEN BEGIN
+          lrecLPHeader."Processing State" := lrecLPHeader."Processing State"::Removing;
+          lrecLPHeader.MODIFY();
+        END;
+      END;
+
+      IF (ldQtyToShip < 0) THEN BEGIN
+        ldQtyToShip := 0;
+      END;
+
+      lrecTransferLine.VALIDATE("Qty. to Ship", ldQtyToShip);
+
+      IF( (lrecTransferLine."Transfer-from Bin Code" = '') AND (lcodBinCode <> '') ) THEN BEGIN
+        lrecTransferLine.VALIDATE("Transfer-from Bin Code",lcodBinCode);
+      END;
+
+      IF ( cuCustomizedFuncs.OnUpdateTransferLine( iEventID, lrecTransferLine, ptrecEventParams, pbsOutput ) ) THEN BEGIN
+        ptrecEventParams.getExtensibilityTransferLine( lrecCustomExtendedTransferLine );
+        lrecTransferLine.GET( lrecTransferLine."Document No.", lrecTransferLine."Line No." );
+        lrecTransferLine := lrecCustomExtendedTransferLine;
+      END;
+
+      lrecTransferLine.MODIFY(TRUE);
+
+      // add/remove the serial number
+      IF( (lsLotNumber <> '') OR (lsSerialNumber <> '') ) THEN BEGIN
+        lcuResMgmtOrig.AddRemoveTransferSerialNumber(
+          lrecTransferLine,
+          lsSerialNumber,
+          lsLotNumber,
+          (ldChange < 0),
+          TRUE,
+          FALSE,
+          ldChange);
+      END;
+
+      // store this line in the list of changed lines
+      ltrecCommentLine.SETRANGE("Line No.", lrecTransferLine."Line No.");
+      IF( NOT ltrecCommentLine.FIND('-') ) THEN BEGIN
+        ltrecCommentLine."Table Name" := ltrecCommentLine."Table Name"::Item;
+        ltrecCommentLine."No." := lrecTransferLine."Item No.";
+        ltrecCommentLine."Line No." := lrecTransferLine."Line No.";
+        ltrecCommentLine.INSERT;
+      END;
+
+      IF (lcodLicensePlateNo <> '') THEN BEGIN
+        loptSourceDocument := loptSourceDocument::"Outbound Transfer";
+
+        cuLPCommon.addRemoveLicensePlateLine(loptSourceDocument,
+                                           lrecTransferLine."Document No.",
+                                           lrecTransferLine."Line No.",
+                                           lcodLicensePlateNo,
+                                           lrecTransferLine."Item No.",
+                                           lrecTransferLine."Variant Code",
+                                           lsLotNumber,
+                                           lsSerialNumber,
+                                           ldChange,
+                                           lrecTransferLine."Unit of Measure Code",
+                                           ldtExpirationDate,
+                                           lrecTransferLine."Transfer-from Bin Code"
+                                           );
+
+        IF lrecLPHeader.GET(lcodLicensePlateNo) THEN BEGIN
+          lrecLPHeader."Processing State" := lrecLPHeader."Processing State"::" ";
+          lrecLPHeader.MODIFY();
+        END;
+      END;
+
+      ltrecCommentLine.RESET;
+      ltrecCommentLine.FINDSET(FALSE);
+      lrecTransferLine.GET(lrecTransferHeader."No.",ltrecCommentLine."Line No.");
+      lrecTransferLine.SETRECFILTER();
+      lrrefLine.GETTABLE( lrecTransferLine );
+
+      lcuDataSetTools.SetFormulaCalcEachRow(
+        70011,
+        lrrefLine,
+          -1, //
+        DATABASE::Item, // piLookupTable
+        6500, // piLookupField
+        'WHERE (No.=FILTER(''[Item No.]''))' ); //
+
+      lcuDataSetTools.SetCalculateFields(
+                              70011,
+                              lrrefLine,
+                              lrecTransferLine.FIELDNO("Outstanding Quantity"),
+                              lrecTransferLine.FIELDNO(Quantity),
+                              lrecTransferLine.FIELDNO("Qty. to Ship"),
+                              lrecTransferLine.FIELDNO("Quantity Shipped")
+                              );
+
+      ldnOutput := ldnOutput.StringBuilder();
+      lcuDataSetTools.BuildLineTableWithLocation(70011, lrrefLine, TRUE, ldnOutput, lcodLocation);
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Transfer Line"));
+      ptrecEventParams.setValue('Document No.', lcodTransferOrderNumber);
+      ptrecEventParams.setValue('Previous Quantity', FORMAT(ldPreviousQuantity));
+      ptrecEventParams.setValue('New Quantity', FORMAT(ldQtyToShip));
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE postTransferOrder@1000000020(VAR ptrecEventParams@1000000005 : TEMPORARY Record 23044511;VAR pbsOutput@1000000004 : BigText);
+    VAR
+      lrecTransferHeader@1000000001 : Record 5740;
+      lrecTransferLine@1000000006 : Record 5741;
+      lcuTransPost@1000000003 : Codeunit 5704;
+      ltxtDetails@1000000000 : Text[250];
+      lcodTransferOrderNumber@1000000002 : Code[20];
+      lbManuallyPosted@1000000007 : Boolean;
+    BEGIN
+      // Attempts to post the transfer order (ship)
+      lcodTransferOrderNumber := ptrecEventParams.getValue('No.');
+      lbManuallyPosted := ptrecEventParams.getValueAsBool('manuallyPosted');
+
+      lrecTransferHeader.GET(lcodTransferOrderNumber);
+
+      lrecTransferLine.SETRANGE("Document No.",lrecTransferHeader."No.");
+      IF NOT lbManuallyPosted THEN
+        lrecTransferLine.SETFILTER("Qty. to Ship",'>%1',0);
+
+      IF lrecTransferLine.FINDSET(FALSE) THEN BEGIN
+        lrecTransferHeader.VALIDATE("Posting Date",TODAY);
+        lrecTransferHeader.MODIFY(TRUE);
+        lcuTransPost.SetHideValidationDialog(TRUE);
+        lcuTransPost.RUN(lrecTransferHeader);
+        cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+      END;
+
+      ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_POST_TRANSFER_ORDER', codRegionCode), lcodTransferOrderNumber);
+      ptrecEventParams.setValue('details', ltxtDetails);
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Transfer Header"));
+      ptrecEventParams.setValue('Document No.', lcodTransferOrderNumber);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE addSalesLine@1000000022(VAR ptrecEventParams@1000000013 : TEMPORARY Record 23044511;VAR pbsOutput@1000000012 : BigText) piOutLineNo : Integer;
+    VAR
+      lcodSalesOrderNumber@1000000001 : Code[20];
+      lcodItemNumber@1000000002 : Text;
+      lcodVariantCode@1000000003 : Text;
+      lcodBinCode@1000000004 : Code[20];
+      ldQuantity@1000000005 : Decimal;
+      lsSerialNumber@1000000006 : Text;
+      lsLotNumber@1000000007 : Text;
+      lrecSalesHeader@1000000008 : Record 36;
+      lrecSalesLine@1000000009 : Record 37;
+      liNextLineNumber@1000000010 : Integer;
+      ltxtDocumentType@1000000000 : Text[80];
+      liDocumentType@1000000011 : Integer;
+      lrrefLine@1000000014 : RecordRef;
+      ldnOutput@1000000018 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lcuDataSetTools@1000000016 : Codeunit 23044535;
+      lrecNotUsedWhseActivityLine@1000000017 : Record 5767;
+    BEGIN
+      //  Adds a sales line to the sales order.
+      lcodSalesOrderNumber := ptrecEventParams.getDocumentNo();
+      lcodItemNumber := ptrecEventParams.getItemNo();
+      lcodVariantCode := ptrecEventParams.getValue('variant_code');
+      lcodBinCode := ptrecEventParams.getBin();
+      ldQuantity := ptrecEventParams.getValueAsDecimal('quantity');
+      lsSerialNumber := ptrecEventParams.getSerialNo();
+      lsLotNumber := ptrecEventParams.getLotNo();
+
+      // 'Document Type' is field name from sales header table
+      // The reason why using getValue is 'Document Type' is an option.
+      // If there is not 'Document Type' in the ptrecEventParams, getValueAsInt will return 0
+      ltxtDocumentType := ptrecEventParams.getValue('Document Type');
+      IF (ltxtDocumentType = '') THEN BEGIN
+        liDocumentType := lrecSalesHeader."Document Type"::Order;
+      END ELSE BEGIN
+        EVALUATE(liDocumentType, ltxtDocumentType);
+      END;
+
+      IF ( NOT lrecSalesHeader.GET(liDocumentType, lcodSalesOrderNumber) ) THEN BEGIN
+        // assume sales order, but try other documents after
+        lrecSalesHeader.SETRANGE("No.", lcodSalesOrderNumber);
+        lrecSalesHeader.FINDFIRST();
+      END;
+
+
+      // determine the next line number to use
+      liNextLineNumber := 10000;
+      lrecSalesLine.SETRANGE("Document Type",lrecSalesHeader."Document Type");
+      lrecSalesLine.SETRANGE("Document No.",lrecSalesHeader."No.");
+      IF( lrecSalesLine.FINDLAST ) THEN
+        liNextLineNumber := lrecSalesLine."Line No." + 10000;
+
+      // create the line
+      lrecSalesLine.RESET;
+      lrecSalesLine.INIT;
+      lrecSalesLine.VALIDATE("Document Type",lrecSalesHeader."Document Type");
+      lrecSalesLine.VALIDATE("Document No.",lrecSalesHeader."No.");
+      lrecSalesLine.VALIDATE("Line No.",liNextLineNumber);
+      lrecSalesLine.VALIDATE(Type,lrecSalesLine.Type::Item);
+      lrecSalesLine.VALIDATE("No.",lcodItemNumber);
+      lrecSalesLine.VALIDATE("Variant Code",lcodVariantCode);
+      lrecSalesLine.VALIDATE("Bin Code",lcodBinCode);
+      lrecSalesLine.VALIDATE(Quantity,ldQuantity);
+      lrecSalesLine.VALIDATE("Qty. to Ship",ldQuantity);
+      lrecSalesLine.INSERT(TRUE);
+
+      piOutLineNo := lrecSalesLine."Line No.";
+
+      // add/remove the serial number
+      IF( (lsLotNumber <> '') OR (lsSerialNumber <> '') ) THEN BEGIN
+        cuResMgmt.AddRemoveSalesShipTracking(lrecSalesLine,lsSerialNumber, lsLotNumber,ldQuantity,
+          lrecSalesLine."Unit of Measure Code",
+          0D,
+          lrecNotUsedWhseActivityLine);
+      END;
+
+      lrecSalesLine.SETRECFILTER();
+      lrrefLine.GETTABLE( lrecSalesLine );
+
+      lcuDataSetTools.SetFormulaCalcEachRow(
+        iEventID,
+        lrrefLine,
+          -1, //
+        DATABASE::Item, // piLookupTable
+        6500, // piLookupField
+        'WHERE (No.=FILTER(''[No.]''))' ); //
+      ldnOutput := ldnOutput.StringBuilder();
+      lcuDataSetTools.BuildLineTableEmbedRes(iEventID, lrrefLine, TRUE, ldnOutput);
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Sales Line"));
+      ptrecEventParams.setValue('Document No.', lcodSalesOrderNumber);
+      ptrecEventParams.setValue('Line No.', FORMAT(liNextLineNumber));
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE processSalesLPScan@1000000028(VAR ptrecEventParams@1000000004 : TEMPORARY Record 23044511;VAR pbsOutput@1000000003 : BigText);
+    VAR
+      ltrecLPLine@1000000012 : TEMPORARY Record 23044506;
+      ltrecLPHeader@1000000018 : TEMPORARY Record 23044505;
+      lrecSalesLine@1000000011 : Record 37;
+      ltrecCommentLine@1000000007 : TEMPORARY Record 97;
+      lrecLPLineUsage@1000000006 : Record 23044507;
+      lrecLPHeader@1000000005 : Record 23044505;
+      ltxtDetails@1000000000 : Text[250];
+      lcodLocation@1000000017 : Code[10];
+      lcodSalesNumber@1000000016 : Code[20];
+      lcodLicensePlateNumber@1000000015 : Code[20];
+      lcodBinCode@1000000013 : Code[20];
+      ldQtyToApply@1000000010 : Decimal;
+      ldQtyOutstanding@1000000009 : Decimal;
+      ldQtyApplied@1000000008 : Decimal;
+      liLPAction@1000000014 : Integer;
+      lbShipping@1000000002 : Boolean;
+      lbOverrideBlankBin@1000000001 : Boolean;
+    BEGIN
+      // Updates the Sales Lines with the appropriate License Plate.
+      // If quantities do not match resulting License Plate then an error will be thrown.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodSalesNumber := COPYSTR(ptrecEventParams.getDocumentNo(), 1, MAXSTRLEN(lcodSalesNumber));
+      lcodLicensePlateNumber := ptrecEventParams.getValue('lp_number');
+      liLPAction := ptrecEventParams.getValueAsInt('update_action');
+      lcodBinCode := ptrecEventParams.getValue('bin_code');
+      lbOverrideBlankBin := ptrecEventParams.getValueAsBool('override_blank_bin');
+
+
+      // if not shipping this license plate must have previously been assigned to the document
+      // e.g. shipped out
+      IF( FALSE ) THEN BEGIN
+        // make sure shipped
+        lrecLPHeader.GET(lcodLicensePlateNumber);
+        lrecLPHeader.TESTFIELD(Status,lrecLPHeader.Status::Shipped);
+
+        // make sure the last usage was for this sales order
+        lrecLPLineUsage.SETRANGE("License Plate No.",lcodLicensePlateNumber);
+        lrecLPLineUsage.FINDLAST;
+
+
+        IF( (lrecLPLineUsage."Posting Date" = 0D)
+            OR (lrecLPLineUsage."Source Document" <> lrecLPLineUsage."Source Document"::"Sales Order")
+            OR (lrecLPLineUsage."Source No." <> lcodSalesNumber) ) THEN BEGIN
+          ERROR(cuTranslationMgmt.getTranslatedString('ERR_LP_NOT_SHIPPED', codRegionCode),lcodLicensePlateNumber,lcodSalesNumber);
+        END;
+      END;
+
+      // modify/breakapart the license plate as required
+      // the resulting temp record will either contain the license plate to use or just
+      // a list of items.
+      lcodLicensePlateNumber := cuLPMgmt.AdjustLicensePlate(ptrecEventParams, ltrecLPLine, ltrecLPHeader);
+        cuLPCommon.updateSalesLinesCode(lcodLocation,lcodSalesNumber,lcodLicensePlateNumber,lcodBinCode
+        ,lbOverrideBlankBin
+        ,ltrecLPLine
+        ,ltrecLPHeader
+        );
+
+      cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+
+      ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_ASSIGN_LP', codRegionCode), lcodLicensePlateNumber, lcodSalesNumber);
+      ptrecEventParams.setValue('details', ltxtDetails);
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Sales Line"));
+      ptrecEventParams.setValue('Document No.', lcodSalesNumber);
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE processTransferLPScan@1000000027(VAR ptrecEventParams@1000000004 : TEMPORARY Record 23044511;VAR pbsOutput@1000000003 : BigText);
+    VAR
+      ltrecLPLine@1000000011 : TEMPORARY Record 23044506;
+      ltrecLPHeader@1000000017 : TEMPORARY Record 23044505;
+      lrecTransferLine@1000000010 : Record 5741;
+      lrecLPLineUsage@1000000001 : Record 23044507;
+      lrecLPHeader@1000000000 : Record 23044505;
+      ltrecCommentLine@1000000009 : TEMPORARY Record 97;
+      ltxtDetails@1000000002 : Text[250];
+      lcodLocation@1000000021 : Code[10];
+      lcodTransferNumber@1000000020 : Code[20];
+      lcodLicensePlateNumber@1000000019 : Code[20];
+      lcodBinCode@1000000008 : Code[20];
+      ldQtyToApply@1000000014 : Decimal;
+      ldQtyOutstanding@1000000013 : Decimal;
+      ldQtyApplied@1000000012 : Decimal;
+      liLPAction@1000000016 : Integer;
+      lbOverrideBlankBin@1000000007 : Boolean;
+      lbOverrideQuantity@1000000006 : Boolean;
+    BEGIN
+      // Process the license plate against the transfer order.
+      lcodTransferNumber := ptrecEventParams.getLegacyDocumentNo('transfer_number');
+      lcodLicensePlateNumber := ptrecEventParams.getValue('lp_number');
+
+      // Updates the Transfer Lines with the appropriate License Plate.
+      // If quantities do not match resulting License Plate then an error will be thrown.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodTransferNumber := ptrecEventParams.getDocumentNo();
+      lcodLicensePlateNumber := ptrecEventParams.getValue('lp_number');
+      liLPAction := ptrecEventParams.getValueAsInt('update_action');
+
+
+
+
+      lcodBinCode := ptrecEventParams.getValue('bin_code');
+      lbOverrideBlankBin := ptrecEventParams.getValueAsBool('override_blank_bin');
+
+      // modify/breakapart the license plate as required
+      // the resulting temp record will either contain the license plate to use or just
+      // a list of items.
+      lcodLicensePlateNumber := cuLPMgmt.AdjustLicensePlate(ptrecEventParams, ltrecLPLine, ltrecLPHeader);
+      IF (liLPAction = 5)  THEN BEGIN
+        lbOverrideQuantity := TRUE;
+      END
+      ELSE BEGIN
+        lbOverrideQuantity := FALSE;
+      END;
+      cuLPCommon.updateTransferLinesCode(lcodLocation,lcodTransferNumber,lcodLicensePlateNumber,TRUE
+      ,lcodBinCode
+      ,lbOverrideBlankBin
+      ,ltrecLPLine
+      ,lbOverrideQuantity,
+      FALSE
+      ,ltrecLPHeader
+      );
+
+      cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+
+      ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_ASSIGN_LP', codRegionCode), lcodLicensePlateNumber, lcodTransferNumber);
+      ptrecEventParams.setValue('details', ltxtDetails);
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Transfer Line"));
+      ptrecEventParams.setValue('Document No.', lcodTransferNumber);
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE processShipmentLPScan@1000000030(VAR ptrecEventParams@1000000004 : TEMPORARY Record 23044511;VAR pbsOutput@1000000003 : BigText);
+    VAR
+      ltrecLPLine@1000000007 : TEMPORARY Record 23044506;
+      ltrecLPHeader@1000000013 : TEMPORARY Record 23044505;
+      lrecLPHeader@1000000006 : Record 23044505;
+      lrecWhseSourceShipLine@1000000002 : Record 7321;
+      ltxtDetails@1000000000 : Text[250];
+      lcodLocation@1000000012 : Code[10];
+      lcodShipmentNumber@1000000011 : Code[20];
+      lcodLicensePlateNumber@1000000010 : Code[20];
+      lcodBinCode@1000000008 : Code[20];
+      liLPAction@1000000009 : Integer;
+      liSelectedLineNumber@1000000005 : Integer;
+      lbOverrideBlankBin@1000000001 : Boolean;
+    BEGIN
+      // Updates the Warehouse Shipment Lines with the appropriate License Plate.
+      // If quantities do not match resulting License Plate then an error will be thrown.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodShipmentNumber := ptrecEventParams.getDocumentNo();
+      lbOverrideBlankBin := ptrecEventParams.getValueAsBool('override_blank_bin');
+      lcodLicensePlateNumber := ptrecEventParams.getValue('lp_number');
+      liLPAction := ptrecEventParams.getValueAsInt('update_action');
+      lcodBinCode := ptrecEventParams.getValue('bin');
+      liSelectedLineNumber := ptrecEventParams.getLineNo();
+
+      // find the appropriate line (used to limit selection if shipments are combined)
+      IF( NOT lrecWhseSourceShipLine.GET(lcodShipmentNumber,liSelectedLineNumber) ) THEN BEGIN
+        lrecWhseSourceShipLine.SETRANGE("No.",lcodShipmentNumber);
+        lrecWhseSourceShipLine.FINDFIRST;
+      END;
+
+
+      // modify/breakapart the license plate as required
+      // the resulting temp record will either contain the license plate to use or just
+      // a list of items.
+      lcodLicensePlateNumber := cuLPMgmt.AdjustLicensePlate(ptrecEventParams, ltrecLPLine, ltrecLPHeader);
+
+
+      cuLPCommon.updateWhseShipmentLinesCode(lcodLocation, lcodLicensePlateNumber, lrecWhseSourceShipLine
+      , lcodBinCode
+      , lbOverrideBlankBin
+      , ltrecLPLine
+      , ltrecLPHeader);
+
+      cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+
+      ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_ASSIGN_LP', codRegionCode), lcodLicensePlateNumber, lcodShipmentNumber);
+      ptrecEventParams.setValue('details', ltxtDetails);
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Warehouse Shipment Line"));
+      ptrecEventParams.setValue('Document No.', lcodShipmentNumber);
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE getSalesPrices@1000000002(VAR ptrecEventParams@1000000004 : TEMPORARY Record 23044511;VAR pbsOutput@1000000003 : BigText);
+    VAR
+      lrecSalesPrices@1000000000 : Record 7002;
+      lrref@1000000005 : RecordRef;
+      ldnOutput@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+    BEGIN
+      // Return all sales prices
+      IF (lrecSalesPrices.FINDSET(FALSE) )THEN; // all records
+      lrref.GETTABLE( lrecSalesPrices );
+      ldnOutput := ldnOutput.StringBuilder();
+
+      cuDataSetTools.BuildLinesOnlyDataset(iEventID, lrref,FALSE ,ldnOutput);
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE getCustomers@1000000013(VAR ptrecEventParams@1000000004 : TEMPORARY Record 23044511;VAR pbsOutput@1000000003 : BigText);
+    VAR
+      lrecCustomer@1000000000 : Record 18;
+      lcodLocation@1000000002 : Code[10];
+      lrref@1000000006 : RecordRef;
+      ldnOutput@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+    BEGIN
+      // Return all customers
+      lcodLocation := ptrecEventParams.getValue('location');
+      lrecCustomer.SETFILTER("Location Code", '''''|%1', lcodLocation);
+      IF (lrecCustomer.FINDSET(FALSE) )THEN;
+
+      lrref.GETTABLE( lrecCustomer );
+      ldnOutput := ldnOutput.StringBuilder();
+
+      cuDataSetTools.BuildLinesOnlyDataset(iEventID, lrref,FALSE ,ldnOutput);
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE deleteSalesLine@1000000014(VAR ptrecEventParams@1000000004 : TEMPORARY Record 23044511;VAR pbsOutput@1000000003 : BigText);
+    VAR
+      lcodLocation@1000000002 : Code[10];
+      lrecSalesLine@1000000000 : Record 37;
+      lcodSalesOrderNumber@1000000001 : Code[20];
+      liLineNumber@1000000005 : Integer;
+    BEGIN
+      // Delete the specific sales line
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodSalesOrderNumber := ptrecEventParams.getDocumentNo();
+      liLineNumber := ptrecEventParams.getLineNo();
+      IF (lrecSalesLine.GET(lrecSalesLine."Document Type"::Order, lcodSalesOrderNumber, liLineNumber)) THEN BEGIN
+        lrecSalesLine.DELETE;
+      END;
+      cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Sales Line"));
+      ptrecEventParams.setValue('Document No.', lcodSalesOrderNumber);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE createSalesOrder@1000000016(VAR ptrecEventParams@1000000004 : TEMPORARY Record 23044511;VAR pbsOutput@1000000003 : BigText);
+    VAR
+      lcodLocation@1000000002 : Code[10];
+      lcodSalesOrderNumber@1000000001 : Code[20];
+      lcodCustomerNumber@1000000000 : Code[20];
+      lrecSalesHeader@1000000005 : Record 36;
+      lbPOS@1000000006 : Boolean;
+      ltxtDocumentType@1000000007 : Text[80];
+      liDocumentType@1000000008 : Integer;
+    BEGIN
+      // create a sales header
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodSalesOrderNumber := ptrecEventParams.getDocumentNo();
+      lcodCustomerNumber := ptrecEventParams.getValue('customer_number');
+
+      // 'Document Type' is field name from sales header table
+      // The reason why using getValue is 'Document Type' is an option.
+      // If there is not 'Document Type' in the ptrecEventParams, getValueAsInt will return 0
+      ltxtDocumentType := ptrecEventParams.getValue('Document Type');
+
+      lrecSalesHeader.INIT;
+      IF (ltxtDocumentType = '') THEN BEGIN
+        // old behavior
+        lrecSalesHeader."Document Type" := lrecSalesHeader."Document Type"::Order;
+      END ELSE BEGIN
+        EVALUATE(liDocumentType, ltxtDocumentType);
+        lrecSalesHeader."Document Type" := liDocumentType;
+      END;
+      lrecSalesHeader.VALIDATE("No.", '' );
+      lrecSalesHeader.VALIDATE("Sell-to Customer No.", lcodCustomerNumber);
+      lrecSalesHeader.INSERT(TRUE);
+      pbsOutput.ADDTEXT(STRSUBSTNO('<VALUE>%1</VALUE>',lrecSalesHeader."No." ));
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Sales Header"));
+      ptrecEventParams.setValue('Document No.', lcodSalesOrderNumber);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE getSuggestedItemTracking@1000000012(VAR ptrecEventParams@1000000004 : TEMPORARY Record 23044511;VAR pbsOutput@1000000003 : BigText);
+    VAR
+      lcodLocation@1000000002 : Code[10];
+      lrecItemLedgerEntry@1000000000 : Record 32;
+      lrrefItemLedgerEntry@1000000001 : RecordRef;
+      lcodItemNumber@1000000005 : Text;
+      liCurrentRecordCounter@1000000006 : Integer;
+      lcodVariantCode@1000000007 : Text;
+    BEGIN
+      // it receives the pda,form (in case it matters),document line, and item.
+      // return a generic dataset, with configurable columns.
+      // should return the top 100 "available" (remaining quantity > 0 ) items / lots / serials
+      // from the item ledger entries, sorted by oldest expiry first.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodVariantCode := COPYSTR( ptrecEventParams.getValue('variant_code'), 1, MAXSTRLEN( lcodVariantCode) );
+      lcodItemNumber := COPYSTR( ptrecEventParams.getValue('item_number'), 1, MAXSTRLEN( lcodItemNumber) );
+
+      pbsOutput.ADDTEXT('<DATASET>');
+      pbsOutput.ADDTEXT('<TABLE id="list">');
+      pbsOutput.ADDTEXT('<COLS>');
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.addDSColumnsFromConfig( pbsOutput, iEventID,'', DATABASE::"Item Ledger Entry" );
+      pbsOutput.ADDTEXT('</COLS>');
+      pbsOutput.ADDTEXT('<ROWS>');
+
+      lrecItemLedgerEntry.SETCURRENTKEY("Expiration Date", "Location Code", "Item No.", "Variant Code");
+      lrecItemLedgerEntry.SETRANGE("Location Code", lcodLocation);
+      lrecItemLedgerEntry.SETRANGE("Item No.", lcodItemNumber);
+      lrecItemLedgerEntry.SETRANGE("Variant Code", lcodVariantCode);
+      lrecItemLedgerEntry.SETFILTER("Remaining Quantity", '>0');
+      lrecItemLedgerEntry.ASCENDING(TRUE);
+
+      // using Find('-') because findSet does not allow using the ascending at the same time.
+      IF (lrecItemLedgerEntry.FIND('-') ) THEN BEGIN
+        REPEAT
+          liCurrentRecordCounter += 1;
+          pbsOutput.ADDTEXT('<R><FIELDS>');
+          lrrefItemLedgerEntry.GETTABLE( lrecItemLedgerEntry);
+          cuCommonFuncs.addDSFieldsForRecord(pbsOutput, lrrefItemLedgerEntry, iEventID, '');
+          pbsOutput.ADDTEXT('</FIELDS></R>');
+        UNTIL ((lrecItemLedgerEntry.NEXT() = 0) OR (liCurrentRecordCounter >= 100));
+      END; // IF FIND Lot/Serial in Item Ledger Entry
+
+      pbsOutput.ADDTEXT('</ROWS>');
+      pbsOutput.ADDTEXT('</TABLE>');
+      pbsOutput.ADDTEXT('</DATASET>');
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE assignWhseShipment@1000000021(VAR precWhseShipmentHeader@1000000000 : Record 7320;VAR ptrecEventParams@1000000002 : TEMPORARY Record 23044511);
+    VAR
+      lrecConfig@1000000003 : Record 23044504;
+      lcodUserName@1000000001 : Code[50];
+    BEGIN
+      //<FUNC>
+      //  Description: Assigns the user to the warehouse shipment header if required.
+      //  Side Effect: None
+      //</FUNC>
+
+      lcodUserName := cuCommonFuncs.getUserNameWithDomain(ptrecEventParams);
+
+      IF( lcodUserName <> '' ) THEN BEGIN
+        cuCommonFuncs.getDeviceConfig(lrecConfig,ptrecEventParams);
+
+        IF (lrecConfig."Assign Document" = lrecConfig."Assign Document"::Always) OR
+          ((lrecConfig."Assign Document" = lrecConfig."Assign Document"::Unassigned) AND (precWhseShipmentHeader."Assigned User ID"='')) THEN BEGIN
+          precWhseShipmentHeader."Assigned User ID" := lcodUserName;
+          precWhseShipmentHeader."Assignment Date" := TODAY;
+          precWhseShipmentHeader."Assignment Time" := TIME;
+          precWhseShipmentHeader.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE assignTransferOrder@1000000023(VAR precTransferHeader@1000000001 : Record 5740;VAR ptrecEventParams@1000000000 : TEMPORARY Record 23044511);
+    VAR
+      lrecConfig@1000000003 : Record 23044504;
+      lcodUserName@1000000002 : Code[50];
+    BEGIN
+      //<FUNC>
+      //  Description: Assigns the user to the transfer header if required.
+      //  Side Effect: None
+      //</FUNC>
+
+      lcodUserName := cuCommonFuncs.getUserNameWithDomain(ptrecEventParams);
+
+      IF( lcodUserName <> '' ) THEN BEGIN
+        cuCommonFuncs.getDeviceConfig(lrecConfig,ptrecEventParams);
+        IF (lrecConfig."Assign Document" = lrecConfig."Assign Document"::Always) OR
+          ((lrecConfig."Assign Document" = lrecConfig."Assign Document"::Unassigned) AND (precTransferHeader."Assigned User ID"='')) THEN BEGIN
+
+          precTransferHeader."Assigned User ID" := lcodUserName;
+          precTransferHeader.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE assignSalesOrder@1000000008(VAR precSalesHeader@1000000001 : Record 36;VAR ptrecEventParams@1000000000 : TEMPORARY Record 23044511);
+    VAR
+      lrecConfig@1000000003 : Record 23044504;
+      lcodUserName@1000000002 : Code[50];
+    BEGIN
+      //<FUNC>
+      //  Description: Assigns the user to the sales header if required.
+      //  Side Effect: None
+      //</FUNC>
+
+
+      lcodUserName := cuCommonFuncs.getUserNameWithDomain(ptrecEventParams);
+
+      IF( lcodUserName <> '' ) THEN BEGIN
+        cuCommonFuncs.getDeviceConfig(lrecConfig,ptrecEventParams);
+        IF (lrecConfig."Assign Document" = lrecConfig."Assign Document"::Always) OR
+          ((lrecConfig."Assign Document" = lrecConfig."Assign Document"::Unassigned) AND (precSalesHeader."Assigned User ID"='')) THEN BEGIN
+
+          precSalesHeader."Assigned User ID" := lcodUserName;
+          precSalesHeader.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE EmptyTote@1000000018(VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      lcuLPCommon@1000000004 : Codeunit 23044541;
+      lcodLPNumber@1000000002 : Code[20];
+    BEGIN
+      //<FUNC>
+      // Empties the specified tote
+      //</FUNC>
+      lcodLPNumber := ptrecEventParams.getValue('tote_number');
+      lcuLPCommon.ClearTote(lcodLPNumber);
+
+      cuCommonFuncs.generateSuccessReturnWithMsg(1, STRSUBSTNO(cuTranslationMgmt.getTranslatedString('TOTE_EMPTY_MSG', codRegionCode),lcodLPNumber), pbsOutput);
+
+      ptrecEventParams.setValue('details', cuTranslationMgmt.getTranslatedString('LOG_EMPTY_TOTE', codRegionCode));
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"IWX License Plate Header"));
+      ptrecEventParams.setValue('Document No.', lcodLPNumber);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    LOCAL PROCEDURE ChangeSalesOrderBin@100000000(VAR ptrecEventParams@100000001 : TEMPORARY Record 23044511;VAR pbsOutput@100000000 : BigText);
+    VAR
+      lrecSalesLine@100000008 : Record 37;
+      lrrefLine@100000007 : RecordRef;
+      ldnOutput@100000006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lcodSalesOrderNumber@100000005 : Code[20];
+      lcodNewBinCode@100000004 : Code[20];
+      lcodPrevBinCode@100000003 : Code[20];
+      liLineNumber@100000002 : Integer;
+    BEGIN
+      lcodSalesOrderNumber := COPYSTR(ptrecEventParams.getDocumentNo(), 1, MAXSTRLEN(lcodSalesOrderNumber));
+      liLineNumber := ptrecEventParams.getLineNo();
+      lcodNewBinCode := COPYSTR(ptrecEventParams.getValue('action_result'), 1, MAXSTRLEN(lcodNewBinCode));
+
+      lrecSalesLine.GET(lrecSalesLine."Document Type"::Order, lcodSalesOrderNumber, liLineNumber);
+      lcodPrevBinCode := lrecSalesLine."Bin Code";
+
+      lrecSalesLine.VALIDATE("Bin Code", lcodNewBinCode);
+      lrecSalesLine.MODIFY(TRUE);
+
+      lrecSalesLine.SETRECFILTER();
+      lrrefLine.GETTABLE( lrecSalesLine );
+
+      cuDataSetTools.SetFormulaCalcEachRow(
+        70000,
+        lrrefLine,
+          -1, //
+        DATABASE::Item, // piLookupTable
+        6500, // piLookupField
+        'WHERE (No.=FILTER(''[No.]''))' ); //
+
+      cuDataSetTools.SetCalculateFields(70000,
+                                        lrrefLine,
+                                        lrecSalesLine.FIELDNO("Outstanding Quantity"),
+                                        lrecSalesLine.FIELDNO(Quantity),
+                                        lrecSalesLine.FIELDNO("Qty. to Ship"),
+                                        lrecSalesLine.FIELDNO("Quantity Shipped")
+                                        );
+
+      ldnOutput := ldnOutput.StringBuilder();
+      cuDataSetTools.BuildLineTableEmbedRes(70000, lrrefLine, TRUE, ldnOutput);
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Purchase Line"));
+      ptrecEventParams.setValue('Document No.', lcodSalesOrderNumber);
+      ptrecEventParams.setValue('Pervious Bin', lcodPrevBinCode);
+      ptrecEventParams.setValue('New Bin', lcodNewBinCode);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    LOCAL PROCEDURE ChangeTransferOrderBin@100000001(VAR ptrecEventParams@100000001 : TEMPORARY Record 23044511;VAR pbsOutput@100000000 : BigText);
+    VAR
+      lrecTransferLine@100000008 : Record 5741;
+      lrrefLine@100000007 : RecordRef;
+      ldnOutput@100000006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lcodTransferOrderNumber@100000005 : Code[20];
+      lcodNewBinCode@100000004 : Code[20];
+      lcodPrevBinCode@100000003 : Code[20];
+      liLineNumber@100000002 : Integer;
+    BEGIN
+      lcodTransferOrderNumber := COPYSTR(ptrecEventParams.getDocumentNo(), 1, MAXSTRLEN(lcodTransferOrderNumber));
+      liLineNumber := ptrecEventParams.getLineNo();
+      lcodNewBinCode := COPYSTR(ptrecEventParams.getValue('action_result'), 1, MAXSTRLEN(lcodNewBinCode));
+
+      lrecTransferLine.GET(lcodTransferOrderNumber, liLineNumber);
+      lcodPrevBinCode := lrecTransferLine."Transfer-from Bin Code";
+
+      lrecTransferLine.VALIDATE("Transfer-from Bin Code", lcodNewBinCode);
+      lrecTransferLine.MODIFY(TRUE);
+
+      lrecTransferLine.SETRECFILTER();
+      lrrefLine.GETTABLE( lrecTransferLine );
+
+      cuDataSetTools.SetFormulaCalcEachRow(
+        70011,
+        lrrefLine,
+          -1, //
+        DATABASE::Item, // piLookupTable
+        6500, // piLookupField
+        'WHERE (No.=FILTER(''[Item No.]''))' ); //
+
+      cuDataSetTools.SetCalculateFields(
+                              70011,
+                              lrrefLine,
+                              lrecTransferLine.FIELDNO("Outstanding Quantity"),
+                              lrecTransferLine.FIELDNO(Quantity),
+                              lrecTransferLine.FIELDNO("Qty. to Ship"),
+                              lrecTransferLine.FIELDNO("Quantity Shipped")
+                              );
+
+      ldnOutput := ldnOutput.StringBuilder();
+      cuDataSetTools.BuildLineTableWithLocation(70011, lrrefLine, TRUE, ldnOutput, lrecTransferLine."Transfer-from Code");
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Purchase Line"));
+      ptrecEventParams.setValue('Document No.', lcodTransferOrderNumber);
+      ptrecEventParams.setValue('Pervious Bin', lcodPrevBinCode);
+      ptrecEventParams.setValue('New Bin', lcodNewBinCode);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+    }
+    END.
+  }
+}
+

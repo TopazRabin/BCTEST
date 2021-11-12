@@ -1,0 +1,836 @@
+OBJECT Codeunit 14050801 Send E.D.I. Purch. Pmt. Advice
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/25/19;
+    Time=12:00:00 PM;
+    Version List=SE0.61;
+  }
+  PROPERTIES
+  {
+    TableNo=14050801;
+    OnRun=BEGIN
+            IF NOT SendPaymentAdvice(Rec,TRUE) THEN
+              ERROR(Text008,"No.");
+
+            IF EDITemplate."Post Payment Advice on Send" THEN
+              PostPaymentAdvice(PurchasePaymentAdvice);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BankAccountLedgerEntry@1240030069 : Record 271;
+      BankAccount@1240030051 : Record 270;
+      CheckLedgerEntry@1240030012 : Record 272;
+      CompanyInformation@1240030059 : Record 79;
+      DetailedVendLedgEntry@1240030043 : Record 380;
+      EDIDocument@1240030005 : Record 14002353;
+      EDIElement@1240030002 : Record 14002355;
+      EDIElementArray@1240030001 : ARRAY [100] OF TEMPORARY Record 14002355;
+      EDISegment@1240030004 : Record 14002354;
+      EDITemplate@1240030007 : Record 14002350;
+      EDITradePartner@1240030006 : Record 14002360;
+      EDISendDocHdr@1240030003 : Record 14002369;
+      EDISetup@1240030045 : Record 14002367;
+      PaytoVendor@1240030056 : Record 23;
+      PurchasePaymentAdvice@1240030047 : Record 14050801;
+      PurchasePaymentAdviceLine@1240030046 : Record 14050802;
+      PurchCrMemoHdr@1240030054 : Record 124;
+      PurchInvHeader@1240030050 : Record 122;
+      VendLedgEntry@1240030058 : Record 25;
+      VendLedgEntry2@1240030055 : Record 25;
+      Vendor@1240030008 : Record 23;
+      VendorBankAccount@1240030080 : Record 288;
+      EDIVendorCrossRef@1240020097 : Record 14002366;
+      RecRef@1240020005 : RecordRef;
+      EDIFormat@1240030025 : Codeunit 14002351;
+      EDISend@1240030027 : Codeunit 14002356;
+      EDIPackageMapIntegration@1240030057 : Codeunit 14002378;
+      CreateEDIAlert@1240020001 : Codeunit 14000375;
+      EDILoadDBFields@1240020002 : Codeunit 14002392;
+      EDILoadEDIOutFields@1240020006 : Codeunit 14000381;
+      DateTimeVariable@1240020003 : DateTime;
+      TimeVariable@1240020004 : Time;
+      DateVariable@1240030034 : Date;
+      PaymentDate@1240030037 : Date;
+      DecimalVariable@1240030033 : Decimal;
+      AppliedAmount@1240030062 : Decimal;
+      TotalAppliedAmount@1240030068 : Decimal;
+      RemainingAmount@1240030065 : Decimal;
+      InvoiceAmount@1240030064 : Decimal;
+      i@1240030029 : Integer;
+      IntegerVariable@1240030044 : Integer;
+      OutLenArray@1240030041 : ARRAY [100] OF Integer;
+      ClosedByEntry@1240030015 : Integer;
+      EntryNo@1240030010 : Integer;
+      Version@1240030036 : Integer;
+      LineNo@1240030028 : Integer;
+      FirstHdrSeq@1240030023 : Integer;
+      FirstLineSeq@1240030022 : Integer;
+      FirstTrailerSeq@1240030020 : Integer;
+      LastHdrSeq@1240030019 : Integer;
+      LastLineSeq@1240030018 : Integer;
+      VendLedgEntryNo@1240030061 : Integer;
+      PrevSeq@1240030017 : Integer;
+      NewSegment@1240030048 : Boolean;
+      OutErrorArray@1240030049 : ARRAY [100] OF Boolean;
+      BooleanVariable@1240030031 : Boolean;
+      BypassSegment@1240030030 : Boolean;
+      Text003@1003 : TextConst 'ENU=An active EDI Document %1 was not found for Trading Partner %2.;ENC=An active EDI Document %1 was not found for Trading Partner %2.';
+      Text004@1004 : TextConst 'ENU=EDI Document %1 for Trading Partner %2 has a mapping error.;ENC=EDI Document %1 for Trading Partner %2 has a mapping error.';
+      Text005@1240030082 : TextConst 'ENU=Pay-to Vendor %1 does not exist.;ENC=Pay-to Vendor %1 does not exist.';
+      Text006@1240030086 : TextConst 'ENU=Send Document for %1 was generated on %2. \ Do you want to create again?;ENC=Send Document for %1 was generated on %2 at %3. \ Do you want to create again?';
+      Text007@1240030087 : TextConst 'ENU=Purchase Payment Advice not created.;ENC=Purhase Payment Advice not created.';
+      Text008@1240030089 : TextConst 'ENU=Purchase Payment Remti Advice %1 not exported.;ENC=Purchase Payment Remti Advice %1 not exported.';
+      Text009@1240030094 : TextConst 'ENU=Trade Partner not found for Vendor %1.;ENC=Payment Remit Advice Trade Partner not found for Vendor %1.';
+      EntryFound@1240030042 : Boolean;
+      FirstSegment@1240030024 : Boolean;
+      TradePartnerFound@1240030038 : Boolean;
+      PartialPayment@1240030063 : Boolean;
+      OutFldArray@1240030039 : ARRAY [100] OF Text[250];
+      TradePartner@1240030016 : Code[20];
+      RemitAdviceNo@1240030014 : Code[10];
+      Payee@1240030013 : Code[20];
+      NavisionDocumentNo@1240030011 : Code[10];
+      DocumentNo@1240030035 : Code[10];
+      ReverseCrossRefValue@1240020000 : Text[40];
+      DiscountAmount@1000000000 : Decimal;
+      XMLDoc@1240020007 : Boolean;
+      Text010@1240020008 : TextConst 'ENU=Unable to find EDI Segment Elements for the following: %1 - %2 - %3 - %4';
+
+    PROCEDURE CreatePaymentAdvice@1240030002(CurrVendLedgEntry@1240030003 : Record 25;Release@1240030001 : Boolean) RemitAdvice : Code[10];
+    BEGIN
+      CompanyInformation.GET;
+
+      BankAccountLedgerEntry.RESET;
+      BankAccountLedgerEntry.SETRANGE("Transaction No.",CurrVendLedgEntry."Transaction No.");
+      BankAccountLedgerEntry.FIND('-');
+
+      BankAccount.RESET;
+      BankAccount.SETRANGE("No.",BankAccountLedgerEntry."Bank Account No.");
+      BankAccount.FIND('-');
+
+      CheckLedgerEntry.RESET;
+      CheckLedgerEntry.SETRANGE("Bank Account Ledger Entry No.",BankAccountLedgerEntry."Entry No.");
+      IF NOT CheckLedgerEntry.FIND('-') THEN;
+
+      VendorBankAccount.RESET;
+      VendorBankAccount.SETRANGE("Vendor No.",CurrVendLedgEntry."Vendor No.");
+      IF NOT VendorBankAccount.FIND('-') THEN
+        VendorBankAccount.INIT;
+
+      PaytoVendor.RESET;
+      PaytoVendor.SETRANGE("No.",CurrVendLedgEntry."Vendor No.");
+      IF NOT PaytoVendor.FIND('-') THEN
+        ERROR(Text005,Payee)
+      ELSE
+        Payee := CurrVendLedgEntry."Vendor No.";
+
+      DocumentNo := CurrVendLedgEntry."Document No.";
+      PaymentDate := CurrVendLedgEntry."Posting Date";
+      Version := 1;
+
+      Vendor.GET(CurrVendLedgEntry."Buy-from Vendor No.");
+
+      EDITradePartner.RESET;
+      EDITradePartner.SETRANGE("No.",Vendor."Purch. Pmt. Advice Trade Ptnr.");
+      IF EDITradePartner.FIND('-') THEN BEGIN
+        TradePartnerFound := TRUE;
+        TradePartner := EDITradePartner."No.";
+      END ELSE
+        TradePartnerFound := FALSE;
+
+      IF NOT TradePartnerFound THEN
+        ERROR(Text009,Vendor."No.");
+
+      EDISetup.LOCKTABLE;
+      EDISetup.GET;
+      EDISetup."Purch. Pmt. Remit Advice No." := INCSTR(EDISetup."Purch. Pmt. Remit Advice No.");
+      RemitAdviceNo := EDISetup."Purch. Pmt. Remit Advice No.";
+      EDISetup.MODIFY;
+
+      PurchasePaymentAdvice.INIT;
+      PurchasePaymentAdvice."No." := RemitAdviceNo;
+      PurchasePaymentAdvice.INSERT;
+
+      PurchasePaymentAdvice."Document Date" := WORKDATE;
+      PurchasePaymentAdvice.VALIDATE(Payee,Payee);
+      PurchasePaymentAdvice.Payer := CompanyInformation.Name;
+      PurchasePaymentAdvice."Payer Address" := CompanyInformation.Address;
+      PurchasePaymentAdvice."Payer Address 2" := CompanyInformation."Address 2";
+      PurchasePaymentAdvice."Payer City" := CompanyInformation.City;
+      PurchasePaymentAdvice."Payer State" := CompanyInformation.County;
+      PurchasePaymentAdvice."Payer Zip Code" := CompanyInformation."Post Code";
+      PurchasePaymentAdvice."Payer Country Code" := CompanyInformation."Country/Region Code";
+      PurchasePaymentAdvice."Document No." := DocumentNo;
+      PurchasePaymentAdvice."Payment Date" := PaymentDate;
+      PurchasePaymentAdvice.VALIDATE("Trade Partner No.",TradePartner);
+      PurchasePaymentAdvice."Transaction No." := CurrVendLedgEntry."Transaction No.";
+      PurchasePaymentAdvice."Payment Date" := PaymentDate;
+      IF CurrVendLedgEntry."Currency Code" <> '' THEN BEGIN
+        PurchasePaymentAdvice.Currency := CurrVendLedgEntry."Currency Code";
+        PurchasePaymentAdvice."Foreign Currency" := TRUE;
+      END;
+      PurchasePaymentAdvice."Payment Type" := FORMAT(CheckLedgerEntry."Bank Payment Type");
+      PurchasePaymentAdvice."Payer Account No." := BankAccountLedgerEntry."Bank Account No.";
+      PurchasePaymentAdvice."Payer Routing No." := BankAccount."Transit No.";
+      PurchasePaymentAdvice."Payee Account No." := VendorBankAccount."Bank Account No.";
+      PurchasePaymentAdvice."Payee Routing No." := VendorBankAccount."Transit No.";
+      PurchasePaymentAdvice."Bank Acct. Ledger Entry No." := BankAccountLedgerEntry."Entry No.";
+      PurchasePaymentAdvice.Version := Version;
+      PurchasePaymentAdvice.MODIFY;
+
+      // Create Payment Advice Lines
+
+      TotalAppliedAmount := 0;
+
+      VendLedgEntry.RESET;
+      VendLedgEntry.SETCURRENTKEY("Document No.","Document Type","Vendor No.");
+      VendLedgEntry.SETRANGE("Document No.",DocumentNo);
+      VendLedgEntry.SETRANGE("Vendor No.",PaytoVendor."No.");
+      VendLedgEntry.SETRANGE("Posting Date",PaymentDate);
+      VendLedgEntry.SETRANGE("Transaction No.",CurrVendLedgEntry."Transaction No.");
+      IF VendLedgEntry.FIND('-') THEN
+        REPEAT
+          PartialPayment := FALSE;
+          EntryFound := FALSE;
+          ClosedByEntry := VendLedgEntry."Closed by Entry No.";
+          EntryNo := VendLedgEntry."Entry No.";
+          VendLedgEntry2.RESET;
+          VendLedgEntry2.SETCURRENTKEY("Closed by Entry No.");
+          VendLedgEntry2.SETRANGE("Closed by Entry No.",EntryNo);
+          IF VendLedgEntry2.FIND('-') THEN BEGIN
+            EntryFound := TRUE;
+            VendLedgEntryNo := VendLedgEntry2."Closed by Entry No.";
+          END;
+          IF NOT EntryFound THEN BEGIN
+            VendLedgEntry2.RESET;
+            VendLedgEntry2.SETRANGE("Entry No.",ClosedByEntry);
+            IF VendLedgEntry2.FIND('-') THEN
+              EntryFound := TRUE;
+              VendLedgEntryNo := VendLedgEntry2."Entry No.";
+              PartialPayment := TRUE;
+           END;
+           IF EntryFound THEN
+             REPEAT
+               InvoiceAmount := 0;
+               AppliedAmount := 0;
+               RemainingAmount := 0;
+               DiscountAmount := 0;
+               DiscountAmount := ABS(VendLedgEntry2."Pmt. Disc. Rcd.(LCY)");
+               VendLedgEntry2.CALCFIELDS(Amount);
+
+               DetailedVendLedgEntry.RESET;
+               DetailedVendLedgEntry.SETCURRENTKEY(
+                 "Vendor Ledger Entry No.","Entry Type","Posting Date");
+               DetailedVendLedgEntry.SETRANGE("Vendor Ledger Entry No.",VendLedgEntry2."Entry No.");
+               DetailedVendLedgEntry.SETRANGE(
+                "Entry Type",DetailedVendLedgEntry."Entry Type"::Application);
+               DetailedVendLedgEntry.SETRANGE("Posting Date",PurchasePaymentAdvice."Payment Date");
+               DetailedVendLedgEntry.SETRANGE("Document No.",PurchasePaymentAdvice."Document No.");
+               IF DetailedVendLedgEntry.FIND('-') THEN BEGIN
+                 AppliedAmount := DetailedVendLedgEntry.Amount;
+                 AppliedAmount := AppliedAmount + VendLedgEntry2."Pmt. Disc. Rcd.(LCY)";
+                 TotalAppliedAmount := TotalAppliedAmount + AppliedAmount;
+                 InvoiceAmount := ABS(VendLedgEntry2.Amount);
+               END;
+               RemainingAmount := InvoiceAmount - AppliedAmount - DiscountAmount;
+
+               PurchasePaymentAdviceLine.RESET;
+               PurchasePaymentAdviceLine.SETRANGE("Remit Advice No.",PurchasePaymentAdvice."No.");
+               IF PurchasePaymentAdviceLine.FIND('+') THEN
+                 LineNo := PurchasePaymentAdviceLine."Line No." + 100
+               ELSE
+                 LineNo := 10000;
+               PurchasePaymentAdviceLine."Remit Advice No." := PurchasePaymentAdvice."No.";
+               PurchasePaymentAdviceLine."Line No." := LineNo;
+               PurchasePaymentAdviceLine."Trade Partner No." :=
+                 PurchasePaymentAdvice."Trade Partner No.";
+               PurchasePaymentAdviceLine."Document No." := VendLedgEntry2."Document No.";
+               PurchasePaymentAdviceLine."Vendor Document No." :=
+               VendLedgEntry2."External Document No.";
+               PurchasePaymentAdviceLine."Amount Paid" := AppliedAmount;
+               PurchasePaymentAdviceLine."Remaining Amount" := RemainingAmount;
+               PurchasePaymentAdviceLine."Closed by Amount" := ABS(VendLedgEntry2."Closed by Amount");
+               PurchasePaymentAdviceLine."Invoice Amount" := ABS(VendLedgEntry2.Amount);
+               PurchasePaymentAdviceLine."Invoice Disc. Amt." := DiscountAmount;
+               PurchasePaymentAdviceLine."Vendor Ledger Entry No." := VendLedgEntry2."Entry No.";
+               PurchasePaymentAdviceLine."Document Type" := FORMAT(VendLedgEntry2."Document Type");
+               PurchasePaymentAdviceLine."Reason Code" := VendLedgEntry2."Reason Code";
+               PurchasePaymentAdviceLine."Closed at Date" := VendLedgEntry2."Closed at Date";
+               PurchasePaymentAdviceLine."Transaction No." := CurrVendLedgEntry."Transaction No.";
+               PurchasePaymentAdviceLine."Bank Acct. Ledger Entry No." :=
+                 BankAccountLedgerEntry."Entry No.";
+               PurchasePaymentAdviceLine.INSERT;
+             UNTIL VendLedgEntry2.NEXT = 0;
+        UNTIL VendLedgEntry.NEXT = 0;
+
+      PurchasePaymentAdvice."Payment Advice Created" := TRUE;
+      PurchasePaymentAdvice."Created Date" := TODAY;
+      PurchasePaymentAdvice."Created Time" := TIME;
+      IF Release THEN
+        PurchasePaymentAdvice.Released := TRUE
+      ELSE
+        PurchasePaymentAdvice.Released := FALSE;
+      IF TotalAppliedAmount < 0 THEN
+        TotalAppliedAmount := -1*(TotalAppliedAmount);
+      PurchasePaymentAdvice."Payment Amount" := TotalAppliedAmount;
+      PurchasePaymentAdvice.MODIFY;
+
+      PurchasePaymentAdvice.RESET;
+      PurchasePaymentAdvice.SETRANGE("No.",'');
+      IF PurchasePaymentAdvice.FIND('-') THEN
+        PurchasePaymentAdvice.DELETE(TRUE);
+
+      RemitAdvice := PurchasePaymentAdvice."No.";
+
+      COMMIT;
+    END;
+
+    PROCEDURE SendPaymentAdvice@1240030005(CurrEDIPmtRemitAdvice@1240030000 : Record 14050801;Batch@1240030001 : Boolean) : Boolean;
+    VAR
+      EDIXMLManagement@1240020000 : Codeunit 14099302;
+    BEGIN
+      CLEAR(EDILoadEDIOutFields);
+      PurchasePaymentAdvice.RESET;
+      PurchasePaymentAdvice.COPY(CurrEDIPmtRemitAdvice);
+
+      PurchasePaymentAdvice.CALCFIELDS("Pmt. Entries Total");
+
+      IF NOT Batch THEN BEGIN
+        IF PurchasePaymentAdvice."Payment Advice Generated" THEN
+          IF GUIALLOWED THEN BEGIN
+            IF NOT CONFIRM(
+              Text006,FALSE,PurchasePaymentAdvice."No.",PurchasePaymentAdvice."Generated Date")
+            THEN
+              ERROR(Text007)
+           END ELSE
+             ERROR(Text007);
+      END;
+
+      PurchasePaymentAdvice.TESTFIELD(Released);
+
+      EDITradePartner.GET(PurchasePaymentAdvice."Trade Partner No.");
+
+      CLEAR(EDIVendorCrossRef);
+      EDIVendorCrossRef.RESET;
+      EDIVendorCrossRef.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+      EDIVendorCrossRef.SETRANGE("Navision Buy-from Code",PurchasePaymentAdvice.Payee);
+      IF EDIVendorCrossRef.FIND('-') THEN;
+
+      IF PurchasePaymentAdvice."EDI Internal Doc. No." = '' THEN BEGIN
+        EDISetup.LOCKTABLE;
+        EDISetup.GET;
+        EDISetup."Last Internal Doc. No." := INCSTR(EDISetup."Last Internal Doc. No.");
+        PurchasePaymentAdvice."EDI Internal Doc. No." := EDISetup."Last Internal Doc. No.";
+        EDISetup.MODIFY;
+      END;
+
+      NavisionDocumentNo := 'E_PURPRA';
+
+      EDIDocument.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+      EDIDocument.SETFILTER(
+        Status,'%1|%2',EDIDocument.Status::Test,EDIDocument.Status::Production);
+      EDIDocument.SETRANGE("Navision Document",NavisionDocumentNo);
+      EDIDocument.SETRANGE(Type,EDIDocument.Type::Export);
+      IF NOT EDIDocument.FIND('-') THEN
+        ERROR(
+          Text003,
+          EDITradePartner."No.",NavisionDocumentNo);
+      XMLDoc := EDIDocument."XML Document";
+
+      IF EDIDocument."Packaged Map" THEN BEGIN
+        IF EDIPackageMapIntegration.EDISendPaymentAdvice(CurrEDIPmtRemitAdvice) THEN
+          EXIT(TRUE)
+        ELSE
+          EXIT(FALSE);
+      END;
+
+      EDIDocument.CALCFIELDS("Element Mapping Error","Conditional Mapping Error");
+      IF EDIDocument."Element Mapping Error" OR EDIDocument."Conditional Mapping Error" THEN
+        ERROR(
+          Text004,
+          EDIDocument."Navision Document",EDIDocument."Trade Partner No.");
+
+      EDITemplate.GET(EDIDocument."EDI Template Code");
+
+      EDISendDocHdr."Internal Doc No." := PurchasePaymentAdvice."EDI Internal Doc. No.";
+      EDISendDocHdr."Navision Document" := NavisionDocumentNo;
+      EDISendDocHdr."Document No." := PurchasePaymentAdvice."No.";
+      EDISend.CreateSendHdr(EDITradePartner,EDIDocument,EDISendDocHdr);
+
+      EDISegment.RESET;
+      EDISegment.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+      EDISegment.SETRANGE("Navision Document",EDIDocument."Navision Document");
+      EDISegment.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+      EDISegment.SETRANGE(Version,EDIDocument.Version);
+      EDISegment.SETRANGE(Type,EDIDocument.Type);
+      IF EDISegment.FIND('-') THEN BEGIN
+        FirstSegment := TRUE;
+        REPEAT
+          IF FirstSegment THEN BEGIN
+            FirstHdrSeq := EDISegment."Processing Sequence";
+            FirstSegment := FALSE;
+          END;
+          IF (EDISegment.Segment = 'LINE BEGIN') OR
+             (EDISegment."Node Name" = 'LINE BEGIN')
+          THEN BEGIN
+            LastHdrSeq := PrevSeq;
+            EDISegment.NEXT;
+            FirstLineSeq := EDISegment."Processing Sequence";
+          END;
+          IF (EDISegment.Segment = 'LINE END') OR
+             (EDISegment."Node Name" = 'LINE END')
+          THEN BEGIN
+            LastLineSeq := PrevSeq;
+            IF EDISegment.NEXT <> 0 THEN
+              FirstTrailerSeq := EDISegment."Processing Sequence";
+          END;
+          PrevSeq := EDISegment."Processing Sequence";
+        UNTIL (EDISegment.NEXT = 0);
+      END;
+
+      // Header
+      ReadHdrAssocTables;
+      EDISegment.SETRANGE("Processing Sequence",FirstHdrSeq,LastHdrSeq);
+      IF EDISegment.FIND('-') THEN
+        REPEAT
+          LoadOutputData;
+        UNTIL EDISegment.NEXT = 0;
+
+      // Lines
+      PurchasePaymentAdviceLine.RESET;
+      PurchasePaymentAdviceLine.SETRANGE("Remit Advice No.",PurchasePaymentAdvice."No.");
+      IF PurchasePaymentAdviceLine.FIND('-') THEN
+        REPEAT
+          ReadLineAssocTables;
+          EDISegment.SETRANGE("Processing Sequence",FirstLineSeq,LastLineSeq);
+          IF EDISegment.FIND('-') THEN
+            REPEAT
+              LoadOutputData;
+            UNTIL EDISegment.NEXT = 0;
+        UNTIL PurchasePaymentAdviceLine.NEXT = 0;
+
+      // Trailer
+      IF FirstTrailerSeq <> 0 THEN BEGIN
+        EDISegment.SETFILTER("Processing Sequence",'%1..',FirstTrailerSeq);
+        IF EDISegment.FIND('-') THEN
+          REPEAT
+            LoadOutputData;
+          UNTIL EDISegment.NEXT = 0;
+      END;
+
+      IF EDISetup."Send Document Error" THEN BEGIN
+        EDISendDocHdr.CALCFIELDS("Data Error");
+        IF EDISendDocHdr."Data Error" THEN BEGIN
+          CLEAR(CreateEDIAlert);
+          CreateEDIAlert.CreateAlertSendDocError(EDISendDocHdr."No.",1,FALSE);
+        END;
+      END;
+
+      PurchasePaymentAdvice."Payment Advice Generated" := TRUE;
+      PurchasePaymentAdvice."Generated Date" := TODAY;
+      PurchasePaymentAdvice."Generated Time" := TIME;
+      PurchasePaymentAdvice.MODIFY;
+
+      IF XMLDoc THEN
+        EDIXMLManagement.ResponseIDSubstitution(EDISendDocHdr);
+
+      IF EDITemplate."Post Payment Advice on Send" THEN
+        PostPaymentAdvice(PurchasePaymentAdvice);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE LoadOutputData@2();
+    VAR
+      NodeOnly@1240020000 : Boolean;
+      CreateNode@1240020001 : Boolean;
+    BEGIN
+      NewSegment := TRUE;
+      NodeOnly := FALSE;
+      CreateNode := TRUE;
+      EDIElement.SETRANGE("Trade Partner No.",EDISegment."Trade Partner No.");
+      EDIElement.SETRANGE("Navision Document",EDISegment."Navision Document");
+      EDIElement.SETRANGE("EDI Document No.",EDISegment."EDI Document No.");
+      EDIElement.SETRANGE(Version,EDISegment.Version);
+      EDIElement.SETRANGE(Type,EDISegment.Type);
+      EDIElement.SETRANGE(Segment,EDISegment.Segment);
+      EDIElement.SETRANGE(Type,EDIElement.Type::Export);
+      IF NOT EDIElement.FIND('-') THEN BEGIN
+        IF XMLDoc THEN BEGIN
+          EDISegment.CALCFIELDS("Has Attributes","Node Text");
+          IF EDISegment."Node Text" OR EDISegment."Has Attributes" THEN
+            ERROR(
+              Text010,
+                EDISegment."Trade Partner No.",EDISegment."Navision Document",
+                EDISegment.Version,EDISegment."Node Name")
+          ELSE
+            NodeOnly := TRUE;
+        END ELSE
+          ERROR(
+            Text010,
+              EDISegment."Trade Partner No.",EDISegment."Navision Document",
+              EDISegment.Version,EDISegment.Segment);
+      END ELSE
+        IF XMLDoc AND EDIElement."Node Text" THEN
+          CreateNode := FALSE;
+      IF (XMLDoc = FALSE) OR (XMLDoc AND NodeOnly = FALSE) THEN BEGIN
+        CLEAR(OutFldArray);
+        CLEAR(OutLenArray);
+        CLEAR(OutErrorArray);
+        CLEAR(EDIElementArray);
+        i := 1;
+        REPEAT
+          ReverseCrossRefValue := '';
+          IF EDIElement."Fixed Value" <> '' THEN
+            OutFldArray[i] := EDIElement."Fixed Value"
+          ELSE
+            CASE EDIElement.Origin OF
+              EDIElement.Origin::Navision:
+                LoadDBFields;
+              EDIElement.Origin::"EDI Out":
+                LoadEDIOutFields;
+            END;
+          OutLenArray[i] := EDIElement.Length;
+          EDIFormat.FormatOutput(
+            EDITemplate,EDIElement,OutFldArray,OutErrorArray,i,BypassSegment,
+            BooleanVariable,DateVariable,DecimalVariable,IntegerVariable,TimeVariable,
+            DateTimeVariable);
+          EDIElementArray[i].COPY(EDIElement);
+          i := i + 1;
+        UNTIL EDIElement.NEXT = 0;
+      END;
+
+      IF NOT BypassSegment THEN BEGIN
+        i := 1;
+        IF XMLDoc AND CreateNode THEN BEGIN
+          EDISend.CreateSendLine(
+            EDISendDocHdr,EDIElementArray[i],OutFldArray[i],OutLenArray[i],OutErrorArray[i],
+            NewSegment,ReverseCrossRefValue,EDIDocument,TRUE,EDISegment);
+          NewSegment := FALSE;
+        END;
+        IF (XMLDoc = FALSE) OR (XMLDoc AND NodeOnly = FALSE) THEN
+          REPEAT
+            EDISend.CreateSendLine(
+              EDISendDocHdr,EDIElementArray[i],OutFldArray[i],OutLenArray[i],OutErrorArray[i],
+              NewSegment,ReverseCrossRefValue,EDIDocument,FALSE,EDISegment);
+            NewSegment := FALSE;
+            i := i + 1;
+          UNTIL OutLenArray[i] = 0;
+      END;
+    END;
+
+    PROCEDURE LoadEDIOutFields@16();
+    BEGIN
+      BooleanVariable := FALSE;
+      DateVariable := 0D;
+      IntegerVariable := 0;
+      DecimalVariable := 0;
+      TimeVariable := 0T;
+      DateTimeVariable := 0DT;
+
+      IF EDIElement.Origin = EDIElement.Origin::"EDI Out" THEN BEGIN
+        CASE EDIElement."Field Name" OF
+          ELSE BEGIN
+            LoadEDIOutRecordRef;
+            EDILoadEDIOutFields.PurchasePaymentSendEDIOut(
+              EDIElement,OutFldArray,DecimalVariable,IntegerVariable,DateVariable,
+              BooleanVariable,TimeVariable,DateTimeVariable,i);
+           END;
+        END;
+      END;
+    END;
+
+    PROCEDURE LoadDBFields@23();
+    BEGIN
+      CASE EDIElement."NAV Table No." OF
+        25:
+          BEGIN
+            RecRef.OPEN(25);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(VendLedgEntry);
+          END;
+        79:
+          BEGIN
+            RecRef.OPEN(79);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(CompanyInformation);
+          END;
+        122:
+          BEGIN
+            RecRef.OPEN(122);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(PurchInvHeader);
+          END;
+        124:
+          BEGIN
+            RecRef.OPEN(124);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(PurchCrMemoHdr);
+          END;
+        272:
+          BEGIN
+            RecRef.OPEN(272);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(CheckLedgerEntry);
+          END;
+        20024:
+          BEGIN
+            RecRef.OPEN(23);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(PaytoVendor);
+          END;
+        14050801:
+          BEGIN
+            RecRef.OPEN(14050801);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(PurchasePaymentAdvice);
+          END;
+        14050802:
+          BEGIN
+            RecRef.OPEN(14050802);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(PurchasePaymentAdviceLine);
+          END;
+        14002354:
+          BEGIN
+            RecRef.OPEN(14002354);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDISegment);
+          END;
+        14002360:
+          BEGIN
+            RecRef.OPEN(14002360);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDITradePartner);
+          END;
+          14002369:
+          BEGIN
+            RecRef.OPEN(14002369);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDISendDocHdr);
+          END;
+        14002366:
+          BEGIN
+            RecRef.OPEN(14002366);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDIVendorCrossRef);
+          END;
+        ELSE
+          EXIT;
+      END;
+      EDILoadDBFields.LoadDBFields(
+        EDIElement,OutFldArray,DecimalVariable,IntegerVariable,DateVariable,
+        BooleanVariable,TimeVariable,DateTimeVariable,i,RecRef);
+      RecRef.CLOSE;
+    END;
+
+    PROCEDURE ReadHdrAssocTables@26();
+    BEGIN
+      // Get supporting data from other tables
+
+      EDITemplate.GET(EDIDocument."EDI Template Code");
+
+      CompanyInformation.GET;
+
+      PaytoVendor.GET(PurchasePaymentAdvice.Payee);
+
+      IF NOT CheckLedgerEntry.GET(PurchasePaymentAdvice."Transaction No.") THEN
+        CheckLedgerEntry.INIT;
+
+      VendLedgEntry.RESET;
+      VendLedgEntry.SETCURRENTKEY("Document No.","Document Type","Vendor No.");
+      VendLedgEntry.SETRANGE("Document No.",PurchasePaymentAdvice."Document No.");
+      VendLedgEntry.SETRANGE("Vendor No.",PurchasePaymentAdvice.Payee);
+      VendLedgEntry.SETRANGE("Posting Date",PurchasePaymentAdvice."Payment Date");
+      VendLedgEntry.SETRANGE("Transaction No.",PurchasePaymentAdvice."Transaction No.");
+      IF VendLedgEntry.FIND('-') THEN;
+
+
+      //
+      // Add associated tables.
+      //
+    END;
+
+    PROCEDURE ReadLineAssocTables@27();
+    BEGIN
+      // Get Line supporting data from other tables.
+
+      VendLedgEntry.GET(PurchasePaymentAdviceLine."Vendor Ledger Entry No.");
+
+      PurchInvHeader.INIT;
+      IF PurchasePaymentAdviceLine."Document Type" = 'Invoice' THEN
+        IF PurchInvHeader.GET(PurchasePaymentAdviceLine."Document No.") THEN
+          PurchInvHeader.CALCFIELDS(Amount,"Amount Including VAT")
+        ELSE
+          PurchInvHeader.INIT;
+
+      PurchCrMemoHdr.INIT;
+      IF PurchasePaymentAdviceLine."Document Type" = 'Credit Memo' THEN
+        IF PurchCrMemoHdr.GET(PurchasePaymentAdviceLine."Document No.") THEN
+          PurchCrMemoHdr.CALCFIELDS(Amount,"Amount Including VAT")
+        ELSE
+          PurchCrMemoHdr.INIT;
+
+      //
+      // Add associated tables.
+      //
+    END;
+
+    PROCEDURE ReleasePaymentAdvice@1(VAR CurrentPaymentAdvice@1240030000 : Record 14050801);
+    BEGIN
+      WITH CurrentPaymentAdvice DO BEGIN
+        TESTFIELD(Released,FALSE);
+        TESTFIELD("Trade Partner No.");
+        TESTFIELD("Payment Advice Created");
+        TESTFIELD("Document Date");
+        Released := TRUE;
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE ReopenPaymentAdvice@1240030000(VAR CurrentPaymentAdvice@1240030000 : Record 14050801);
+    BEGIN
+      WITH CurrentPaymentAdvice DO BEGIN
+        TESTFIELD(Released,TRUE);
+        Released := FALSE;
+        IF Posted THEN
+          Posted := FALSE;
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE PostPaymentAdvice@1240030009(VAR CurrentPaymentAdvice@1240030000 : Record 14050801);
+    BEGIN
+      WITH CurrentPaymentAdvice DO BEGIN
+        TESTFIELD(Released,TRUE);
+        TESTFIELD("Payment Advice Generated",TRUE);
+        Posted := TRUE;
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE LoadEDIOutRecordRef@1240020002();
+    BEGIN
+      RecRef.OPEN(23);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(PaytoVendor);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'Pay-to Vendor');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(25);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(VendLedgEntry);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.CLOSE;
+      RecRef.OPEN(79);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(CompanyInformation);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(122);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(PurchInvHeader);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(124);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(PurchCrMemoHdr);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(270);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(BankAccount);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(271);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(BankAccountLedgerEntry);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(272);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(CheckLedgerEntry);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(288);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(VendorBankAccount);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002350);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDITemplate);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002353);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDIDocument);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002354);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDISegment);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002359);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDISendDocHdr);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002360);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDITradePartner);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14050801);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(PurchasePaymentAdvice);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14050802);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(PurchasePaymentAdviceLine);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

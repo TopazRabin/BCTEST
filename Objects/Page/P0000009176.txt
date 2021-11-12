@@ -1,0 +1,417 @@
+OBJECT Page 9176 My Settings
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12/21/17;
+    Time=12:00:00 PM;
+    Version List=NAVW111.00.00.19846;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=My Settings;
+               ESM=Mi configuraci¢n;
+               FRC=Mes ParamŠtres;
+               ENC=My Settings];
+    PageType=StandardDialog;
+    OnInit=BEGIN
+             NotRunningOnSaaS := NOT PermissionManager.SoftwareAsAService;
+             IsNotOnMobile := ClientTypeManagement.GetCurrentClientType <> CLIENTTYPE::Phone;
+           END;
+
+    OnOpenPage=VAR
+                 UserPersonalization@1000 : Record 2000000073;
+                 RoleCenterNotificationMgt@1001 : Codeunit 1430;
+               BEGIN
+                 WITH UserPersonalization DO BEGIN
+                   GET(USERSECURITYID);
+                   ProfileID := "Profile ID";
+                   ProfileAppID := "App ID";
+                   ProfileScope := Scope;
+                   LanguageID := "Language ID";
+                   LocaleID := "Locale ID";
+                   TimeZoneID := "Time Zone";
+                   IF COMPANYNAME <> Company THEN BEGIN
+                     VarCompany := COMPANYNAME;
+                     // Mark that the company is changed
+                     IsCompanyChanged := TRUE
+                   END ELSE
+                     VarCompany := Company;
+                   NewWorkdate := WORKDATE;
+                   SetCompanyDisplayName;
+                 END;
+                 IF RoleCenterNotificationMgt.IsEvaluationNotificationClicked THEN BEGIN
+                   // change notification state from Clicked to Enabled in order to avoid appearing a new notification
+                   // on this page after decline of terms & conditions in the 30 days trial wizard
+                   RoleCenterNotificationMgt.EnableEvaluationNotification;
+                   COMMIT;
+                 END;
+               END;
+
+    OnQueryClosePage=VAR
+                       UserPersonalization@1002 : Record 2000000073;
+                       sessionSetting@1004 : SessionSettings;
+                       AnythingUpdated@1003 : Boolean;
+                       WasEvaluation@1001 : Boolean;
+                     BEGIN
+                       IF CloseAction <> ACTION::Cancel THEN BEGIN
+                         WITH UserPersonalization DO BEGIN
+                           GET(USERSECURITYID);
+
+                           IF ("Language ID" <> LanguageID) OR
+                              ("Locale ID" <> LocaleID) OR
+                              ("Time Zone" <> TimeZoneID) OR
+                              (Company <> VarCompany) OR IsCompanyChanged OR
+                              ("Profile ID" <> ProfileID)
+                           THEN BEGIN
+                             AnythingUpdated := TRUE;
+                             sessionSetting.INIT;
+
+                             IF Company <> VarCompany THEN BEGIN
+                               WasEvaluation := IsEvaluation;
+                               sessionSetting.COMPANY := VarCompany;
+                             END;
+
+                             IF "Profile ID" <> ProfileID THEN BEGIN
+                               sessionSetting.PROFILEID := ProfileID;
+                               sessionSetting.PROFILEAPPID := ProfileAppID;
+                               sessionSetting.PROFILESYSTEMSCOPE := ProfileScope = ProfileScope::System;
+                             END;
+
+                             IF "Language ID" <> LanguageID THEN
+                               sessionSetting.LANGUAGEID := LanguageID;
+
+                             IF "Locale ID" <> LocaleID THEN
+                               sessionSetting.LOCALEID := LocaleID;
+
+                             IF "Time Zone" <> TimeZoneID THEN
+                               sessionSetting.TIMEZONE := TimeZoneID;
+                           END;
+                         END;
+
+                         IF WasEvaluation AND IsTrial THEN
+                           MESSAGE(TrialStartMsg);
+
+                         OnQueryClosePageEvent(LanguageID,LocaleID,TimeZoneID,VarCompany,ProfileID);
+
+                         IF AnythingUpdated THEN
+                           sessionSetting.REQUESTSESSIONUPDATE(TRUE);
+                       END;
+                     END;
+
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 14  ;1   ;Group     ;
+                GroupType=Group }
+
+    { 13  ;2   ;Field     ;
+                Name=UserRoleCenter;
+                AssistEdit=Yes;
+                CaptionML=[ENU=Role Center;
+                           ESM=µrea de tareas;
+                           FRC=Tableau de bord;
+                           ENC=Role Centre];
+                ToolTipML=[ENU=Specifies the Role Center that is associated with the current user.;
+                           ESM=Especifica el µrea de tareas asociada al usuario actual.;
+                           FRC=Sp‚cifie le tableau de bord qui est associ‚ … l'utilisateur actuel.;
+                           ENC=Specifies the Role Centre that is associated with the current user.];
+                ApplicationArea=#All;
+                SourceExpr=GetProfileName;
+                Importance=Promoted;
+                Editable=FALSE;
+                OnAssistEdit=VAR
+                               Profile@1001 : Record 2000000178;
+                               UserPersonalizationCard@1000 : Page 9172;
+                             BEGIN
+                               IF PAGE.RUNMODAL(PAGE::"Available Role Centers",Profile) = ACTION::LookupOK THEN BEGIN
+                                 ProfileID := Profile."Profile ID";
+                                 ProfileAppID := Profile."App ID";
+                                 ProfileScope := Profile.Scope;
+                               END;
+                               OnUserRoleCenterChange(ProfileID);
+                               UserPersonalizationCard.SetExperienceToSuite(ProfileID);
+                             END;
+                              }
+
+    { 6   ;2   ;Field     ;
+                Name=Company;
+                CaptionML=[ENU=Company;
+                           ESM=Empresa;
+                           FRC=Compagnie;
+                           ENC=Company];
+                ToolTipML=[ENU=Specifies the database company that you work in. You must sign out and then sign in again for the change to take effect.;
+                           ESM=Especifica la empresa de la base de datos en la que trabaja. Para que el cambio surta efecto, debe cerrar la sesi¢n y volver a iniciarla.;
+                           FRC=Sp‚cifie la base de donn‚es compagnie dans laquelle vous travaillez. Pour qu'un changement de compagnie prenne effet, vous devez vous d‚connecter et vous reconnecter.;
+                           ENC=Specifies the database company that you work in. You must sign out and then sign in again for the change to take effect.];
+                ApplicationArea=#All;
+                SourceExpr=CompanyDisplayName;
+                Editable=FALSE;
+                OnAssistEdit=VAR
+                               SelectedCompany@1001 : Record 2000000006;
+                               AllowedCompanies@1000 : Page 9177;
+                               IsSetupInProgress@1002 : Boolean;
+                             BEGIN
+                               AllowedCompanies.Initialize;
+
+                               IF SelectedCompany.GET(COMPANYNAME) THEN
+                                 AllowedCompanies.SETRECORD(SelectedCompany);
+
+                               AllowedCompanies.LOOKUPMODE(TRUE);
+
+                               IF AllowedCompanies.RUNMODAL = ACTION::LookupOK THEN BEGIN
+                                 AllowedCompanies.GETRECORD(SelectedCompany);
+                                 OnCompanyChange(SelectedCompany.Name,IsSetupInProgress);
+                                 IF IsSetupInProgress THEN BEGIN
+                                   VarCompany := COMPANYNAME;
+                                   MESSAGE(STRSUBSTNO(CompanySetUpInProgressMsg,SelectedCompany.Name));
+                                 END ELSE
+                                   VarCompany := SelectedCompany.Name;
+                                 SetCompanyDisplayName;
+                               END;
+                             END;
+                              }
+
+    { 7   ;2   ;Field     ;
+                Name=NewWorkdate;
+                CaptionML=[ENU=Work Date;
+                           ESM=Fecha de trabajo;
+                           FRC=Date de travail;
+                           ENC=Work Date];
+                ToolTipML=[ENU=Specifies the date that will be entered on transactions, typically today's date. This change only affects the date on new transactions.;
+                           ESM=Especifica la fecha que se introducir  en las transacciones, generalmente la fecha actual. Este cambio solo afecta a la fecha de las transacciones nuevas.;
+                           FRC=Sp‚cifie la date qui sera saisie sur les transactions, g‚n‚ralement la date du jour. Cette modification ne concerne que la date des nouvelles transactions.;
+                           ENC=Specifies the date that will be entered on transactions, typically today's date. This change only affects the date on new transactions.];
+                ApplicationArea=#All;
+                SourceExpr=NewWorkdate;
+                OnValidate=BEGIN
+                             WORKDATE := NewWorkdate;
+                           END;
+                            }
+
+    { 9   ;2   ;Field     ;
+                Name=Locale2;
+                CaptionML=[ENU=Region;
+                           ESM=Regi¢n;
+                           FRC=R‚gion;
+                           ENC=Region];
+                ToolTipML=[ENU=Specifies the regional settings, such as date and numeric format, on all devices. You must sign out and then sign in again for the change to take effect.;
+                           ESM=Especifica la configuraci¢n regional, como el formato num‚rico y de fecha en todos los dispositivos. Para que el cambio surta efecto, debe cerrar la sesi¢n y volver a iniciarla.;
+                           FRC=Sp‚cifie les paramŠtres r‚gionaux, comme la date et le format num‚rique, sur tous les p‚riph‚riques. Pour qu'un changement prenne effet, vous devez vous d‚connecter et vous reconnecter.;
+                           ENC=Specifies the regional settings, such as date and numeric format, on all devices. You must sign out and then sign in again for the change to take effect.];
+                ApplicationArea=#All;
+                SourceExpr=GetLocale;
+                Visible=NOT NotRunningOnSaaS;
+                OnAssistEdit=VAR
+                               LanguageManagement@1000 : Codeunit 43;
+                             BEGIN
+                               IF PermissionManager.SoftwareAsAService THEN
+                                 LanguageManagement.LookupWindowsLocale(LocaleID);
+                             END;
+                              }
+
+    { 2   ;2   ;Group     ;
+                CaptionML=[ENU=Region & Language;
+                           ESM=Regi¢n e idioma;
+                           FRC=R‚gion et langue;
+                           ENC=Region & Language];
+                Visible=NotRunningOnSaaS;
+                GroupType=Group }
+
+    { 4   ;3   ;Field     ;
+                Name=Locale;
+                CaptionML=[ENU=Region;
+                           ESM=Regi¢n;
+                           FRC=R‚gion;
+                           ENC=Region];
+                ToolTipML=[ENU=Specifies the regional settings, such as date and numeric format, on all devices. You must sign out and then sign in again for the change to take effect.;
+                           ESM=Especifica la configuraci¢n regional, como el formato num‚rico y de fecha en todos los dispositivos. Para que el cambio surta efecto, debe cerrar la sesi¢n y volver a iniciarla.;
+                           FRC=Sp‚cifie les paramŠtres r‚gionaux, comme la date et le format num‚rique, sur tous les p‚riph‚riques. Pour qu'un changement prenne effet, vous devez vous d‚connecter et vous reconnecter.;
+                           ENC=Specifies the regional settings, such as date and numeric format, on all devices. You must sign out and then sign in again for the change to take effect.];
+                ApplicationArea=#All;
+                SourceExpr=GetLocale;
+                Visible=NotRunningOnSaaS;
+                OnAssistEdit=VAR
+                               LanguageManagement@1000 : Codeunit 43;
+                             BEGIN
+                               IF NOT PermissionManager.SoftwareAsAService THEN
+                                 LanguageManagement.LookupWindowsLocale(LocaleID);
+                             END;
+                              }
+
+    { 3   ;3   ;Field     ;
+                Name=Language;
+                CaptionML=[ENU=Language;
+                           ESM=Idioma;
+                           FRC=Langue;
+                           ENC=Language];
+                ToolTipML=[ENU=Specifies the display language, on all devices. You must sign out and then sign in again for the change to take effect.;
+                           ESM=Especifica el idioma de la interfaz de usuario en todos los dispositivos. Para que el cambio surta efecto, debe cerrar la sesi¢n y volver a iniciarla.;
+                           FRC=Sp‚cifie la langue d'affichage sur tous les p‚riph‚riques. Pour qu'un changement de langue prenne effet, vous devez vous d‚connecter et vous reconnecter.;
+                           ENC=Specifies the display language, on all devices. You must sign out and then sign in again for the change to take effect.];
+                ApplicationArea=#All;
+                SourceExpr=GetLanguage;
+                Importance=Promoted;
+                Visible=NotRunningOnSaaS;
+                Editable=FALSE;
+                OnAssistEdit=VAR
+                               LanguageManagement@1001 : Codeunit 43;
+                             BEGIN
+                               IF NOT PermissionManager.SoftwareAsAService THEN
+                                 LanguageManagement.LookupApplicationLanguage(LanguageID);
+                             END;
+                              }
+
+    { 5   ;3   ;Field     ;
+                Name=TimeZone;
+                CaptionML=[ENU=Time Zone;
+                           ESM=Zona horaria;
+                           FRC=Fuseau horaire;
+                           ENC=Time Zone];
+                ToolTipML=[ENU=Specifies the time zone that you work in. You must sign out and then sign in again for the change to take effect.;
+                           ESM=Especifica la zona horaria en la que trabaja. Para que el cambio surta efecto, debe cerrar la sesi¢n y volver a iniciarla.;
+                           FRC=Sp‚cifie le fuseau horaire dans lequel vous travaillez. Pour qu'un changement de soci‚t‚ prenne effet, vous devez vous d‚connecter et vous reconnecter.;
+                           ENC=Specifies the time zone that you work in. You must sign out and then sign in again for the change to take effect.];
+                ApplicationArea=#All;
+                SourceExpr=GetTimeZone;
+                Visible=NotRunningOnSaaS;
+                OnAssistEdit=VAR
+                               ConfPersonalizationMgt@1001 : Codeunit 9170;
+                             BEGIN
+                               IF NOT PermissionManager.SoftwareAsAService THEN
+                                 ConfPersonalizationMgt.LookupTimeZone(TimeZoneID);
+                             END;
+                              }
+
+    { 11  ;2   ;Field     ;
+                ApplicationArea=#All;
+                SourceExpr=MyNotificationsLbl;
+                Visible=IsNotOnMobile;
+                Editable=FALSE;
+                OnDrillDown=BEGIN
+                              PAGE.RUNMODAL(PAGE::"My Notifications");
+                            END;
+                             }
+
+  }
+  CODE
+  {
+    VAR
+      PermissionManager@1008 : Codeunit 9002;
+      ClientTypeManagement@1077 : Codeunit 4;
+      LanguageID@1001 : Integer;
+      LocaleID@1000 : Integer;
+      TimeZoneID@1002 : Text[180];
+      VarCompany@1003 : Text;
+      NewWorkdate@1005 : Date;
+      ProfileID@1007 : Code[30];
+      NotRunningOnSaaS@1012 : Boolean;
+      MyNotificationsLbl@1013 : TextConst 'ENU=Change when I receive notifications.;ESM=Permite cambiar cu ndo recibo notificaciones.;FRC=Modifier lorsque je re‡ois des notifications.;ENC=Change when I receive notifications.';
+      IsNotOnMobile@1006 : Boolean;
+      CompanyDisplayName@1010 : Text[250];
+      ProfileAppID@1011 : GUID;
+      ProfileScope@1014 : 'System,Tenant';
+      CompanySetUpInProgressMsg@1015 : TextConst '@@@=%1 - a company name;ENU=Company %1 was just created, and we are still setting it up for you.\This may take up to 10 minutes, so take a short break before you begin to use Dynamics NAV.;ESM=La empresa %1 se acaba de crear y todav¡a la estamos configurando.\Este proceso puede tardar hasta 10 minutos, por lo que puede tomarse un peque¤o descanso antes de usar Dynamics NAV.;FRC=La soci‚t‚ %1 vient d''ˆtre cr‚‚e et nous sommes toujours en train de la configurer pour vous.\Cela peut prendre jusqu''… 10ÿminutes, alors faites une courte pause avant de commencer … utiliser Dynamics NAV.;ENC=Company %1 was just created, and we are still setting it up for you.\This may take up to 10 minutes, so take a short break before you begin to use Dynamics NAV.';
+      TrialStartMsg@1004 : TextConst 'ENU=We''re glad you''ve chosen to explore Dynamics NAV!\\Your session will restart to activate the new settings.;ESM=Nos alegra que haya decidido explorar Dynamics NAV.\\Se reiniciar  su sesi¢n para activar la nueva configuraci¢n.;FRC=Nous vous remercions d''avoir choisi de d‚couvrir Dynamics NAVÿ!\\Votre session va red‚marrer pour activer les nouveaux paramŠtres.;ENC=We''re glad you''ve chosen to explore Dynamics NAV!\\Your session will restart to activate the new settings.';
+      IsCompanyChanged@1009 : Boolean;
+
+    LOCAL PROCEDURE GetLanguage@20() : Text;
+    BEGIN
+      EXIT(GetWindowsLanguageNameFromID(LanguageID));
+    END;
+
+    LOCAL PROCEDURE GetWindowsLanguageNameFromID@12(ID@1000 : Integer) : Text;
+    VAR
+      WindowsLanguage@1001 : Record 2000000045;
+    BEGIN
+      IF WindowsLanguage.GET(ID) THEN
+        EXIT(WindowsLanguage.Name);
+    END;
+
+    LOCAL PROCEDURE GetLocale@1() : Text;
+    BEGIN
+      EXIT(GetWindowsLanguageNameFromID(LocaleID));
+    END;
+
+    LOCAL PROCEDURE GetTimeZone@2() : Text;
+    VAR
+      TimeZone@1000 : Record 2000000164;
+    BEGIN
+      TimeZone.SETRANGE(ID,TimeZoneID);
+      IF TimeZone.FINDFIRST THEN
+        EXIT(TimeZone."Display Name");
+    END;
+
+    LOCAL PROCEDURE GetProfileName@5() : Text;
+    VAR
+      Profile@1000 : Record 2000000178;
+    BEGIN
+      IF NOT Profile.GET(ProfileScope,ProfileAppID,ProfileID) THEN BEGIN
+        Profile.SETRANGE("Default Role Center",TRUE);
+        IF NOT Profile.FINDFIRST THEN
+          EXIT('');
+      END;
+      EXIT(Profile.Description);
+    END;
+
+    LOCAL PROCEDURE GetLicenseState@6() : Integer;
+    VAR
+      TenantLicenseState@1000 : Record 2000000189;
+    BEGIN
+      IF TenantLicenseState.FINDLAST THEN
+        EXIT(TenantLicenseState.State);
+      EXIT(TenantLicenseState.State::Evaluation);
+    END;
+
+    LOCAL PROCEDURE IsEvaluation@7() : Boolean;
+    VAR
+      TenantLicenseState@1000 : Record 2000000189;
+    BEGIN
+      EXIT(GetLicenseState = TenantLicenseState.State::Evaluation);
+    END;
+
+    LOCAL PROCEDURE IsTrial@8() : Boolean;
+    VAR
+      TenantLicenseState@1000 : Record 2000000189;
+    BEGIN
+      EXIT(GetLicenseState = TenantLicenseState.State::Trial);
+    END;
+
+    [Integration]
+    [External]
+    LOCAL PROCEDURE OnCompanyChange@3(NewCompanyName@1000 : Text;VAR IsSetupInProgress@1001 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    LOCAL PROCEDURE OnUserRoleCenterChange@4(NewRoleCenter@1000 : Code[30]);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnQueryClosePageEvent@21(NewLanguageID@1000 : Integer;NewLocaleID@1001 : Integer;NewTimeZoneID@1002 : Text[180];NewCompany@1003 : Text;NewProfileID@1004 : Code[30]);
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE SetCompanyDisplayName@13();
+    VAR
+      SelectedCompany@1001 : Record 2000000006;
+      AllowedCompanies@1002 : Page 9177;
+    BEGIN
+      IF SelectedCompany.GET(VarCompany) THEN
+        CompanyDisplayName := AllowedCompanies.GetCompanyDisplayNameDefaulted(SelectedCompany)
+    END;
+
+    BEGIN
+    {
+      Contains various system-wide settings which are personal to an individual user.
+      Styled as a StandardDialog which is ideal for presenting a single field. Once more fields are added,
+      this page should be converted to a Card page.
+    }
+    END.
+  }
+}
+

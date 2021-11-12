@@ -1,0 +1,194 @@
+OBJECT Report 14000569 Current Fill Rate
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.02;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Current Fill Rate;
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   InvMgtSetup.GET;
+                   HorizonToUse := CALCDATE('<+' + FORMAT(InvMgtSetup."Fill Rate - Horizon Days") + 'D>', WORKDATE);
+
+                   DemandHorizonOption := DemandHorizonOption::"Open Orders Only";
+                   SupplyHorizonOption := SupplyHorizonOption::Inventory;
+                 END;
+
+    OnPreReport=BEGIN
+                  InvMgtSetup.TESTFIELD(InvMgtSetup."Roll Up Via Repl. Path");
+                  CalcDateTime := CREATEDATETIME(WORKDATE, TIME);
+                END;
+
+  }
+  DATASET
+  {
+    { 1   ;    ;DataItem;                    ;
+               DataItemTable=Table14000555;
+               OnAfterGetRecord=VAR
+                                  AvailQty@1000 : Decimal;
+                                BEGIN
+                                  "Procurement Unit".SETFILTER("Location Filter", "Location Code");
+                                  // Inventory Only
+                                  Supply := UBP.FillRateCalcSupplyLines("Procurement Unit", HorizonToUse, SupplyHorizonOption);
+
+                                  // Negative inventory
+                                  IF Supply < 0 THEN
+                                    Supply := 0;
+
+                                  CASE DemandHorizonOption OF
+                                    DemandHorizonOption::"Open Orders Only": TotalDemand := UBP.FillRateCalcDemandLines("Procurement Unit", HorizonToUse, DemandHorizonOption);
+                                    DemandHorizonOption::Forecast: TotalDemand := CalcForecastAtDate("Procurement Unit");
+                                    ELSE
+                                      ERROR('');
+                                  END;
+
+                                  IF TotalDemand < 0 THEN
+                                    TotalDemand := 0;
+
+                                  AvailQty := Supply - TotalDemand;
+
+                                  // Avail Fill Rate Pct
+                                  AvailPct := 0;
+                                  CASE TRUE OF
+                                     AvailQty >= 0:
+                                      BEGIN
+                                        AvailPct := 100;
+                                      END;
+                                    AvailQty < 0:
+                                      BEGIN
+                                        IF TotalDemand > 0 THEN BEGIN
+                                          AvailPct := ROUND(((Supply/TotalDemand)*100),0.1);
+                                        END;
+                                      END;
+                                  END;
+
+                                  "Procurement Unit"."Fill Rate Total Demand" := TotalDemand;
+                                  "Procurement Unit"."Fill Rate Percentage" := AvailPct;
+                                  "Procurement Unit"."Fill Rate Calculation Date" := CalcDateTime;
+                                  "Procurement Unit".MODIFY(FALSE);
+                                END;
+
+               ReqFilterFields=Location Code,Item No.,Variant Code,Usage Formula Status,Replenishment Hierarchy,Top Repl. Source Type,Top Repl. Source Code,Purchaser Code }
+
+    { 2   ;1   ;Column  ;LocationCode_ProcurementUnit;
+               SourceExpr="Procurement Unit"."Location Code" }
+
+    { 3   ;1   ;Column  ;ItemNo_ProcurementUnit;
+               SourceExpr="Procurement Unit"."Item No." }
+
+    { 4   ;1   ;Column  ;VariantCode_ProcurementUnit;
+               SourceExpr="Procurement Unit"."Variant Code" }
+
+    { 5   ;1   ;Column  ;Description_ProcurementUnit;
+               SourceExpr="Procurement Unit".Description }
+
+    { 6   ;1   ;Column  ;Inventory_ProcurementUnit;
+               SourceExpr="Procurement Unit".Inventory }
+
+    { 9   ;1   ;Column  ;ReplenishmentSourceType_ProcurementUnit;
+               SourceExpr="Procurement Unit"."Replenishment Source Type" }
+
+    { 13  ;1   ;Column  ;ReplenishmentSourceCode_ProcurementUnit;
+               SourceExpr="Procurement Unit"."Replenishment Source Code" }
+
+    { 7   ;1   ;Column  ;UsageFormulaStatus_ProcurementUnit;
+               SourceExpr="Procurement Unit"."Usage Formula Status" }
+
+    { 8   ;1   ;Column  ;ReplenishmentHierarchy_ProcurementUnit;
+               SourceExpr="Procurement Unit"."Replenishment Hierarchy" }
+
+    { 10  ;1   ;Column  ;TotalDemand         ;
+               SourceExpr=TotalDemand }
+
+    { 11  ;1   ;Column  ;Supply              ;
+               SourceExpr=Supply }
+
+    { 12  ;1   ;Column  ;HorizonDate         ;
+               SourceExpr=HorizonToUse }
+
+    { 14  ;1   ;Column  ;FillRate            ;
+               SourceExpr=AvailPct }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+      { 1   ;    ;Container ;
+                  Name=Options;
+                  ContainerType=ContentArea }
+
+      { 2   ;1   ;Field     ;
+                  Name=HorizonToUse;
+                  CaptionML=ENU=Planning Date Horizon;
+                  SourceExpr=HorizonToUse;
+                  Editable=FALSE }
+
+      { 1240020000;1;Field  ;
+                  Name=Demand Option;
+                  SourceExpr=DemandHorizonOption }
+
+      { 1240020001;1;Field  ;
+                  Name=Supply Option;
+                  SourceExpr=SupplyHorizonOption }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      HorizonToUse@1000 : Date;
+      InvMgtSetup@1002 : Record 14000551;
+      DemandHorizonOption@1001 : 'Open Orders Only,Forecast';
+      SupplyHorizonOption@1009 : 'Inventory,Supply Horizon';
+      Supply@1003 : Decimal;
+      Demand@1004 : Decimal;
+      TotalDemand@1005 : Decimal;
+      Forecast@1007 : Decimal;
+      UBP@1006 : Codeunit 14000564;
+      AvailPct@1008 : Decimal;
+      CalcDateTime@1240020000 : DateTime;
+
+    PROCEDURE CalcForecastAtDate@3(VAR CurrProcUnit@1000 : Record 14000555) ForecastQty : Decimal;
+    VAR
+      CreateLocInvRollUp@1001 : Codeunit 14000574;
+      LocationInventoryRollUp@1005 : Record 14000583;
+      First@1006 : Boolean;
+    BEGIN
+      // not used currently
+      // Calculate Forecast at date
+      ForecastQty := 0;
+
+      IF InvMgtSetup."Roll Up Via Repl. Path" THEN BEGIN
+        CLEAR(CreateLocInvRollUp);
+        CreateLocInvRollUp.SetGblOverrideCalcSingleLocForecast(TRUE);
+        CreateLocInvRollUp.CalcRollUp(CurrProcUnit,FALSE,0,HorizonToUse);
+        First := TRUE;
+        REPEAT
+          CreateLocInvRollUp.GetNextRollUpLine(LocationInventoryRollUp,First);
+          First := FALSE;
+        UNTIL LocationInventoryRollUp."Individual Location Code" = CurrProcUnit."Location Code";
+
+        ForecastQty := LocationInventoryRollUp."Single Loc. Adj. Forecast" + ABS(LocationInventoryRollUp."Transfer Out Qty.");
+        EXIT(ForecastQty);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

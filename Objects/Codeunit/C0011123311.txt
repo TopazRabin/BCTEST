@@ -1,0 +1,2000 @@
+OBJECT Codeunit 11123311 SC - Settings Functions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=SCW19.2.0;
+  }
+  PROPERTIES
+  {
+    TableNo=11123302;
+    OnRun=VAR
+            RequestBuff@11123303 : TEMPORARY Record 11123303;
+            ResponseBuff@11123302 : TEMPORARY Record 11123303;
+            Params@11123304 : TEMPORARY Record 11123310;
+          BEGIN
+            Context.GetRequestBuff(RequestBuff);
+            Context.GetResponseBuff(ResponseBuff);
+            Context.GetParams(Params);
+
+            CASE Code OF
+              UPPERCASE('GetCountries') : GetCountries(RequestBuff,ResponseBuff);
+              UPPERCASE('GetDefaultCurrency') : GetDefaultCurrency(RequestBuff,ResponseBuff);
+              UPPERCASE('GetTaxNumberFormats') : GetTaxNumberFormats(RequestBuff,ResponseBuff);
+              UPPERCASE('GetAnonymousCustomer') : GetAnonymousCustomer(RequestBuff,ResponseBuff);
+              UPPERCASE('GetCurrencies') : GetCurrencies(RequestBuff,ResponseBuff);
+              UPPERCASE('GetSettings') : GetSettings(RequestBuff,ResponseBuff);
+              UPPERCASE('TestConnection') : TestConnection(RequestBuff,ResponseBuff);
+              UPPERCASE('CheckSupportPersistedBasket') : CheckSupportPersistedBasket(Params);
+            END;
+
+            Context.SetParams(Params);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text11123302@11123302 : TextConst 'ENU=Template Customer is incorrect. Check SC - Webshop.';
+      Context@11123303 : Codeunit 11123305;
+      text11123303@11123304 : TextConst 'ENU=Please wait. User roles and permissions are updating.';
+
+    PROCEDURE GetCountries@11123303(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      Country@11123304 : Record 9;
+      Params@11123305 : TEMPORARY Record 11123310;
+      ResultNodeBuff@11123306 : TEMPORARY Record 11123303;
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::"Country/Region");
+
+      IF Params.WithCustomerTemplateOnly THEN
+        Country.SETFILTER("Customer Template Code",'<>%1','');
+      IF Params.VisibleOnly THEN
+        Country.SETRANGE("Visible in Webshop",TRUE);
+
+      IF Country.FINDSET THEN
+        REPEAT
+          OutXMLBuff.AddElement(ResultNodeBuff,'Country','');
+          ResultNodeBuff.AddFieldElement('Id',Country.Code);
+          ResultNodeBuff.AddFieldElement('Name',Country.Name);
+          ResultNodeBuff.AddFieldElement('CustomerTemplate',Country."Customer Template Code");
+          ResultNodeBuff.AddFieldElement('Visible',FORMAT(Country."Visible in Webshop",0,2));
+        UNTIL Country.NEXT = 0;
+    END;
+
+    PROCEDURE GetDefaultCurrency@11123304(VAR InXMLBuff@11123306 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    BEGIN
+      OutXMLBuff.AddElementEx('Id',GetDefaultCurrencyGLSetup);
+    END;
+
+    PROCEDURE GetDefaultCurrencyGLSetup@11123305() : Code[10];
+    VAR
+      GLSetup@11123302 : Record 98;
+      RecMgt@11123303 : Codeunit 11123326;
+    BEGIN
+      // <TPZ1301>
+      IF RecMgt.GetGLSetup(GLSetup,FALSE) THEN
+        //EXIT(GLSetup."LCY Code");
+        EXIT('USD');
+      // </TPZ1301>
+    END;
+
+    PROCEDURE GetTaxNumberFormats@11123306(VAR InXMLBuff@11123307 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      VATRegNoFormat@11123303 : Record 381;
+      ResultNodeBuff@11123304 : TEMPORARY Record 11123303;
+    BEGIN
+      IF VATRegNoFormat.FINDSET THEN
+        REPEAT
+          OutXMLBuff.AddElement(ResultNodeBuff,'TaxNumberFormat','');
+          ResultNodeBuff.AddFieldElement('CountryId',VATRegNoFormat."Country/Region Code");
+          ResultNodeBuff.AddFieldElement('Format',VATRegNoFormat.Format);
+        UNTIL VATRegNoFormat.NEXT = 0;
+    END;
+
+    PROCEDURE GetAnonymousCustomer@11123307(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      Customer@11123304 : Record 18;
+      Webshop@11123306 : Record 11123313;
+      Params@11123307 : TEMPORARY Record 11123310;
+      CustomerFunc@11123305 : Codeunit 11123313;
+      RecMgt@11123308 : Codeunit 11123326;
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::Customer);
+
+      RecMgt.GetWebshop(Params.WebsiteId,Webshop,TRUE);
+      IF NOT Customer.GET(Webshop."Template Customer No.") THEN
+        ERROR(Text11123302);
+
+      CustomerFunc.BuildCustomerXML(OutXMLBuff,Customer,Params);
+    END;
+
+    PROCEDURE GetCurrencies@11123308(VAR InXMLBuff@11123308 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      Currency@11123303 : Record 4;
+      GLSetup@11123304 : Record 98;
+      DefaultCurrency@11123305 : Record 4;
+      TempCurrency@11123306 : TEMPORARY Record 4;
+      RecMgt@11123307 : Codeunit 11123326;
+    BEGIN
+      RecMgt.GetGLSetup(GLSetup,TRUE);
+
+      IF DefaultCurrency.GET(GLSetup."LCY Code") THEN BEGIN
+        TempCurrency.INIT;
+        TempCurrency := DefaultCurrency;
+        TempCurrency.Code := DefineCurrencyISOCode(TempCurrency.Code);
+        IF TempCurrency.INSERT THEN;
+      END ELSE BEGIN
+        TempCurrency.INIT;
+        TempCurrency.Code := DefineCurrencyISOCode(GLSetup."LCY Code");
+        TempCurrency.Description := TempCurrency.Code;
+        IF TempCurrency.INSERT THEN;
+      END;
+
+      Currency.SETFILTER(Code,'<>%1',GLSetup."LCY Code");
+      Currency.SETRANGE("Visible in Webshop",TRUE);
+      IF Currency.FINDSET THEN
+        REPEAT
+          TempCurrency.INIT;
+          TempCurrency := Currency;
+          TempCurrency.Code := DefineCurrencyISOCode(TempCurrency.Code);
+          IF TempCurrency.INSERT THEN;
+        UNTIL Currency.NEXT = 0;
+
+      IF TempCurrency.FINDSET THEN
+        REPEAT
+          AddCurrencyNodeToXML(OutXMLBuff,TempCurrency.Code,TempCurrency.Description);
+        UNTIL TempCurrency.NEXT = 0;
+    END;
+
+    PROCEDURE TestConnection@11123325(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    BEGIN
+      OutXMLBuff.AddElementEx('TestConnection','ok');
+    END;
+
+    PROCEDURE DefineCurrencyISOCode@11123342(CurrencyCode@11123302 : Code[10]) : Code[10];
+    VAR
+      CurrencyISOCode@11123303 : Record 11123329;
+    BEGIN
+      CurrencyISOCode.RESET;
+      IF CurrencyISOCode.ISEMPTY THEN
+        CurrencyISOCode.AddDefaultValue;
+
+      CurrencyISOCode.SETRANGE("Currency Code",CurrencyCode);
+      IF CurrencyISOCode.FINDFIRST THEN
+        EXIT(CurrencyISOCode."ISO Currency Code");
+
+      EXIT(CurrencyCode);
+    END;
+
+    PROCEDURE InitCurrencyList@11123363(VAR Params@11123304 : Record 11123310);
+    VAR
+      DefaultCurrency@11123306 : Record 4;
+      TempCurrency@11123305 : TEMPORARY Record 4;
+      Currency@11123308 : Record 4;
+      GLSetup@11123311 : Record 98;
+      TempCurrencyList@11123302 : TEMPORARY Record 11123330;
+      Settings@11123309 : Codeunit 11123311;
+      RecMgt@11123310 : Codeunit 11123326;
+      CurrencyCode@11123307 : Code[10];
+      CurrencyISOCode@11123303 : Code[10];
+    BEGIN
+      IF Params.CurrentCurrencyId <> Params.BaseCurrencyId THEN BEGIN
+        CurrencyCode := Params.CurrentCurrencyId;
+        CurrencyISOCode := Settings.DefineCurrencyISOCode(Params.CurrentCurrencyId);
+        TempCurrencyList.Add(CurrencyISOCode,CurrencyCode);
+      END ELSE BEGIN
+        CurrencyCode := Params.BaseCurrencyId;
+        CurrencyISOCode := Settings.DefineCurrencyISOCode(Params.BaseCurrencyId);
+        TempCurrencyList.Add(CurrencyISOCode,CurrencyCode);
+      END;
+
+      IF NOT Params.MultiCurrency THEN BEGIN
+        Context.SetCurrencyList(TempCurrencyList);
+        EXIT;
+      END;
+
+      RecMgt.GetGLSetup(GLSetup,TRUE);
+
+      IF DefaultCurrency.GET(GLSetup."LCY Code") THEN BEGIN
+        TempCurrency.INIT;
+        TempCurrency := DefaultCurrency;
+        TempCurrency.Code := Settings.DefineCurrencyISOCode(TempCurrency.Code);
+        IF TempCurrency.INSERT THEN;
+      END ELSE BEGIN
+        TempCurrency.INIT;
+        TempCurrency.Code := Settings.DefineCurrencyISOCode(GLSetup."LCY Code");
+        TempCurrency.Description := TempCurrency.Code;
+        IF TempCurrency.INSERT THEN;
+      END;
+
+      Currency.SETFILTER(Code,'<>%1',GLSetup."LCY Code");
+      Currency.SETRANGE("Visible in Webshop",TRUE);
+      IF Currency.FINDSET THEN
+        REPEAT
+          TempCurrency.INIT;
+          TempCurrency := Currency;
+          CurrencyCode := TempCurrency.Code;
+          TempCurrency.Code := Settings.DefineCurrencyISOCode(TempCurrency.Code);
+          IF TempCurrency.INSERT THEN BEGIN
+            IF NOT TempCurrencyList.GET(TempCurrency.Code) THEN
+              TempCurrencyList.Add(TempCurrency.Code,CurrencyCode);
+          END;
+        UNTIL Currency.NEXT = 0;
+
+      Context.SetCurrencyList(TempCurrencyList);
+    END;
+
+    PROCEDURE GetCurrencyList@11123333(VAR CurrencyList@11123302 : Record 11123330);
+    BEGIN
+      Context.GetCurrencyList(CurrencyList);
+    END;
+
+    PROCEDURE AddCurrencyNodeToXML@11123309(VAR ParrentNodeBuff@11123302 : Record 11123303;Code@11123303 : Code[10];Name@11123304 : Text[80]);
+    VAR
+      ResultNodeBuff@11123305 : TEMPORARY Record 11123303;
+    BEGIN
+      ParrentNodeBuff.AddElement(ResultNodeBuff,'Currency','');
+      ResultNodeBuff.AddFieldElement('Id',Code);
+      ResultNodeBuff.AddFieldElement('Name',Name);
+    END;
+
+    PROCEDURE GetSettings@11123310(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      ChangeMgt@11123304 : Codeunit 11123324;
+    BEGIN
+      OutXMLBuff.AddElementEx('CultureId',FORMAT(WINDOWSLANGUAGE));
+      OutXMLBuff.AddElementEx('CodePage',FORMAT(Context.GetCodePage));
+      OutXMLBuff.AddElementEx('SupportsShippingMethods',FORMAT(IsSupportsShippingMethods,0,2));
+      OutXMLBuff.AddElementEx('SupportsShippingOrigin','1');
+      OutXMLBuff.AddElementEx('SupportsZipCodeValidation','0');
+      OutXMLBuff.AddElementEx('SupportsPromotableQuotes','1');
+      OutXMLBuff.AddElementEx('SupportsProductSuggestions','1');
+      OutXMLBuff.AddElementEx('SupportsPrepayment',FORMAT(Context.SupportsPrepayment,0,2));
+      OutXMLBuff.AddElementEx('SupportsPersistedBaskets',FORMAT(SupportPersistedBasket,0,2));
+      OutXMLBuff.AddElementEx('SupportsCustomerStatistics',FORMAT(TRUE,0,2));
+      OutXMLBuff.AddElementEx('OrderCommentLineMaxLength','80');
+      OutXMLBuff.AddElementEx('SanaVersion',ChangeMgt.GetSanaVersion);
+      OutXMLBuff.AddElementEx('SupportsProductImages','1');
+      OutXMLBuff.AddElementEx('CompatibilityLevel','9.2.0');
+      OutXMLBuff.AddElementEx('SupportsDocBasedRma',FORMAT(TRUE,0,2));
+      OutXMLBuff.AddElementEx('SupportsRmaSplitLines',FORMAT(IsSupportsRmaSplitLines,0,2));
+      OutXMLBuff.AddElementEx('SupportsDocFreeRma',FORMAT(IsSupportsDocFreeRma,0,2));
+      OutXMLBuff.AddElementEx('SupportsInvoicePayment','1');
+    END;
+
+    PROCEDURE SupportPersistedBasket@11123335() : Boolean;
+    VAR
+      TempParams@11123303 : TEMPORARY Record 11123310;
+      CommonFunc@11123304 : Codeunit 11123309;
+      Dispatcher@11123302 : Codeunit 11123306;
+    BEGIN
+      Dispatcher.DispatchInternal('CheckSupportPersistedBasket',TempParams);
+      EXIT(TempParams.SupportsPersistedBaskets);
+    END;
+
+    PROCEDURE GetLanguageCode@11123311(LanguageIdText@11123302 : Text[50]) : Code[10];
+    VAR
+      Language@11123303 : Record 8;
+      LanguageID@11123304 : Integer;
+    BEGIN
+      IF EVALUATE(LanguageID,LanguageIdText) THEN
+        IF LanguageID <> 0 THEN BEGIN
+          Language.SETRANGE("Windows Language ID",LanguageID);
+          IF Language.FINDFIRST THEN
+            EXIT(Language.Code);
+        END;
+      EXIT('0');
+    END;
+
+    PROCEDURE RoundPrice@11123313(Price@11123302 : Decimal;CurrencyCode@11123303 : Code[10]) : Decimal;
+    VAR
+      GLSetup@11123304 : Record 98;
+      Currency@11123305 : Record 4;
+      RecMgt@11123307 : Codeunit 11123326;
+      RoundingPrecision@11123306 : Decimal;
+    BEGIN
+      IF RecMgt.GetGLSetup(GLSetup,FALSE) THEN
+        RoundingPrecision := GLSetup."Inv. Rounding Precision (LCY)";
+
+      IF RecMgt.GetCurrency(CurrencyCode,Currency,FALSE) THEN
+        RoundingPrecision := Currency."Invoice Rounding Precision";
+
+      IF RoundingPrecision = 0 THEN
+        RoundingPrecision := 0.01;
+
+      EXIT(ROUND(Price,RoundingPrecision));
+    END;
+
+    PROCEDURE SetSanaRolePermissions@11123323();
+    VAR
+      Object@11123303 : Record 2000000001;
+      Window@11123302 : Dialog;
+      RoleID@11123313 : Code[20];
+      ObjectType@11123311 : Option;
+      ObjectID@11123310 : Integer;
+      ReadPermission@11123308 : ' ,Yes,Indirect';
+      InsertPermission@11123307 : ' ,Yes,Indirect';
+      ModifyPermission@11123306 : ' ,Yes,Indirect';
+      DeletePermission@11123305 : ' ,Yes,Indirect';
+      ExecutePermission@11123304 : ' ,Yes,Indirect';
+      RoleName@11123312 : Text[30];
+      ObjectName@11123309 : Text[249];
+    BEGIN
+      Window.OPEN(text11123303);
+
+      Object.SETFILTER(ID,'%1..%2',11123301,11123399);
+      IF Object.FINDSET THEN BEGIN
+        RoleID := 'SC-SANA';
+        RoleName := 'Sana Commerce User';
+        InsertUserRoles(RoleID,RoleName);
+        ReadPermission := ReadPermission::Yes;
+        InsertPermission := InsertPermission::Yes;
+        ModifyPermission := ModifyPermission::Yes;
+        DeletePermission := DeletePermission::Yes;
+        ExecutePermission := ExecutePermission::Yes;
+        REPEAT
+          ObjectType := Object.Type;
+          ObjectID := Object.ID;
+          ObjectName := Object.Name;
+
+          InsertPermissions(RoleID,RoleName,ObjectType,ObjectID,ObjectName,ReadPermission,InsertPermission,
+            ModifyPermission,DeletePermission,ExecutePermission);
+        UNTIL Object.NEXT = 0;
+      END;
+
+      Window.CLOSE;
+    END;
+
+    PROCEDURE SetRolesPermissions@11123302();
+    VAR
+      Window@11123302 : Dialog;
+    BEGIN
+      Window.OPEN(text11123303);
+
+      SetUserRoles;
+      SetPermission;
+      SetProfile;
+
+      DelPermissionLines;
+
+      Window.CLOSE;
+    END;
+
+    PROCEDURE SetUserRoles@11123312();
+    BEGIN
+      ParseUserRolesStr('"SC-MANAGER","e-Commerce Manager"');
+      ParseUserRolesStr('"SC-SYSADMIN","e-Commerce Sys. Administrator"');
+      ParseUserRolesStr('"SC-USER","All Sana Commerce Users"');
+    END;
+
+    PROCEDURE SetPermission@11123314();
+    BEGIN
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","3","Payment Terms","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","4","Currency","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5","Finance Charge Terms","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","6","Customer Price Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7","Standard Text","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","8","Language","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","9","Country/Region","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","10","Shipment Method","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","13","Salesperson/Purchaser","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","50027","Mfr. Rep.","Yes","Yes","Yes","Yes","Yes"'); //<TPZ2027>
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","14","Location","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","15","G/L Account","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","17","G/L Entry","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","18","Customer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","19","Cust. Invoice Disc.","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","21","Cust. Ledger Entry","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","23","Vendor","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","25","Vendor Ledger Entry","Indirect","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","27","Item","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","30","Item Translation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","32","Item Ledger Entry","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","36","Sales Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","37","Sales Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","38","Purchase Header","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","39","Purchase Line","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","44","Sales Comment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","45","G/L Register","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","46","Item Register","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","49","Invoice Post. Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","50","Accounting Period","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","51","User Time Register","Indirect","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","77","Report Selections","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","78","Printer Selection","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","79","Company Information","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","80","Gen. Journal Template","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","81","Gen. Journal Line","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","82","Item Journal Template","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","83","Item Journal Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","90","BOM Component","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","91","User Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","92","Customer Posting Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","94","Inventory Posting Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","97","Comment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","98","General Ledger Setup","Yes","Yes","Indirect","Yes","Yes"'
+      );
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","99","Item Vendor","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","110","Sales Shipment Header","Yes","Indirect","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","111","Sales Shipment Line","Yes","Indirect","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","112","Sales Invoice Header","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","113","Sales Invoice Line","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","114","Sales Cr.Memo Header","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","115","Sales Cr.Memo Line","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","120","Purch. Rcpt. Header","Indirect","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","121","Purch. Rcpt. Line","Indirect","Indirect","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","122","Purch. Inv. Header","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","123","Purch. Inv. Line","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","124","Purch. Cr. Memo Hdr.","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","125","Purch. Cr. Memo Line","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","140","License Agreement","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","156","Resource","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","167","Job","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","169","Job Ledger Entry","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","170","Standard Sales Code","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","171","Standard Sales Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","172","Standard Customer Sales Code","Yes","Indirect","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","174","Standard Purchase Line","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","200","Work Type","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","201","Resource Price","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","202","Resource Cost","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","203","Res. Ledger Entry","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","204","Unit of Measure","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","205","Resource Unit of Measure","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","207","Res. Journal Line","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","210","Job Journal Line","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","212","Job Posting Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","221","Gen. Jnl. Allocation","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","222","Ship-to Address","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","225","Post Code","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","230","Source Code","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","231","Reason Code","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","232","Gen. Journal Batch","Indirect","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","233","Item Journal Batch","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","238","BOM Ledger Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","240","Resource Register","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","241","Job Register","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","242","Source Code Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","246","Requisition Line","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","250","Gen. Business Posting Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","251","Gen. Product Posting Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","252","General Posting Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","253","G/L Entry - VAT Entry link","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","254","VAT Entry","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","258","Transaction Type","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","259","Transport Method","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","260","Tariff Number","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","265","Document Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","269","G/L Account Net Change","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","270","Bank Account","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","271","Bank Account Ledger Entry","Indirect","Indirect","Indirect","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","272","Check Ledger Entry","Indirect","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","279","Extended Text Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","280","Extended Text Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","281","Phys. Inventory Ledger Entry","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","286","Territory","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","287","Customer Bank Account","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","288","Vendor Bank Account","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","289","Payment Method","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","290","VAT Amount Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","291","Shipping Agent","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","292","Reminder Terms","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","293","Reminder Level","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","294","Reminder Text","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","300","Reminder/Fin. Charge Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","301","Finance Charge Text","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","308","No. Series","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","309","No. Series Line","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","310","No. Series Relationship","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","311","Sales & Receivables Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","312","Purchases & Payables Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","313","Inventory Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","314","Resources Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","315","Jobs Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","318","Tax Area","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","319","Tax Area Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","320","Tax Jurisdiction","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","321","Tax Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","322","Tax Detail","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","323","VAT Business Posting Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","324","VAT Product Posting Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","325","VAT Posting Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","330","Currency Exchange Rate","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","336","Tracking Specification","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","337","Reservation Entry","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","338","Entry Summary","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","339","Item Application Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","340","Customer Discount Group","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","341","Item Discount Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","343","Item Application Entry History","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","348","Dimension","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","349","Dimension Value","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","350","Dimension Combination","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","351","Dimension Value Combination","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","352","Default Dimension","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","354","Default Dimension Priority","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","360","Dimension Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","363","Analysis View","Indirect","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","364","Analysis View Filter","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","365","Analysis View Entry","Indirect","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","367","Dimension Code Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","368","Dimension Selection Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","369","Selected Dimension","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","378","Report List Translation","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","379","Detailed Cust. Ledg. Entry","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","381","VAT Registration No. Format","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","388","Dimension Translation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","390","Availability at Date","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","402","Change Log Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","403","Change Log Setup (Table)","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","404","Change Log Setup (Field)","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","405","Change Log Entry","Indirect","Indirect","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","409","SMTP Mail Setup","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","410","IC G/L Account","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","411","IC Dimension","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","412","IC Dimension Value","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","413","IC Partner","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","414","IC Outbox Transaction","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","415","IC Outbox Jnl. Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","423","IC Inbox/Outbox Jnl. Line Dim.","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","424","IC Comment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","426","IC Outbox Sales Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","427","IC Outbox Sales Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","442","IC Document Dimension","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","452","Approval Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","454","Approval Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","455","Approval Comment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","456","Posted Approval Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","457","Posted Approval Comment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","459","Sales Prepayment %","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","460","Purchase Prepayment %","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","464","Approval Templates","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","470","Job Queue","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","471","Job Queue Category","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","472","Job Queue Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","474","Job Queue Log Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","480","Dimension Set Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","481","Dimension Set Tree Node","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","751","Standard General Journal Line","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","753","Standard Item Journal Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","800","Online Map Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","801","Online Map Parameter Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","826","Dynamics Online Payment Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","1001","Job Task","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","1003","Job Planning Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","1015","Job Entry No.","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","1017","Job Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","1018","Job WIP Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","1019","Job Difference Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","1108","Cost Accounting Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5050","Contact","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5051","Contact Alt. Address","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5052","Contact Alt. Addr. Date Range","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5053","Business Relation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5054","Contact Business Relation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5055","Mailing Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5056","Contact Mailing Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5057","Industry Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5058","Contact Industry Group","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5059","Web Source","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5060","Contact Web Source","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5061","Rlshp. Mgt. Comment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5062","Attachment","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5063","Interaction Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5064","Interaction Template","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5065","Interaction Log Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5066","Job Responsibility","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5067","Contact Job Responsibility","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5068","Salutation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5069","Salutation Formula","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5070","Organizational Level","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5071","Campaign","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5074","Delivery Sorter","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5076","Segment Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5077","Segment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5078","Segment History","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5079","Marketing Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5080","To-do","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5085","Contact Duplicate","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5086","Cont. Duplicate Search String","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5087","Profile Questionnaire Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5088","Profile Questionnaire Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5089","Contact Profile Answer","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5092","Opportunity","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5093","Opportunity Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5094","Close Opportunity Code","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+      '"SC-MANAGER","e-Commerce Manager","Table Data","5095","Duplicate Search String Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5100","Communication Method","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5103","Interaction Tmpl. Language","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5105","Customer Template","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5107","Sales Header Archive","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5108","Sales Line Archive","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5109","Purchase Header Archive","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5110","Purchase Line Archive","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5111","Rating","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5122","Interaction Template Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5123","Inter. Log Entry Comment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5196","To-do Interaction Language","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5199","Attendee","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5218","Human Resources Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5401","Item Variant","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5402","Unit of Measure Translation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5404","Item Unit of Measure","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5405","Production Order","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5406","Prod. Order Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5407","Prod. Order Component","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5601","FA Ledger Entry","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5603","FA Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5611","Depreciation Book","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5625","Maintenance Ledger Entry","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5644","FA Posting Type","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5645","FA Date Type","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5647","FA Matrix Posting Type","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5700","Stockkeeping Unit","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5701","Stockkeeping Unit Comment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5714","Responsibility Center","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5715","Item Substitution","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5716","Substitution Condition","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5717","Item Cross Reference","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5718","Nonstock Item","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5719","Nonstock Item Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5722","Item Category","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5723","Product Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5741","Transfer Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5745","Transfer Shipment Line","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5747","Transfer Receipt Line","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5765","Warehouse Request","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5766","Warehouse Activity Header","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5767","Warehouse Activity Line","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5768","Whse. Cross-Dock Opportunity","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5769","Warehouse Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5773","Registered Whse. Activity Line","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5790","Shipping Agent Services","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5800","Item Charge","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5802","Value Entry","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5804","Avg. Cost Adjmt. Entry Point","Yes","Indirect","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5805","Item Charge Assignment (Purch)","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5809","Item Charge Assignment (Sales)","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5811","Post Value Entry to G/L","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5813","Inventory Posting Setup","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5814","Inventory Period","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5815","Inventory Period Entry","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5832","Capacity Ledger Entry","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5900","Service Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5901","Service Item Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5902","Service Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5903","Service Order Type","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5904","Service Item Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5905","Service Cost","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5906","Service Comment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5907","Service Ledger Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5908","Warranty Ledger Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5910","Service Hour","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5911","Service Mgt. Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5912","Service Document Log","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5913","Loaner","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5914","Loaner Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5915","Fault Area","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5916","Symptom Code","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5917","Fault Reason Code","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5918","Fault Code","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5919","Resolution Code","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5920","Fault/Resol. Codes Rlship.","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5927","Repair Status","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5933","Service Order Posting Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5934","Service Register","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5935","Service E-Mail Queue","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5936","Service Document Register","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5940","Service Item","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5941","Service Item Component","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5942","Service Item Log","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5943","Troubleshooting Header","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5944","Troubleshooting Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5945","Troubleshooting Setup","Yes","Yes","Yes","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5950","Service Order Allocation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5952","Resource Location","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5956","Resource Skill","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5957","Service Zone","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5964","Service Contract Line","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5965","Service Contract Header","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5966","Contract Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5969","Contract Gain/Loss Entry","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5970","Filed Service Contract Header","Indirect","Yes","Indirect","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5971","Filed Contract Line","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","5989","Service Shipment Item Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5990","Service Shipment Header","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5991","Service Shipment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5992","Service Invoice Header","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5993","Service Invoice Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5994","Service Cr.Memo Header","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","5995","Service Cr.Memo Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","6080","Service Price Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","6081","Serv. Price Group Setup","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","6082","Service Price Adjustment Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","6083","Serv. Price Adjustment Detail","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","6084","Service Line Price Adjmt.","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","6502","Item Tracking Code","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","6504","Serial No. Information","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","6505","Lot No. Information","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","6506","Item Tracking Comment","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","6507","Item Entry Relation","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","6508","Value Entry Relation","Yes","Yes","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","6509","Whse. Item Entry Relation","Yes","Indirect","Indirect","Indirect","Yes"'
+      );
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","6550","Whse. Item Tracking Line","Yes","Indirect","Indirect","Indirect","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","6635","Return Reason","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","6650","Return Shipment Header","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","6651","Return Shipment Line","Indirect","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","6660","Return Receipt Header","Yes","Indirect","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","6661","Return Receipt Line","Yes","Indirect","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","6670","Returns-Related Document","Yes","Indirect","Indirect","Indirect","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7002","Sales Price","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","7004","Sales Line Discount","Yes","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7012","Purchase Price","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7014","Purchase Line Discount","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7030","Campaign Target Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7110","Analysis Field Value","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7111","Analysis Report Name","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7112","Analysis Line Template","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7113","Analysis Type","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7114","Analysis Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+       '"SC-MANAGER","e-Commerce Manager","Table Data","7116","Analysis Column Template","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7118","Analysis Column","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7134","Item Budget Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7152","Item Analysis View","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","7153","Item Analysis View Filter","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","7154","Item Analysis View Entry","Yes","Indirect","Indirect","Indirect","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","7156","Item Analysis View Budg. Entry","Yes","Yes","Yes","Indirect","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7302","Bin Content","Yes","Yes","Yes","Indirect","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7305","Special Equipment","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","7307","Put-away Template Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","7311","Warehouse Journal Line","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7312","Warehouse Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7313","Warehouse Register","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7317","Warehouse Receipt Line","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","7319","Posted Whse. Receipt Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","7321","Warehouse Shipment Line","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","7322","Posted Whse. Shipment Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","7323","Posted Whse. Shipment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7325","Whse. Pick Request","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7326","Whse. Worksheet Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7354","Bin","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","7381","Phys. Invt. Counting Period","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7600","Base Calendar","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7601","Base Calendar Change","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","7602","Customized Calendar Change","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","7603","Customized Calendar Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+      '"SC-MANAGER","e-Commerce Manager","Table Data","7604","Where Used Base Calendar","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","7704","Item Identifier","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","9053","Sales Cue","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","9150","My Customer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","9152","My Item","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123302","SC - Operation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123303","SC - XML Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123305","SC - Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123306","SC - Translation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123308","SC - Catalog Filter","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","11123310","SC - Parameters Collection","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123311","SC - NAS Parameters","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","11123312","SC - Role Center Cue","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123313","SC - Webshop","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","11123314","SC - Order Import Info.","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","11123315","SC - Manual Process Request","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","11123316","SC - Process Request Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123317","SC - Product Info.","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123318","SC - Variant Info.","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","11123319","SC - Product Variant Price","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","11123320","SC - Data Validation Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","11123321","SC - Data Validation Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123322","SC - Lookup Value","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","11123323","SC - Sales Document Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","11123324","SC - Sales Header Blob","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","11123325","SC - Sales Document Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","11123326","SC - Customer Assortment","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123327","SC - Record Action","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","11123328","SC - Volume Price/Discount","Yes","Yes","Yes","Yes","Yes"');
+
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123327","SC - Record Action","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+      '"SC-MANAGER","e-Commerce Manager","Table Data","11123332","SC - Chart Sales Ord. Setup","Yes","Yes","Yes","Yes"'
+        + ',Yes');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123339","SC - Webshop Orders Overview","Yes","Yes","Yes"'
+        + ',Yes,Yes');
+
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","11123330","SC - Key Value","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","99000763","Routing Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","99000765","Manufacturing Setup","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","99000771","Production BOM Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","99000772","Production BOM Line","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","99000799","Order Tracking Entry","Yes","Indirect","Indirect","Indirect","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","99000800","Sales Planning Line","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","99000829","Planning Component","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","99000832",' +
+        '"Item Availability Line","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","99000846","Planning Buffer","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","99000849","Action Message Entry","Yes","Indirect","Indirect","Indirect","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","99000850","Planning Assignment","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","99000852","Production Forecast Entry","Indirect","Yes","Indirect","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","99000875","Order Promising Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","99000880","Order Promising Line","Yes","Indirect","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","2000000001","Object","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","2000000005","Permission","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","2000000006","Company","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","2000000007","Date","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","2000000053","Access Control","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","2000000068","Record Link","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","2000000069","Client Add-in","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","2000000071","Object Metadata","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","2000000072","Profile","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","2000000073","User Personalization","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","2000000074","Profile Metadata","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","2000000075","User Metadata","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-MANAGER","e-Commerce Manager","Table Data","2000000080","Page Data Personalization","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","2000000120","User","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table Data","2000000121","User Property","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Table","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Report","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Codeunit","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","XMLport","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","MenuSuite","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Page","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","Query","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","System","2510","Edit; Find","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","System","2520","Edit; Replace","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","System","3220","View; Table Filter","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","System","3230","View; FlowFilter","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","System","3410","View; Sort","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","System","3510","View; Design","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-MANAGER","e-Commerce Manager","System","5830","Tools; Security; Password","Yes","Yes","Yes","Yes","Yes"');
+
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","4","Currency","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","7","Standard Text","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","8","Language","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","9","Country/Region","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","13","Salesperson/Purchaser","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","50027","Mfr. Rep.","Yes","Yes","Yes","Yes","Yes"'); //<TPZ2027>
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","14","Location","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","15","G/L Account","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","17","G/L Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","18","Customer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","21","Cust. Ledger Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"sSC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","23","Vendor","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","27","Item","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","32","Item Ledger Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","36",' +
+        '"Sales Header","Indirect","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","37","Sales Line","Indirect","Indirect","Indirect","Indirect","Yes"'
+      );
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","39",' +
+        '"Purchase Line","Indirect","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","50","Accounting Period","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","51",' +
+        '"User Time Register","Indirect","Indirect","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","78","Printer Selection","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","79","Company Information","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","80","Gen. Journal Template","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","90","BOM Component","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","91","User Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","92","Customer Posting Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","93","Vendor Posting Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","97","Comment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","98","General Ledger Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","110",' +
+        '"Sales Shipment Header","Indirect","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","112",' +
+        '"Sales Invoice Header","Indirect","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","114",' +
+        '"Sales Cr.Memo Header","Indirect","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","140","License Agreement","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","156","Resource","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","180","G/L Account Where-Used","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","204","Unit of Measure","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","208","Job Posting Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","220","Business Unit","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","221","Gen. Jnl. Allocation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","222","Ship-to Address","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","225","Post Code","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","230","Source Code","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","232","Gen. Journal Batch","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","238","BOM Ledger Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","242","Source Code Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","252","General Posting Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","253","G/L Entry - VAT Entry link","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","254","VAT Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","265","Document Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","269","G/L Account Net Change","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","277","Bank Account Posting Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","279","Extended Text Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","280","Extended Text Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","281",' +
+        '"Phys. Inventory Ledger Entry","Indirect","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","287",' +
+        '"Customer Bank Account","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","289","Payment Method","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","291","Shipping Agent","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","300","Reminder/Fin. Charge Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","308","No. Series","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","309","No. Series Line","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","310","No. Series Relationship","Yes","Yes","Indirect","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","311","Sales & Receivables Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","312","Purchases & Payables Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","313","Inventory Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","314","Resources Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","315","Jobs Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","325","VAT Posting Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","330","Currency Exchange Rate","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","339","Item Application Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","340","Customer Discount Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","341","Item Discount Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","348","Dimension","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","349","Dimension Value","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","352","Default Dimension","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","360","Dimension Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","367","Dimension Code Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","368","Dimension Selection Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","369","Selected Dimension","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","378","Report List Translation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","379","Detailed Cust. Ledg. Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","388","Dimension Translation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","390",' +
+        '"Availability at Date","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","402","Change Log Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","403","Change Log Setup (Table)","Indirect","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","404","Change Log Setup (Field)","Indirect","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","405","Change Log Entry","Indirect","Indirect","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","409","SMTP Mail Setup","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","452","Approval Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","464","Approval Templates","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","470","Job Queue","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","471","Job Queue Category","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","472","Job Queue Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","474","Job Queue Log Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","800","Online Map Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","801","Online Map Parameter Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","1003",' +
+        '"Job Planning Line","Indirect","Indirect","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","1015","Job Entry No.","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","1017","Job Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","1018","Job WIP Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","1019","Job Difference Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5050","Contact","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5051","Contact Alt. Address","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5052",' +
+        '"Contact Alt. Addr. Date Range","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5053","Business Relation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5054","Contact Business Relation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5055","Mailing Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5056","Contact Mailing Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5057","Industry Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5058","Contact Industry Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5059","Web Source","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5060","Contact Web Source","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5061","Rlshp. Mgt. Comment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5062","Attachment","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5063","Interaction Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5064","Interaction Template","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5065","Interaction Log Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5066","Job Responsibility","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5067","Contact Job Responsibility","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5068","Salutation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5069","Salutation Formula","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5070","Organizational Level","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5079","Marketing Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5080","To-do","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5087","Profile Questionnaire Header","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5088","Profile Questionnaire Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5089","Contact Profile Answer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5092","Opportunity","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5093","Opportunity Entry","Indirect","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5103","Interaction Tmpl. Language","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5107","Sales Header Archive","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5108","Sales Line Archive","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5109","Purchase Header Archive","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5110","Purchase Line Archive","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5111","Rating","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5122","Interaction Template Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5123",' +
+        '"Inter. Log Entry Comment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5196","To-do Interaction Language","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5218","Human Resources Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5401","Item Variant","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5404","Item Unit of Measure","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5406","Prod. Order Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5407","Prod. Order Component","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5600","Fixed Asset","Yes","Yes","Indirect","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5601","FA Ledger Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5603","FA Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5604","FA Posting Type Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5606","FA Posting Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5607","FA Class","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5608","FA Subclass","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5609","FA Location","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5611","Depreciation Book","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5612","FA Depreciation Book","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5615","FA Allocation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5616","Maintenance Registration","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5625","Maintenance Ledger Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5626","Maintenance","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5640","Main Asset Component","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5642","Depreciation Table Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5643","Depreciation Table Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5644","FA Posting Type","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5645","FA Date Type","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5647","FA Matrix Posting Type","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5700","Stockkeeping Unit","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5701",' +
+        '"Stockkeeping Unit Comment Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5714",' +
+        '"Responsibility Center","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5715","Item Substitution","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5716","Substitution Condition","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5717","Item Cross Reference","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5718","Nonstock Item","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5719","Nonstock Item Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5769","Warehouse Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5790","Shipping Agent Services","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5800","Item Charge","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5802","Value Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5811",' +
+        '"Post Value Entry to G/L","Indirect","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5813","Inventory Posting Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5902",' +
+        '"Service Line","Indirect","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","5973",' +
+        '"Service Contract Account Group","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","6502","Item Tracking Code","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","6504","Serial No. Information","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","6505","Lot No. Information","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","6507",' +
+        '"Item Entry Relation","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","6508",' +
+        '"Value Entry Relation","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","6509",' +
+        '"Whse. Item Entry Relation","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","6550",' +
+        '"Whse. Item Tracking Line","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","6660",' +
+        '"Return Receipt Header","Indirect","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","6670",' +
+        '"Returns-Related Document","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","7002","Sales Price","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","7354","Bin","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","7600","Base Calendar","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","7601","Base Calendar Change","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","7602","Customized Calendar Change","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","7603","Customized Calendar Entry","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","7604",' +
+        '"Where Used Base Calendar","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","7704",' +
+        '"Item Identifier","Indirect","Indirect","Indirect","Indirect","');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123302","SC - Operation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123303","SC - XML Buffer","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123305","SC - Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123306","SC - Translation","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123308","SC - Catalog Filter","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123310",' +
+        '"SC - Parameters Collection","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123311","SC - NAS Parameters","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123312","SC - Role Center Cue","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123313","SC - Webshop","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123314","SC - Order Import Info.","Yes","Yes","Yes","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123315",' +
+        '"SC - Manual Process Request","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123316",' +
+        '"SC - Process Request Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123317","SC - Product Info.","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123318","SC - Variant Info.","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123319",' +
+        '"SC - Product Variant Price","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123320",' +
+        '"SC - Data Validation Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123321",' +
+        '"SC - Data Validation Line","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123322","SC - Lookup Value","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123323",' +
+        '"SC - Sales Document Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123324","SC - Sales Header Blob","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123325","SC - Sales Document Line","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123326","SC - Customer Assortment","Yes","Yes","Yes","Yes","Yes"'
+      );
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123327","SC - Record Action","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123328",' +
+        '"SC - Volume Price/Discount","Yes","Yes","Yes","Yes","Yes"');
+
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123329",' +
+        '"SC - Currency ISO Code","Yes","Yes","Yes","Yes","Yes"');
+
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123330",' +
+        '"SC - Key Value","Yes","Yes","Yes","Yes","Yes"');
+
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123332",' +
+        '"SC - Chart Sales Ord. Setup","Yes","Yes","Yes","Yes","Yes"');
+
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123339",' +
+        '"SC - Webshop Orders Overview","Yes","Yes","Yes","Yes","Yes"');
+
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","11123330","SC - Key Value","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","99000763","Routing Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","99000765",' +
+       '"Manufacturing Setup","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","99000771","Production BOM Header","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","99000799",' +
+        '"Order Tracking Entry","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","99000829","Planning Component","Yes","Yes","Indirect","Yes","Yes"')
+      ;
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","99000832",' +
+        '"Item Availability Line","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","99000846",' +
+        '"Planning Buffer","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","99000849",' +
+        '"Action Message Entry","Yes","Indirect","Indirect","Indirect","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","99000850","Planning Assignment","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","99000875","Order Promising Setup","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000001","Object","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000005","Permission","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000006","Company","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000007","Date","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000053","Access Control","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000068","Record Link","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000069","Client Add-in","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000071","Object Metadata","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000072","Profile","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000073","User Personalization","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000074","Profile Metadata","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000075","User Metadata","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000076","Web Service","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000080",' +
+        '"Page Data Personalization","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000110","Active Session","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000120","User","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table Data","2000000121","User Property","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Table","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Report","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Codeunit","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","XMLport","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","MenuSuite","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Page","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","Query","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","System","2510","Edit; Find","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","System","2520","Edit; Replace","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","System","3220","View; Table Filter","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","System","3230","View; FlowFilter","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","System","3410","View; Sort","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","System","3510","View; Design","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr(
+        '"SC-SYSADMIN","e-Commerce Sys. Administrator","System","5830","Tools; Security; Password","Yes","Yes","Yes","Yes","Yes"');
+
+      ParsePermissionStr('"SC-USER","All Sana Commerce Users","Table Data","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-USER","All Sana Commerce Users","Table","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-USER","All Sana Commerce Users","Codeunit","0","","Yes","Yes","Yes","Yes","Yes"');
+      ParsePermissionStr('"SC-USER","All Sana Commerce Users","Report","0","","Yes","Yes","Yes","Yes","Yes"');
+    END;
+
+    PROCEDURE SetProfile@11123315();
+    BEGIN
+      ParseProfileStr('"E-COMMERCE MANAGER","{00000000-0000-0000-0000-000000000000}","",' +
+        '"Sana Commerce Manager","11123322","0","0","0","0","","0","","0"');
+      ParseProfileStr('"E-COMMERCE SYS. ADMINISTRATOR","{00000000-0000-0000-0000-000000000000}","",' +
+        '"Sana Commerce System Administrator","11123324","0","0","0","0","","0","","0"');
+    END;
+
+    PROCEDURE ParseUserRolesStr@11123327(String@11123304 : Text[1024]);
+    VAR
+      RoleID@11123302 : Code[20];
+      Name@11123303 : Text[30];
+    BEGIN
+      String := DELCHR(String,'=','"');
+
+      RoleID := SELECTSTR(1,String);
+      Name := SELECTSTR(2,String);
+
+      InsertUserRoles(RoleID,Name);
+    END;
+
+    PROCEDURE ParsePermissionStr@11123320(String@11123302 : Text[1024]);
+    VAR
+      RoleID@11123305 : Code[20];
+      RoleName@11123306 : Code[30];
+      ObjectTypeStr@11123307 : Text[20];
+      ReadPermissionStr@11123311 : Text[30];
+      InsertPermissionStr@11123312 : Text[30];
+      ModifyPermissionStr@11123313 : Text[30];
+      DeletePermissionStr@11123314 : Text[30];
+      ExecutePermissionStr@11123315 : Text[30];
+      ObjectName@11123310 : Text[30];
+      ObjectType@11123308 : Integer;
+      ObjectID@11123309 : Integer;
+      ReadPermission@11123316 : Integer;
+      InsertPermission@11123317 : Integer;
+      ModifyPermission@11123318 : Integer;
+      DeletePermission@11123319 : Integer;
+      ExecutePermission@11123320 : Integer;
+    BEGIN
+      String := DELCHR(String,'=','"');
+
+      RoleID := SELECTSTR(1,String);
+      RoleName := SELECTSTR(2,String);
+      ObjectTypeStr := SELECTSTR(3,String);
+      ObjectType := GetPermisionObjectType(ObjectTypeStr);
+      EVALUATE(ObjectID,SELECTSTR(4,String));
+      ObjectName := SELECTSTR(5,String);
+      ReadPermissionStr := SELECTSTR(6,String);
+      ReadPermission := GetPermisionOption(ReadPermissionStr);
+      InsertPermissionStr := SELECTSTR(7,String);
+      InsertPermission := GetPermisionOption(InsertPermissionStr);
+      ModifyPermissionStr := SELECTSTR(8,String);
+      ModifyPermission := GetPermisionOption(ModifyPermissionStr);
+      DeletePermissionStr := SELECTSTR(9,String);
+      DeletePermission := GetPermisionOption(DeletePermissionStr);
+      ExecutePermissionStr := SELECTSTR(10,String);
+      ExecutePermission := GetPermisionOption(ExecutePermissionStr);
+
+      InsertPermissions(RoleID,RoleName,ObjectType,ObjectID,ObjectName,ReadPermission,InsertPermission,
+        ModifyPermission,DeletePermission,ExecutePermission);
+    END;
+
+    PROCEDURE ParseProfileStr@11123316(String@11123302 : Text[1024]);
+    VAR
+      ProfileID@11123303 : Code[30];
+      OwnerID@11123305 : Text[132];
+      OwnerSID@11123304 : Text[119];
+      RoleCenterID@11123307 : Integer;
+      DefaultRoleCenter@11123308 : Boolean;
+      UseComments@11123309 : Boolean;
+      UseNotes@11123310 : Boolean;
+      UseRecordNotes@11123311 : Boolean;
+      UsePageNotes@11123313 : Boolean;
+      DisablePersonalization@11123315 : Boolean;
+      PageNotebook@11123314 : Text[250];
+      RecordNotebook@11123312 : Text[250];
+      Description@11123306 : Text[250];
+    BEGIN
+      String := DELCHR(String,'=','"');
+
+      ProfileID := SELECTSTR(1,String);
+      OwnerSID := SELECTSTR(2,String);
+      OwnerID := SELECTSTR(3,String);
+      Description := SELECTSTR(4,String);
+      EVALUATE(RoleCenterID,SELECTSTR(5,String));
+      EVALUATE(DefaultRoleCenter,SELECTSTR(6,String));
+      EVALUATE(UseComments,SELECTSTR(7,String));
+      EVALUATE(UseNotes,SELECTSTR(8,String));
+      EVALUATE(UseRecordNotes,SELECTSTR(9,String));
+      RecordNotebook := SELECTSTR(10,String);
+      EVALUATE(UsePageNotes,SELECTSTR(11,String));
+      PageNotebook := SELECTSTR(12,String);
+      EVALUATE(DisablePersonalization,SELECTSTR(13,String));
+
+      InsertProfile(ProfileID,OwnerSID,OwnerID,Description,RoleCenterID,DefaultRoleCenter,UseComments,UseNotes,UseRecordNotes,
+        RecordNotebook,UsePageNotes,PageNotebook,DisablePersonalization);
+    END;
+
+    PROCEDURE InsertUserRoles@11123329(RoleID@11123303 : Code[20];RoleName@11123302 : Text[30]);
+    VAR
+      UserRole@11123304 : Record 2000000004;
+    BEGIN
+      WITH UserRole DO BEGIN
+        INIT;
+        "Role ID" := RoleID;
+        Name := RoleName;
+        IF NOT INSERT THEN
+          MODIFY;
+      END;
+    END;
+
+    PROCEDURE InsertPermissions@11123326(RoleID@11123302 : Code[20];RoleName@11123303 : Text[30];ObjectType@11123304 : Option;ObjectID@11123305 : Integer;ObjectName@11123306 : Text[249];ReadPermission@11123307 : Integer;InsertPermission@11123308 : Integer;ModifyPermission@11123309 : Integer;DeletePermission@11123310 : Integer;ExecutePermission@11123311 : Integer);
+    VAR
+      Permission@11123312 : Record 2000000005;
+    BEGIN
+      Permission.INIT;
+      Permission."Role ID" := RoleID;
+      Permission."Object Type" := ObjectType;
+      Permission."Object ID" := ObjectID;
+      Permission."Read Permission" := ReadPermission;
+      Permission."Insert Permission" := InsertPermission;
+      Permission."Modify Permission" := ModifyPermission;
+      Permission."Delete Permission" := DeletePermission;
+      Permission."Execute Permission" := ExecutePermission;
+      IF NOT Permission.INSERT THEN
+        Permission.MODIFY;
+    END;
+
+    PROCEDURE InsertProfile@11123317(ProfileID@11123314 : Code[30];OwnerSID@11123313 : Text[119];OwnerID@11123312 : Text[132];Description@11123311 : Text[250];RoleCenterID@11123310 : Integer;DefaultRoleCenter@11123309 : Boolean;UseComments@11123308 : Boolean;UseNotes@11123307 : Boolean;UseRecordNotes@11123306 : Boolean;RecordNotebook@11123305 : Text[250];UsePageNotes@11123304 : Boolean;PageNotebook@11123303 : Text[250];DisablePersonalization@11123302 : Boolean);
+    VAR
+      TableRef@11123316 : RecordRef;
+      FieldRef@11123317 : FieldRef;
+    BEGIN
+      TableRef.OPEN(DATABASE::Profile);
+      TableRef.INIT;
+      IF TableRef.FIELDEXIST(3) THEN BEGIN // "Profile ID"
+        FieldRef := TableRef.FIELD(3);
+        FieldRef.VALUE(ProfileID);
+      END;
+      IF TableRef.FIELDEXIST(6) THEN BEGIN // "Owner SID"
+        FieldRef := TableRef.FIELD(6);
+        FieldRef.VALUE(OwnerSID);
+      END;
+      IF TableRef.FIELDEXIST(9) THEN BEGIN // "Owner ID"
+        FieldRef := TableRef.FIELD(9);
+        FieldRef.VALUE(OwnerID);
+      END;
+      IF TableRef.FIELDEXIST(12) THEN BEGIN // "Description"
+        FieldRef := TableRef.FIELD(12);
+        FieldRef.VALUE(Description);
+      END;
+      IF TableRef.FIELDEXIST(15) THEN BEGIN // "Role Center ID"
+        FieldRef := TableRef.FIELD(15);
+        FieldRef.VALUE(RoleCenterID);
+      END;
+      IF TableRef.FIELDEXIST(18) THEN BEGIN // "Default Role Center"
+        FieldRef := TableRef.FIELD(18);
+        FieldRef.VALUE(DefaultRoleCenter);
+      END;
+      IF TableRef.FIELDEXIST(21) THEN BEGIN // "Use Comments"
+        FieldRef := TableRef.FIELD(21);
+        FieldRef.VALUE(UseComments);
+      END;
+      IF TableRef.FIELDEXIST(24) THEN BEGIN // "Use Notes"
+        FieldRef := TableRef.FIELD(24);
+        FieldRef.VALUE(UseNotes);
+      END;
+      IF TableRef.FIELDEXIST(27) THEN BEGIN // "Use Record Notes"
+        FieldRef := TableRef.FIELD(27);
+        FieldRef.VALUE(UseRecordNotes);
+      END;
+      IF TableRef.FIELDEXIST(30) THEN BEGIN // "Record Notebook"
+        FieldRef := TableRef.FIELD(30);
+        FieldRef.VALUE(RecordNotebook);
+      END;
+      IF TableRef.FIELDEXIST(33) THEN BEGIN // "Use Page Notes"
+        FieldRef := TableRef.FIELD(33);
+        FieldRef.VALUE(UsePageNotes);
+      END;
+      IF TableRef.FIELDEXIST(36) THEN BEGIN // "Page Notebook"
+        FieldRef := TableRef.FIELD(36);
+        FieldRef.VALUE(PageNotebook);
+      END;
+      IF TableRef.FIELDEXIST(39) THEN BEGIN // "Disable Personalization"
+        FieldRef := TableRef.FIELD(39);
+        FieldRef.VALUE(DisablePersonalization);
+      END;
+
+      IF NOT TableRef.INSERT THEN
+        TableRef.MODIFY;
+
+      TableRef.CLOSE;
+    END;
+
+    PROCEDURE GetPermisionObjectType@11123321(ObjectTypeStr@11123302 : Text[20]) ObjectType : Integer;
+    VAR
+      Context@11123304 : Codeunit 11123305;
+    BEGIN
+      IF Context.GetVersionNav <= 6 // NAV2009
+        THEN
+          CASE ObjectTypeStr OF
+            'Table Data' :  ObjectType := 0;
+            'Table' : ObjectType := 1;
+            'Form' :  ObjectType := 2;
+            'Report' :  ObjectType := 3;
+            'Dataport' :  ObjectType := 4;
+            'Codeunit' :  ObjectType := 5;
+            'XMLport' : ObjectType := 6;
+            'MenuSuite' : ObjectType := 7;
+            'Page' :  ObjectType := 8;
+            '' :  ObjectType := 9;
+            'System' :  ObjectType := 10;
+          END;
+
+      IF Context.GetVersionNav >= 7 // NAV2013
+        THEN
+          CASE ObjectTypeStr OF
+            'Table Data' :  ObjectType := 0;
+            'Table' : ObjectType := 1;
+            '' :  ObjectType := 2;
+            'Report' :  ObjectType := 3;
+            'Codeunit' :  ObjectType := 5;
+            'XMLport' : ObjectType := 6;
+            'MenuSuite' : ObjectType := 7;
+            'Page' :  ObjectType := 8;
+            'Query' :  ObjectType := 9;
+            'System' :  ObjectType := 10;
+          END;
+    END;
+
+    PROCEDURE GetPermisionOption@11123322(PermisionStr@11123302 : Text[30]) Permision : Integer;
+    BEGIN
+      CASE PermisionStr OF
+        '' : Permision := 0;
+        'Yes' : Permision := 1;
+        'Indirect' : Permision := 2;
+      END;
+    END;
+
+    PROCEDURE DelPermissionLines@11123334();
+    VAR
+      Permission@11123302 : Record 2000000005;
+    BEGIN
+      WITH Permission DO BEGIN
+        SETFILTER("Role ID",'%1|%2','SC-MANAGER','SC-SYSADMIN');
+        SETRANGE("Object Type",Permission."Object Type"::"Table Data");
+        SETRANGE("Object ID",0);
+        DELETEALL;
+      END;
+    END;
+
+    PROCEDURE SetAllCountriesRegionsVisible@11123318(CustomerTemplateCode@11123302 : Code[10]);
+    VAR
+      CountryRegion@11123305 : Record 9;
+    BEGIN
+      WITH CountryRegion DO BEGIN
+        SETRANGE("Visible in Webshop",FALSE);
+        MODIFYALL("Customer Template Code",CustomerTemplateCode);
+        MODIFYALL("Visible in Webshop",TRUE);
+      END;
+    END;
+
+    PROCEDURE DateToUtc@11123324(InDate@11123302 : DateTime) OutDate : DateTime;
+    BEGIN
+      IF InDate <> 0DT THEN
+        EXIT(ConvertDateToUtc(InDate));
+    END;
+
+    PROCEDURE UtcToDate@11123328(InDate@11123302 : DateTime) OutDate : DateTime;
+    BEGIN
+      IF InDate <> 0DT THEN
+        EXIT(ConvertUtcToDate(InDate));
+    END;
+
+    LOCAL PROCEDURE ConvertDateToUtc@11123330(InDate@11123302 : DateTime) : DateTime;
+    VAR
+      Wrapper@11123305 : Codeunit 11123308;
+      ActiveTimeBias@11123304 : Integer;
+    BEGIN
+      ActiveTimeBias := Wrapper.GetActiveTimeBias;
+
+      IF DT2TIME(InDate) - ActiveTimeBias > DT2TIME(InDate) THEN
+        EXIT(CREATEDATETIME(DT2DATE(InDate) - 1,DT2TIME(InDate) - ActiveTimeBias))
+      ELSE
+        EXIT(CREATEDATETIME(DT2DATE(InDate),DT2TIME(InDate) - ActiveTimeBias));
+    END;
+
+    LOCAL PROCEDURE ConvertUtcToDate@11123331(InDate@11123302 : DateTime) : DateTime;
+    VAR
+      Wrapper@11123305 : Codeunit 11123308;
+      ActiveTimeBias@11123304 : Integer;
+    BEGIN
+      ActiveTimeBias := Wrapper.GetActiveTimeBias;
+
+      IF DT2TIME(InDate) + ActiveTimeBias < DT2TIME(InDate) THEN
+        EXIT(CREATEDATETIME(DT2DATE(InDate) + 1,DT2TIME(InDate) + ActiveTimeBias))
+      ELSE
+        EXIT(CREATEDATETIME(DT2DATE(InDate),DT2TIME(InDate) + ActiveTimeBias));
+    END;
+
+    PROCEDURE AddPerformanceDuration@11123336(VAR InXMLBuff@11123306 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303;Option@11123303 : 'Start,Stop');
+    VAR
+      TextVar@11123308 : Text[1024];
+      StartPerform@11123304 : Text[1024];
+      StopPerform@11123305 : Text[1024];
+    BEGIN
+      // Performance monitor - does not implemented in current version. For future implementation.
+      // -----------------------------------------------------------------------------------------------------------------
+      //CASE Option OF
+      //  Option::Start :
+      //    BEGIN
+      //      TextVar := InXMLBuff.SelectSingleNodeText('//PerformanceProfiler');
+      //      IF TextVar <> '1' THEN
+      //        EXIT;
+      //
+      //      StartPerform := FORMAT(CURRENTDATETIME,0,'<Day,2>-<Month,2>-<Year>_<Hours24>.<Minutes,2>.<Seconds,2><Second dec>');
+      //      OutXMLBuff.AddElementEx('StartPerform',StartPerform);
+      //    END;
+      //  Option::Stop :
+      //    BEGIN
+      //      StopPerform := FORMAT(CURRENTDATETIME,0,'<Day,2>-<Month,2>-<Year>_<Hours24>.<Minutes,2>.<Seconds,2><Second dec>');
+      //      OutXMLBuff.AddElementEx('StopPerform',StopPerform);
+      //    END;
+      //END;
+      // -----------------------------------------------------------------------------------------------------------------
+    END;
+
+    LOCAL PROCEDURE CheckSupportPersistedBasket@11123301(VAR Params@11123301 : Record 11123310);
+    VAR
+      CommonFunc@11123302 : Codeunit 11123309;
+      Context@11123303 : Codeunit 11123305;
+    BEGIN
+      Params.SupportsPersistedBaskets := Context.SupportsPersistedBaskets AND (NOT CommonFunc.LSRetailConnectorIsUsed);
+    END;
+
+    PROCEDURE IsSupportsShippingMethods@11123319() : Boolean;
+    BEGIN
+      EXIT(NOT Context.SanaExtansionIsUsed);
+    END;
+
+    PROCEDURE IsSupportsRmaSplitLines@11123337() : Boolean;
+    VAR
+      OrderBaskFunc@11123303 : Codeunit 11123320;
+    BEGIN
+      EXIT(NOT OrderBaskFunc.IsExactCostRevMandatory);
+    END;
+
+    PROCEDURE IsSupportsDocFreeRma@11123338() : Boolean;
+    VAR
+      OrderBaskFunc@11123303 : Codeunit 11123320;
+    BEGIN
+      EXIT(NOT OrderBaskFunc.IsExactCostRevMandatory);
+    END;
+
+    BEGIN
+    {
+      2016-02-09 TPZ1301 TAKHMETO
+        GetDefaultCurrencyGLSetup function has been modified
+      2017-10-13 TPZ2027 EBAGIM
+        Swaping Salesperon with MfrRep table
+    }
+    END.
+  }
+}
+

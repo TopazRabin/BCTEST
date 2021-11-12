@@ -1,0 +1,711 @@
+OBJECT Codeunit 14002404 E.D.I. Update Routing Req.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/21/17;
+    Time=12:00:00 PM;
+    Version List=SE0.60.13;
+  }
+  PROPERTIES
+  {
+    TableNo=14002358;
+    OnRun=BEGIN
+            IF "Navision Document" <> 'U_ROUTEREQ' THEN
+              ERROR(Text001,"Navision Document");
+
+            ShippingSetup.GET;
+            PackingStation.GetPackingStation;
+
+            EDITemplate.GET("EDI Template Code");
+            EDIRecDocHdr2.GET("Internal Doc. No.");
+            IF EDIRecDocHdr2."Company Name" <> COMPANYNAME THEN
+              ERROR(
+                Text002,
+                EDIRecDocHdr2."Internal Doc. No.",EDIRecDocHdr2."Company Name",COMPANYNAME);
+
+            EDIDocument.GET(
+              EDIRecDocHdr2."Trade Partner No.",EDIRecDocHdr2."Navision Document",
+              EDIRecDocHdr2."EDI Document No.",EDIRecDocHdr2."EDI Version",
+              EDIDocument.Type::Import);
+             RoutingByExtDoc := EDIDocument."Routing Req. by Ext. Doc. No.";
+
+            IF "Routing Req. Updated" THEN BEGIN
+              IF GUIALLOWED THEN BEGIN
+                IF NOT CONFIRM(
+                  Text003 +
+                  Text004)
+                THEN
+                  ERROR(Text005);
+              END ELSE
+                ERROR(Text005);
+            END;
+
+            IF GUIALLOWED THEN BEGIN
+              ProgressWindow.OPEN(
+                Text006 +
+                Text007 +
+                Text008 +
+                Text009 +
+                Text010 +
+                Text011 +
+                Text012);
+              ProgressWindow.UPDATE(1,"Trade Partner No.");
+              ProgressWindow.UPDATE(2,"Internal Doc. No.");
+            END;
+
+            EDITradePartner.GET(EDIRecDocHdr2."Trade Partner No.");
+
+            RoutingRequestHdrTmp.RESET;
+            RoutingRequestHdrTmp.DELETEALL;
+
+            FirstLineSeg := '';
+            EDISegment.SETRANGE("Trade Partner No.",EDIRecDocHdr2."Trade Partner No.");
+            EDISegment.SETRANGE("Navision Document",'U_ROUTEREQ');
+            IF EDISegment.FIND('-') THEN
+              REPEAT
+                IF EDISegment."Segment Type" = EDISegment."Segment Type"::Command THEN BEGIN
+                  EDISegment.NEXT;
+                  FirstLineSeg := EDISegment.Segment;
+                END;
+              UNTIL (EDISegment.NEXT = 0) OR
+                    (FirstLineSeg <> '');
+            IF FirstLineSeg = '' THEN
+              ERROR(Text013);
+
+            EDIRecDocFields.RESET;
+            EDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+            EDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            IF EDIRecDocFields.FIND('-') THEN
+              REPEAT
+                CASE EDIRecDocFields."NAV Table No." OF
+                  14002403:
+                    CASE EDIRecDocFields."Nav Field No." OF
+                      RoutingReqLine.FIELDNO("Routing Req. Ctrl. No."):
+                        IF EDIRecDocFields."Field Text Value" = '' THEN
+                          EDIRecDocFields.NEXT
+                        ELSE BEGIN
+                          IF ((NOT RoutingReqFound) AND
+                              (RoutingByExtDoc = FALSE)) OR
+                             (RoutingByExtDoc = TRUE)
+                          THEN BEGIN
+                            RoutingReqLine.RESET;
+                              RoutingReqLine.SETCURRENTKEY("Routing Req. Ctrl. No.");
+                              RoutingReqLine.SETRANGE(
+                                "Routing Req. Ctrl. No.",EDIRecDocFields."Field Text Value");
+                              IF RoutingReqLine.FIND('-') THEN BEGIN
+                                IF RoutingByExtDoc THEN BEGIN
+                                  PurchaseOrderNo := RoutingReqLine."External Document No.";
+                                  GetRoutingHdr(EDIRecDocHdr2);
+                                  RoutingReqLine.RESET;
+                                  RoutingReqLine.SETRANGE("External Document No.",PurchaseOrderNo);
+                                  RoutingReqLine.SETRANGE("Routing Request No.",RoutingReqHdr."No.");
+                                  RoutingReqLine.FIND('-');
+                                  RoutingReqFound := TRUE;
+                                END ELSE BEGIN
+                                  RoutingReqFound := TRUE;
+                                  GetHdr;
+                                END;
+                                IF GUIALLOWED THEN BEGIN
+                                  ProgressWindow.UPDATE(3,RoutingReqLine."Routing Request No.");
+                                  ProgressWindow.UPDATE(4,RoutingReqLine."Document No.");
+                                  ProgressWindow.UPDATE(5,RoutingReqLine."Routing Req. Ctrl. No.");
+                                END;
+                                RoutingReqLine."Routing Received" := TRUE;
+                                RoutingReqLine.MODIFY;
+                              END ELSE
+                                ERROR(
+                                  Text014,
+                                   EDIRecDocFields."Field Text Value");
+                          END ELSE
+                            ReferenceID := EDIRecDocFields."Field Text Value";
+                        END;
+                      RoutingReqLine.FIELDNO("Reference ID Qualifier"):
+                        ReferenceIDQualifier := EDIRecDocFields."Field Text Value";
+                      RoutingReqLine.FIELDNO("Load Identification No."):
+                        LoadIdentificationNo := EDIRecDocFields."Field Text Value";
+                      RoutingReqLine.FIELDNO("SCAC Code"):
+                        SCACCode := EDIRecDocFields."Field Text Value";
+                      RoutingReqLine.FIELDNO("EDI Ship-to Code"):
+                        BEGIN
+                          EDIShiptoCode := EDIRecDocFields."Field Text Value";
+                          IF GUIALLOWED THEN
+                            ProgressWindow.UPDATE(5,EDIRecDocFields."Field Text Value");
+                        END;
+                      RoutingReqLine.FIELDNO("Pick-Up Date"):
+                        PickUpDate := EDIRecDocFields."Field Date Value";
+                      RoutingReqLine.FIELDNO("Pick-Up Time"):
+                        PickUpTime := EDIRecDocFields."Field Text Value";
+                      RoutingReqLine.FIELDNO("Pick-UP Appointment No."):
+                        PickUpApptNo := EDIRecDocFields."Field Text Value";
+                      RoutingReqLine.FIELDNO("Stop Sequence"):
+                        StopSequence := EDIRecDocFields."Field Text Value";
+                      RoutingReqLine.FIELDNO(Trailers):
+                        Trailers := EDIRecDocFields."Field Dec. Value";
+                      RoutingReqLine.FIELDNO("Application Error Code"):
+                        ApplicationErrorCode := EDIRecDocFields."Field Text Value";
+                    END;
+                END;
+                IF EDIRecDocFields.Trigger THEN BEGIN
+                  IF RoutingByExtDoc THEN BEGIN
+                    RoutingReqLine.RESET;
+                    RoutingReqLine.SETRANGE("Routing Request No.",RoutingReqHdr."No.");
+                    RoutingReqLine.SETRANGE("Routing Received",TRUE);
+                    RoutingReqLine.FIND('-');
+                  END;
+                  REPEAT
+                    IF RoutingByExtDoc THEN
+                      RoutingReqHdr.GET(RoutingReqLine."Routing Request No.");
+                    RoutingReqLine."EDI Internal Doc. No. (Resp.)" := EDIRecDocHdr2."Internal Doc. No.";
+                    IF SCACCode <> '' THEN
+                      RoutingReqLine.VALIDATE("SCAC Code",SCACCode);
+                    IF EDIShiptoCode <> '' THEN BEGIN
+                      IF EDIDocument."Do Not Update Rte ShiptoCode" <> '' THEN BEGIN
+                        IF STRPOS(
+                          EDIDocument."Do Not Update Rte ShiptoCode",EDIShiptoCode) = 0
+                        THEN
+                          RoutingReqLine.VALIDATE("EDI Ship-to Code",EDIShiptoCode);
+                      END ELSE
+                        RoutingReqLine.VALIDATE("EDI Ship-to Code",EDIShiptoCode);
+                    END;
+                    IF ReferenceID <> '' THEN
+                      RoutingReqLine.VALIDATE("Reference ID",ReferenceID);
+                    IF ReferenceIDQualifier <> '' THEN
+                      RoutingReqLine.VALIDATE("Reference ID Qualifier",ReferenceIDQualifier);
+                    IF LoadIdentificationNo <> '' THEN
+                      RoutingReqLine.VALIDATE("Load Identification No.",LoadIdentificationNo);
+                    IF PickUpDate <> 0D THEN
+                      RoutingReqLine.VALIDATE("Pick-Up Date",PickUpDate);
+                    IF PickUpTime <> '' THEN
+                      RoutingReqLine.VALIDATE("Pick-Up Time",PickUpTime);
+                    IF PickUpApptNo <> '' THEN
+                      RoutingReqLine.VALIDATE("Pick-UP Appointment No.",PickUpApptNo);
+                    IF StopSequence <> '' THEN
+                      RoutingReqLine.VALIDATE("Stop Sequence",StopSequence);
+                    IF Trailers <> 0 THEN
+                      RoutingReqLine.VALIDATE(Trailers,Trailers);
+                    IF ApplicationErrorCode <> '' THEN
+                      RoutingReqLine.VALIDATE("Application Error Code",ApplicationErrorCode);
+                    RoutingReqLine."Routing Received" := FALSE;
+                    RoutingReqLine.MODIFY;
+
+                    IF RoutingByExtDoc THEN BEGIN
+                      EDIRecDocFields2.RESET;
+                      EDIRecDocFields2.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+                      EDIRecDocFields2.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+                      IF EDIRecDocFields2.FIND('-') THEN BEGIN
+                        EDIRecDocFields2.SETRANGE("NAV Table No.",14002402);
+                        EDIRecDocFields2.SETRANGE("Nav Field No.",RoutingReqHdr.FIELDNO("Load Identification"));
+                        IF EDIRecDocFields2.FIND('-') THEN
+                          RoutingReqHdr.VALIDATE("Load Identification",EDIRecDocFields2."Field Text Value");
+                      END;
+                    END;
+                    RoutingReqHdr."EDI Routing Received" := TRUE;
+                    RoutingReqHdr."EDI Routing Rec. Date" := WORKDATE;
+                    RoutingReqHdr.MODIFY;
+                  UNTIL RoutingReqLine.NEXT = 0;
+                  RoutingReqFound := FALSE;
+                END;
+              UNTIL EDIRecDocFields.NEXT = 0;
+
+            EDIRecDocHdr2."Routing Req. Updated" := TRUE;
+            EDIRecDocHdr2."Routing Req. Updated Date" := TODAY;
+            EDIRecDocHdr2."Routing Req. Updated Time" := TIME;
+            EDIRecDocHdr2."Data Error" := FALSE;
+            EDIRecDocHdr2."Document Processed" := TRUE;
+            EDIRecDocHdr2.MODIFY;
+
+            IF GUIALLOWED THEN
+              ProgressWindow.CLOSE;
+
+            COMMIT;
+
+            AutoProcess := FALSE;
+            IF EDITemplate."Update Sls. Ord. From Req." THEN BEGIN
+              EDIRecDocHdr2."Data Error" := TRUE;
+              EDIRecDocHdr2.MODIFY;
+              COMMIT;
+              AutoProcess := TRUE;
+              UpdateSalesOrders(RoutingReqHdr);
+              EDIRecDocHdr2."Data Error" := FALSE;
+              EDIRecDocHdr2.MODIFY;
+              COMMIT;
+            END;
+            AutoProcess := FALSE;
+            IF EDITemplate."Create BOL from Routing Req." THEN BEGIN
+              EDIRecDocHdr2."Data Error" := TRUE;
+              EDIRecDocHdr2.MODIFY;
+              COMMIT;
+              AutoProcess := TRUE;
+              CreateBOL(RoutingReqHdr);
+              EDIRecDocHdr2."Data Error" := FALSE;
+              EDIRecDocHdr2.MODIFY;
+              COMMIT;
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EDIDocument@1240030000 : Record 14002353;
+      EDISegment@1240030001 : Record 14002354;
+      EDITemplate@1240030002 : Record 14002350;
+      EDITradePartner@1240030003 : Record 14002360;
+      EDIRecDocHdr2@1240030004 : Record 14002358;
+      EDIRecDocFields@1240030005 : Record 14002359;
+      RoutingReqHdr@1240030006 : Record 14002402;
+      RoutingReqLine@1240030007 : Record 14002403;
+      ShippingSetup@1240030008 : Record 14000707;
+      PackingStation@1240030009 : Record 14000709;
+      BillOfLading@1240020012 : Record 14000822;
+      RoutingRequestHdrTmp@1240020014 : TEMPORARY Record 14002402;
+      ShippingAgent@1240020015 : Record 291;
+      EDIGenCrossRef@1240020016 : Record 14000377;
+      EDIRecDocFields2@1240020018 : Record 14002359;
+      RoutingByExtDoc@1240020010 : Boolean;
+      RoutingReqFound@1240030010 : Boolean;
+      ProgressWindow@1240030011 : Dialog;
+      FirstLineSeg@1240030012 : Code[3];
+      OrderOpen@1240030013 : Boolean;
+      Text001@1001 : TextConst 'ENU=EDI Navision Document %1 does not match this function.';
+      Text002@1002 : TextConst 'ENU=The receive document %1 is for company %2. You are currently in company %3.';
+      Text003@1003 : TextConst 'ENU=Routing Request has already been updated.\';
+      Text004@1004 : TextConst 'ENU=Do you wish to re-update it?';
+      Text005@1005 : TextConst 'ENU=Routing Request not updated.';
+      Text006@1006 : TextConst 'ENU=Updating Routing Request......\';
+      Text007@1007 : TextConst 'ENU=Trading Partner      #1##################\';
+      Text008@1008 : TextConst 'ENU=Internal Doc No.     #2########\';
+      Text009@1009 : TextConst 'ENU=Routing Request      #3##################\';
+      Text010@1010 : TextConst 'ENU=Order No.            #4##################\';
+      Text011@1011 : TextConst 'ENU=Routing Request No.  #5################################################\';
+      Text012@1012 : TextConst 'ENU=Ship-To To.          #6##################\';
+      Text013@1013 : TextConst 'ENU=Unable to find the first line segement after a Line Begin command.';
+      Text014@1014 : TextConst 'ENU=Routing Request Control No. -%1- not found.';
+      Text015@1015 : TextConst 'ENU=Updating Sales Orders......\';
+      Text016@1016 : TextConst 'ENU=Creating Bill of Lading(s)......\';
+      SCACCode@1000000002 : Text[30];
+      PurchaseOrderNo@1000000006 : Text[80];
+      EDIShiptoCode@1240020000 : Code[20];
+      LoadIdentificationNo@1240020001 : Text[30];
+      PickUpDate@1240020002 : Date;
+      PickUpTime@1240020003 : Text[10];
+      PickUpApptNo@1240020004 : Code[30];
+      StopSequence@1240020005 : Code[10];
+      Trailers@1240020006 : Decimal;
+      ReferenceID@1240020007 : Text[30];
+      ReferenceIDQualifier@1240020008 : Text[3];
+      ApplicationErrorCode@1240020009 : Text[30];
+      Text017@1240020011 : TextConst 'ENU=Routing Request %1 not found.';
+      Text018@1240020013 : TextConst 'ENU=Bill of Lading could not be created.';
+      AutoProcess@1240020017 : Boolean;
+
+    PROCEDURE GetHdr@1();
+    BEGIN
+      IF RoutingReqHdr."No." <> RoutingReqLine."Routing Request No." THEN
+        RoutingReqHdr.GET(RoutingReqLine."Routing Request No.");
+    END;
+
+    PROCEDURE UpdateSalesOrders@2(CurrRoutingReqHdr@1240030000 : Record 14002402);
+    VAR
+      EDICustCrossRef@1240030001 : Record 14002362;
+      RouteReqLine@1240030002 : Record 14002403;
+      SalesHdr@1240030003 : Record 36;
+      ShippingAgent@1240030004 : Record 291;
+      EDIRecDocHdr@1240020000 : Record 14002358;
+      ReleaseSalesDocument@1000000000 : Codeunit 414;
+      OrderWasReleased@1000000001 : Boolean;
+    BEGIN
+      IF GUIALLOWED THEN
+        ProgressWindow.OPEN(
+          Text015 +
+          Text007 +
+          Text008 +
+          Text009 +
+          Text010 +
+          Text011 +
+          Text012);
+
+      OrderWasReleased := FALSE;
+
+      RoutingReqLine.RESET;
+      RoutingReqLine.SETRANGE("Routing Request No.",CurrRoutingReqHdr."No.");
+      RoutingReqLine.SETFILTER("EDI Internal Doc. No. (Resp.)",'<>%1','');
+      IF RoutingReqLine.FIND('-') THEN BEGIN
+        IF EDIRecDocHdr.GET(RoutingReqLine."EDI Internal Doc. No. (Resp.)") THEN
+          EDIDocument.GET(
+            EDIRecDocHdr."Trade Partner No.",EDIRecDocHdr."Navision Document",
+            EDIRecDocHdr."EDI Document No.",EDIRecDocHdr."EDI Version",
+            EDIDocument.Type::Import);
+        RoutingByExtDoc := EDIDocument."Routing Req. by Ext. Doc. No.";
+      END;
+
+      IF AutoProcess AND RoutingByExtDoc THEN
+        GetRoutingsForUpdates(EDIRecDocHdr);
+
+      RoutingRequestHdrTmp.RESET;
+      IF (RoutingRequestHdrTmp.FIND('-')) OR
+         (AutoProcess = FALSE) OR
+         ((AutoProcess) AND (NOT RoutingByExtDoc))
+      THEN
+        REPEAT
+          WITH CurrRoutingReqHdr DO BEGIN
+            RouteReqLine.RESET;
+            IF AutoProcess AND RoutingByExtDoc THEN
+              RouteReqLine.SETRANGE("Routing Request No.",RoutingRequestHdrTmp."No.")
+            ELSE
+              RouteReqLine.SETRANGE("Routing Request No.","No.");
+            RouteReqLine.SETFILTER("Document No.",'<>%1','');
+            IF RouteReqLine.FIND('-') THEN
+              REPEAT
+                IF GUIALLOWED THEN BEGIN
+                  ProgressWindow.UPDATE(1,"Trade Partner No.");
+                  ProgressWindow.UPDATE(3,RoutingReqLine."Routing Request No.");
+                  ProgressWindow.UPDATE(4,RoutingReqLine."Document No.");
+                  ProgressWindow.UPDATE(5,RoutingReqLine."Routing Req. Ctrl. No.");
+                END;
+                SalesHdr.GET(SalesHdr."Document Type"::Order,RouteReqLine."Document No.");
+                SalesHdr.SetRunFromEDI(TRUE);
+                // Open Sales Order
+                IF SalesHdr.Status = SalesHdr.Status::Released THEN
+                    IF EDIDocument."Reopen Released Sales Order"
+                  THEN BEGIN
+                    ReleaseSalesDocument.Reopen(SalesHdr);
+                    OrderWasReleased := TRUE;
+                    SalesHdr.GET(SalesHdr."Document Type"::Order,RouteReqLine."Document No.");
+                END;
+                IF SalesHdr."EDI Ship-to Code" <> RouteReqLine."EDI Ship-to Code" THEN BEGIN
+                  OrderOpen := TRUE;
+                  EDICustCrossRef.RESET;
+                  EDICustCrossRef.SETRANGE("Trade Partner No.","Trade Partner No.");
+                  EDICustCrossRef.SETRANGE("EDI Sell To Code",SalesHdr."EDI Sell-to Code");
+                  EDICustCrossRef.SETRANGE("EDI Ship To Code",RouteReqLine."EDI Ship-to Code");
+                  EDICustCrossRef.FIND('-');
+                  SalesHdr.VALIDATE("Ship-to Code",EDICustCrossRef."Navision Ship To Code");
+                  SalesHdr."EDI Ship-to Code" := EDICustCrossRef."EDI Ship To Code";
+                END;
+
+                ShippingAgent.RESET;
+                ShippingAgent.SETRANGE("SCAC Code",RouteReqLine."SCAC Code");
+                IF NOT ShippingAgent.FIND THEN BEGIN
+                  EDIGenCrossRef.RESET;
+                  EDIGenCrossRef.SETCURRENTKEY("Trade Partner", "Cross Reference", "NAV Table Name");
+                  EDIGenCrossRef.SETFILTER("Trade Partner", EDIRecDocHdr2."Trade Partner No.");
+                  EDIGenCrossRef.SETRANGE("Cross Reference", 1);
+                  EDIGenCrossRef.SETRANGE("NAV Table No.", 36);
+                  EDIGenCrossRef.SETRANGE("EDI Value", RouteReqLine."SCAC Code");
+                  IF EDIGenCrossRef.FIND('-') THEN BEGIN
+                    ShippingAgent.RESET;
+                    ShippingAgent.SETRANGE(Code,EDIGenCrossRef."NAV Value");
+                  END;
+                END;
+                ShippingAgent.FIND('-');
+                IF ShippingAgent.Code <> SalesHdr."Shipping Agent Code" THEN BEGIN
+                  // Open Sales Order
+                  OrderOpen := TRUE;
+                  SalesHdr.VALIDATE("Shipping Agent Code",ShippingAgent.Code);
+                END;
+                IF OrderOpen THEN BEGIN
+                  SalesHdr.MODIFY;
+                  // Release Sales Order
+                  IF OrderWasReleased THEN BEGIN
+                    ReleaseSalesDocument.RUN(SalesHdr);
+                    OrderWasReleased := FALSE;
+                  END;
+                  OrderOpen := FALSE;
+                END;
+                SalesHdr.SetRunFromEDI(FALSE);
+              UNTIL RouteReqLine.NEXT = 0;
+          END;
+        UNTIL RoutingRequestHdrTmp.NEXT = 0;
+
+      RoutingRequestHdrTmp.RESET;
+      RoutingRequestHdrTmp.DELETEALL;
+
+      IF GUIALLOWED THEN
+        ProgressWindow.CLOSE;
+    END;
+
+    PROCEDURE CreateBOL@3(CurrRouteReqHdr@1240030000 : Record 14002402);
+    VAR
+      RouteReqLine@1240030002 : Record 14002403;
+      RouteReqLine2@1240030003 : TEMPORARY Record 14002403;
+      SalesHdr@1240030004 : Record 36;
+      EDIRecDocHdr@1240020000 : Record 14002358;
+      BillOfLadingWorksheetMgt@1240030005 : Codeunit 14000822;
+    BEGIN
+      IF GUIALLOWED THEN
+        ProgressWindow.OPEN(
+          Text016 +
+          Text007 +
+          Text008 +
+          Text009 +
+          Text010 +
+          Text011 +
+          Text012);
+
+      RoutingReqLine.RESET;
+      RoutingReqLine.SETRANGE("Routing Request No.",CurrRouteReqHdr."No.");
+      RoutingReqLine.SETFILTER("EDI Internal Doc. No. (Resp.)",'<>%1','');
+      IF RoutingReqLine.FIND('-') THEN BEGIN
+        IF EDIRecDocHdr.GET(RoutingReqLine."EDI Internal Doc. No. (Resp.)") THEN
+          EDIDocument.GET(
+            EDIRecDocHdr."Trade Partner No.",EDIRecDocHdr."Navision Document",
+            EDIRecDocHdr."EDI Document No.",EDIRecDocHdr."EDI Version",
+            EDIDocument.Type::Import);
+        RoutingByExtDoc := EDIDocument."Routing Req. by Ext. Doc. No.";
+      END;
+
+      IF RoutingByExtDoc AND AutoProcess THEN BEGIN
+        GetRoutingsForUpdates(EDIRecDocHdr);
+        RoutingRequestHdrTmp.RESET;
+        IF RoutingRequestHdrTmp.FIND('-') THEN BEGIN
+          WITH RoutingRequestHdrTmp DO BEGIN
+            REPEAT
+              CurrRouteReqHdr.GET(RoutingRequestHdrTmp."No.");
+              RouteReqLine2.INIT;
+              BillOfLading.INIT;
+              RouteReqLine.RESET;
+              RouteReqLine.SETCURRENTKEY(
+                "Routing Request No.","SCAC Code","EDI Ship-to Code","Pick-UP Appointment No.");
+              RouteReqLine.SETRANGE("Routing Request No.","No.");
+              RouteReqLine.SETFILTER("SCAC Code",'<>%1','');
+              IF RouteReqLine.FIND('-') THEN
+                REPEAT
+                  ProgressWindow.UPDATE(1,"Trade Partner No.");
+                  ProgressWindow.UPDATE(3,RoutingReqLine."Routing Request No.");
+                  ProgressWindow.UPDATE(4,RoutingReqLine."Document No.");
+                  ProgressWindow.UPDATE(5,RoutingReqLine."Routing Req. Ctrl. No.");
+
+                  IF (RouteReqLine."SCAC Code" <> RouteReqLine2."SCAC Code") OR
+                     (RouteReqLine."EDI Ship-to Code" <> RouteReqLine2."EDI Ship-to Code") OR
+                     (RouteReqLine."Pick-UP Appointment No." <> RouteReqLine2."Pick-UP Appointment No.")
+                  THEN BEGIN
+                    BillOfLading.INIT;
+                    BillOfLading."No." := '';
+                    BillOfLading.INSERT(TRUE);
+                    SalesHdr.GET(SalesHdr."Document Type"::Order,RouteReqLine."Document No.");
+                    BillOfLading.VALIDATE("Ship-to No.",SalesHdr."Sell-to Customer No.");
+                    BillOfLading.VALIDATE("Ship-to Type",BillOfLading."Ship-to Type"::Customer);
+                    BillOfLading.VALIDATE("Ship-to Code",SalesHdr."Ship-to Code");
+                    BillOfLading.VALIDATE("Shipping Agent Code",SalesHdr."Shipping Agent Code");
+                    BillOfLading.VALIDATE("Shipping Agent Service",SalesHdr."E-Ship Agent Service");
+                    BillOfLading.VALIDATE("Custom Value 1",RouteReqLine."Pick-UP Appointment No.");
+                    BillOfLading.VALIDATE("EDI Routing Request PUA",RouteReqLine."Pick-UP Appointment No.");
+                    BillOfLading.VALIDATE("Custom Value 2","Load Identification");
+                    BillOfLading.VALIDATE("EDI Routing Request Load ID","Load Identification");
+                    BillOfLading.VALIDATE("Custom Value 3",SalesHdr."EDI Ship-to Code");
+                    BillOfLading.VALIDATE("EDI Routing Req. Ship-to Code",SalesHdr."EDI Ship-to Code");
+                    BillOfLading.MODIFY;
+                    RouteReqLine2.COPY(RouteReqLine);
+                  END;
+                  SalesHdr.GET(SalesHdr."Document Type"::Order,RouteReqLine."Document No.");
+                  BillOfLadingWorksheetMgt.AddSalesHeader(
+                    BillOfLading,SalesHdr,PackingStation,ShippingSetup,FALSE);
+                UNTIL RouteReqLine.NEXT = 0
+              ELSE
+                ERROR(Text018);
+              MapBillOfLadingFields;
+              CurrRouteReqHdr.VALIDATE("Bill of Lading No.",BillOfLading."No.");
+              CurrRouteReqHdr.MODIFY;
+            UNTIL NEXT = 0;
+          END;
+        END ELSE
+          ERROR(Text018);
+      END ELSE BEGIN
+        WITH CurrRouteReqHdr DO BEGIN
+          RouteReqLine2.INIT;
+          BillOfLading.INIT;
+          RouteReqLine.RESET;
+          RouteReqLine.SETCURRENTKEY(
+            "Routing Request No.","SCAC Code","EDI Ship-to Code","Pick-UP Appointment No.");
+          RouteReqLine.SETRANGE("Routing Request No.","No.");
+          RouteReqLine.SETFILTER("SCAC Code",'<>%1','');
+          IF RouteReqLine.FIND('-') THEN
+            REPEAT
+              IF GUIALLOWED THEN BEGIN
+                ProgressWindow.UPDATE(1,"Trade Partner No.");
+                ProgressWindow.UPDATE(3,RoutingReqLine."Routing Request No.");
+                ProgressWindow.UPDATE(4,RoutingReqLine."Document No.");
+                ProgressWindow.UPDATE(5,RoutingReqLine."Routing Req. Ctrl. No.");
+              END;
+              IF (RouteReqLine."SCAC Code" <> RouteReqLine2."SCAC Code") OR
+                 (RouteReqLine."EDI Ship-to Code" <> RouteReqLine2."EDI Ship-to Code") OR
+                 (RouteReqLine."Pick-UP Appointment No." <> RouteReqLine2."Pick-UP Appointment No.")
+              THEN BEGIN
+                BillOfLading.INIT;
+                BillOfLading."No." := '';
+                BillOfLading.INSERT(TRUE);
+                SalesHdr.GET(SalesHdr."Document Type"::Order,RouteReqLine."Document No.");
+                BillOfLading.VALIDATE("Ship-to No.",SalesHdr."Sell-to Customer No.");
+                BillOfLading.VALIDATE("Ship-to Type",BillOfLading."Ship-to Type"::Customer);
+                BillOfLading.VALIDATE("Ship-to Code",SalesHdr."Ship-to Code");
+                BillOfLading.VALIDATE("Shipping Agent Code",SalesHdr."Shipping Agent Code");
+                BillOfLading.VALIDATE("Shipping Agent Service",SalesHdr."E-Ship Agent Service");
+                BillOfLading.VALIDATE("Custom Value 1",RouteReqLine."Pick-UP Appointment No.");
+                BillOfLading.VALIDATE("EDI Routing Request PUA",RouteReqLine."Pick-UP Appointment No.");
+                BillOfLading.VALIDATE("Custom Value 2","Load Identification");
+                BillOfLading.VALIDATE("EDI Routing Request Load ID","Load Identification");
+                BillOfLading.VALIDATE("Custom Value 3",SalesHdr."EDI Ship-to Code");
+                BillOfLading.VALIDATE("EDI Routing Req. Ship-to Code",SalesHdr."EDI Ship-to Code");
+                BillOfLading.MODIFY;
+                RouteReqLine2.COPY(RouteReqLine);
+              END;
+              SalesHdr.GET(SalesHdr."Document Type"::Order,RouteReqLine."Document No.");
+              BillOfLadingWorksheetMgt.AddSalesHeader(
+                BillOfLading,SalesHdr,PackingStation,ShippingSetup,FALSE);
+            UNTIL RouteReqLine.NEXT = 0
+          ELSE
+            ERROR(Text018);
+           MapBillOfLadingFields;
+           IF RoutingByExtDoc THEN BEGIN
+             CurrRouteReqHdr.VALIDATE("Bill of Lading No.",BillOfLading."No.");
+             CurrRouteReqHdr.MODIFY;
+           END;
+        END;
+      END;
+
+      RoutingRequestHdrTmp.RESET;
+      RoutingRequestHdrTmp.DELETEALL;
+
+      IF GUIALLOWED THEN
+        ProgressWindow.CLOSE;
+    END;
+
+    PROCEDURE GetRoutingHdr@1000000002(VAR CurrEDIRecDocHdr@1000000001 : Record 14002358);
+    VAR
+      LineNo@1000000000 : Integer;
+      CurrEDIRecDocFields@1000000003 : Record 14002359;
+    BEGIN
+      CurrEDIRecDocFields.RESET;
+      CurrEDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      CurrEDIRecDocFields.SETRANGE("Internal Doc. No.",CurrEDIRecDocHdr."Internal Doc. No.");
+      CurrEDIRecDocFields.SETRANGE("NAV Table No.",DATABASE::"Routing Request Header");
+      CurrEDIRecDocFields.SETRANGE("Nav Field No.",RoutingReqHdr.FIELDNO("No."));
+      IF CurrEDIRecDocFields.FIND('-') THEN BEGIN
+         IF CurrEDIRecDocFields."Segment Group" <> 0 THEN BEGIN
+           CurrEDIRecDocFields.SETRANGE("Segment Group",EDIRecDocFields."Segment Group");
+           IF CurrEDIRecDocFields.FIND('-') THEN
+             RoutingReqHdr.GET(CurrEDIRecDocFields."Field Text Value")
+           ELSE
+             ERROR(Text017,CurrEDIRecDocFields."Field Text Value");
+         END ELSE
+           RoutingReqHdr.GET(CurrEDIRecDocFields."Field Text Value");
+      END ELSE BEGIN
+        CurrEDIRecDocFields.RESET;
+        CurrEDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+        CurrEDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+        CurrEDIRecDocFields.SETRANGE("Segment Group",EDIRecDocFields."Segment Group");
+        IF CurrEDIRecDocFields.FIND('-') THEN BEGIN
+          CurrEDIRecDocFields.SETRANGE(Segment,'L11');
+          CurrEDIRecDocFields.SETRANGE(Element,'02');
+          IF CurrEDIRecDocFields.FIND('-') THEN
+            CurrEDIRecDocFields.SETRANGE("Field Text Value",'BM');
+            IF CurrEDIRecDocFields.FIND('-') THEN BEGIN
+              LineNo := CurrEDIRecDocFields."Line No.";
+              LineNo := LineNo - 1;
+            END;
+        END;
+        CurrEDIRecDocFields.RESET;
+        CurrEDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","Line No.");
+        CurrEDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+        CurrEDIRecDocFields.SETRANGE("Line No.",LineNo);
+        IF CurrEDIRecDocFields.FIND('-') THEN
+          RoutingReqHdr.GET(CurrEDIRecDocFields."Field Text Value")
+        ELSE
+          ERROR(Text017,CurrEDIRecDocFields."Field Text Value");
+      END;
+
+      IF RoutingByExtDoc THEN
+        IF BillOfLading.GET(RoutingReqHdr."Bill of Lading No.") THEN
+          MapBillOfLadingFields;
+    END;
+
+    PROCEDURE GetRoutingsForUpdates@1240020000(VAR CurrEDIRecDocHdr@1000000001 : Record 14002358);
+    VAR
+      CurrEDIRecDocFields@1000000003 : Record 14002359;
+      CurrEDIRecDocFields2@1240020002 : Record 14002359;
+      RoutingRequestHdr@1240020000 : Record 14002402;
+      LineNo@1240020001 : Integer;
+    BEGIN
+      CurrEDIRecDocFields.RESET;
+      CurrEDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      CurrEDIRecDocFields.SETRANGE("Internal Doc. No.",CurrEDIRecDocHdr."Internal Doc. No.");
+      CurrEDIRecDocFields.SETRANGE("NAV Table No.",DATABASE::"Routing Request Header");
+      CurrEDIRecDocFields.SETRANGE("Nav Field No.",RoutingReqHdr.FIELDNO("No."));
+      IF CurrEDIRecDocFields.FIND('-') THEN
+        REPEAT
+          IF RoutingRequestHdr.GET(CurrEDIRecDocFields."Field Text Value") THEN BEGIN
+            RoutingRequestHdrTmp.RESET;
+            RoutingRequestHdrTmp.SETRANGE("No.",RoutingReqHdr."No.");
+            IF NOT RoutingRequestHdrTmp.FIND('-') THEN BEGIN
+              RoutingRequestHdrTmp.COPY(RoutingRequestHdr);
+              RoutingRequestHdrTmp.INSERT;
+            END;
+          END;
+        UNTIL CurrEDIRecDocFields.NEXT = 0
+      ELSE BEGIN
+        CurrEDIRecDocFields.RESET;
+        CurrEDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+        CurrEDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+        CurrEDIRecDocFields.SETRANGE(Segment,'L11');
+        CurrEDIRecDocFields.SETRANGE(Element,'02');
+        CurrEDIRecDocFields.SETRANGE("Field Text Value",'BM');
+        IF CurrEDIRecDocFields.FIND('-') THEN
+          REPEAT
+            LineNo := CurrEDIRecDocFields."Line No.";
+            LineNo := LineNo - 1;
+
+            CurrEDIRecDocFields2.RESET;
+            CurrEDIRecDocFields2.SETCURRENTKEY("Internal Doc. No.","Line No.");
+            CurrEDIRecDocFields2.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            CurrEDIRecDocFields2.SETRANGE("Line No.",LineNo);
+            IF CurrEDIRecDocFields2.FIND('-') THEN BEGIN
+              RoutingRequestHdr.GET(CurrEDIRecDocFields2."Field Text Value");
+              RoutingRequestHdrTmp.RESET;
+              RoutingRequestHdrTmp.SETRANGE("No.",RoutingReqHdr."No.");
+              IF NOT RoutingRequestHdrTmp.FIND('-') THEN BEGIN
+                RoutingRequestHdrTmp.COPY(RoutingRequestHdr);
+                RoutingRequestHdrTmp.INSERT;
+              END;
+            END ELSE
+              ERROR(Text017,CurrEDIRecDocFields."Field Text Value");
+          UNTIL CurrEDIRecDocFields.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE MapBillOfLadingFields@1240030005();
+    VAR
+      EDIRecDocFields@1240020000 : Record 14002359;
+    BEGIN
+      EDIRecDocFields.RESET;
+      EDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocFields.SETRANGE("NAV Table No.",DATABASE::"Bill of Lading");
+      IF EDIRecDocFields.FIND('-') THEN
+        REPEAT
+          CASE EDIRecDocFields."Nav Field No." OF
+            BillOfLading.FIELDNO("Custom Value 1"):
+              BillOfLading."Custom Value 1" := EDIRecDocFields."Field Text Value";
+            BillOfLading.FIELDNO("Custom Value 2"):
+              BillOfLading."Custom Value 2" := EDIRecDocFields."Field Text Value";
+            BillOfLading.FIELDNO("Custom Value 3"):
+              BillOfLading."Custom Value 3" := EDIRecDocFields."Field Text Value";
+            BillOfLading.FIELDNO("Custom Value 4"):
+              BillOfLading."Custom Value 4" := EDIRecDocFields."Field Text Value";
+            BillOfLading.FIELDNO("Custom Value 5"):
+              BillOfLading."Custom Value 5" := EDIRecDocFields."Field Text Value";
+
+            //
+            // Add Custom Bill of Lading fields here
+            //
+
+          END;
+        UNTIL EDIRecDocFields.NEXT = 0;
+      BillOfLading.MODIFY;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

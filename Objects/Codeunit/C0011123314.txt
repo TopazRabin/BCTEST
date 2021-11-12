@@ -1,0 +1,604 @@
+OBJECT Codeunit 11123314 SC - Customer Helper
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/03/21;
+    Time=[ 9:40:33 AM];
+    Modified=Yes;
+    Version List=SCW19.2.0;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text11123303@11123302 : TextConst 'ENU=The requested field ''%1'' cannot be found in the table ''%2''.';
+      Context@11123303 : Codeunit 11123305;
+
+    PROCEDURE GetCustomerXML@11123314(VAR ResultNodeBuff@11123303 : Record 11123303;Customer@11123302 : Record 18;VAR Params@11123310 : Record 11123310);
+    VAR
+      CollectionNodeBuff@11123306 : TEMPORARY Record 11123303;
+      OrderFunc@11123304 : Codeunit 11123319;
+      EventMgt@11123305 : Codeunit 11123331;
+      Settings@11123307 : Codeunit 11123311;
+      CurrencyCode@11123308 : Code[10];
+    BEGIN
+      ResultNodeBuff.AddFieldElement('Id',Customer."No.");
+      ResultNodeBuff.AddFieldElement('Name',Customer.Name);
+      ResultNodeBuff.AddFieldElement('Address',Customer.Address);
+      ResultNodeBuff.AddFieldElement('Address2',Customer."Address 2");
+      ResultNodeBuff.AddFieldElement('City',Customer.City);
+      ResultNodeBuff.AddFieldElement('ZipCode',Customer."Post Code");
+      ResultNodeBuff.AddFieldElement('CountryId',Customer."Country/Region Code");
+      ResultNodeBuff.AddFieldElement('State',Customer.County);
+      ResultNodeBuff.AddFieldElement('CountryName',OrderFunc.GetCountryName(Customer."Country/Region Code"));
+      ResultNodeBuff.AddFieldElement('ContactName',Customer.Contact);
+
+      CurrencyCode := GetCustomerCurrency(Customer);
+      ResultNodeBuff.AddFieldElement('CurrencyId',Settings.DefineCurrencyISOCode(CurrencyCode));
+
+      ResultNodeBuff.AddFieldElement('PhoneNo',Customer."Phone No.");
+      ResultNodeBuff.AddFieldElement('FaxNo',Customer."Fax No.");
+      ResultNodeBuff.AddFieldElement('Email',Customer."E-Mail");
+      ResultNodeBuff.AddFieldElement('BillToCustomerId',Customer."Bill-to Customer No.");
+      ResultNodeBuff.AddFieldElement('PricesInclTax',FORMAT(GetCustomerPricesIncludingVAT(Customer),0,2));
+      GetCustomerBlocked(Customer,ResultNodeBuff);
+      ResultNodeBuff.AddFieldElement('B2cCustomer',FORMAT(Customer."B2C Customer",0,2));
+      ResultNodeBuff.AddFieldElement('LanguagePreference',GetCustomerLanguage(Customer));
+      ResultNodeBuff.AddFieldElement('CustomerGroupId',Customer."Customer Price Group");
+      //<TPZ1412>
+      //ResultNodeBuff.AddFieldElement('SalesPersonId',Customer."Salesperson Code");
+      //</TPZ1412>
+      ResultNodeBuff.AddFieldElement('IsValid',FORMAT(Params.IsValid,0,2));
+      ResultNodeBuff.AddFieldElement('IsGuest',FORMAT(Customer."Webshop Guest",0,2));
+
+      EventMgt.OnGetCustomer(ResultNodeBuff,Customer,Params);
+
+      IF Params.LoadShippingAddresses THEN BEGIN
+        ResultNodeBuff.AddElement(CollectionNodeBuff,'ShippingAddresses','');
+          GetShippingAddresses(CollectionNodeBuff,Customer);
+         // GetShippingAddressesTPZ(CollectionNodeBuff,Customer,Params);//UTK
+      END;
+
+      GetCustomerExtraFieldsXML(ResultNodeBuff,Customer,Params);
+    END;
+
+    PROCEDURE GetCustomerStatisticsXML@11123302(VAR ResultNodeBuff@11123303 : Record 11123303;Customer@11123302 : Record 18;VAR Params@11123310 : Record 11123310);
+    VAR
+      DocumentType@11123311 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';
+      CurrentDate@11123313 : Date;
+      TotalOrders@11123309 : Integer;
+      TotalPostInvoice@11123306 : Integer;
+      CustDateFilter@11123312 : Text[30];
+    BEGIN
+      IF CurrentDate <> WORKDATE THEN
+        CurrentDate := WORKDATE;
+
+      Customer.SETRANGE("Date Filter",0D,CurrentDate);
+      Customer.CALCFIELDS("No. of Quotes","Outstanding Orders (LCY)","Outstanding Invoices (LCY)");
+      TotalOrders := GetTotalDocumentsByPeriod(DocumentType::Order,CustDateFilter,Params);
+      TotalPostInvoice := GetTotalPostInvByPeriod(CustDateFilter,Params);
+
+      ResultNodeBuff.AddFieldElement('Id',Customer."No.");
+      ResultNodeBuff.AddFieldElement('TotalOrders',FORMAT(TotalOrders + TotalPostInvoice));
+      ResultNodeBuff.AddFieldElement('TotalQuotes',FORMAT(Customer."No. of Quotes"));
+      ResultNodeBuff.AddFieldElement('TotalOutstandingOrderAmount',FORMAT(Customer."Outstanding Orders (LCY)"));
+      ResultNodeBuff.AddFieldElement('TotalOutstandingInvoiceAmount',FORMAT(Customer."Outstanding Invoices (LCY)"));
+      ResultNodeBuff.AddFieldElement('CurrencyId',Context.GetDefaultCurrency);
+
+      AddCustomerSalesStatisticsXML(ResultNodeBuff,Customer,Params);
+    END;
+
+    PROCEDURE AddCustomerSalesStatisticsXML@11123316(VAR ResultNodeBuff@11123304 : Record 11123303;Customer@11123303 : Record 18;VAR Params@11123302 : Record 11123310);
+    VAR
+      ThisYearNodeBuff@11123332 : TEMPORARY Record 11123303;
+      LastYearNodeBuff@11123331 : TEMPORARY Record 11123303;
+      ToDateNodeBuff@11123330 : TEMPORARY Record 11123303;
+      DateFilterCalc@11123327 : Codeunit 358;
+      CurrentDate@11123305 : Date;
+      CustDateFilter@11123326 : ARRAY [4] OF Text[30];
+      CustDateName@11123325 : ARRAY [4] OF Text[30];
+    BEGIN
+      ResultNodeBuff.AddElement(ThisYearNodeBuff,'ForThisYear','');
+      ResultNodeBuff.AddElement(LastYearNodeBuff,'ForLastYear','');
+      ResultNodeBuff.AddElement(ToDateNodeBuff,'ToDate','');
+
+      IF CurrentDate <> WORKDATE THEN
+        CurrentDate := WORKDATE;
+
+      IF Params.LoadForThisYear THEN BEGIN
+        DateFilterCalc.CreateFiscalYearFilter(CustDateFilter[2],CustDateName[2],CurrentDate,0);
+        AddStatisticsFieldValuesXML(ThisYearNodeBuff,Customer,CustDateFilter[2],Params);
+      END;
+
+      IF Params.LoadForLastYear THEN BEGIN
+        DateFilterCalc.CreateFiscalYearFilter(CustDateFilter[3],CustDateName[3],CurrentDate,-1);
+        AddStatisticsFieldValuesXML(LastYearNodeBuff,Customer,CustDateFilter[3],Params);
+      END;
+
+      IF Params.LoadToDate THEN
+          AddStatisticsFieldValuesXML(ToDateNodeBuff,Customer,CustDateFilter[4],Params);
+    END;
+
+    PROCEDURE AddStatisticsFieldValuesXML@11123317(VAR PeriodNodeBuff@11123304 : Record 11123303;Customer@11123303 : Record 18;CustDateFilter@11123327 : Text[30];VAR Params@11123302 : Record 11123310);
+    VAR
+      CostCalcMgt@11123325 : Codeunit 5836;
+      CustSalesLCY@11123322 : Decimal;
+      AdjmtCostLCY@11123321 : Decimal;
+      CustProfit@11123320 : Decimal;
+      AdjCustProfit@11123318 : Decimal;
+      CustInvDiscAmountLCY@11123316 : Decimal;
+      CustReminderChargeAmtLCY@11123312 : Decimal;
+      CustRefundsLCY@11123308 : Decimal;
+      CustOtherAmountsLCY@11123307 : Decimal;
+      InvAmountsLCY@11123305 : Decimal;
+      CustPaymentsLCY@11123315 : Decimal;
+      QuotesAmountLCY@11123317 : Decimal;
+      ReturnsAmountLCY@11123324 : Decimal;
+      TotalOrders@11123309 : Integer;
+      TotalPostInvoice@11123310 : Integer;
+      OrderFrequency@11123311 : Integer;
+      QuoteFrequency@11123319 : Integer;
+      ReturnOrdersFrequency@11123314 : Integer;
+      DocumentType@11123313 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';
+      FieldType@11123306 : Text[50];
+    BEGIN
+      WITH Customer DO BEGIN
+        SETFILTER("Date Filter",CustDateFilter);
+        CALCFIELDS(
+          "Sales (LCY)","Profit (LCY)","Inv. Discounts (LCY)",
+          "Inv. Amounts (LCY)","Pmt. Disc. Tolerance (LCY)","Reminder Amounts (LCY)",
+          "Refunds (LCY)","Other Amounts (LCY)","Balance Due (LCY)","Payments (LCY)");
+
+        CustSalesLCY := "Sales (LCY)";
+        CustProfit := "Profit (LCY)" + CostCalcMgt.NonInvtblCostAmt(Customer);
+        AdjmtCostLCY := CostCalcMgt.CalcCustAdjmtCostLCY(Customer);
+        AdjCustProfit := CustProfit + AdjmtCostLCY;
+        InvAmountsLCY := "Inv. Amounts (LCY)";
+        CustInvDiscAmountLCY := "Inv. Discounts (LCY)";
+        CustReminderChargeAmtLCY := "Reminder Amounts (LCY)";
+        CustRefundsLCY := "Refunds (LCY)";
+        CustOtherAmountsLCY := "Other Amounts (LCY)";
+        CustPaymentsLCY := "Payments (LCY)";
+        QuotesAmountLCY := GetDocAmountLCY(DocumentType::Quote,CustDateFilter,Params);
+        ReturnsAmountLCY := GetDocAmountLCY(DocumentType::"Return Order",CustDateFilter,Params);
+        TotalOrders := GetTotalDocumentsByPeriod(DocumentType::Order,CustDateFilter,Params);
+        TotalPostInvoice := GetTotalPostInvByPeriod(CustDateFilter,Params);
+        OrderFrequency := TotalOrders + TotalPostInvoice;
+        QuoteFrequency := GetTotalDocumentsByPeriod(DocumentType::Quote,CustDateFilter,Params);
+        ReturnOrdersFrequency := GetTotalDocumentsByPeriod(DocumentType::"Return Order",CustDateFilter,Params);
+
+        FieldType := 'Decimal';
+        PeriodNodeBuff.AddFieldNameValueTypeElement('Sales',FORMAT(CustSalesLCY),FieldType);
+        PeriodNodeBuff.AddFieldNameValueTypeElement('Quotes',FORMAT(QuotesAmountLCY),FieldType);
+        PeriodNodeBuff.AddFieldNameValueTypeElement('Profits (adjusted)',FORMAT(AdjCustProfit),FieldType);
+        PeriodNodeBuff.AddFieldNameValueTypeElement('Reminder amounts',FORMAT(CustReminderChargeAmtLCY),FieldType);
+        PeriodNodeBuff.AddFieldNameValueTypeElement('Overdue amounts',FORMAT("Balance Due (LCY)"),FieldType);
+        PeriodNodeBuff.AddFieldNameValueTypeElement('Invoiced amounts',FORMAT(InvAmountsLCY),FieldType);
+        PeriodNodeBuff.AddFieldNameValueTypeElement('Paid invoices',FORMAT(CustPaymentsLCY),FieldType);
+        PeriodNodeBuff.AddFieldNameValueTypeElement('Discounted amounts',FORMAT(CustInvDiscAmountLCY),FieldType);
+        PeriodNodeBuff.AddFieldNameValueTypeElement('Order returns',FORMAT(ReturnsAmountLCY),FieldType);
+
+        FieldType := 'Integer';
+        PeriodNodeBuff.AddFieldNameValueTypeElement('Order frequency',FORMAT(OrderFrequency),FieldType);
+        PeriodNodeBuff.AddFieldNameValueTypeElement('Quote frequency',FORMAT(QuoteFrequency),FieldType);
+        PeriodNodeBuff.AddFieldNameValueTypeElement('Order return frequency',FORMAT(ReturnOrdersFrequency),FieldType);
+      END;
+    END;
+
+    PROCEDURE GetCustStatisticsFieldsXML@11123319(VAR OutXMLBuff@11123304 : Record 11123303;VAR Params@11123302 : Record 11123310);
+    BEGIN
+      AddCustStatisticsFieldXML(OutXMLBuff,'TotalOrders','Integer');
+      AddCustStatisticsFieldXML(OutXMLBuff,'TotalQuotes','Integer');
+      AddCustStatisticsFieldXML(OutXMLBuff,'TotalOutstandingOrderAmount','Decimal');
+      AddCustStatisticsFieldXML(OutXMLBuff,'TotalOutstandingInvoiceAmount','Decimal');
+      AddCustStatisticsFieldXML(OutXMLBuff,'Sales','Decimal');
+      AddCustStatisticsFieldXML(OutXMLBuff,'Quotes','Decimal');
+      AddCustStatisticsFieldXML(OutXMLBuff,'Profits (adjusted)','Decimal');
+      AddCustStatisticsFieldXML(OutXMLBuff,'Reminder amounts','Decimal');
+      AddCustStatisticsFieldXML(OutXMLBuff,'Overdue amounts','Decimal');
+      AddCustStatisticsFieldXML(OutXMLBuff,'Invoiced amounts','Decimal');
+      AddCustStatisticsFieldXML(OutXMLBuff,'Paid invoices','Decimal');
+      AddCustStatisticsFieldXML(OutXMLBuff,'Discounted amounts','Decimal');
+      AddCustStatisticsFieldXML(OutXMLBuff,'Order returns','Decimal');
+      AddCustStatisticsFieldXML(OutXMLBuff,'Order frequency','Integer');
+      AddCustStatisticsFieldXML(OutXMLBuff,'Quote frequency','Integer');
+      AddCustStatisticsFieldXML(OutXMLBuff,'Order return frequency','Integer');
+    END;
+
+    PROCEDURE AddCustStatisticsFieldXML@11123321(VAR OutXMLBuff@11123304 : Record 11123303;FieldName@11123302 : Text[1024];FieldType@11123303 : Text[1024]);
+    VAR
+      ResultNodeBuff@11123305 : TEMPORARY Record 11123303;
+    BEGIN
+      OutXMLBuff.AddElement(ResultNodeBuff,'Field','');
+      ResultNodeBuff.AddFieldElement('Name',FieldName);
+      ResultNodeBuff.AddFieldElement('Caption',FieldName);
+      ResultNodeBuff.AddFieldElement('Type',FieldType);
+    END;
+
+    PROCEDURE GetDocAmountLCY@11123318(DocumentType@11123317 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';CustDateFilter@11123305 : Text[30];VAR Params@11123302 : Record 11123310) : Decimal;
+    VAR
+      SalesHeader@11123304 : Record 36;
+      TempSalesLine@11123306 : TEMPORARY Record 37;
+      TempSalesHeader@11123307 : TEMPORARY Record 36;
+      TempTotalSalesLine@11123309 : TEMPORARY Record 37;
+      TempTotalSalesLineLCY@11123315 : TEMPORARY Record 37;
+      SalesPost@11123303 : Codeunit 80;
+      TotalSalesLineLCY@11123316 : Decimal;
+      VATAmount@11123310 : Decimal;
+      ProfitLCY@11123312 : Decimal;
+      ProfitPct@11123313 : Decimal;
+      TotalAdjCostLCY@11123314 : Decimal;
+      VATAmountText@11123311 : Text[30];
+    BEGIN
+      SalesHeader.SETCURRENTKEY("Document Type","Sell-to Customer No.","No.");
+      SalesHeader.SETRANGE("Document Type",DocumentType);
+      SalesHeader.SETRANGE("Sell-to Customer No.",Params.AccountId);
+      SalesHeader.SETFILTER("Order Date",CustDateFilter);
+      IF SalesHeader.FINDSET THEN
+        REPEAT
+          TempSalesHeader := SalesHeader;
+          SalesPost.GetSalesLines(TempSalesHeader,TempSalesLine,0);
+          CLEAR(SalesPost);
+          SalesPost.SumSalesLinesTemp(
+            TempSalesHeader,TempSalesLine,0,TempTotalSalesLine,TempTotalSalesLineLCY,
+            VATAmount,VATAmountText,ProfitLCY,ProfitPct,TotalAdjCostLCY);
+          TotalSalesLineLCY += TempTotalSalesLineLCY.Amount;
+        UNTIL SalesHeader.NEXT = 0;
+      EXIT(TotalSalesLineLCY);
+    END;
+
+    PROCEDURE GetTotalDocumentsByPeriod@11123305(DocumentType@11123304 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';CustDateFilter@11123303 : Text[30];VAR Params@11123302 : Record 11123310) : Integer;
+    VAR
+      SalesHeader@11123305 : Record 36;
+    BEGIN
+      WITH SalesHeader DO BEGIN
+        SETCURRENTKEY("Document Type","Sell-to Customer No.","No.");
+        SETRANGE("Document Type",DocumentType);
+        SETRANGE("Sell-to Customer No.",Params.AccountId);
+        IF "Document Type" = "Document Type"::Order THEN
+          SETFILTER(Status,'<>%1',Status::Released);
+        SETFILTER("Order Date",CustDateFilter);
+        EXIT(COUNT);
+      END;
+    END;
+
+    PROCEDURE GetTotalPostInvByPeriod@11123320(CustDateFilter@11123303 : Text[30];VAR Params@11123302 : Record 11123310) : Integer;
+    VAR
+      SalesInvoiceHeader@11123305 : Record 112;
+    BEGIN
+      SalesInvoiceHeader.SETCURRENTKEY("Sell-to Customer No.","No.");
+      SalesInvoiceHeader.SETRANGE("Sell-to Customer No.",Params.AccountId);
+      SalesInvoiceHeader.SETFILTER("Order Date",CustDateFilter);
+      EXIT(SalesInvoiceHeader.COUNT);
+    END;
+
+    PROCEDURE GetCustomerExtraFieldsXML@11123303(VAR ResultNodeBuff@11123303 : Record 11123303;VAR Customer@11123302 : Record 18;VAR Params@11123319 : Record 11123310);
+    VAR
+      TempExtraFieldList@11123304 : TEMPORARY Record 11123330;
+      CommonFunc@11123305 : Codeunit 11123309;
+      RecRef@11123308 : RecordRef;
+      FieldNo@11123306 : Integer;
+      FieldName@11123307 : Text[250];
+    BEGIN
+      IF Params.ExtraFieldListIsEmpty THEN
+        EXIT;
+
+      Params.GetExtraFieldList(TempExtraFieldList);
+
+      RecRef.GETTABLE(Customer);
+
+      IF TempExtraFieldList.FINDSET THEN
+        REPEAT
+          FieldName := TempExtraFieldList.Value;
+          IF NOT CommonFunc.IsRelationalField(FieldName) THEN BEGIN
+            FieldNo := CommonFunc.GetFieldNoByName(RecRef.NUMBER,FieldName);
+            IF FieldNo = 0 THEN
+              ERROR(Text11123303,FieldName,RecRef.CAPTION);
+
+            ResultNodeBuff.AddFieldElementByNo(RecRef,FieldNo);
+          END ELSE
+            CommonFunc.AddRelationalFieldXML(ResultNodeBuff,RecRef,FieldName);
+        UNTIL TempExtraFieldList.NEXT = 0;
+    END;
+
+    PROCEDURE GetSalespersonXML@11123304(VAR ResultNodeBuff@11123303 : Record 11123303;Salesperson@11123302 : Record 50027;VAR Params@11123307 : Record 11123310);
+    VAR
+      EventMgt@11123308 : Codeunit 11123331;
+    BEGIN
+      //<TPZ2027> - change in Function Parameters
+      ResultNodeBuff.AddFieldElement('Id',Salesperson.Code);
+      ResultNodeBuff.AddFieldElement('Name',Salesperson.Name);
+      ResultNodeBuff.AddFieldElement('Email',Salesperson."E-Mail");
+      ResultNodeBuff.AddFieldElement('PhoneNo',Salesperson."Phone No.");
+      //ResultNodeBuff.AddFieldElement('JobTitle',Salesperson."Job Title");//<TPZ2027>
+
+      EventMgt.OnGetSalesperson(ResultNodeBuff,Salesperson,Params);
+
+      GetSalespersonExtraFieldsXML(ResultNodeBuff,Salesperson,Params);
+
+      IF Params.LoadRelatedCustomers THEN
+        AddRelatedCustomersXML(ResultNodeBuff,Salesperson,Params);//EB
+    END;
+
+    PROCEDURE GetSalespersonExtraFieldsXML@11123313(VAR ResultNodeBuff@11123303 : Record 11123303;VAR Salesperson@11123302 : Record 50027;VAR Params@11123312 : Record 11123310);
+    VAR
+      TempExtraFieldList@11123309 : TEMPORARY Record 11123330;
+      CommonFunc@11123308 : Codeunit 11123309;
+      RecRef@11123306 : RecordRef;
+      FieldNo@11123305 : Integer;
+      FieldName@11123304 : Text[250];
+    BEGIN
+      //<TPZ2027> - change in Function Parameters
+      IF Params.ExtraFieldListIsEmpty THEN
+        EXIT;
+
+      Params.GetExtraFieldList(TempExtraFieldList);
+
+      RecRef.GETTABLE(Salesperson);
+
+      IF TempExtraFieldList.FINDSET THEN
+        REPEAT
+          FieldName := TempExtraFieldList.Value;
+          IF NOT CommonFunc.IsRelationalField(FieldName) THEN BEGIN
+            FieldNo := CommonFunc.GetFieldNoByName(RecRef.NUMBER,FieldName);
+            IF FieldNo = 0 THEN
+              ERROR(Text11123303,FieldName,RecRef.CAPTION);
+
+            ResultNodeBuff.AddFieldElementByNo(RecRef,FieldNo);
+          END ELSE
+            CommonFunc.AddRelationalFieldXML(ResultNodeBuff,RecRef,FieldName);
+        UNTIL TempExtraFieldList.NEXT = 0;
+    END;
+
+    PROCEDURE GetContactXML@11123306(VAR ResultNodeBuff@11123303 : Record 11123303;Contact@11123302 : Record 5050;VAR Params@11123306 : Record 11123310);
+    VAR
+      Customer@11123311 : Record 18;
+      ContBusRel@11123308 : Record 5054;
+      OrderFunc@11123304 : Codeunit 11123319;
+      EventMgt@11123310 : Codeunit 11123331;
+      Settings@11123312 : Codeunit 11123311;
+      RecMgt@11123313 : Codeunit 11123326;
+      ContactNo@11123307 : Code[20];
+      CustomerNo@11123309 : Code[20];
+      CurrencyCode@11123305 : Code[10];
+    BEGIN
+      ResultNodeBuff.AddFieldElement('Id',Contact."No.");
+      ResultNodeBuff.AddFieldElement('Name',Contact.Name);
+      ResultNodeBuff.AddFieldElement('Address',Contact.Address);
+      ResultNodeBuff.AddFieldElement('Address2',Contact."Address 2");
+      ResultNodeBuff.AddFieldElement('City',Contact.City);
+      ResultNodeBuff.AddFieldElement('ZipCode',Contact."Post Code");
+      ResultNodeBuff.AddFieldElement('CountryId',Contact."Country/Region Code");
+      ResultNodeBuff.AddFieldElement('CountryName',OrderFunc.GetCountryName(Contact."Country/Region Code"));
+      ResultNodeBuff.AddFieldElement('State',Contact.County);
+      ResultNodeBuff.AddFieldElement('PhoneNo',Contact."Phone No.");
+      ResultNodeBuff.AddFieldElement('FaxNo',Contact."Fax No.");
+      ResultNodeBuff.AddFieldElement('Email',Contact."E-Mail");
+
+      CurrencyCode := Contact."Currency Code";
+      ResultNodeBuff.AddFieldElement('CurrencyId',Settings.DefineCurrencyISOCode(CurrencyCode));
+
+      ResultNodeBuff.AddFieldElement('SalesPersonId',Contact."Salesperson Code");
+      ResultNodeBuff.AddFieldElement('TaxNo',Contact."VAT Registration No.");
+
+      ContactNo := Contact."No.";
+      IF Contact.Type = Contact.Type::Person THEN
+        ContactNo := Contact."Company No.";
+      ContBusRel.RESET;
+      ContBusRel.SETCURRENTKEY("Link to Table","Contact No.");
+      ContBusRel.SETRANGE("Link to Table",ContBusRel."Link to Table"::Customer);
+      ContBusRel.SETRANGE("Contact No.",ContactNo);
+      IF ContBusRel.FINDFIRST THEN
+        IF RecMgt.GetCustomer(ContBusRel."No.",Customer,FALSE) THEN
+          CustomerNo := Customer."No.";
+
+      ResultNodeBuff.AddFieldElement('CustomerId',CustomerNo);
+
+      EventMgt.OnGetContact(ResultNodeBuff,Contact,Params);
+
+      GetContactExtraFieldsXML(ResultNodeBuff,Contact,Params);
+    END;
+
+    PROCEDURE GetContactExtraFieldsXML@11123307(VAR ResultNodeBuff@11123303 : Record 11123303;VAR Contact@11123302 : Record 5050;VAR Params@11123315 : Record 11123310);
+    VAR
+      TempExtraFieldList@11123309 : TEMPORARY Record 11123330;
+      CommonFunc@11123308 : Codeunit 11123309;
+      RecRef@11123306 : RecordRef;
+      FieldNo@11123305 : Integer;
+      FieldName@11123304 : Text[250];
+    BEGIN
+      IF Params.ExtraFieldListIsEmpty THEN
+        EXIT;
+
+      Params.GetExtraFieldList(TempExtraFieldList);
+
+      RecRef.GETTABLE(Contact);
+
+      IF TempExtraFieldList.FINDSET THEN
+        REPEAT
+          FieldName := TempExtraFieldList.Value;
+          IF NOT CommonFunc.IsRelationalField(FieldName) THEN BEGIN
+            FieldNo := CommonFunc.GetFieldNoByName(RecRef.NUMBER,FieldName);
+            IF FieldNo = 0 THEN
+              ERROR(Text11123303,FieldName,RecRef.CAPTION);
+
+            ResultNodeBuff.AddFieldElementByNo(RecRef,FieldNo);
+          END ELSE
+            CommonFunc.AddRelationalFieldXML(ResultNodeBuff,RecRef,FieldName);
+        UNTIL TempExtraFieldList.NEXT = 0;
+    END;
+
+    PROCEDURE GetShippingAddresses@11123311(VAR ResultNodebuff@11123302 : Record 11123303;Customer@11123303 : Record 18) : Boolean;
+    VAR
+      ShippingAddress@11123304 : Record 222;
+      TempShippingAddress@11123307 : TEMPORARY Record 222;
+      CustomerFunc@11123306 : Codeunit 11123313;
+      ShippAddressExists@11123305 : Boolean;
+    BEGIN
+
+      CustomerFunc.CopyShipAddressFromCustomer(TempShippingAddress,Customer);
+      GetShippingAddressXML(ResultNodebuff,TempShippingAddress);
+
+      ShippingAddress.RESET;
+      ShippingAddress.SETRANGE("Customer No.",Customer."No.");
+      IF ShippingAddress.FINDSET THEN BEGIN
+        ShippAddressExists := TRUE;
+        REPEAT
+          GetShippingAddressXML(ResultNodebuff,ShippingAddress);
+        UNTIL ShippingAddress.NEXT = 0;
+      END;
+      EXIT(ShippAddressExists);
+    END;
+
+    PROCEDURE GetShippingAddressXML@11123308(VAR OutXmlBuff@11123302 : Record 11123303;VAR ShippingAddress@11123303 : Record 222);
+    VAR
+      OrderFunc@11123304 : Codeunit 11123319;
+      ResultNodeBuff@11123305 : TEMPORARY Record 11123303;
+    BEGIN
+      OutXmlBuff.AddElement(ResultNodeBuff,'ShippingAddress','');
+
+      ResultNodeBuff.AddFieldElement('Id',ShippingAddress.Code);
+      ResultNodeBuff.AddFieldElement('Name',ShippingAddress.Name);
+      ResultNodeBuff.AddFieldElement('Address',ShippingAddress.Address);
+      ResultNodeBuff.AddFieldElement('Address2',ShippingAddress."Address 2");
+      ResultNodeBuff.AddFieldElement('ZipCode',ShippingAddress."Post Code");
+      ResultNodeBuff.AddFieldElement('City',ShippingAddress.City);
+      ResultNodeBuff.AddFieldElement('CountryId',ShippingAddress."Country/Region Code");
+      ResultNodeBuff.AddFieldElement('CountryName',OrderFunc.GetCountryName(ShippingAddress."Country/Region Code"));
+      ResultNodeBuff.AddFieldElement('State',ShippingAddress.County);
+      ResultNodeBuff.AddFieldElement('ContactName',ShippingAddress.Contact);
+      ResultNodeBuff.AddFieldElement('PhoneNo',ShippingAddress."Phone No.");
+    END;
+
+    PROCEDURE GetCustomerCurrency@11123309(Customer@11123302 : Record 18) : Code[10];
+    VAR
+      RecMgt@11123304 : Codeunit 11123326;
+      GLSetup@11123305 : Record 98;
+    BEGIN
+      IF Customer."Bill-to Customer No." <> '' THEN
+        RecMgt.GetCustomer(Customer."Bill-to Customer No.",Customer,TRUE);
+
+      IF Customer."Currency Code" <> '' THEN
+        EXIT(Customer."Currency Code");
+
+      // <TPZ1301>
+      IF RecMgt.GetGLSetup(GLSetup,FALSE) THEN
+        EXIT('USD');
+        //EXIT(GLSetup."LCY Code");
+      // </TPZ1301>
+    END;
+
+    PROCEDURE GetCustomerPricesIncludingVAT@11123312(VAR Customer@11123302 : Record 18) : Boolean;
+    VAR
+      BillToCustomer@11123303 : Record 18;
+      RecMgt@11123304 : Codeunit 11123326;
+    BEGIN
+      IF Customer."Bill-to Customer No." <> '' THEN BEGIN
+        RecMgt.GetCustomer(Customer."Bill-to Customer No.",BillToCustomer,TRUE);
+        EXIT(BillToCustomer."Prices Including VAT");
+      END;
+      EXIT(Customer."Prices Including VAT");
+    END;
+
+    PROCEDURE GetCustomerLanguage@11123315(VAR Customer@11123302 : Record 18) : Code[10];
+    VAR
+      Language@11123303 : Record 8;
+    BEGIN
+      IF Customer."Language Code" <> '' THEN BEGIN
+        IF Language.GET(Customer."Language Code") THEN
+          EXIT(FORMAT(Language."Windows Language ID"));
+      END;
+    END;
+
+    PROCEDURE GetCustomerBlocked@11123310(VAR Customer@11123304 : Record 18;VAR ResultNodebuff@11123303 : Record 11123303);
+    BEGIN
+      IF Customer.Blocked = Customer.Blocked::" " THEN
+        ResultNodebuff.AddFieldElement('Blocked','0')
+      ELSE
+        ResultNodebuff.AddFieldElement('Blocked','1');
+    END;
+
+    PROCEDURE AddRelatedCustomersXML@11123393(VAR RootNodeBuff@11123304 : Record 11123303;Salesperson@11123303 : Record 50027;VAR Params@11123302 : Record 11123310);
+    VAR
+      Customer@11123306 : Record 18;
+      CollectionNodeBuff@11123307 : TEMPORARY Record 11123303;
+      ResultNodeBuff@11123308 : TEMPORARY Record 11123303;
+      CustomerFunc@11123305 : Codeunit 11123313;
+    BEGIN
+      //<TPZ2027> - change in Function Parameters
+      RootNodeBuff.AddElement(CollectionNodeBuff,'RelatedCustomers','');
+      CustomerFunc.ApplyFilterToCustBySalesperson(Customer,Salesperson.Code);
+      IF Customer.FINDSET THEN BEGIN
+        REPEAT
+          CollectionNodeBuff.AddElement(ResultNodeBuff,'RelatedCustomer','');
+          ResultNodeBuff.AddAttribute('Id',Customer."No.");
+        UNTIL Customer.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE GetSalespersonCode@1000000001(CustomerNo@1000000001 : Code[20]) : Code[10];
+    VAR
+      CustomerDivision@1000000000 : Record 50007;
+    BEGIN
+      // <TPZ1412>
+      CustomerDivision.RESET;
+      CustomerDivision.SETRANGE("Customer No.",CustomerNo);
+      CustomerDivision.SETRANGE("Shortcut Dimension 5 Code",'E');
+      IF CustomerDivision.FINDFIRST THEN
+        EXIT(CustomerDivision."CSR Code");
+
+      EXIT('');
+      // </TPZ1412>
+    END;
+
+    PROCEDURE GetShippingAddressesTPZ@1000000000(VAR ResultNodebuff@11123302 : Record 11123303;Customer@11123303 : Record 18;VAR Params@1000000000 : Record 11123310) : Boolean;
+    VAR
+      ShippingAddress@11123304 : Record 222;
+      TempShippingAddress@11123307 : TEMPORARY Record 222;
+      CustomerFunc@11123306 : Codeunit 11123313;
+      ShippAddressExists@11123305 : Boolean;
+      CustomerDivision@1000000001 : Record 50007;
+    BEGIN
+
+      //UTK
+      //CustomerFunc.CopyShipAddressFromCustomer(TempShippingAddress,Customer);
+
+      //UTK
+      CustomerDivision.RESET;
+      IF (CustomerDivision.GET(Customer."No.",'L')) AND (CustomerDivision."Location Code" <> '')THEN BEGIN
+         CustomerFunc.CopyShipAddressFromLocation(TempShippingAddress,Customer,CustomerDivision."Location Code");
+       END ELSE//UTK
+         CustomerFunc.CopyShipAddressFromCustomer(TempShippingAddress,Customer);
+
+      GetShippingAddressXML(ResultNodebuff,TempShippingAddress);
+
+      ShippingAddress.RESET;
+      ShippingAddress.SETRANGE("Customer No.",Customer."No.");
+      IF ShippingAddress.FINDSET THEN BEGIN
+        ShippAddressExists := TRUE;
+        REPEAT
+          GetShippingAddressXML(ResultNodebuff,ShippingAddress);
+        UNTIL ShippingAddress.NEXT = 0;
+      END;
+      EXIT(ShippAddressExists);
+      //
+    END;
+
+    BEGIN
+    {
+      2016-01-20 TPZ1412 TAKHMETO
+        GetSalespersonCode function has been added
+      2016-02-09 TPZ1301 TAKHMETO
+        GetCustomerCurrency function has been modified
+      2017-10-13 TPZ2027 EBAGIM
+        Swaping Salesperon with MfrRep table
+    }
+    END.
+  }
+}
+

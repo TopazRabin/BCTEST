@@ -1,0 +1,310 @@
+OBJECT Codeunit 51005 Table246EventSubscribers
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/28/20;
+    Time=[ 1:42:38 AM];
+    Modified=Yes;
+    Version List=NAVEVENT;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SkipPurchPriceUpdate@1000000000 : Boolean;
+
+    [EventSubscriber(Table,246,OnAfterValidateEvent,"No.")]
+    PROCEDURE Tb246_No_OnValidate@1000000000(VAR Rec@1000000000 : Record 246;VAR xRec@1000000001 : Record 246;CurrFieldNo@1000000002 : Integer);
+    VAR
+      GetPlanningParameters@1000000003 : Codeunit 99000855;
+      TempSKU@1000000004 : TEMPORARY Record 5700;
+      Item@1000000005 : Record 27;
+    BEGIN
+      IF Rec.Type = Rec.Type::Item THEN
+        TB246_UpdateDescription(Rec);
+      GetPlanningParameters.AtSKU(TempSKU,Rec."No.",Rec."Variant Code",Rec."Location Code");
+      // <TPZ135>
+      Rec."Replenishment Model" := TempSKU."Replenishment Model";
+      Rec."Minimum Inventory" := TempSKU."Minimum Inventory";
+      Rec."Maximum Inventory" := TempSKU."Maximum Inventory";
+      // </TPZ135>
+      IF Rec."Planning Line Origin" <> Rec."Planning Line Origin"::"Order Planning" THEN BEGIN //TOP050 KT ABCSI Modification to Item Cards 01222015
+        //TOP050 KT ABCSI Modification to Item Cards 01222015 pankaj code commented and used event
+        Item.GET(Rec."No.");
+        IF (Rec."Replenishment System" = Rec."Replenishment System"::Purchase) AND
+           (Item."Alt. Purch. Unit of Measure" <> '')
+        THEN
+          Rec.VALIDATE(Rec."Alt. UOM Code",Item."Alt. Purch. Unit of Measure")
+        ELSE
+          Rec.VALIDATE(Rec."Alt. UOM Code",Item."Alt. Base Unit of Measure");
+        //TOP050 KT ABCSI Modification to Item Cards 01222015
+      END;
+    END;
+
+    [EventSubscriber(Table,246,OnBeforeValidateEvent,Quantity)]
+    PROCEDURE Tb246_Quantity_OnValidate@1000000005(VAR Rec@1000000000 : Record 246;VAR xRec@1000000001 : Record 246;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      //TOP050 KT ABCSI Modification to Item Cards 01222015
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+      WITH Rec DO BEGIN
+        IF "Alt. UOM Code" <> '' THEN
+          IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+            IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+              IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+                "Alt. UOM Quantity" := ROUND(Quantity / "Qty. per Alt. UOM",0.00001)
+              ELSE
+                "Alt. UOM Quantity" := ROUND(Quantity * "Qty. per Unit of Measure",0.00001);
+            END ELSE
+              "Alt. UOM Quantity" := Quantity;
+          END ELSE
+            "Alt. UOM Quantity" := 0;
+      END;
+    END;
+
+    [EventSubscriber(Table,246,OnAfterValidateEvent,Quantity)]
+    PROCEDURE Tb246_Quantity_OnValidate_1@1000000006(VAR Rec@1000000000 : Record 246;VAR xRec@1000000001 : Record 246;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      Rec."Line Amount" := ROUND(Rec.Quantity * Rec."Direct Unit Cost");
+    END;
+
+    [EventSubscriber(Table,246,OnAfterValidateEvent,"vendor no.")]
+    PROCEDURE Tb246_Vendor_NoValidate@1000000011(VAR Rec@1000000000 : Record 246;VAR xRec@1000000001 : Record 246;CurrFieldNo@1000000002 : Integer);
+    VAR
+      ItemVend@1000000003 : Record 99;
+      ItemCrossRef@1000000004 : Record 5717;
+    BEGIN
+      WITH Rec DO BEGIN
+        // <TPZ135>
+        IF ItemVend.GET("Vendor No.","No.","Variant Code") THEN
+          IF ItemCrossRef.GET(
+               "No.","Variant Code","Unit of Measure Code",
+               ItemCrossRef."Cross-Reference Type"::Vendor,
+               "Vendor No.",ItemVend."Vendor Item No.")
+          THEN
+            "Vendor Item Description" := ItemCrossRef.Description;
+        // </TPZ135>
+
+        IF (Type = Type::Item) AND ("No." <> '') AND ("Prod. Order No." = '') THEN
+          IF ItemVend.GET("Vendor No.","No.","Variant Code") THEN BEGIN
+            "Vendor Item No." := ItemVend."Vendor Item No.";
+            // <TPZ135>
+            "Vendor Priority" := ItemVend."Vendor Priority";
+            "Vendor Comment" := ItemVend."Vendor Comment";
+            "Internal Comment" := ItemVend."Internal Comment";
+            // </TPZ135>
+          END;
+      END;
+    END;
+
+    [EventSubscriber(Table,246,OnBeforeValidateEvent,"Direct Unit Cost")]
+    PROCEDURE Tb246_DirectUnitCost_OnValidate@1000000015(VAR Rec@1000000000 : Record 246;VAR xRec@1000000001 : Record 246;CurrFieldNo@1000000002 : Integer);
+    VAR
+      PurchPrice@1000000003 : Record 7012;
+      Table7012EventPublishers@1000000004 : Codeunit 50098;
+    BEGIN
+      //TOP050 KT ABCSI Modification to Item Cards 01222015
+      IF Rec."Alt. UOM Code" <> '' THEN
+      Rec."Alt. UOM Direct Unit Cost" := Tb246_CalcAltUOMDirectUnitCost(Rec);
+      //TOP050 KT ABCSI Modification to Item Cards 01222015
+      Rec."Line Amount" := ROUND(Rec.Quantity * Rec."Direct Unit Cost");
+      //IF Rec.SkipPurchPriceUpdate THEN //Need to discuss
+        //EXIT;
+
+      IF Rec.Type = Rec.Type::Item THEN
+        IF PurchPrice.GET(Rec."No.",Rec."Vendor No.",0D,Rec."Currency Code",Rec."Variant Code",Rec."Unit of Measure Code",0) THEN BEGIN
+          //PurchPrice.SetReqWkshLineException("Worksheet Template Name","Journal Batch Name","Line No.");//TPZ2830
+          Table7012EventPublishers.Tb7012_OnSetReqWkshLineException(Rec."Worksheet Template Name",Rec."Journal Batch Name",Rec."Line No.");//TPZ2830
+          PurchPrice.VALIDATE("Direct Unit Cost",Rec."Direct Unit Cost");
+          PurchPrice.MODIFY;
+        END;
+    END;
+
+    [EventSubscriber(Table,246,OnAfterValidateEvent,"Vendor Item No.")]
+    PROCEDURE Tb246_VendorItemNo_OnValidate_1@1000000022(VAR Rec@1000000000 : Record 246;VAR xRec@1000000001 : Record 246;CurrFieldNo@1000000002 : Integer);
+    VAR
+      ItemVend@1000000003 : Record 99;
+    BEGIN
+      // <TPZ135>
+      WITH Rec DO BEGIN
+        TESTFIELD(Type,Type::Item);
+        IF ItemVend.GET("Vendor No.","No.","Variant Code") THEN BEGIN
+          ItemVend.SetReqWkshLineException("Worksheet Template Name","Journal Batch Name","Line No.");
+          ItemVend.VALIDATE("Vendor Item No.","Vendor Item No.");
+          ItemVend.MODIFY(TRUE);
+        END ELSE BEGIN
+          ItemVend.INIT;
+          ItemVend."Vendor No." := "Vendor No.";
+          ItemVend."Item No." := "No.";
+          ItemVend."Variant Code" := "Variant Code";
+          ItemVend."Vendor Priority" := "Vendor Priority";
+          ItemVend."Vendor Item No." := "Vendor Item No.";
+          ItemVend."Vendor Comment" := "Vendor Comment";
+          ItemVend."Internal Comment" := "Internal Comment";
+          ItemVend.INSERT;
+        END;
+      END;
+      // </TPZ135>
+    END;
+
+    PROCEDURE TB246_UpdateDescription@8(VAR RecPara@1000000000 : Record 246);
+    VAR
+      ItemCrossRef@1001 : Record 5717;
+      SalesLine@1000 : Record 37;
+      ItemLoc@1000000001 : Record 27;
+      ItemVariant@1000000002 : Record 5401;
+      Vend@1000000003 : Record 23;
+      ItemTranslation@1000000004 : Record 30;
+    BEGIN
+      WITH RecPara DO BEGIN
+        IF "Variant Code" = '' THEN BEGIN
+          ItemLoc.GET(RecPara."No.");
+          Description := ItemLoc.Description;
+          "Description 2" := ItemLoc."Description 2";
+        END ELSE BEGIN
+          ItemVariant.GET("No.","Variant Code");
+          Description := ItemVariant.Description;
+          "Description 2" := ItemVariant."Description 2";
+        END;
+        //<TPZ2224>
+        {IF SalesLine.GET(SalesLine."Document Type"::Order,"Sales Order No.","Sales Order Line No.") THEN BEGIN
+          Description := SalesLine.Description;
+          "Description 2" := SalesLine."Description 2";
+        END;
+
+        IF "Vendor No." <> '' THEN
+          IF ItemCrossRef.GetItemDescription(
+               Description,"No.","Variant Code","Unit of Measure Code",ItemCrossRef."Cross-Reference Type"::Vendor,"Vendor No.")
+          THEN
+            "Description 2" := ''
+          ELSE BEGIN}
+        //</TPZ2224>
+        IF "Vendor No." <> '' THEN BEGIN
+          Vend.GET("Vendor No.");
+          IF Vend."Language Code" <> '' THEN
+            IF ItemTranslation.GET("No.","Variant Code",Vend."Language Code") THEN BEGIN
+              Description := ItemTranslation.Description;
+              "Description 2" := ItemTranslation."Description 2";
+            END;
+        END;
+      END;
+    END;
+
+    PROCEDURE Tb246_CalcAltUOMDirectUnitCost@1000000016(T246Para@1000000001 : Record 246) : Decimal;
+    BEGIN
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+      WITH T246Para DO BEGIN
+        IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+          IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+            IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+              EXIT(ROUND("Direct Unit Cost" * "Qty. per Alt. UOM",0.00001))
+            ELSE
+              EXIT(ROUND("Direct Unit Cost" / "Qty. per Unit of Measure",0.00001));
+          END ELSE
+            EXIT("Direct Unit Cost");
+        END ELSE
+          EXIT(0);
+      END;
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+    END;
+
+    PROCEDURE CalcAltUOMQty@1000000004(RequisitionLine@1000000000 : Record 246;Qty@14000700 : Decimal) : Decimal;
+    BEGIN
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+      WITH RequisitionLine DO BEGIN
+      IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+        IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+          IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+            EXIT(ROUND(Qty / "Qty. per Alt. UOM",0.00001))
+          ELSE
+            EXIT(ROUND(Qty * "Qty. per Unit of Measure",0.00001));
+        END ELSE
+          EXIT(Qty);
+      END ELSE
+        EXIT(0);
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+      END;
+    END;
+
+    PROCEDURE CalcQtyFromAltUOMQty@1000000002(RequisitionLine@1000000000 : Record 246;Qty@1000000001 : Decimal) : Decimal;
+    BEGIN
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+      WITH RequisitionLine DO BEGIN
+        IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+        IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+          IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+            EXIT(ROUND(Qty * "Qty. per Alt. UOM",0.00001))
+          ELSE
+            EXIT(ROUND(Qty / "Qty. per Unit of Measure",0.00001));
+        END ELSE
+          EXIT(Qty);
+      END ELSE
+        EXIT(0);
+        END;
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+    END;
+
+    PROCEDURE CalcAltUOMDirectUnitCost@1000000001(RequisitionLine@1000000000 : Record 246;DirectUnitCost@1000000001 : Decimal) : Decimal;
+    BEGIN
+      WITH RequisitionLine DO BEGIN
+        //TOP050 KT ABCSI Modification to Item Cards 01212015
+      IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+        IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+          IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+            EXIT(ROUND(DirectUnitCost * "Qty. per Alt. UOM",0.00001))
+          ELSE
+            EXIT(ROUND(DirectUnitCost / "Qty. per Unit of Measure",0.00001));
+        END ELSE
+          EXIT(DirectUnitCost);
+      END ELSE
+        EXIT(0);
+      END;
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+    END;
+
+    PROCEDURE CalcDUnitCostFromAltUOMDUnitCost@1000000017(RequisitionLine@1000000000 : Record 246;DirectUnitCost@1000000001 : Decimal) : Decimal;
+    BEGIN
+      WITH RequisitionLine DO BEGIN
+        //TOP050 KT ABCSI Modification to Item Cards 01212015
+      IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+        IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+          IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+            EXIT(ROUND(DirectUnitCost / "Qty. per Alt. UOM",0.00001))
+          ELSE
+            EXIT(ROUND(DirectUnitCost / "Qty. per Unit of Measure",0.00001));
+        END ELSE
+          EXIT(DirectUnitCost);
+      END ELSE
+        EXIT(0);
+      END;
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+    END;
+
+    PROCEDURE UpdateAmounts@1000000003(RequisitionLine@1000000000 : Record 246);
+    BEGIN
+      WITH RequisitionLine DO BEGIN
+        // <TPZ135>
+      "Line Amount" := ROUND(Quantity * "Direct Unit Cost");
+      // </TPZ135>
+      END;
+    END;
+
+    PROCEDURE SetSkipPurchPriceUpdate@1000000007(NewSkipPurchPriceUpdate@1000000000 : Boolean);
+    BEGIN
+      // <TPZ135>
+      SkipPurchPriceUpdate := NewSkipPurchPriceUpdate;
+      // </TPZ135>
+    END;
+
+    BEGIN
+    {
+      20200421  TPZ2830  PSHUKLA
+    }
+    END.
+  }
+}
+

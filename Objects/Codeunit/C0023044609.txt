@@ -1,0 +1,1266 @@
+OBJECT Codeunit 23044609 DSHIP EasyPost Rate Mgmt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/30/21;
+    Time=[ 8:39:31 AM];
+    Modified=Yes;
+    Version List=DSHIP2.2.3,3229;
+  }
+  PROPERTIES
+  {
+    TableNo=23044623;
+    OnRun=BEGIN
+
+            trecParam := Rec;
+
+            // The events are in order of being fired
+            CASE Rec.Action OF
+              Rec.Action::GetRates: handleGetRates();
+              Rec.Action::GetLabels: handleGetLabels();
+              Rec.Action::GetReturnRates: handleGetReturnRates();
+              Rec.Action::GetReturnLabel: handleGetReturnLabel();
+              Rec.Action::CreateManifest: handleCreateManifest();
+              Rec.Action::GetManifest: handleGetManifest();
+              Rec.Action::GetQuotes: handleGetQuotes();
+              ELSE EXIT;
+            END;
+
+            Rec.COPY(trecParam, TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      recDShipSetup@1000000004 : Record 23044600;
+      trecParam@1000000000 : TEMPORARY Record 23044623;
+      cuListMgmt@1000000003 : Codeunit 23044600;
+      cuPackMgmt@1000000002 : Codeunit 23044601;
+      cuRateMgmt@1000000001 : Codeunit 23044602;
+      cuRateSingleton@1000000005 : Codeunit 23044608;
+      tcEasyPost@1000000010 : TextConst 'ENU=EASYPOST';
+      tcOrderError@1000000006 : TextConst 'ENU=Error generating labels for Order: %1\%2;ESM=Generando etiquetas de pedido del error: %1. \ %2;FRC=G‚n‚ration des ‚tiquettes pour l''Ordre d''erreur: %1. \ %2;ENC=Error generating labels for Order: %1.\%2';
+      tcLabelError@1000000007 : TextConst 'ENU=Error generating label for Package: %1\%2;ESM=Generaci¢n de etiqueta para el paquete de error: %1. \ %2;FRC=G‚n‚ration‚tiquette pour Package d''erreur: %1. \ %2;ENC=Error generating label for Package: %1.\%2';
+      tcCommInvEasyPostName@1000000009 : TextConst 'ENU=commercial_invoice;ESM=commercial_invoice;FRC=commercial_invoice;ENC=commercial_invoice';
+      tcCODReturnLabelName@1000000008 : TextConst 'ENU=cod_return_label;ESM=cod_return_label;FRC=cod_return_label;ENC=cod_return_label';
+      tcScanFormError@1000000011 : TextConst 'ENU=Error generating ScanForm for Order: %1\%2';
+      tcScanFormUrlError@1000000012 : TextConst 'ENU=Error retrieving URL for ScanForm: %1\%2';
+
+    LOCAL PROCEDURE handleGetRates@1000000000();
+    VAR
+      lrecrRecRef@1000000006 : RecordRef;
+      ltrecOrderBuffer@1000000004 : TEMPORARY Record 23044601;
+      lrecWhseShipHeader@1000000003 : Record 7320;
+      lrecSalesHeader@1000000002 : Record 36;
+      lrecTransferHeader@1000000001 : Record 5740;
+      lrecMiscShipment@1000000000 : Record 23044621;
+      lrecLPHeader@1000000005 : Record 23044505;
+      lasFromAddress@1000000008 : ARRAY [12] OF Text[100];
+      lasToAddress@1000000007 : ARRAY [12] OF Text[100];
+      lsOrderID@1000000009 : Text;
+      ltcUnknownDoc@1000000010 : TextConst 'ENU=Unknown source document for packaging.;ESM=Documento de origen desconocido de embalaje.;FRC=Document de source inconnu pour l''empaquetage.;ENC=Unknown source document for packaging.';
+    BEGIN
+      //<FUNC>
+      //  Description: Handles EasyPost API calls
+      //  Called From:
+      //  Side Effect:
+      //</FUNC>
+
+      ltrecOrderBuffer.INIT;
+      ltrecOrderBuffer."Document No." := trecParam."Document No.";
+      ltrecOrderBuffer."Document Type" := trecParam."Document Type";
+      IF ( trecParam."Document Type" = trecParam."Document Type"::"Sales Order" ) THEN
+        ltrecOrderBuffer."Document Subtype" := 1;
+      ltrecOrderBuffer.INSERT;
+
+      cuRateMgmt.setPrereqs(ltrecOrderBuffer, lrecLPHeader, lrecrRecRef, lasFromAddress, lasToAddress);
+
+      CASE trecParam."Document Type" OF
+        trecParam."Document Type"::"Warehouse Shipment":
+          BEGIN
+            IF ( lrecWhseShipHeader.GET(trecParam."Document No.") ) THEN BEGIN
+              lsOrderID := getWhseShipRates(lrecWhseShipHeader, lasFromAddress, lasToAddress);
+            END;
+          END;
+        trecParam."Document Type"::"Outbound Transfer":
+          BEGIN
+            IF ( lrecTransferHeader.GET(trecParam."Document No.") ) THEN BEGIN
+              lsOrderID := getTransferOrderRates(lrecTransferHeader, lasFromAddress, lasToAddress);
+            END;
+          END;
+        trecParam."Document Type"::"Sales Order":
+          BEGIN
+            IF ( lrecSalesHeader.GET(lrecSalesHeader."Document Type"::Order, trecParam."Document No.") ) THEN BEGIN
+              lsOrderID := getSalesOrderRates(lrecSalesHeader, lasFromAddress, lasToAddress);
+            END;
+          END;
+        trecParam."Document Type"::"Misc. Shipment":
+          BEGIN
+            IF ( lrecMiscShipment.GET(trecParam."Document No.") ) THEN BEGIN
+              lsOrderID := getMiscShipmentRates(lrecMiscShipment, lasFromAddress, lasToAddress);
+            END;
+          END;
+        ELSE BEGIN
+          ERROR(ltcUnknownDoc);
+        END;
+      END;
+
+      trecParam."Object ID" := lsOrderID;
+    END;
+
+    LOCAL PROCEDURE handleGetLabels@1000000001();
+    VAR
+      ltrecTempBlob@1000000007 : Record 99008535;
+      ltrecSelectedRate@1000000020 : TEMPORARY Record 23044603;
+      lrecFreightInt@1000000021 : Record 23044624;
+      lrecLabelData@1000000016 : Record 23044622;
+      ldnDynamicShip@1000000018 : DotNet "'DynamicShip.ShippingIntegration, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.DynamicShip.ShippingIntegration.DynamicShipping";
+      ldnOrder@1000000015 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Order";
+      ldnShipment@1000000008 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Shipment";
+      ldnDictInsurance@1000000017 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.Dictionary`2";
+      ldnlabelsList@1000000014 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      ldnBytes@1000000013 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      ldnSBEncoded@1000000012 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      ldnConvert@1000000011 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      ldnMemStream@1000000010 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      losLabel@1000000009 : OutStream;
+      lsRawURL@1000000005 : Text;
+      lsTemp@1000000003 : Text;
+      liShipIndex@1000000002 : Integer;
+      liShipCount@1000000001 : Integer;
+      liLabelIndex@1000000006 : Integer;
+      liLabelCount@1000000004 : Integer;
+      lbLabelPerShipment@1000000000 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Handles getting the labels for the accepted rate
+      //  Called From:
+      //  Side Effect:
+      //</FUNC>
+
+      cuRateSingleton.getSelectedRate(ltrecSelectedRate);
+
+      // get api key
+      lrecFreightInt.GET(tcEasyPost);
+      ldnDynamicShip := ldnDynamicShip.DynamicShipping(lrecFreightInt."API Key");
+
+      ldnDictInsurance := ldnDictInsurance.Dictionary();
+      cuRateMgmt.createDictStrDec(ldnDictInsurance);
+      cuRateMgmt.getTotalInsuranceAmountByOrder(trecParam."Document Type", trecParam."Document No.", ldnDictInsurance);
+
+      ldnOrder := ldnDynamicShip.GenerateShipsLabelWithIns(trecParam."Object ID",
+                                                           ltrecSelectedRate."Carrier Name",
+                                                           ltrecSelectedRate.Service,
+                                                           ldnDictInsurance);
+
+
+      IF ( ldnDynamicShip.GetLastError <> '' ) THEN BEGIN
+        ERROR(tcOrderError, trecParam."Object ID", ldnDynamicShip.GetLastError);
+      END;
+
+      ldnlabelsList := ldnDynamicShip.DownloadLabelsForShipment(ldnOrder);
+
+      IF ( ldnDynamicShip.GetLastError <> '' ) THEN BEGIN
+        ERROR(tcOrderError, trecParam."Object ID", ldnDynamicShip.GetLastError);
+      END;
+
+      // populate trecParam with info from shipments per LP
+      liLabelCount := ldnlabelsList.Count - 1;
+      liShipCount := ldnOrder.shipments.Count - 1;
+      FOR liShipIndex := 0 TO liShipCount DO BEGIN
+        ldnShipment := ldnOrder.shipments.Item(liShipIndex);
+        trecParam."License Plate No." := ldnShipment.reference;
+        trecParam."Shipment Tracking Number" := ldnShipment.id;
+
+        // if there's no label, then they all came in the first one
+        IF ( ldnShipment.postage_label.label_url <> '' ) THEN BEGIN
+          recDShipSetup.GET;
+          CASE recDShipSetup."Carrier Label Print Type" OF
+            recDShipSetup."Carrier Label Print Type"::ZPL:
+              BEGIN
+                lsRawURL := ldnDynamicShip.GetZPLURLForShipment(ldnShipment.id);
+                cuRateMgmt.writeDataToBlob(ltrecTempBlob, lsRawURL);
+                trecParam."Package Carrier Label RAW" := ltrecTempBlob.Blob;
+              END; // case zpl
+          END; // case "carrier label print type
+        END;
+
+        ldnBytes := ldnConvert.FromBase64String(ldnlabelsList.Item(liShipIndex));
+        ldnMemStream := ldnMemStream.MemoryStream(ldnBytes);
+        trecParam."Package Carrier Label PNG".CREATEOUTSTREAM(losLabel);
+        ldnMemStream.WriteTo(losLabel);
+
+        trecParam."Package Carrier Label URL" := ldnShipment.postage_label.label_url;
+        lsTemp := ldnShipment.tracking_code;
+        // workaround for dotnet string=null
+        IF ( lsTemp <> '' ) THEN
+          trecParam."Package Tracking No." := COPYSTR(lsTemp, 1, MAXSTRLEN(trecParam."Package Tracking No."));
+        IF ( NOT ISNULL(ldnShipment.tracker) ) THEN BEGIN
+          trecParam."Object URL" := ldnShipment.tracker.public_url;
+          trecParam."Package Tracker ID" := ldnShipment.tracker.id;
+        END;
+
+        setCommercialInvoice(ldnShipment, trecParam."Document Type", trecParam."Document No.");
+        getCODLabel(ldnShipment);
+
+        trecParam.INSERT;
+      END; // FOR liShipIndex := 0 TO liShipCount
+
+      // this will store additional labels the carrier may have sent
+      FOR liLabelIndex := liShipIndex + 1 TO liLabelCount DO BEGIN
+        cuRateMgmt.getLabelData(lrecLabelData,
+                                lrecLabelData."Label Type"::Additional,
+                                lrecLabelData."Label Format"::PNG,
+                                trecParam."License Plate No.",
+                                TRUE);
+
+        ldnBytes := ldnConvert.FromBase64String(ldnlabelsList.Item(liLabelIndex));
+        ldnMemStream := ldnMemStream.MemoryStream(ldnBytes);
+        lrecLabelData.Label.CREATEOUTSTREAM(losLabel);
+        ldnMemStream.WriteTo(losLabel);
+
+        lrecLabelData."Label URL" := trecParam."Package Carrier Label URL";
+        lrecLabelData.MODIFY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE handleGetReturnRates@1000000004();
+    VAR
+      lrecShipOptions@1000000000 : Record 23044616;
+      lrecFreightInt@1000000007 : Record 23044624;
+      ldnDynamicShip@1000000002 : DotNet "'DynamicShip.ShippingIntegration, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.DynamicShip.ShippingIntegration.DynamicShipping";
+      ldnOrder@1000000001 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Order";
+      lsCarrierID@1000000006 : Text;
+      lsCarrierService@1000000005 : Text;
+      lasFromAddress@1000000004 : ARRAY [12] OF Text[100];
+      lasToAddress@1000000003 : ARRAY [12] OF Text[100];
+    BEGIN
+      //<FUNC>
+      //  Description: Handles getting rates for the return label
+      //  Called From:
+      //  Side Effect:
+      //</FUNC>
+
+      IF (NOT lrecShipOptions.GET(trecParam."Document Type", trecParam."Document No.")) THEN
+        EXIT;
+
+      // this will eliminate handling non-easypost calls
+      IF ((lrecShipOptions."Order ID" = '') OR
+          (STRPOS(lrecShipOptions."Order ID", 'order_') <> 1)) THEN
+        EXIT;
+
+      cuRateMgmt.getCarrierIDAndServiceByShipOptions(lrecShipOptions, lsCarrierID, lsCarrierService, tcEasyPost);
+
+      lrecFreightInt.GET(tcEasyPost);
+      ldnDynamicShip := ldnDynamicShip.DynamicShipping(lrecFreightInt."API Key");
+
+      ldnOrder := ldnDynamicShip.GenerateReturnLabel(lrecShipOptions."Order ID",
+                                                     lsCarrierID,
+                                                     lsCarrierService);
+
+      IF (ldnDynamicShip.GetLastError <> '') THEN
+        ERROR(ldnDynamicShip.GetLastError);
+
+      addAgentRatesToBuffer(ldnOrder, lsCarrierService, ldnOrder.id);
+
+      trecParam."Object ID" := ldnOrder.id;
+    END;
+
+    LOCAL PROCEDURE handleGetReturnLabel@1000000005();
+    VAR
+      ltrecSelectedRate@1000000006 : TEMPORARY Record 23044603;
+      ltrecTempBlob@1000000012 : Record 99008535;
+      lrecFreightInt@1000000013 : Record 23044624;
+      ldnDynamicShip@1000000005 : DotNet "'DynamicShip.ShippingIntegration, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.DynamicShip.ShippingIntegration.DynamicShipping";
+      ldnOrder@1000000004 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Order";
+      ldnShipment@1000000009 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Shipment";
+      lsCarrierID@1000000003 : Text;
+      lsCarrierService@1000000002 : Text;
+      lsRawURL@1000000011 : Text;
+      lasFromAddress@1000000001 : ARRAY [12] OF Text[100];
+      lasToAddress@1000000000 : ARRAY [12] OF Text[100];
+      lcodShipAgent@1000000008 : Code[20];
+      lcodShipAgentService@1000000007 : Code[20];
+      ldRate@1000000010 : Decimal;
+    BEGIN
+      //<FUNC>
+      //  Description: Handles getting the return label once rate was chosen
+      //  Called From:
+      //  Side Effect:
+      //</FUNC>
+
+      lrecFreightInt.GET(tcEasyPost);
+      ldnDynamicShip := ldnDynamicShip.DynamicShipping(lrecFreightInt."API Key");
+      ldnOrder := ldnOrder.Retrieve(trecParam."Object ID");
+      ldnShipment := ldnOrder.shipments.Item(0);
+
+      // shipment does not yet have label bought
+      IF (ISNULL(ldnShipment.postage_label)) THEN BEGIN
+        cuRateSingleton.getSelectedRate(ltrecSelectedRate);
+        IF (ltrecSelectedRate.ID <> '') THEN BEGIN
+          cuRateMgmt.getShipAgentAndServiceByCarrierIDAndService(ltrecSelectedRate."Carrier Account ID", ltrecSelectedRate.Service, lcodShipAgent, lcodShipAgentService);
+          ldnOrder := ldnDynamicShip.GenerateShipmentsLabel(ldnOrder.id,
+                                                            ltrecSelectedRate."Carrier Name",
+                                                            ltrecSelectedRate.Service);
+        END;
+      END;
+
+      IF (ldnDynamicShip.GetLastError <> '') THEN BEGIN
+        ERROR(tcOrderError, ldnOrder.id, ldnDynamicShip.GetLastError);
+      END;
+
+      ldnShipment := ldnOrder.shipments.Item(0);
+
+      recDShipSetup.GET;
+      IF (ldnShipment.postage_label.label_url <> '') THEN BEGIN
+
+        cuRateMgmt.writeImageToBlob(ltrecTempBlob, ldnShipment.postage_label.label_url);
+        trecParam."Package Carrier Label PNG" := ltrecTempBlob.Blob;
+
+        CASE recDShipSetup."Carrier Label Print Type" OF
+          recDShipSetup."Carrier Label Print Type"::ZPL:
+            BEGIN
+              CLEAR(ltrecTempBlob);
+              cuRateMgmt.writeDataToBlob(ltrecTempBlob, ldnDynamicShip.GetZPLURLForShipment(ldnShipment.id));
+              trecParam."Package Carrier Label RAW" := ltrecTempBlob.Blob;
+            END; // case zpl
+        END; // case "carrier label print type
+
+        trecParam."License Plate No." := ldnShipment.reference;
+        trecParam."Package Carrier Label URL" := ldnShipment.postage_label.label_url;
+        trecParam."Package Tracking No." := COPYSTR(ldnShipment.tracking_code, 1, MAXSTRLEN(trecParam."Package Tracking No."));
+        trecParam."Object URL" := ldnShipment.tracker.public_url;
+        trecParam."Package Tracker ID" := ldnShipment.tracker.id;
+        trecParam.INSERT;
+
+      END ELSE // if postage_label != null
+        MESSAGE('WARNING: Easypost failed to generate the return label.');
+    END;
+
+    LOCAL PROCEDURE getWhseShipRates@1000000012(precWhseShipHeader@1000000000 : Record 7320;VAR pasFromAddress@1000000004 : ARRAY [12] OF Text[100];VAR pasToAddress@1000000003 : ARRAY [12] OF Text[100]) : Text[100];
+    VAR
+      lrecLPHeader@1000000005 : Record 23044505;
+      lsOrderID@1000000002 : Text;
+      lsCarrierID@1000000009 : Text;
+      lsService@1000000011 : Text;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up the list of shipping rates for the warehouse shipment
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      lsCarrierID := cuRateMgmt.getCarrierID(precWhseShipHeader."Shipping Agent Code", precWhseShipHeader."Location Code", tcEasyPost);
+      lsService := cuRateMgmt.getCarrierService(precWhseShipHeader."Shipping Agent Code", precWhseShipHeader."Shipping Agent Service Code");
+
+      lsOrderID := getShipRates(
+                      precWhseShipHeader."Location Code",
+                      pasFromAddress,
+                      pasToAddress,
+                      lrecLPHeader."Source Document"::Shipment,
+                      precWhseShipHeader."No.",
+                      lsCarrierID,
+                      lsService
+                   );
+
+      EXIT(lsOrderID);
+    END;
+
+    LOCAL PROCEDURE getSalesOrderRates@1000000014(precSalesHeader@1000000000 : Record 36;VAR pasFromAddress@1000000004 : ARRAY [12] OF Text[100];VAR pasToAddress@1000000003 : ARRAY [12] OF Text[100]) : Text[100];
+    VAR
+      lrecLPHeader@1000000005 : Record 23044505;
+      lsOrderID@1000000002 : Text;
+      lsCarrierID@1000000009 : Text;
+      lsService@1000000011 : Text;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up the list of shipping rates for the sales order
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      lsCarrierID := cuRateMgmt.getCarrierID(precSalesHeader."Shipping Agent Code",precSalesHeader."Location Code", tcEasyPost);
+      lsService := cuRateMgmt.getCarrierService(precSalesHeader."Shipping Agent Code", precSalesHeader."Shipping Agent Service Code");
+
+      lsOrderID := getShipRates(
+                      precSalesHeader."Location Code",
+                      pasFromAddress,
+                      pasToAddress,
+                      lrecLPHeader."Source Document"::"Sales Order",
+                      precSalesHeader."No.",
+                      lsCarrierID,
+                      lsService
+                   );
+
+      EXIT(lsOrderID);
+    END;
+
+    LOCAL PROCEDURE getTransferOrderRates@1000000017(precTransferHeader@1000000000 : Record 5740;VAR pasFromAddress@1000000004 : ARRAY [12] OF Text[100];VAR pasToAddress@1000000003 : ARRAY [12] OF Text[100]) : Text[100];
+    VAR
+      lrecLPHeader@1000000005 : Record 23044505;
+      lrecPackageBuffer@1000000007 : Record 23044601;
+      lsOrderID@1000000002 : Text;
+      lsCarrierID@1000000009 : Text;
+      lsService@1000000011 : Text;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up the list of shipping rates for the transfer order
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      lsCarrierID := cuRateMgmt.getCarrierID(precTransferHeader."Shipping Agent Code",precTransferHeader."Transfer-from Code", tcEasyPost);
+      lsService := cuRateMgmt.getCarrierService(precTransferHeader."Shipping Agent Code", precTransferHeader."Shipping Agent Service Code");
+
+      lsOrderID := getShipRates(
+                      precTransferHeader."Transfer-from Code",
+                      pasFromAddress,
+                      pasToAddress,
+                      lrecLPHeader."Source Document"::"Outbound Transfer",
+                      precTransferHeader."No.",
+                      lsCarrierID,
+                      lsService
+                   );
+
+      EXIT(lsOrderID);
+    END;
+
+    LOCAL PROCEDURE getMiscShipmentRates@1000000055(precMiscShipment@1000000000 : Record 23044621;VAR pasFromAddress@1000000004 : ARRAY [12] OF Text[100];VAR pasToAddress@1000000003 : ARRAY [12] OF Text[100]) : Text[100];
+    VAR
+      lrecLPHeader@1000000005 : Record 23044505;
+      lsOrderID@1000000002 : Text;
+      lsCarrierID@1000000009 : Text;
+      lsService@1000000011 : Text;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up the list of shipping rates for the misc shipment
+      //  Called From: This codeunit (CU23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      lsCarrierID := cuRateMgmt.getCarrierID(precMiscShipment."Shipping Agent Code", precMiscShipment."Location Code", tcEasyPost);
+      lsService := cuRateMgmt.getCarrierService(precMiscShipment."Shipping Agent Code", precMiscShipment."Shipping Agent Service Code");
+
+      lsOrderID := getShipRates(
+                      precMiscShipment."Location Code",
+                      pasFromAddress,
+                      pasToAddress,
+                      lrecLPHeader."Source Document"::"Misc. Shipment",
+                      precMiscShipment."No.",
+                      lsCarrierID,
+                      lsService
+                   );
+
+      EXIT(lsOrderID);
+    END;
+
+    LOCAL PROCEDURE getShipRates@1000000009(pcodLocation@1000000001 : Code[20];pasFromAddress@1000000026 : ARRAY [12] OF Text[100];pasToAddress@1000000000 : ARRAY [12] OF Text[100];poptSourceDoc@1000000009 : Option;pcodSourceNo@1000000010 : Code[20];psCarrier@1000000016 : Text;psService@1000000017 : Text) : Text;
+    VAR
+      lrecFreightInt@1000000007 : Record 23044624;
+      lrecLPHeader@1000000006 : Record 23044505;
+      ldnFromAddress@1000000003 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Address";
+      ldnToAddress@1000000002 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Address";
+      ldnReturnAddress@1000000023 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Address";
+      ldnDictionary@1000000025 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.Dictionary`2";
+      ldnPackageList@1000000005 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      ldnOrder@1000000012 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Order";
+      ldnDynamicShip@1000000011 : DotNet "'DynamicShip.ShippingIntegration, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.DynamicShip.ShippingIntegration.DynamicShipping";
+      ldnShipment@1000000015 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Shipment";
+      ldnDictShipment@1000000022 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.Dictionary`2";
+      ldnMessage@1000000019 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Message";
+      liShipIndex@1000000014 : Integer;
+      liShipCount@1000000008 : Integer;
+      loptDocType@1000000018 : Option;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up the list of shipping rates for the document
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecLPHeader.SETFILTER("No.", cuPackMgmt.CreateLPNoFilterWithLPSourceDoc(poptSourceDoc, pcodSourceNo));
+
+      cuPackMgmt.getDShipDocTypeFromLPSrcType(poptSourceDoc, loptDocType);
+
+      recDShipSetup.GET;
+      lrecFreightInt.GET(tcEasyPost);
+      // set key so address.create succeeds
+      ldnDynamicShip := ldnDynamicShip.DynamicShipping(lrecFreightInt."API Key");
+
+      cuRateMgmt.callShipOptionsExtension(recDShipSetup."Shipment Extension Codeunit", loptDocType, pcodSourceNo);
+      cuRateMgmt.callCustomsExtension(recDShipSetup."Shipment Extension Codeunit", loptDocType, pcodSourceNo);
+
+      initShipAddresses(loptDocType, pcodSourceNo, pasFromAddress, pasToAddress,
+                        ldnFromAddress, ldnToAddress, ldnReturnAddress);
+
+      //cuRateMgmt.setShipmentAddressesOptions(loptDocType, pcodSourceNo, pasFromAddress, pasToAddress, ldnFromAddress, ldnToAddress, ldnReturnAddress);
+
+      //
+      // create the packages
+      //
+      cuRateMgmt.createListOfDict(ldnPackageList);
+      //ldnPackagelList := ldnPackagelList.List();
+      IF ( lrecLPHeader.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          // these are flowfields, but this call chain does not modify the lp header
+          // we do this to avoid a "select *" with no where clause in sql with non-super users
+          // that's what a calcfield causes as user permissions are determined nav side, not sql side
+          lrecLPHeader."Source Document" := poptSourceDoc;
+          lrecLPHeader."Source No." := pcodSourceNo;
+          ldnDictShipment := ldnDictShipment.Dictionary();
+          cuRateMgmt.createDictStrObj(ldnDictShipment);
+          ldnDictShipment.Add('reference', lrecLPHeader."No.");
+          cuRateMgmt.callInsuranceExtension(recDShipSetup."Shipment Extension Codeunit",
+                                            lrecLPHeader."No.", loptDocType, pcodSourceNo);
+          cuRateMgmt.setShipmentDimensions(lrecLPHeader, ldnDictShipment);
+          cuRateMgmt.callPkgOptionsExtension(recDShipSetup."Shipment Extension Codeunit",
+                                             lrecLPHeader."No.", loptDocType, pcodSourceNo);
+          cuRateMgmt.setPackageOptions(lrecLPHeader, ldnDictShipment);
+          cuRateMgmt.setCustomsInfo(lrecLPHeader, ldnDictShipment);
+          ldnPackageList.Add(ldnDictShipment);
+        UNTIL( lrecLPHeader.NEXT=0);
+      END;
+
+      //   Get comma separated text of carrier IDs to feed into GetRates
+      IF ( psCarrier = '' ) THEN BEGIN
+        psCarrier := cuRateMgmt.getCarrierIDStringByFreightInt(pcodLocation, tcEasyPost);
+      END; //if psCarrier = ''
+
+      //xx
+      //ldnDynamicShip := ldnDynamicShip.DynamicShipping(lrecFreightInt."API Key");
+
+
+      ldnOrder := ldnDynamicShip.GetRates(
+                    lrecFreightInt."API Key",
+                    ldnPackageList,
+                    ldnFromAddress,
+                    ldnToAddress,
+                    psCarrier,
+                    ldnReturnAddress
+                  );
+
+      IF ( ldnDynamicShip.GetLastError <> '' ) THEN
+        ERROR(ldnDynamicShip.GetLastError);
+
+      addRatesToBuffer(ldnOrder, psService, ldnOrder.id, loptDocType, pcodSourceNo);
+
+      EXIT(ldnOrder.id);
+    END;
+
+    PROCEDURE addAgentRatesToBuffer@1000000024(VAR pdnOrder@1000000012 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Order";psService@1000000001 : Text;psOrderID@1000000019 : Text);
+    VAR
+      ptrecRateBuffer@1000000010 : TEMPORARY Record 23044603;
+      ptrecShipMessages@1000000002 : TEMPORARY Record 23044604;
+      ldnListRates@1000000000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      ldnRate@1000000006 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Rate";
+      ldnShipment@1000000009 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Shipment";
+      ldnMessage@1000000008 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Message";
+      ldnDateTime@1000000015 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.DateTime";
+      liMessageID@1000000011 : Integer;
+      liShipIndex@1000000007 : Integer;
+      liShipCount@1000000018 : Integer;
+      liMsgIndex@1000000005 : Integer;
+      liMsgCount@1000000017 : Integer;
+      liRateIndex@1000000004 : Integer;
+      liRateCount@1000000016 : Integer;
+      ldRate@1000000003 : Decimal;
+      lsReturnedMessage@1000000013 : Text;
+      lsTemp@1000000014 : Text;
+    BEGIN
+      //<FUNC>
+      //  Description:
+      //  Called From: This codeunit, DSHIP Rate Quote Management (CU23044605)
+      //  Side Effect:
+      //</FUNC>
+
+      psService := LOWERCASE(psService);
+
+      cuRateSingleton.getRateBuffer(ptrecRateBuffer);
+      cuRateSingleton.getShipMessages(ptrecShipMessages);
+
+      liRateCount := pdnOrder.rates.Count() - 1;
+      FOR liRateIndex := 0 TO liRateCount DO BEGIN
+        ldnRate := pdnOrder.rates.Item(liRateIndex);
+        IF ( (psService = '') OR (psService = LOWERCASE(ldnRate.service)) ) THEN BEGIN
+          ptrecRateBuffer.INIT;
+          // ptrecRateBuffer."License Plate No." := precLPHeader."No.";
+          ptrecRateBuffer.ID := ldnRate.id;
+          ptrecRateBuffer."Carrier Name" := ldnRate.carrier;
+          ptrecRateBuffer."Carrier Account ID" := ldnRate.carrier_account_id;
+          // for api functionality
+          //ptrecRateBuffer."Shipment ID" := ldnRate.shipment_id;
+          ptrecRateBuffer."Order ID" := psOrderID;
+          EVALUATE(ldRate, FORMAT(ldnRate.rate));
+          ptrecRateBuffer."Rate Cost" := ldRate;
+          ptrecRateBuffer."Rate Price" := ldRate;
+          ptrecRateBuffer.Currency := FORMAT(ldnRate.currency);
+          ptrecRateBuffer."Delivery Days" := ldnRate.delivery_days;
+          IF ( NOT ISNULL(ldnRate.delivery_date) ) THEN BEGIN
+            ldnDateTime := ldnRate.delivery_date;
+            ptrecRateBuffer."Delivery Date" := ldnDateTime;
+          END;
+          ptrecRateBuffer."Delivery Date Guaranteed" := ldnRate.delivery_date_guaranteed;
+          ptrecRateBuffer.Service := ldnRate.service;
+
+          IF ( EVALUATE(ldRate, FORMAT(ldnRate.retail_rate)) ) THEN BEGIN
+            ptrecRateBuffer."Retail Rate" := ldRate;
+            ptrecRateBuffer."Retail Currency" := FORMAT(ldnRate.retail_currency);
+          END;
+
+          IF ( EVALUATE(ldRate, ldnRate.list_rate) ) THEN BEGIN
+            ptrecRateBuffer."List Rate" := ldRate;
+            ptrecRateBuffer."List Currency" := ldnRate.list_currency;
+          END;
+
+          ptrecRateBuffer.INSERT;
+        END;
+      END;
+
+      ptrecShipMessages.RESET;
+      liMessageID := 1;
+      IF ( ptrecShipMessages.FINDLAST ) THEN
+        liMessageID := ptrecShipMessages.ID + 1;
+      liShipCount := pdnOrder.shipments.Count() - 1;
+      FOR liShipIndex := 0 TO liShipCount DO BEGIN
+        ldnShipment := pdnOrder.shipments.Item(liShipIndex);
+        liMsgCount := ldnShipment.messages.Count() - 1;
+        FOR liMsgIndex := 0 TO liMsgCount DO BEGIN
+          ldnMessage := ldnShipment.messages.Item(liMsgIndex);
+          ptrecShipMessages.SETRANGE(Carrier, ldnMessage.carrier);
+          ptrecShipMessages.SETRANGE(Type, ldnMessage.type);
+          lsReturnedMessage := COPYSTR(ldnMessage.message, 1, MAXSTRLEN(ptrecShipMessages.Message));
+          ptrecShipMessages.SETRANGE(Message, lsReturnedMessage);
+          IF ( NOT ptrecShipMessages.FINDFIRST ) THEN BEGIN
+            ptrecShipMessages.ID := liMessageID;
+            ptrecShipMessages.Carrier := ldnMessage.carrier;
+            ptrecShipMessages.Type := ldnMessage.type;
+            ptrecShipMessages.Message := lsReturnedMessage;
+            ptrecShipMessages.INSERT;
+            liMessageID += 1;
+          END;
+        END;
+      END;
+
+      cuRateSingleton.setRateBuffer(ptrecRateBuffer);
+      cuRateSingleton.setShipMessages(ptrecShipMessages);
+    END;
+
+    LOCAL PROCEDURE setCommercialInvoice@1000000043(VAR pdnShipment@1000000000 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Shipment";poptDocType@1000000007 : Option;pcodDocNo@1000000002 : Code[20]);
+    VAR
+      lrecCustomsHeader@1000000004 : Record 23044605;
+      ldnForm@1000000001 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Form";
+      liFormIndex@1000000003 : Integer;
+      liFormLast@1000000006 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Description: Stores the URL to comm invoice in related customs header
+      //  Called From: This codeunit (23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      liFormLast := pdnShipment.forms.Count() - 1;
+      FOR liFormIndex := 0 TO liFormLast DO BEGIN
+        ldnForm := pdnShipment.forms.Item(liFormIndex);
+        IF ( ldnForm.form_type = tcCommInvEasyPostName ) THEN BEGIN
+          //some carriers (ups) send multiple invoices, they all appear identical
+          //ls := ldnForm.form_url;
+
+          lrecCustomsHeader.SETRANGE("Document Type", poptDocType);
+          lrecCustomsHeader.SETRANGE("Document No.", pcodDocNo);
+          IF ( (lrecCustomsHeader.FINDFIRST) AND
+               (ldnForm.form_url <> '') )
+          THEN BEGIN
+            lrecCustomsHeader."Commercial Invoice URL" := ldnForm.form_url;
+            lrecCustomsHeader.MODIFY(TRUE);
+            EXIT;
+          END; // lreccustomsheader.get
+        END; // if comminv
+      END; // foreach shipment.forms
+    END;
+
+    LOCAL PROCEDURE getCODLabel@1000000084(pdnShipment@1000000002 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Shipment");
+    VAR
+      lrecLabelData@1000000004 : Record 23044622;
+      ldnDynamicShip@1000000003 : DotNet "'DynamicShip.ShippingIntegration, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.DynamicShip.ShippingIntegration.DynamicShipping";
+      lsURL@1000000000 : Text;
+    BEGIN
+      //<FUNC>
+      //  Description: Gets the COD label, then sets it
+      //  Called From: This codeunit (CU23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      lsURL := getCODReturnLabelURL(pdnShipment);
+      cuRateMgmt.setLabelData(lrecLabelData."Label Type"::COD,
+                              lrecLabelData."Label Format"::PNG,
+                              pdnShipment.reference, lsURL, 0);
+    END;
+
+    LOCAL PROCEDURE getCODReturnLabelURL@1000000067(VAR pdnShipment@1000000000 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Shipment") : Text;
+    VAR
+      ldnForm@1000000001 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Form";
+      liFormIndex@1000000003 : Integer;
+      liFormLast@1000000006 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Description: Retrieves the COD return label url
+      //  Called From: This codeunit (CU23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      liFormLast := pdnShipment.forms.Count() - 1;
+      FOR liFormIndex := 0 TO liFormLast DO BEGIN
+        ldnForm := pdnShipment.forms.Item(liFormIndex);
+        IF ( ldnForm.form_type = tcCODReturnLabelName ) THEN
+          EXIT(ldnForm.form_url);
+      END; // foreach shipment.forms
+    END;
+
+    LOCAL PROCEDURE createScanForm@1000000002(VAR precLPHeader@1000000000 : Record 23044505) rsScanFormID : Text[100];
+    VAR
+      lrecFreightInt@1000000002 : Record 23044624;
+      lcuRateMgmt@1000000004 : Codeunit 23044602;
+      ldnDynamicShip@1000000001 : DotNet "'DynamicShip.ShippingIntegration, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.DynamicShip.ShippingIntegration.DynamicShipping";
+      ldnListShipIds@1000000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+    BEGIN
+      //<FUNC>
+      //  Description: Creates a scanform object based on the LP
+      //  Called From:
+      //  Side Effect: None
+      //</FUNC>
+
+      // if LP rec is not set or missing shipment id
+      IF ( precLPHeader."Shipment Tracking Number" = '' ) THEN
+        EXIT('');
+
+      // create list of all ship ids
+      IF ( precLPHeader.FINDSET() ) THEN BEGIN
+        lcuRateMgmt.createListOfStr(ldnListShipIds);
+        REPEAT
+          ldnListShipIds.Add(LOWERCASE(precLPHeader."Shipment Tracking Number"));
+        UNTIL(precLPHeader.NEXT() = 0);
+      END;
+
+      // init dship dotnet
+      lrecFreightInt.GET(tcEasyPost);
+      ldnDynamicShip := ldnDynamicShip.DynamicShipping(lrecFreightInt."API Key");
+
+      // create and retrieve scanformid
+      rsScanFormID := ldnDynamicShip.CreateScanForm(ldnListShipIds);
+
+      IF ( ldnDynamicShip.GetLastError <> '' ) THEN BEGIN
+        ERROR(tcScanFormError, precLPHeader."Package Order ID", ldnDynamicShip.GetLastError);
+      END;
+    END;
+
+    LOCAL PROCEDURE retrieveScanFormUrl@1000000003(psScanFormID@1000000000 : Text[100]) rsScanFormUrl : Text[250];
+    VAR
+      lrecFreightInt@1000000003 : Record 23044624;
+      ldnDynamicShip@1000000002 : DotNet "'DynamicShip.ShippingIntegration, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.DynamicShip.ShippingIntegration.DynamicShipping";
+      ldnListShipIds@1000000001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+    BEGIN
+      //<FUNC>
+      //  Description: Retrieves the URL for the carrier generated manifest
+      //  Called From:
+      //  Side Effect: None
+      //</FUNC>
+
+      // nothing to retrieve
+      IF ( psScanFormID = '' ) THEN
+        EXIT('');
+
+      // init dship dotnet
+      lrecFreightInt.GET(tcEasyPost);
+      ldnDynamicShip := ldnDynamicShip.DynamicShipping(lrecFreightInt."API Key");
+
+      // get scanform/manifest url
+      rsScanFormUrl := ldnDynamicShip.GetScanFormUrl(psScanFormID);
+
+      IF ( ldnDynamicShip.GetLastError <> '' ) THEN BEGIN
+        ERROR(tcScanFormUrlError, psScanFormID, ldnDynamicShip.GetLastError);
+      END;
+    END;
+
+    LOCAL PROCEDURE handleCreateManifest@1000000006();
+    VAR
+      lrecLPHeader@1000000001 : Record 23044505;
+    BEGIN
+      //<FUNC>
+      //  Description: Creates the EasyPost ScanForm obj
+      //  Called From: This codeunit (CU23044609)
+      //  Side Effect: Sets Manifest Header details
+      //</FUNC>
+
+      IF (trecParam."Document Type" <> trecParam."Document Type"::"Shipment Manifest") THEN
+        EXIT;
+
+      lrecLPHeader.SETRANGE("Manifest No.", trecParam."Document No.");
+      IF (lrecLPHeader.FINDFIRST()) THEN BEGIN
+        trecParam."Object ID" := createScanForm(lrecLPHeader);
+      END;
+    END;
+
+    LOCAL PROCEDURE handleGetManifest@1000000007();
+    VAR
+      lrecManifestHeader@1000000000 : Record 23044618;
+    BEGIN
+      //<FUNC>
+      //  Description: Get the generated EasyPost ScanForm URL
+      //  Called From: This codeunit (CU23044609)
+      //  Side Effect: None
+      //</FUNC>
+
+      IF (trecParam."Document Type" <> trecParam."Document Type"::"Shipment Manifest") THEN
+        EXIT;
+
+      IF (lrecManifestHeader.GET(trecParam."Document No.")) THEN BEGIN
+        trecParam."Object URL" := retrieveScanFormUrl(lrecManifestHeader."ScanForm ID");
+      END;
+    END;
+
+    LOCAL PROCEDURE handleGetQuotes@1000000008();
+    VAR
+      lrecrRecRef@1000000007 : RecordRef;
+      ltrecOrderBuffer@1000000002 : TEMPORARY Record 23044601;
+      ltrecLPHeader@1000000006 : TEMPORARY Record 23044505;
+      lrecSalesHeader@1000000000 : Record 36;
+      lsOrderId@1000000005 : Text;
+      lsCarrierId@1000000009 : Text;
+      lsCarrierSvc@1000000008 : Text;
+      lasFromAddress@1000000004 : ARRAY [12] OF Text[100];
+      lasToAddress@1000000003 : ARRAY [12] OF Text[100];
+      loptSalesDocType@1000000001 : Option;
+    BEGIN
+      //<FUNC>
+      //  Description: Get the freight rates for the quoting event (SO/SQ)
+      //  Called From: This codeunit (CU23044609)
+      //  Side Effect: May add a sales line for freight costs
+      //</FUNC>
+
+      // do not handle unexpected documents
+      CASE trecParam."Document Type" OF
+        trecParam."Document Type"::"Sales Order":
+          loptSalesDocType := lrecSalesHeader."Document Type"::Order;
+        trecParam."Document Type"::"Sales Quote":
+          loptSalesDocType := lrecSalesHeader."Document Type"::Quote;
+        ELSE
+          EXIT;
+      END;
+
+      ltrecOrderBuffer.INIT;
+      ltrecOrderBuffer."Document No." := trecParam."Document No.";
+      // this is a lie to leverage the function
+      ltrecOrderBuffer."Document Type" := trecParam."Document Type"::"Sales Order";
+      ltrecOrderBuffer."Document Subtype" := loptSalesDocType;
+      ltrecOrderBuffer.INSERT;
+      cuRateMgmt.setPrereqs(ltrecOrderBuffer, ltrecLPHeader, lrecrRecRef, lasFromAddress, lasToAddress);
+
+      initLPHeadersForQuote(ltrecLPHeader, trecParam."License Plate No.",
+                            trecParam."Quote Box Count", trecParam."Quote Box Weight");
+
+      lrecSalesHeader.GET(loptSalesDocType, trecParam."Document No.");
+      lsCarrierId := cuRateMgmt.getCarrierID(lrecSalesHeader."Shipping Agent Code",
+                                             lrecSalesHeader."Location Code", tcEasyPost);
+      lsCarrierSvc := cuRateMgmt.getCarrierService(lrecSalesHeader."Shipping Agent Code",
+                                                   lrecSalesHeader."Shipping Agent Service Code");
+
+      lsOrderId := getQuoteRates(lrecSalesHeader."Location Code", lasFromAddress, lasToAddress,
+                                 trecParam."Document Type", trecParam."Document No.",
+                                 lsCarrierId, lsCarrierSvc, ltrecLPHeader);
+      IF (lsOrderId = '') THEN
+        EXIT;
+
+      trecParam."Object ID" := lsOrderId;
+    END;
+
+    LOCAL PROCEDURE initLPHeadersForQuote@1000000028(VAR ptrecLPHeader@1000000000 : TEMPORARY Record 23044505;pcodPkgTmpl@1000000003 : Code[20];piBoxCount@1000000002 : Integer;pdBoxWeight@1000000001 : Decimal);
+    VAR
+      lcuLPCommon@1000000004 : Codeunit 23044541;
+      liBoxIndex@1000000006 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Description: Creates temporary LP Headers that can be used for rate quotes
+      //  Called From: This codeunit (CU23044609)
+      //  Side Effect:
+      //</FUNC>
+
+      recDShipSetup.GET;
+
+      // create a temp LP for each box
+      FOR liBoxIndex := 1 TO piBoxCount DO BEGIN
+        ptrecLPHeader.INIT;
+        ptrecLPHeader."No." := 'LPQ' + PADSTR('', 5 - STRLEN(FORMAT(liBoxIndex)), '0') + FORMAT(liBoxIndex);
+        ptrecLPHeader.INSERT(FALSE);
+        lcuLPCommon.updateLPFromTemplate(ptrecLPHeader,pcodPkgTmpl);
+        ptrecLPHeader."Weight Unit of Measure" := recDShipSetup."Freight Quote Weight UOM Code";
+        ptrecLPHeader."Shipment Gross Weight" := pdBoxWeight;
+        ptrecLPHeader.MODIFY(FALSE);
+      END;
+    END;
+
+    LOCAL PROCEDURE getQuoteRates@1000000013(pcodLocation@1000000024 : Code[50];pasFromAddress@1000000023 : ARRAY [12] OF Text[100];pasToAddress@1000000022 : ARRAY [12] OF Text[100];poptSourceDoc@1000000005 : Option;pcodSourceNo@1000000004 : Code[20];psCarrierId@1000000010 : Text;psCarrierSvc@1000000009 : Text;VAR ptrecLPHeader@1000000021 : TEMPORARY Record 23044505) : Text;
+    VAR
+      lrecFreightInt@1000000006 : Record 23044624;
+      lrecShipOptions@1000000019 : Record 23044608;
+      ldnOrder@1000000000 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Order";
+      ldnFromAddress@1000000018 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Address";
+      ldnToAddress@1000000017 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Address";
+      ldnReturnAddress@1000000001 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Address";
+      ldnPackageList@1000000016 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      ldnDSParcel@1000000015 : DotNet "'DynamicShip.ShippingIntegration, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.DynamicShip.ShippingIntegration.DynamicShipParcel";
+      ldnDynamicShip@1000000013 : DotNet "'DynamicShip.ShippingIntegration, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.DynamicShip.ShippingIntegration.DynamicShipping";
+      ldnShipment@1000000012 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Shipment";
+      ldnMessage@1000000002 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Message";
+      ldnDictShipment@1000000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.Dictionary`2";
+      liShipIndex@1000000011 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Description: Makes the required DotNet calls
+      //  Called From: This codeunit (CU23044609)
+      //  Side Effect:
+      //</FUNC>
+
+      lrecFreightInt.GET(tcEasyPost);
+      ldnDynamicShip := ldnDynamicShip.DynamicShipping(lrecFreightInt."API Key");
+
+      // init addresses
+      // bad doc info to purposefully fail ship options get
+      initShipAddresses(99, 'DSHIPQuote', pasFromAddress, pasToAddress,
+                        ldnFromAddress, ldnToAddress, ldnReturnAddress);
+
+      // set only the necessary for quote
+      cuRateMgmt.createListOfDict(ldnPackageList);
+      ptrecLPHeader.RESET;
+      IF (ptrecLPHeader.FINDSET(FALSE)) THEN BEGIN
+        REPEAT
+          ldnDictShipment := ldnDictShipment.Dictionary();
+          cuRateMgmt.createDictStrObj(ldnDictShipment);
+          ldnDictShipment.Add('reference', ptrecLPHeader."No.");
+          cuRateMgmt.setShipmentDimensions(ptrecLPHeader, ldnDictShipment);
+          setQuoteCustomsInfo(pasFromAddress, pasToAddress, ldnDictShipment);
+          ldnPackageList.Add(ldnDictShipment);
+        UNTIL(ptrecLPHeader.NEXT() = 0);
+      END;
+
+      // if a carrier was not specified, get all relevant to location
+      IF (psCarrierId = '') THEN BEGIN
+        psCarrierId := cuRateMgmt.getCarrierIDStringByFreightInt(pcodLocation, tcEasyPost);
+      END;
+
+      // dotnet call to getrates
+      ldnOrder := ldnDynamicShip.GetRates(
+                    lrecFreightInt."API Key",
+                    ldnPackageList,
+                    ldnFromAddress,
+                    ldnToAddress,
+                    psCarrierId
+                  );
+
+      IF (ldnDynamicShip.GetLastError <> '') THEN
+        ERROR(ldnDynamicShip.GetLastError);
+
+      addRatesToBuffer(ldnOrder, psCarrierSvc, ldnOrder.id, poptSourceDoc, pcodSourceNo);
+
+      EXIT(ldnOrder.id);
+    END;
+
+    LOCAL PROCEDURE initShipAddresses@1000000027(poptDocType@1000000005 : Option;pcodDocNo@1000000006 : Code[50];pasFromAddress@1000000004 : ARRAY [12] OF Text[100];pasToAddress@1000000003 : ARRAY [12] OF Text[100];pdnFromAddress@1000000002 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Address";pdnToAddress@1000000001 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Address";pdnReturnAddress@1000000000 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Address");
+    BEGIN
+      //<FUNC>
+      //  Description: Initializes the to/from/return addresses
+      //  Called From: This codeunit (CU23044609)
+      //  Side Effect: None
+      //</FUNC>
+
+      pdnFromAddress := pdnFromAddress.Address();
+      pdnToAddress := pdnToAddress.Address();
+      pdnReturnAddress := pdnReturnAddress.Address();
+
+      cuRateMgmt.setShipmentAddressesOptions(poptDocType, pcodDocNo,
+                                             pasFromAddress, pasToAddress,
+                                             pdnFromAddress, pdnToAddress, pdnReturnAddress);
+    END;
+
+    LOCAL PROCEDURE setQuoteCustomsInfo@1000000034(pasFromAddress@1000000004 : ARRAY [12] OF Text[100];pasToAddress@1000000001 : ARRAY [12] OF Text[100];VAR pdnDictShipment@1000000000 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.Dictionary`2");
+    VAR
+      ltrecOrderBuffer@1000000003 : TEMPORARY Record 23044601;
+      ltrecCustomsHeader@1000000006 : TEMPORARY Record 23044605;
+      ltrecCustomsLine@1000000009 : TEMPORARY Record 23044606;
+      ltrecGroupedLines@1000000008 : TEMPORARY Record 23044506;
+      ltrecLPHeader@1000000010 : TEMPORARY Record 23044505;
+      lrecCompanyInfo@1000000014 : Record 79;
+      lrecGenLedgSetup@1000000013 : Record 98;
+      lcuCustomsMgmt@1000000002 : Codeunit 23044603;
+      ldnDictCustomsInfo@1000000005 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.Dictionary`2";
+      ldnListCustomsItems@1000000007 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      ltcFreightQuote@1000000011 : TextConst 'ENU=DShip Freight Quoting';
+      ltcTariffNo@1000000012 : TextConst 'ENU=123456';
+    BEGIN
+      //<FUNC>
+      //  Description: Set customs information so international quotes can succeed
+      //               Some carriers do not return rates if the information is missing
+      //  Called From: This codeunit (CU23044609)
+      //  Side Effect: None
+      //</FUNC>
+
+      // check if international
+      IF (NOT lcuCustomsMgmt.checkInternationalPackageByAddress(pasFromAddress, pasToAddress)) THEN
+        EXIT;
+
+      // create customs header
+      ltrecCustomsHeader.INIT();
+      ltrecCustomsHeader."Content Explanation" := ltcFreightQuote;
+      ltrecCustomsHeader."Content Type" := ltrecCustomsHeader."Content Type"::merchandise;
+      ltrecCustomsHeader."Customs Certified" := ltrecCustomsHeader."Customs Certified"::Yes;
+      ltrecCustomsHeader."Customs Signer" := USERID();
+      ltrecCustomsHeader."EEL PFC" := 'NOEEI 30.37(a)';
+      ltrecCustomsHeader."Non Delivery Option" := ltrecCustomsHeader."Non Delivery Option"::return;
+      ltrecCustomsHeader."Restriction Type" := ltrecCustomsHeader."Restriction Type"::none;
+      ltrecCustomsHeader.INSERT(FALSE);
+
+      cuRateMgmt.setCustomsHeader(ltrecCustomsHeader, ldnDictCustomsInfo);
+
+      // create customs line
+      ltrecLPHeader.INIT();
+      ltrecLPHeader.Description := ltcFreightQuote;
+      ltrecLPHeader.INSERT(FALSE);
+      ltrecCustomsLine.INIT();
+      ltrecCustomsLine.Description := ltcFreightQuote;
+      ltrecCustomsLine."HS Tariff No." := ltcTariffNo;
+      lrecCompanyInfo.GET;
+      lrecGenLedgSetup.GET;
+      ltrecCustomsLine."Currency Code" := lrecGenLedgSetup."LCY Code";
+      ltrecCustomsLine."Origin Country/Region Code" := lrecCompanyInfo."Country/Region Code";
+      ltrecCustomsLine."Value Per Item Qty." := 0.01;
+      ltrecCustomsLine."Weight Per Item Qty." := 0.01;
+      ltrecCustomsLine.INSERT(FALSE);
+      ltrecGroupedLines.INIT();
+      ltrecGroupedLines.Quantity := 1;
+      ltrecGroupedLines."Item No." := 'DSHIP';
+      ltrecGroupedLines.INSERT(FALSE);
+
+      cuRateMgmt.createListOfDict(ldnListCustomsItems);
+      cuRateMgmt.setCustomsLine(ltrecLPHeader, ltrecCustomsLine, ltrecGroupedLines, ldnListCustomsItems);
+
+      // add line to header then to shipment
+      ldnDictCustomsInfo.Add('customs_items', ldnListCustomsItems);
+      pdnDictShipment.Add('customs_info', ldnDictCustomsInfo);
+    END;
+
+    PROCEDURE addRatePricesToBuffer@1000000010(poptDocType@1000000004 : Option;pcodDocNo@1000000003 : Code[50]);
+    VAR
+      ltrecOrderBuffer@1000000002 : TEMPORARY Record 23044601;
+      ltrecAPIParam@1000000001 : TEMPORARY Record 23044623;
+      ltrecRateBuffer@1000000005 : TEMPORARY Record 23044603;
+      ltrecCommentLine@1000000007 : TEMPORARY Record 97;
+      lrecSalesHeader@1000000000 : Record 36;
+      ldRatePrice@1000000008 : Decimal;
+      ldDiscountPercentage@1000000006 : Decimal;
+    BEGIN
+      //<FUNC>
+      //  Description: Adds the Rate Price according to the Freight Price Rules
+      //  Called From: This codeunit (CU23044609)
+      //  Side Effect: None
+      //</FUNC>
+
+      ltrecOrderBuffer.INIT();
+      ltrecOrderBuffer."Document No." := pcodDocNo;
+      CASE poptDocType OF
+        ltrecAPIParam."Document Type"::"Sales Order":
+          BEGIN
+            ltrecOrderBuffer."Document Type" := ltrecOrderBuffer."Document Type"::"Sales Order";
+            ltrecOrderBuffer."Document Subtype" := lrecSalesHeader."Document Type"::Order;
+          END;
+        ltrecAPIParam."Document Type"::"Sales Quote":
+          BEGIN
+            ltrecOrderBuffer."Document Type" := ltrecOrderBuffer."Document Type"::"Sales Order";
+            ltrecOrderBuffer."Document Subtype" := lrecSalesHeader."Document Type"::Quote;
+          END;
+        ELSE
+          ltrecOrderBuffer."Document Type" := poptDocType;
+      END;
+      ltrecOrderBuffer.INSERT(FALSE);
+
+      cuRateSingleton.getRateBuffer(ltrecRateBuffer);
+      IF (ltrecRateBuffer.FINDSET(FALSE)) THEN BEGIN
+        REPEAT
+          ltrecCommentLine.RESET();
+          ltrecCommentLine.DELETEALL();
+          ldRatePrice := cuRateMgmt.getSplitRateForSourceDoc(ltrecOrderBuffer, ltrecRateBuffer, ltrecCommentLine, ldDiscountPercentage);
+          ldRatePrice *= 1 - ldDiscountPercentage / 100;
+          ltrecRateBuffer."Rate Price" := ldRatePrice;
+          ltrecRateBuffer.MODIFY(FALSE);
+        UNTIL(ltrecRateBuffer.NEXT() = 0);
+        cuRateSingleton.setRateBuffer(ltrecRateBuffer);
+      END; //if
+    END;
+
+    PROCEDURE addRatesToBuffer@1000000011(pdnOrder@1000000002 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Order";psCarrierSvc@1000000001 : Text;psOrderId@1000000000 : Text;poptDocType@1000000003 : Option;pcodDocNo@1000000004 : Code[50]);
+    VAR
+      WhseShptHdr@1000000005 : Record 7320;
+      SalesHeader@1000000006 : Record 36;
+      DSHIPPackageListManagement@1000000007 : Codeunit 23044600;
+      DSHIPCarrier@1000000008 : Record 23044607;
+      TransHeader@1000000009 : Record 5740;
+    BEGIN
+      //<FUNC>
+      //  Description: Add the agent and price rates to buffer
+      //  Called From: This codeunit (CU23044609)
+      //  Side Effect: None
+      //</FUNC>
+
+      //<TPZ2723>
+      //addAgentRatesToBuffer(pdnOrder, psCarrierSvc, psOrderId); //DSHP Code blocked
+      IF WhseShptHdr.GET(pcodDocNo) THEN;
+      IF SalesHeader.GET(SalesHeader."Document Type"::Order,DSHIPPackageListManagement.GetSONumber(WhseShptHdr,pcodDocNo)) THEN BEGIN //TPZ3257 Added second parameter for SO Scan
+        IF DSHIPCarrier.GET(SalesHeader."Shipping Agent Code",'EASYPOST') THEN
+          addAgentRatesToBufferTPZ(pdnOrder,psCarrierSvc,psOrderId,pcodDocNo)
+        ELSE
+          addAgentRatesToBuffer(pdnOrder, psCarrierSvc, psOrderId);
+      //<TPZ2723>
+      //-->Pankaj
+      END ELSE IF TransHeader.GET(DSHIPPackageListManagement.GetSONumber(WhseShptHdr,pcodDocNo)) THEN //TPZ3257 Added second parameter for SO Scan
+        IF DSHIPCarrier.GET(TransHeader."Shipping Agent Code",'EASYPOST') THEN
+          addAgentRatesToBufferTPZ(pdnOrder,psCarrierSvc,psOrderId,pcodDocNo)
+        ELSE
+          addAgentRatesToBuffer(pdnOrder, psCarrierSvc, psOrderId);
+      //<--TPZ3229
+      addRatePricesToBuffer(poptDocType, pcodDocNo);
+    END;
+
+    PROCEDURE addAgentRatesToBufferTPZ@1000000015(VAR pdnOrder@1000000012 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Order";psService@1000000001 : Text;psOrderID@1000000019 : Text;WhseNo@1000000021 : Code[20]);
+    VAR
+      ptrecRateBuffer@1000000010 : TEMPORARY Record 23044603;
+      ptrecShipMessages@1000000002 : TEMPORARY Record 23044604;
+      ldnListRates@1000000000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      ldnRate@1000000006 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Rate";
+      ldnShipment@1000000009 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Shipment";
+      ldnMessage@1000000008 : DotNet "'EasyPost.Net35, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'.EasyPost.Message";
+      ldnDateTime@1000000015 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.DateTime";
+      liMessageID@1000000011 : Integer;
+      liShipIndex@1000000007 : Integer;
+      liShipCount@1000000018 : Integer;
+      liMsgIndex@1000000005 : Integer;
+      liMsgCount@1000000017 : Integer;
+      liRateIndex@1000000004 : Integer;
+      liRateCount@1000000016 : Integer;
+      ldRate@1000000003 : Decimal;
+      lsReturnedMessage@1000000013 : Text;
+      lsTemp@1000000014 : Text;
+      DSHIPCarrierService@1000000020 : Record 23044611;
+      WarehouseShipmentLine@1000000023 : Record 7321;
+      SalesHeader@1000000022 : Record 36;
+    BEGIN
+      //<FUNC>
+      //  Description:
+      //  Called From: This codeunit, DSHIP Rate Quote Management (CU23044605)
+      //  Side Effect:
+      //</FUNC>
+
+      psService := LOWERCASE(psService);
+
+      cuRateSingleton.getRateBuffer(ptrecRateBuffer);
+      cuRateSingleton.getShipMessages(ptrecShipMessages);
+      //<vaseem>
+      WarehouseShipmentLine.RESET;
+      WarehouseShipmentLine.SETRANGE("No.",WhseNo);
+      IF WarehouseShipmentLine.FINDFIRST THEN BEGIN
+        IF SalesHeader.GET(SalesHeader."Document Type"::Order,WarehouseShipmentLine."Source No.") THEN ;
+        psService := '';
+      END;
+      //</vaseem>
+      liRateCount := pdnOrder.rates.Count() - 1;
+      FOR liRateIndex := 0 TO liRateCount DO BEGIN
+        ldnRate := pdnOrder.rates.Item(liRateIndex);
+        //MESSAGE('ps SERVICE %1 ldnDate %2',psService,ldnRate.service);
+        IF ( (psService = '') OR (psService = LOWERCASE(ldnRate.service)) ) THEN BEGIN
+          //MESSAGE(ldnRate.service);
+          //<vaseem>
+          DSHIPCarrierService.RESET;
+          IF SalesHeader."E-Ship Agent Service" <> '' THEN
+            DSHIPCarrierService.SETRANGE("E-Ship Agent Service",SalesHeader."E-Ship Agent Service");
+          IF SalesHeader."Shipping Agent Code" <> '' THEN
+            DSHIPCarrierService.SETRANGE("Shipping Agent Code",SalesHeader."Shipping Agent Code");
+          DSHIPCarrierService.SETRANGE("Service Name",ldnRate.service);
+          IF DSHIPCarrierService.FINDFIRST THEN BEGIN
+          //</vaseem>
+            ptrecRateBuffer.INIT;
+            // ptrecRateBuffer."License Plate No." := precLPHeader."No.";
+            ptrecRateBuffer.ID := ldnRate.id;
+            ptrecRateBuffer."Carrier Name" := ldnRate.carrier;
+            ptrecRateBuffer."Carrier Account ID" := ldnRate.carrier_account_id;
+            // for api functionality
+            //ptrecRateBuffer."Shipment ID" := ldnRate.shipment_id;
+            ptrecRateBuffer."Order ID" := psOrderID;
+            EVALUATE(ldRate, FORMAT(ldnRate.rate));
+            ptrecRateBuffer."Rate Cost" := ldRate;
+            ptrecRateBuffer."Rate Price" := ldRate;
+            ptrecRateBuffer.Currency := FORMAT(ldnRate.currency);
+            ptrecRateBuffer."Delivery Days" := ldnRate.delivery_days;
+            IF ( NOT ISNULL(ldnRate.delivery_date) ) THEN BEGIN
+              ldnDateTime := ldnRate.delivery_date;
+              ptrecRateBuffer."Delivery Date" := ldnDateTime;
+            END;
+            ptrecRateBuffer."Delivery Date Guaranteed" := ldnRate.delivery_date_guaranteed;
+            ptrecRateBuffer.Service := ldnRate.service;
+
+            IF ( EVALUATE(ldRate, FORMAT(ldnRate.retail_rate)) ) THEN BEGIN
+              ptrecRateBuffer."Retail Rate" := ldRate;
+              ptrecRateBuffer."Retail Currency" := FORMAT(ldnRate.retail_currency);
+            END;
+
+            IF ( EVALUATE(ldRate, ldnRate.list_rate) ) THEN BEGIN
+              ptrecRateBuffer."List Rate" := ldRate;
+              ptrecRateBuffer."List Currency" := ldnRate.list_currency;
+            END;
+
+            ptrecRateBuffer.INSERT;
+          END;
+        END;
+      END;
+
+      ptrecShipMessages.RESET;
+      liMessageID := 1;
+      IF ( ptrecShipMessages.FINDLAST ) THEN
+        liMessageID := ptrecShipMessages.ID + 1;
+      liShipCount := pdnOrder.shipments.Count() - 1;
+      FOR liShipIndex := 0 TO liShipCount DO BEGIN
+        ldnShipment := pdnOrder.shipments.Item(liShipIndex);
+        liMsgCount := ldnShipment.messages.Count() - 1;
+        FOR liMsgIndex := 0 TO liMsgCount DO BEGIN
+          ldnMessage := ldnShipment.messages.Item(liMsgIndex);
+          ptrecShipMessages.SETRANGE(Carrier, ldnMessage.carrier);
+          ptrecShipMessages.SETRANGE(Type, ldnMessage.type);
+          lsReturnedMessage := COPYSTR(ldnMessage.message, 1, MAXSTRLEN(ptrecShipMessages.Message));
+          ptrecShipMessages.SETRANGE(Message, lsReturnedMessage);
+          IF ( NOT ptrecShipMessages.FINDFIRST ) THEN BEGIN
+            ptrecShipMessages.ID := liMessageID;
+            ptrecShipMessages.Carrier := ldnMessage.carrier;
+            ptrecShipMessages.Type := ldnMessage.type;
+            ptrecShipMessages.Message := lsReturnedMessage;
+            ptrecShipMessages.INSERT;
+            liMessageID += 1;
+          END;
+        END;
+      END;
+
+      cuRateSingleton.setRateBuffer(ptrecRateBuffer);
+      cuRateSingleton.setShipMessages(ptrecShipMessages);
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+      2019-12-18 TPZ2723 VAHAMAD
+       Code modified in funtion addRatesToBuffer to use E-ship Agent service in EASYPOST Carrier
+      001 TPZ3229 PKS 06152021 Added code to fetch freight and print label for TO.
+    }
+    END.
+  }
+}
+

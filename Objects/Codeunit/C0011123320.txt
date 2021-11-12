@@ -1,0 +1,2944 @@
+OBJECT Codeunit 11123320 SC - Order/Basket Functions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/02/21;
+    Time=[ 9:31:59 AM];
+    Modified=Yes;
+    Version List=SCW19.2.0,001,TPZ3099,TPZ3108,005;
+  }
+  PROPERTIES
+  {
+    TableNo=11123302;
+    OnRun=VAR
+            Params@11123302 : TEMPORARY Record 11123310;
+            RequestBuff@11123304 : TEMPORARY Record 11123303;
+            ResponseBuff@11123303 : TEMPORARY Record 11123303;
+            Context@11123305 : Codeunit 11123305;
+          BEGIN
+            Context.GetRequestBuff(RequestBuff);
+            Context.GetResponseBuff(ResponseBuff);
+            Context.GetParams(Params);
+
+            CASE Code OF
+              UPPERCASE('SaveOrder') : SaveOrder(RequestBuff,ResponseBuff);
+              UPPERCASE('UpdateOrderFields') : SaveOrder(RequestBuff,ResponseBuff);
+              UPPERCASE('AddOrderSalesLines') : AddOrderSalesLines(Params);
+              UPPERCASE('CalculateBasket') : CalculateBasket(RequestBuff,ResponseBuff);
+              UPPERCASE('PromoteQuote') : PromoteQuote(RequestBuff,ResponseBuff);
+              UPPERCASE('SaveReturnOrder') : SaveReturnOrder(RequestBuff,ResponseBuff);
+            END;
+
+            Context.SetParams(Params);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text11123303@11123303 : TextConst 'ENU=AccountId must be specified.';
+      Text11123305@11123305 : TextConst 'ENU=Prepacks not supported when order placed without calculations.';
+      Text11123306@11123306 : TextConst 'ENU=Internal error. Quote %1 could not be converted to order. Automatic reservation for item %2 is not possible.';
+      Text11123307@11123304 : TextConst 'ENU=It is not possible to edit sales document.\\An error occured during the edittig process of %1 %2 for %3 %4. \\Error message: %5';
+      Text11123309@11123310 : TextConst 'ENU=*/SalesLines/SalesLine';
+      TempOrderedQntyBufferGlobal@11123320 : TEMPORARY Record 37;
+      NotInStockLinesBuffGlobal@11123319 : TEMPORARY Record 11123303;
+      DecrQtyLinesBuffGlobal@11123318 : TEMPORARY Record 11123303;
+      NonOrderableLinesBuffGlobal@11123317 : TEMPORARY Record 11123303;
+      SalesLineGlobal@11123316 : Record 37;
+      LineNoGlobalForUpdate@11123315 : Integer;
+      LineNoGlobal@11123314 : Integer;
+      MatrixLineNoGlobal@11123313 : Integer;
+      SubLineGlobal@11123312 : Boolean;
+      PrepackCodeToInvGlobal@11123311 : Boolean;
+      PrepToInvInitializedGlobal@11123309 : Boolean;
+      IsTempSalesHeaderGlobal@11123308 : Boolean;
+      TempSalesHeaderInitGlobal@11123307 : Boolean;
+      Text11123310@11123302 : TextConst 'ENU=The policy of exact cost reversing mandatory does not allow split return lines.';
+      Text11123302@11123321 : TextConst 'ENU="The value of parameter Document Type = ''%1'' is not correct in XML request. The range of available values is from 0 to 5."';
+      Text11123311@11123322 : TextConst 'ENU=Internal error. %1 unexpected table.';
+      TextShiptoSelcet@1000000000 : Text;
+
+    PROCEDURE SaveOrder@11123357(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      OrderNodeBuff@11123306 : TEMPORARY Record 11123303;
+      Params@11123304 : TEMPORARY Record 11123310;
+      SalesHeader@11123307 : Record 36;
+      SalesHeaderExists@11123305 : Boolean;
+    BEGIN
+      Params.InitParams(InXMLBuff,0);
+      InXMLBuff.SelectSingleNode('Order',OrderNodeBuff);
+      Params.InitFieldValues(OrderNodeBuff);
+      Params.CurrentCurrencyId := Params.BaseCurrencyId;
+
+      IF Params.DocumentId <> '' THEN
+        SalesHeaderExists := SalesHeader.GET(GetDocumentType(Params),Params.DocumentId);
+
+      IF NOT SalesHeaderExists THEN
+        CreateOrder(OrderNodeBuff,OutXMLBuff,Params)
+      ELSE
+        UpdateOrder(OrderNodeBuff,OutXMLBuff,Params);
+    END;
+
+    PROCEDURE CreateOrder@11123302(VAR OrderNodeBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303;VAR Params@11123311 : Record 11123310);
+    VAR
+      SalesHeader@11123309 : Record 36;
+      SalesLine@11123308 : Record 37;
+      OrderFunc@11123307 : Codeunit 11123319;
+      Dispatcher@11123306 : Codeunit 11123306;
+      Context@11123305 : Codeunit 11123305;
+      EventMgt@11123304 : Codeunit 11123331;
+    BEGIN
+      IF NOT SanaOrderExists(SalesHeader,Params) THEN BEGIN
+        InsertSalesHeader(SalesHeader,FALSE,Params);
+        ValidateSalesHeader(SalesHeader,Params);
+
+        SetDocumentCurrency(SalesHeader,Params);
+        SetDocumentProperties(SalesHeader,Params);
+        SetOrderShippingAddress(SalesHeader,OrderNodeBuff,Params);
+        UpdatePaymentStatus(SalesHeader,Params);
+        SetOrderShippingAgentService(SalesHeader,Params);
+
+        EventMgt.OnBeforeSaveDocument(SalesHeader,Params);
+
+        SalesHeader.MODIFY(TRUE);
+
+        Context.SetXMLNodeBuff(OrderNodeBuff);
+        Dispatcher.DispatchInternal('AddOrderSalesLines',Params);
+        EventMgt.OnAfterAddDocumentLines(SalesHeader,Params);
+        CalcOrderDiscounts(SalesHeader,SalesLine,Params);
+        SetDocumentComments36(SalesHeader,OrderNodeBuff,0);
+        AutoSaveHeaderFields(SalesHeader,OrderNodeBuff);
+
+        IF IsQuoteToOrder(Params) THEN
+          PromoteQuoteToOrder(SalesHeader,Params);
+
+        SetSalesDocHeader36(SalesHeader,Params);
+
+        AddOrderImportInfo(SalesHeader,Params);
+      END;
+
+      EventMgt.OnBeforeCreateDocResponse(SalesHeader,Params);
+      OrderFunc.CreateOrderXMLResponse(OutXMLBuff,SalesHeader,Params);
+      EventMgt.OnAfterCreateDocResponse(OutXMLBuff,SalesHeader,Params);
+    END;
+
+    PROCEDURE UpdateOrder@11123303(VAR OrderNodeBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303;VAR Params@11123312 : Record 11123310);
+    VAR
+      SalesHeader@11123305 : Record 36;
+      SalesLine@11123304 : Record 37;
+      OrderFunc@11123307 : Codeunit 11123319;
+      ArchiveManager@11123308 : Codeunit 5063;
+      Context@11123306 : Codeunit 11123305;
+      Dispatcher@11123309 : Codeunit 11123306;
+      EventMgt@11123310 : Codeunit 11123331;
+    BEGIN
+      SalesHeader.GET(GetDocumentType(Params),Params.DocumentId);
+      SalesHeader.SetHideValidationDialog(TRUE);
+
+      TestSalesHeader(SalesHeader,TRUE);
+      UpdatePaymentStatus(SalesHeader,Params);
+      IF Context.GetCurrentOperationName <> 'UpdateOrderFields' THEN BEGIN
+        ArchiveManager.StoreSalesDocument(SalesHeader,FALSE);
+        DeletePromotionCouponeInfo(SalesHeader,Params);
+        TryDeleteSalesLines(SalesHeader,TRUE,Params);
+        SalesHeader.InitRecord;
+        ValidateSalesHeader(SalesHeader,Params);
+
+        SetDocumentCurrency(SalesHeader,Params);
+        SetDocumentProperties(SalesHeader,Params);
+        SetOrderShippingAddress(SalesHeader,OrderNodeBuff,Params);
+        SetOrderShippingAgentService(SalesHeader,Params);
+
+        EventMgt.OnBeforeSaveDocument(SalesHeader,Params);
+         SalesHeader.IspickupOrder := Params.IsPickupOrder;//<TPZ3154>
+        SalesHeader.MODIFY(TRUE);
+
+        Context.SetXMLNodeBuff(OrderNodeBuff);
+        Dispatcher.DispatchInternal('AddOrderSalesLines',Params);
+        EventMgt.OnAfterAddDocumentLines(SalesHeader,Params);
+        CalcOrderDiscounts(SalesHeader,SalesLine,Params);
+        SetDocumentComments36(SalesHeader,OrderNodeBuff,0);
+
+        IF IsQuoteToOrder(Params) THEN
+          PromoteQuoteToOrder(SalesHeader,Params);
+      END;
+
+      AutoSaveHeaderFields(SalesHeader,OrderNodeBuff);
+
+      SetSalesDocHeader36(SalesHeader,Params);
+
+      IF Context.GetCurrentOperationName <> 'UpdateOrderFields' THEN BEGIN
+        Params.LoadOrderLines := TRUE;
+        EventMgt.OnBeforeCreateDocResponse(SalesHeader,Params);
+        OrderFunc.CreateOrderXMLResponse(OutXMLBuff,SalesHeader,Params);
+        EventMgt.OnAfterCreateDocResponse(OutXMLBuff,SalesHeader,Params);
+      END;
+    END;
+
+    PROCEDURE IsQuoteToOrder@11123380(VAR Params@11123302 : Record 11123310) : Boolean;
+    BEGIN
+      EXIT((Params.OriginalQuoteId <> '') AND (Params.DocumentType = 'Quote'));
+    END;
+
+    PROCEDURE PromoteQuoteToOrder@11123368(VAR SalesHeader@11123302 : Record 36;VAR Params@11123304 : Record 11123310);
+    VAR
+      SalesQuoteToOrder@11123303 : Codeunit 86;
+    BEGIN
+      SalesQuoteToOrder.SetHideValidationDialog := TRUE;
+      IF NOT ValidQuoteForPromote(SalesHeader,Params) THEN
+        ERROR(Text11123306,SalesHeader."No.",Params.ProductId);
+
+      SalesQuoteToOrder.RUN(SalesHeader);
+
+      SalesQuoteToOrder.GetSalesOrderHeader(SalesHeader);
+      Params.OriginalOrderId := Params.OriginalQuoteId;
+      Params.DocumentType := 'Order';
+    END;
+
+    PROCEDURE ValidQuoteForPromote@11123381(SalesHeader@11123303 : Record 36;VAR Params@11123302 : Record 11123310) : Boolean;
+    VAR
+      SalesLine@11123304 : Record 37;
+      TempSalseLine@11123305 : TEMPORARY Record 37;
+    BEGIN
+      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+      SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+      SalesLine.SETRANGE(Reserve,SalesLine.Reserve::Always);
+      IF SalesLine.FINDSET THEN
+        REPEAT
+          TempSalseLine := SalesLine;
+          IF NOT ValidatePromotableLine(TempSalseLine,Params) THEN BEGIN
+            Params.ProductId := TempSalseLine."No.";
+            EXIT(FALSE);
+          END;
+        UNTIL SalesLine.NEXT = 0;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ValidatePromotableLine@11123378(SalesLine@11123302 : Record 37;VAR Params@11123303 : Record 11123310) : Boolean;
+    VAR
+      ReserveSalesLine@11123304 : Codeunit 99000832;
+      ReservMgt@11123305 : Codeunit 99000845;
+      FullAutoReservation@11123306 : Boolean;
+      QtyToReserve@11123307 : Decimal;
+      QtyToReserveBase@11123308 : Decimal;
+    BEGIN
+      ReserveSalesLine.ReservQuantity(SalesLine,QtyToReserve,QtyToReserveBase);
+      IF QtyToReserveBase <> 0 THEN BEGIN
+        ReservMgt.SetSalesLine(SalesLine);
+        ReservMgt.AutoReserve(FullAutoReservation,'',SalesLine."Shipment Date",QtyToReserve,QtyToReserveBase);
+        EXIT(NOT FullAutoReservation);
+      END;
+    END;
+
+    PROCEDURE ValidateSalesHeader@11123304(VAR SalesHeader@11123302 : Record 36;VAR Params@11123303 : Record 11123310);
+    VAR
+      Contact@11123304 : Record 5050;
+      Customer@11123307 : Record 18;
+      Webshop@11123306 : Record 11123313;
+      CustomerFunc@11123305 : Codeunit 11123313;
+      RecMgt@11123308 : Codeunit 11123326;
+    BEGIN
+      RecMgt.GetWebshop(Params.WebsiteId,Webshop,TRUE);
+
+      IF SalesHeader."Document Type" = SalesHeader."Document Type"::Quote THEN BEGIN
+        SetMaxExpiredDate(SalesHeader,Params);
+        IF Params.AccountType = 'Contact' THEN BEGIN
+          RecMgt.GetContact(Params.AccountId,Contact,TRUE);
+          CustomerFunc.TestContact(Contact,TRUE);
+          SalesHeader.VALIDATE("Sell-to Customer Template Code",Contact."Customer Template Code");
+
+          Webshop.TESTFIELD("Template Customer No.");
+          IF RecMgt.GetCustomer(Webshop."Template Customer No.",Customer,FALSE) THEN BEGIN
+            SalesHeader.VALIDATE("Tax Area Code",Customer."Tax Area Code");
+            SalesHeader.VALIDATE("Tax Liable",Customer."Tax Liable");
+            IF NOT SetLocationCodeFromWebshop(Webshop,SalesHeader) THEN
+            SalesHeader.VALIDATE("Location Code",Customer."Location Code");
+          END;
+        END ELSE BEGIN
+          SalesHeader.VALIDATE("Sell-to Customer No.",Params.AccountId);
+          SetLocationCodeFromWebshop(Webshop,SalesHeader);
+        END;
+      END ELSE BEGIN
+        SalesHeader.VALIDATE("Sell-to Customer No.",Params.AccountId);
+        SetLocationCodeFromWebshop(Webshop,SalesHeader);
+      END;
+    END;
+
+    PROCEDURE AddNonOrderableLine@11123305(VAR NonOrderableXMLBuff@11123309 : Record 11123303;Description@11123308 : Text[1024];VAR Params@11123305 : Record 11123310;VerticalCode@11123303 : Text[1024]);
+    VAR
+      NOCollectionNodeBuff@11123307 : TEMPORARY Record 11123303;
+      CatalogHelper@11123306 : Codeunit 11123318;
+      UOMDescription@11123304 : Text[1024];
+    BEGIN
+      UOMDescription := CatalogHelper.GetUOMDescription(Params.UnitOfMeasureId,Params.LanguageId);
+
+      NonOrderableXMLBuff.AddElement(NOCollectionNodeBuff,'Line','');
+
+      IF UOMDescription <> '' THEN
+        NOCollectionNodeBuff.AddFieldElement('Description',STRSUBSTNO('%1 - %2',Description,UOMDescription))
+      ELSE
+        NOCollectionNodeBuff.AddFieldElement('Description',Description);
+
+      NOCollectionNodeBuff.AddFieldElement('ProductId',Params.ProductId);
+      NOCollectionNodeBuff.AddFieldElement('VariantId',Params.VariantId);
+      NOCollectionNodeBuff.AddFieldElement('PrepackId',Params.PrepackId);
+      NOCollectionNodeBuff.AddFieldElement('VerticalId',VerticalCode);
+      NOCollectionNodeBuff.AddFieldElement('UnitOfMeasureId',Params.UnitOfMeasureId);
+      NOCollectionNodeBuff.AddFieldElement('CouponId','');
+    END;
+
+    PROCEDURE SetOrderShippingAddress@11123307(VAR SalesHeader@11123302 : Record 36;VAR InXmlBuff@11123303 : Record 11123303;VAR Params@11123309 : Record 11123310);
+    VAR
+      ResultNodeBuff@11123306 : TEMPORARY Record 11123303;
+      ShipToAddress@11123305 : Record 222;
+      Webshop@11123307 : Record 11123313;
+      RecMgt@11123308 : Codeunit 11123326;
+      TextVar@11123304 : Text[1024];
+    BEGIN
+      WITH SalesHeader DO BEGIN
+        InXmlBuff.SelectSingleNode('//ShippingAddress',ResultNodeBuff);
+        TextVar := ResultNodeBuff.CutFieldValueByName('Id');
+        TextShiptoSelcet := TextVar;//<TPZ3108>
+        IF TextVar <> '' THEN BEGIN
+          IF ShipToAddress.GET("Sell-to Customer No.",TextVar) THEN
+            VALIDATE("Ship-to Code",TextVar)
+          ELSE
+            VALIDATE("Ship-to Code",'');
+
+          IF RecMgt.GetWebshop(Params.WebsiteId,Webshop,FALSE) THEN
+            SetLocationCodeFromWebshop(Webshop,SalesHeader);
+        END ELSE BEGIN
+          VALIDATE("Ship-to Code",'');
+
+          TextVar := ResultNodeBuff.CutFieldValueByName('Name');
+          IF TextVar <> '' THEN
+            "Ship-to Name" := TextVar;
+
+          TextVar := ResultNodeBuff.CutFieldValueByName('Address');
+          IF TextVar <> '' THEN
+            "Ship-to Address" := TextVar;
+
+          IF STRLEN("Ship-to Address") = 0 THEN BEGIN
+            TextVar := ResultNodeBuff.CutFieldValueByName('Address2');
+            IF TextVar <> '' THEN
+              "Ship-to Address 2" := TextVar;
+
+            IF (STRLEN("Ship-to Address 2") > 0) AND
+               (STRLEN("Ship-to Address") + STRLEN("Ship-to Address 2") < MAXSTRLEN("Ship-to Address"))
+            THEN BEGIN
+              "Ship-to Address" := STRSUBSTNO('%1 %2',"Ship-to Address","Ship-to Address 2");
+              "Ship-to Address 2" := '';
+            END;
+           END ELSE BEGIN
+             TextVar := ResultNodeBuff.CutFieldValueByName('Address2');
+             "Ship-to Address 2" := TextVar;
+           END;
+
+          TextVar := ResultNodeBuff.CutFieldValueByName('ZipCode');
+          IF TextVar <> '' THEN
+            "Ship-to Post Code" := TextVar;
+
+          TextVar := ResultNodeBuff.CutFieldValueByName('City');
+          IF TextVar <> '' THEN
+            "Ship-to City" := TextVar;
+
+          TextVar := ResultNodeBuff.CutFieldValueByName('CountryId');
+          IF TextVar <> '' THEN
+            "Ship-to Country/Region Code" := TextVar;
+
+          TextVar := ResultNodeBuff.CutFieldValueByName('State');
+          IF TextVar <> '' THEN
+            "Ship-to County" := TextVar;
+        END;
+      END;
+    END;
+
+    PROCEDURE SetOrderShippingAgentService@11123346(VAR SalesHeader@11123303 : Record 36;VAR Params@11123302 : Record 11123310);
+    VAR
+      ShiptoAddress@1000000000 : Record 222;
+    BEGIN
+      IF Params.ShippingAgentCode <> '' THEN
+        SalesHeader."Shipping Agent Code" := Params.ShippingAgentCode;
+
+      IF Params.ShippingAgentServiceCode <> '' THEN
+        SalesHeader."Shipping Agent Service Code" := Params.ShippingAgentServiceCode;
+
+      //<TPZ3108>
+      IF TextShiptoSelcet = 'DEFAULT' THEN BEGIN
+        IF SalesHeader."Ship-to Code" = '' THEN BEGIN
+         ShiptoAddress.RESET;
+         ShiptoAddress.SETRANGE("Customer No.",SalesHeader."Sell-to Customer No.");
+         ShiptoAddress.SETRANGE(Blocked,FALSE);
+         IF ShiptoAddress.FINDFIRST THEN
+           SalesHeader.VALIDATE("Ship-to Code",ShiptoAddress.Code);
+        END;
+        SalesHeader.VALIDATE("Shipping Agent Code",'Pickup');
+        SalesHeader.VALIDATE("E-Ship Agent Service",'Pickup');
+      END;
+      IF SalesHeader."Ship-to Code" = '' THEN
+        SalesHeader."Ship-to Code" := 'DS';
+
+      IF SalesHeader."Ship-to Contact" <> '' THEN
+      SalesHeader."Ship-to Contact" := COPYSTR(SalesHeader."Ship-to Contact",1,35);
+
+      IF SalesHeader."Bill-to Contact" <> '' THEN
+      SalesHeader."Bill-to Contact" := COPYSTR(SalesHeader."Bill-to Contact",1,35);
+      //</TPZ3108>
+    END;
+
+    PROCEDURE SetDocumentProperties@11123309(VAR SalesHeader@11123302 : Record 36;VAR Params@11123303 : Record 11123310);
+    VAR
+      Validation@11123304 : Codeunit 11123310;
+      ErrorText@11123305 : Text[1024];
+    BEGIN
+      IF NOT Validation.ValidateMaxFieldLen(
+        DATABASE::"Sales Header",SalesHeader.FIELDNO("External Document No."),Params.ReferenceNo,ErrorText)
+      THEN
+        ERROR(ErrorText);
+      SalesHeader."External Document No." := Params.ReferenceNo;
+
+      IF Params.ContactId <> '' THEN BEGIN
+        SalesHeader."Sell-to Contact No." := Params.ContactId;
+        SalesHeader.VALIDATE("Sell-to Contact No.");
+        IF (SalesHeader."Sell-to Customer No." <> '') AND
+           (SalesHeader."Sell-to Customer No." = SalesHeader."Bill-to Customer No.")
+        THEN BEGIN
+          SalesHeader."Bill-to Contact No." := Params.ContactId;
+          SalesHeader.VALIDATE("Bill-to Contact No.");
+        END;
+      END;
+
+      IF Params.ContactName <> '' THEN BEGIN
+        SalesHeader."Sell-to Contact" := Params.ContactName;
+        IF (SalesHeader."Sell-to Customer No." <> '') AND
+           (SalesHeader."Sell-to Customer No." = SalesHeader."Bill-to Customer No.")
+        THEN
+          SalesHeader."Bill-to Contact" := Params.ContactName;
+      END;
+
+      IF Params.SalesPersonId <> '' THEN
+        SalesHeader.VALIDATE("Salesperson Code",Params.SalesPersonId);
+
+      SalesHeader.VALIDATE("Requested Delivery Date",Params.RequestedDeliveryDate);
+
+      IF SalesHeader."Sell-to Customer Template Code" <> '' THEN BEGIN
+        SalesHeader.VALIDATE("Sell-to Contact No.");
+        SalesHeader.VALIDATE("Salesperson Code",Params.SalesPersonId);
+      END;
+    END;
+
+    LOCAL PROCEDURE AddOrderSalesLines@11123310(VAR Params@11123304 : Record 11123310);
+    VAR
+      SalesHeader@11123303 : Record 36;
+      SalesLine@11123305 : Record 37;
+      InXMLBuff@11123302 : TEMPORARY Record 11123303;
+      SalesLineNodesBuff@11123309 : TEMPORARY Record 11123303;
+      Context@11123311 : Codeunit 11123305;
+      EventMgt@11123310 : Codeunit 11123331;
+      PreviousItemNo@11123307 : Code[50];
+      Prepack@11123317 : Boolean;
+      PrepackToInv@11123318 : Boolean;
+      PrepackHasVariants@11123319 : Boolean;
+    BEGIN
+      Context.GetXMLNodeBuff(InXMLBuff);
+
+      InXMLBuff.SelectNodes('//SalesLine',SalesLineNodesBuff);
+      SalesHeader.GET(GetDocumentType(Params),Params.DocumentId);
+      PrepackToInv := IsPrepackCodeToInventory;
+
+      WHILE SalesLineNodesBuff.NextNode DO BEGIN
+        Params.InitLineFieldValues(SalesLineNodesBuff);
+
+        GetLineNoMatrixSubline(
+          SalesLine,SalesHeader."Document Type",SalesHeader."No.",
+          Params,LineNoGlobal,MatrixLineNoGlobal,SubLineGlobal);
+
+        CLEAR(SalesLine);
+
+        EventMgt.OnBeforeAddDocumentLine(SalesLine,Params);
+
+        CASE Params.LineType OF
+          'item' :
+            BEGIN
+              Prepack := Params.PrepackId <> '';
+              IF Prepack THEN
+                PrepackHasVariants := PrepackHasVariantsByCode(Params.PrepackId,Params.ProductId)
+              ELSE
+                PrepackHasVariants := TRUE;
+
+              InsertSalesLine(SalesHeader,SalesLine,Params);
+              ProcessSalesLine(SalesHeader,SalesLine,Params,PrepackHasVariants);
+              UpdateUOMQtytoPCS(SalesLine);//<TPZ3099>
+              SetDocumentComments36(SalesHeader,SalesLineNodesBuff,SalesLine."Line No.");
+            END;
+          'paymentcosts','shippingcosts' :
+            AddSpecialCostLine(
+              SalesHeader,SalesLine,LineNoGlobal,
+              GetSpecialCostLineType(Params.LineType),
+              Params);
+          'promotioncode' :
+            ReadPromotionLineFromXML(SalesHeader,Params);
+        END;
+        AutoSaveLineFields(SalesLine,SalesLineNodesBuff);
+
+        IF PreviousItemNo <> Params.ProductId THEN BEGIN
+          InsertExtendedText(SalesHeader,SalesLine,Params);
+          PreviousItemNo := Params.ProductId;
+        END;
+
+        EventMgt.OnAfterAddDocumentLine(SalesLine,Params);
+      END;
+    END;
+
+    PROCEDURE SetDocumentCurrency@11123338(VAR SalesHeader@11123302 : Record 36;VAR Params@11123303 : Record 11123310);
+    VAR
+      CurrExchRate@11123304 : Record 330;
+      Currency@11123305 : Record 4;
+      SettingsFunctions@11123306 : Codeunit 11123311;
+      RecMgt@11123308 : Codeunit 11123326;
+      CurrencyCode@11123307 : Code[10];
+    BEGIN
+      IF Params.CurrentCurrencyId <> '' THEN BEGIN
+        CurrencyCode := GetCustomerCurrencyCode(Params);
+
+        IF (CurrencyCode <> '') AND (Params.CurrentCurrencyId <> CurrencyCode) THEN
+          CurrencyCode := Params.CurrentCurrencyId;
+
+        IF (CurrencyCode = '') AND (Params.CurrentCurrencyId <> SettingsFunctions.GetDefaultCurrencyGLSetup) THEN
+          CurrencyCode := Params.CurrentCurrencyId;
+
+        IF RecMgt.GetCurrency(CurrencyCode,Currency,FALSE) THEN BEGIN
+          SalesHeader."Currency Code" := Currency.Code;
+          SalesHeader."Currency Factor" := CurrExchRate.ExchangeRate(WORKDATE,Currency.Code);
+        END ELSE BEGIN
+          SalesHeader."Currency Code" := '';
+          SalesHeader."Currency Factor" := 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE GetCustomerCurrencyCode@11123311(VAR Params@11123302 : Record 11123310) : Code[10];
+    VAR
+      Customer@11123303 : Record 18;
+      RecMgt@11123306 : Codeunit 11123326;
+      CustomerFunc@11123304 : Codeunit 11123313;
+    BEGIN
+      IF CustomerFunc.IsAccountCustomer(Params.AccountType) THEN BEGIN
+        RecMgt.GetCustomer(Params.AccountId,Customer,TRUE);
+        EXIT(CustomerFunc.GetCustomerCurrency(Customer));
+      END;
+    END;
+
+    PROCEDURE SetMaxExpiredDate@11123369(VAR SalesHeader@11123302 : Record 36;VAR Params@11123303 : Record 11123310);
+    BEGIN
+      IF Params.MaxExpirationDate = 0D THEN
+        EXIT;
+
+      IF SalesHeader."Due Date" = 0D THEN
+        SalesHeader.VALIDATE("Due Date",Params.MaxExpirationDate);
+      IF Params.MaxExpirationDate < SalesHeader."Due Date" THEN
+        SalesHeader.VALIDATE("Due Date",Params.MaxExpirationDate);
+    END;
+
+    PROCEDURE AddBasketSalesLines@11123315(VAR InXMLBuff@11123302 : Record 11123303;VAR ResultNodeBuff@11123303 : Record 11123303;VAR ResultCollectionNodeBuff@11123304 : Record 11123303;VAR SalesHeader@11123305 : Record 36;VAR SalesLine@11123307 : Record 37;VAR Params@11123306 : Record 11123310);
+    VAR
+      Variant@11123309 : Record 5401;
+      EventMgt@11123319 : Codeunit 11123331;
+      SalesLineNodesBuff@11123313 : TEMPORARY Record 11123303;
+      ItemDescription@11123322 : Text[1024];
+      PreviousItemNo@11123318 : Code[50];
+      PrepackCodeToInventory@11123326 : Boolean;
+      CanBeOrdered@11123327 : Boolean;
+      PrepackHasVariants@11123328 : Boolean;
+      Prepack@11123329 : Boolean;
+    BEGIN
+      ResultNodeBuff.AddElement(NotInStockLinesBuffGlobal,'NotInStockLines','');
+      ResultNodeBuff.AddElement(DecrQtyLinesBuffGlobal,'DecreasedQuantityLines','');
+      ResultNodeBuff.AddElement(NonOrderableLinesBuffGlobal,'NonOrderableLines','');
+
+      InXMLBuff.SelectNodes(Text11123309,SalesLineNodesBuff);
+
+      IF Params.Wishlist THEN
+        Params.CheckStock := FALSE;
+
+      PrepackCodeToInventory := IsPrepackCodeToInventory;
+
+      WHILE SalesLineNodesBuff.NextNode DO BEGIN
+        Params.InitLineFieldValues(SalesLineNodesBuff);
+
+        GetLineNoMatrixSubline(
+          SalesLine,SalesHeader."Document Type",SalesHeader."No.",
+          Params,LineNoGlobal,MatrixLineNoGlobal,SubLineGlobal);
+
+        CLEAR(SalesLine);
+
+        EventMgt.OnBeforeAddDocumentLine(SalesLine,Params);
+
+        CASE Params.LineType OF
+          'item' :
+            BEGIN
+              Prepack := Params.PrepackId <> '';
+              IF Prepack THEN
+                PrepackHasVariants := PrepackHasVariantsByCode(Params.PrepackId,Params.ProductId)
+              ELSE
+                PrepackHasVariants := TRUE;
+
+              IF Prepack AND (NOT PrepackHasVariants) THEN
+                CanBeOrdered := IsPrepackOrderable(
+                  Params.ProductId,ItemDescription,Params.VariantId,
+                  PrepackCodeToInventory,Params.PrepackId,Params)
+              ELSE
+                CanBeOrdered := IsProductOrderable(ItemDescription,Params);
+
+              IF CanBeOrdered THEN BEGIN
+                IF IsTempSalesHeader(SalesHeader) THEN
+                  SetTemporarySalesHeader(SalesLine,TRUE);
+
+                InsertSalesLine(SalesHeader,SalesLine,Params);
+                ProcessSalesLine(SalesHeader,SalesLine,Params,PrepackHasVariants);
+              END ELSE BEGIN
+                AddNonOrderableLine(NonOrderableLinesBuffGlobal,ItemDescription,Params,Params.VariantId);
+              END;
+            END;
+          'paymentcosts','shippingcosts' :
+            IF NOT Params.Wishlist THEN
+              AddSpecialCostLine(
+                SalesHeader,SalesLine,LineNoGlobal,
+                GetSpecialCostLineType(Params.LineType),
+                Params);
+          'promotioncode' :
+            IF NOT Params.Wishlist THEN
+              ReadPromotionLineFromXML(SalesHeader,Params);
+        END;
+        AutoSaveLineFields(SalesLine,SalesLineNodesBuff);
+
+        EventMgt.OnAfterAddDocumentLine(SalesLine,Params);
+
+        IF PreviousItemNo <> Params.ProductId THEN BEGIN
+          InsertExtendedText(SalesHeader,SalesLine,Params);
+          PreviousItemNo := Params.ProductId;
+        END;
+      END;
+    END;
+
+    PROCEDURE IsProductOrderable@11123316(VAR ItemDescription@11123303 : Text[250];VAR Params@11123302 : Record 11123310) : Boolean;
+    VAR
+      Item@11123309 : Record 27;
+      TempItem@11123310 : TEMPORARY Record 27;
+      ItemVariant@11123308 : Record 5401;
+      CatalogHelper@11123307 : Codeunit 11123318;
+      FilterHelper@11123306 : Codeunit 11123321;
+      RecMgt@11123305 : Codeunit 11123326;
+      UOMCode@11123311 : Code[10];
+      ReturnValue@11123304 : Boolean;
+    BEGIN
+      ReturnValue := TRUE;
+
+      FilterHelper.SetItemWebshopFilter(Item,Params);
+      Item.SETRANGE("No.",Params.ProductId);
+      IF Item.FINDFIRST THEN BEGIN
+        ItemDescription := CatalogHelper.GetProductDescription(Item,1,Params.LanguageId);
+        TempItem := Item;
+        UOMCode := Params.UnitOfMeasureId;
+        IF UOMCode = '' THEN
+          UOMCode := CatalogHelper.GetItemUOM(TempItem);
+
+        TempItem."Sales Unit of Measure" := UOMCode;
+
+        IF ValidItem(TempItem,Params) THEN BEGIN
+          IF Params.VariantId <> '' THEN BEGIN
+            IF NOT RecMgt.GetItemVariant(Params.ProductId,Params.VariantId,ItemVariant,FALSE) OR
+               NOT ItemVariant."Visible in Webshop"
+            THEN BEGIN
+              ItemDescription := STRSUBSTNO('%1(%2)',ItemDescription,Params.VariantId);
+              ReturnValue := FALSE;
+            END;
+          END;
+        END ELSE
+          ReturnValue := FALSE;
+      END ELSE BEGIN
+        ItemDescription := Params.ProductId;
+        ReturnValue := FALSE;
+      END;
+      EXIT(ReturnValue);
+    END;
+
+    PROCEDURE CreateBasketLinesXMLResponse@11123317(VAR ResultCollectionNodebuff@11123304 : Record 11123303;SalesHeader@11123302 : Record 36;VAR SalesLine@11123308 : Record 37;VAR Params@11123303 : Record 11123310);
+    VAR
+      Item@11123306 : Record 27;
+      VariantRec@11123307 : Record 5401;
+      CollectionNodeBuff@11123314 : TEMPORARY Record 11123303;
+      CatalogHelper@11123311 : Codeunit 11123318;
+      OrderFunc@11123313 : Codeunit 11123319;
+      EventMgt@11123323 : Codeunit 11123331;
+      SettingsFunctions@11123325 : Codeunit 11123311;
+      RecRef@11123324 : RecordRef;
+      SalesLineTitle@11123315 : Text[1024];
+      SortID@11123316 : Text[1024];
+      IsNonEditableItem@11123322 : Text[1024];
+      UnitOfMeasureDescription@11123305 : Text[1024];
+      ProductTitle@11123310 : Text[1024];
+      DiscountAmount@11123309 : Decimal;
+      Price@11123312 : Decimal;
+      Prepack@11123319 : Boolean;
+      PrepackHasVariants@11123320 : Boolean;
+      PrepackCodeToInventory@11123321 : Boolean;
+    BEGIN
+      PrepackCodeToInventory := IsPrepackCodeToInventory;
+      WITH SalesLine DO BEGIN
+        IF FINDSET THEN
+          REPEAT
+            RecRef.GETTABLE(SalesLine);
+
+            ResultCollectionNodebuff.AddElement(CollectionNodeBuff,'SalesLine','');
+            CollectionNodeBuff.AddFieldElement('LineNo',FORMAT("Line No."));
+
+            OrderFunc.AddProdNoVarCodeAttachNoToXML(RecRef,CollectionNodeBuff);
+            OrderFunc.AddSalesLineTitleToXML(CollectionNodeBuff,Params,"No.","Variant Code",Description,RecRef);
+
+            CollectionNodeBuff.AddFieldElement('ServiceChargeId',OrderFunc.GetServiceChargeCode(RecRef));
+
+            IF Type = Type::" " THEN
+              CollectionNodeBuff.AddFieldElement('Quantity','1')
+            ELSE
+              CollectionNodeBuff.AddFieldElement('Quantity',FORMAT(Quantity));
+            Price := SettingsFunctions.RoundPrice("Unit Price",SalesHeader."Currency Code");
+            CollectionNodeBuff.AddFieldElement('Price',FORMAT(Price));
+
+            CollectionNodeBuff.AddFieldElement('TaxPercent',FORMAT("VAT %"));
+            DiscountAmount := SettingsFunctions.RoundPrice("Line Discount Amount",SalesHeader."Currency Code");
+            CollectionNodeBuff.AddFieldElement('DiscountAmount',FORMAT(DiscountAmount));
+            CollectionNodeBuff.AddFieldElement('DiscountPercent',FORMAT("Line Discount %"));
+            CollectionNodeBuff.AddFieldElement('LineAmount',FORMAT("Line Amount"));
+
+            SortID := '0';
+
+            IF Prepack AND (NOT PrepackCodeToInventory) THEN
+              IsNonEditableItem := '1'
+            ELSE
+              IsNonEditableItem := FORMAT(OrderFunc.IsReadOnlyLine(RecRef),0,2);
+
+            IF IsNonEditableItem = '1' THEN
+              SortID := '0';
+            UnitOfMeasureDescription := CatalogHelper.GetUOMDescription("Unit of Measure Code",Params.LanguageId);
+            CollectionNodeBuff.AddFieldElement('IsReadOnlyLine',IsNonEditableItem);
+            CollectionNodeBuff.AddFieldElement('SortId',SortID);
+            CollectionNodeBuff.AddFieldElement('LineType',OrderFunc.GetLineType(RecRef));
+            CollectionNodeBuff.AddFieldElement('UnitOfMeasureId',"Unit of Measure Code");
+            CollectionNodeBuff.AddFieldElement('UnitOfMeasureDescription',UnitOfMeasureDescription);
+            AddPhysicalDimensions(CollectionNodeBuff,SalesLine);
+
+            EventMgt.OnGetSalesLine(CollectionNodeBuff,SalesLine,Params);
+
+            RecRef.CLOSE;
+          UNTIL NEXT = 0;
+      END;
+
+      OrderFunc.AddPromotionLineToXML(ResultCollectionNodebuff,SalesHeader);
+    END;
+
+    PROCEDURE IsPrepackOrderable@11123398(ItemNo@11123302 : Code[20];VAR ItemDescription@11123303 : Text[1024];VariantCode@11123304 : Code[10];IsPrepackToInv@11123305 : Boolean;PrepackCode@11123306 : Code[10];VAR Params@11123307 : Record 11123310) : Boolean;
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE PrepackHasVariantsByCode@11123399(PrepackCode@11123302 : Code[10];ItemNo@11123303 : Code[20]) : Boolean;
+    VAR
+      Variant@11123304 : Record 5401;
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE AddBasePrepackLine@11123320(VAR ResultCollectionNodeBuff@11123302 : Record 11123303;VAR SalesLine@11123303 : Record 37;PrepackHasVariants@11123305 : Boolean;VAR Params@11123306 : Record 11123310);
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE SalesLineExists@11123321(DocumentType@11123302 : Integer;DocumentNo@11123303 : Code[20];LineNo@11123304 : Integer) : Boolean;
+    VAR
+      SalesLine@11123305 : Record 37;
+    BEGIN
+      SalesLine.SETCURRENTKEY("Document No.","Line No.","Document Type");
+      SalesLine.SETRANGE("Document No.",DocumentNo);
+      SalesLine.SETRANGE("Line No.",LineNo);
+      SalesLine.SETRANGE("Document Type",DocumentType);
+      EXIT(NOT SalesLine.ISEMPTY);
+    END;
+
+    PROCEDURE CheckStock@11123322(VAR NotInStockLinesBuff@11123310 : Record 11123303;VAR DecrQtyLinesBuff@11123309 : Record 11123303;VAR SalesLine@11123306 : Record 37;VAR Params@11123303 : Record 11123310) : Boolean;
+    VAR
+      Item@11123316 : Record 27;
+      NotInStockLineBuff@11123315 : TEMPORARY Record 11123303;
+      DecrQtyLineBuff@11123314 : TEMPORARY Record 11123303;
+      RecMgt@11123313 : Codeunit 11123326;
+      Dispatcher@11123312 : Codeunit 11123306;
+      CatalogHelper@11123311 : Codeunit 11123318;
+      ActualInventory@11123308 : Decimal;
+      QtyPerUOM@11123307 : Decimal;
+      OrderedQnty@11123305 : Decimal;
+      Result@11123304 : Boolean;
+    BEGIN
+      Result := TRUE;
+
+      IF NOT Params.CheckStock THEN
+        EXIT(Result);
+
+      RecMgt.GetItem(Params.ProductId,Item,TRUE);
+
+      QtyPerUOM := CatalogHelper.GetQtyPerItemUOM(Item."No.",Params.UnitOfMeasureId);
+
+      IF Params.VariantId <> '' THEN
+        Dispatcher.DispatchInternal('GetAvailableStockForVariant',Params)
+      ELSE
+        Dispatcher.DispatchInternal('GetAvailableStockForItem',Params);
+
+      ActualInventory := Params.Inventory;
+
+      IF SalesLine."Document Type" <> SalesLine."Document Type"::Order THEN BEGIN
+        OrderedQnty := GetOrderedQnty(SalesLine."No.",SalesLine."Variant Code");
+        OrderedQnty := ROUND(OrderedQnty / QtyPerUOM,0.00001);
+        ActualInventory := ActualInventory - OrderedQnty;
+      END;
+
+      IF Params.QuantityPrecision <> 0 THEN
+        ActualInventory := (ActualInventory DIV Params.QuantityPrecision) * Params.QuantityPrecision
+      ELSE
+        IF (ActualInventory > 0) AND (QtyPerUOM > 1) THEN
+          ActualInventory := ROUND(ActualInventory,1,'<');
+
+      IF ActualInventory <= 0 THEN BEGIN
+        NotInStockLinesBuff.AddElement(NotInStockLineBuff,'Line','');
+        NotInStockLineBuff.AddFieldElement('Description',CreateNonOrderableProductTitle(Params));
+        NotInStockLineBuff.AddFieldElement('ProductId',SalesLine."No.");
+        NotInStockLineBuff.AddFieldElement('VariantId',SalesLine."Variant Code");
+        NotInStockLineBuff.AddFieldElement('UnitOfMeasureId',Params.UnitOfMeasureId);
+        NotInStockLineBuff.AddFieldElement('CouponId','');
+        Result := FALSE;
+      END ELSE
+        IF ActualInventory < Params.Quantity THEN BEGIN
+          Params.Quantity := ActualInventory;
+          DecrQtyLinesBuff.AddElement(DecrQtyLineBuff,'Line','');
+          DecrQtyLineBuff.AddFieldElement('Description',CreateNonOrderableProductTitle(Params));
+          DecrQtyLineBuff.AddFieldElement('ProductId',SalesLine."No.");
+          DecrQtyLineBuff.AddFieldElement('VariantId',SalesLine."Variant Code");
+          DecrQtyLineBuff.AddFieldElement('UnitOfMeasureId',Params.UnitOfMeasureId);
+          DecrQtyLineBuff.AddFieldElement('CouponId','');
+        END;
+
+      IF SalesLine."Document Type" <> SalesLine."Document Type"::Order THEN BEGIN
+        OrderedQnty := Params.Quantity * QtyPerUOM;
+        UpdateOrderedQnty(SalesLine."No.",SalesLine."Variant Code",OrderedQnty);
+      END;
+
+      EXIT(Result);
+    END;
+
+    LOCAL PROCEDURE CalcPrepackInventory@11123323(Item@11123302 : Record 27;SalesLine@11123303 : Record 37;OrderedQnty@11123304 : Decimal;VAR Params@11123305 : Record 11123310) : Decimal;
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE TestAccountCodeAndType@11123324(VAR Params@11123302 : Record 11123310);
+    VAR
+      AccountId@11123303 : Integer;
+    BEGIN
+      IF (Params.AccountId = '') OR (Params.AccountId = '0') THEN
+        ERROR(Text11123303);
+    END;
+
+    PROCEDURE CalcPrepackVariantInventory@11123325(PrepackVariant@11123302 : Record 5401;Item@11123303 : Record 27;PrepackOrderedQnty@11123304 : Decimal;VAR Params@11123305 : Record 11123310) : Decimal;
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    LOCAL PROCEDURE CalcItemVariantInventory@11123326(ItemNo@11123302 : Code[20];VariantCode@11123303 : Code[10];VAR Params@11123304 : Record 11123310) : Decimal;
+    VAR
+      CatalogHelper@11123305 : Codeunit 11123318;
+      ItemVariantInventory@11123306 : Decimal;
+      ItemVariantActualInventory@11123307 : Decimal;
+    BEGIN
+      IF VariantCode <> '' THEN
+        CatalogHelper.GetAvailableStockForVariant(Params)
+      ELSE
+        CatalogHelper.GetAvailableStockForItem(Params);
+
+      ItemVariantInventory := Params.Inventory;
+
+      ItemVariantActualInventory := ItemVariantInventory - GetOrderedQnty(ItemNo,VariantCode);
+      EXIT(ItemVariantActualInventory);
+    END;
+
+    PROCEDURE UpdateOrderedQnty@11123327(ItemNo@11123302 : Code[20];VariantCode@11123303 : Code[10];OrderedQnty@11123304 : Decimal);
+    BEGIN
+      WITH TempOrderedQntyBufferGlobal DO BEGIN
+        RESET;
+        SETCURRENTKEY("Document Type",Type,"No.","Variant Code");
+        SETRANGE("No.",ItemNo);
+        SETRANGE("Variant Code",VariantCode);
+        IF FINDFIRST THEN BEGIN
+          Quantity := Quantity + OrderedQnty;
+          MODIFY;
+        END ELSE BEGIN
+          LineNoGlobalForUpdate := LineNoGlobalForUpdate + 10000;
+          INIT;
+          "Line No." := LineNoGlobalForUpdate;
+          "No." := ItemNo;
+          "Variant Code" := VariantCode;
+          Quantity := OrderedQnty;
+          INSERT;
+        END;
+      END;
+    END;
+
+    PROCEDURE GetOrderedQnty@11123328(ItemNo@11123302 : Code[20];VariantCode@11123303 : Code[10]) : Decimal;
+    VAR
+      Qnty@11123304 : Decimal;
+    BEGIN
+      WITH TempOrderedQntyBufferGlobal DO BEGIN
+        RESET;
+        SETCURRENTKEY("Document Type",Type,"No.","Variant Code");
+        SETRANGE("No.",ItemNo);
+        SETRANGE("Variant Code",VariantCode);
+        IF FINDFIRST THEN
+          Qnty := Quantity;
+      END;
+      EXIT(Qnty);
+    END;
+
+    PROCEDURE UpdatePaymentStatus@11123329(VAR SalesHeader@11123302 : Record 36;VAR Params@11123303 : Record 11123310);
+    VAR
+      Webshop@11123304 : Record 11123313;
+      SalesDocHeader@11123305 : Record 11123323;
+      OrderFunc@11123306 : Codeunit 11123319;
+      RecMgt@11123307 : Codeunit 11123326;
+    BEGIN
+      IF (Params.PaymentMethodName = '') AND (Params.PaymentStatus IN ['undefined','unpaid'])  THEN
+        EXIT;
+
+      IF NOT OrderFunc.FindSalesDocHeader36(SalesHeader,SalesDocHeader) THEN
+        OrderFunc.InsertSalesDocHeader36(SalesHeader,SalesDocHeader);
+
+      WITH SalesDocHeader DO BEGIN
+        IF ("Payment Method Name" <> Params.PaymentMethodName) AND
+         (Params.PaymentMethodName <> '')
+      THEN
+          "Payment Method Name" := Params.PaymentMethodName;
+
+        IF ("Payment Method Status" <> Params.PaymentStatus) AND
+         (Params.PaymentStatus <> '')
+      THEN
+          "Payment Method Status" := Params.PaymentStatus;
+
+        IF ("Payment Transaction Id" <> Params.PaymentTransactionId) AND
+         (Params.PaymentTransactionId <> '')
+      THEN
+          "Payment Transaction Id" := Params.PaymentTransactionId;
+
+        MODIFY(TRUE);
+      END;
+
+      RecMgt.GetWebshop(Params.WebsiteId,Webshop,TRUE);
+      IF Webshop."Payment Method Code" <> '' THEN
+        SalesHeader.VALIDATE("Payment Method Code",Webshop."Payment Method Code");
+    END;
+
+    PROCEDURE CreateNonOrderableProductTitle@11123330(VAR Params@11123302 : Record 11123310) : Text[1024];
+    VAR
+      CatalogHelper@11123303 : Codeunit 11123318;
+      ItemDescription@11123305 : Text[1024];
+      VariantDescription@11123304 : Text[1024];
+      UOMDescription@11123307 : Text[1024];
+      SalesLineTitle@11123306 : Text[1024];
+    BEGIN
+      ItemDescription :=
+        CatalogHelper.GetProductOrVariantDescription(Params.ProductId,'',Params);
+
+      IF Params.VariantId <> ''  THEN BEGIN
+        VariantDescription :=
+          CatalogHelper.GetProductOrVariantDescription(Params.ProductId,Params.VariantId,Params);
+      END;
+
+      IF VariantDescription = '' THEN
+        SalesLineTitle := ItemDescription
+      ELSE
+        SalesLineTitle := STRSUBSTNO('%1 - %2',ItemDescription,VariantDescription);
+
+      UOMDescription := CatalogHelper.GetUOMDescription(Params.UnitOfMeasureId,Params.LanguageId);
+      IF UOMDescription <> '' THEN
+        SalesLineTitle := STRSUBSTNO('%1 - %2',SalesLineTitle,UOMDescription);
+
+      EXIT(ItemDescription);
+    END;
+
+    PROCEDURE AddSpecialCostLine@11123331(VAR SalesHeader@11123302 : Record 36;VAR SalesLine@11123303 : Record 37;LineNo@11123305 : Integer;SpecialCostLineType@11123306 : ' ,Payment Cost,Shipping Cost';VAR Params@11123307 : Record 11123310);
+    VAR
+      Webshop@11123308 : Record 11123313;
+      SalesDocLine@11123315 : Record 11123325;
+      Customer@11123318 : Record 18;
+      OrderFunc@11123316 : Codeunit 11123319;
+      RecMgt@11123319 : Codeunit 11123326;
+      LineTitle@11123310 : Text[1024];
+      LinePrice@11123311 : Decimal;
+      LinePrepaymentPct@11123314 : Decimal;
+      LineType@11123312 : Integer;
+      LineItemNo@11123313 : Code[20];
+      SalesDocLineExists@11123317 : Boolean;
+    BEGIN
+      IF Params.Price <> 0 THEN
+        LinePrice := Params.Price;
+
+      IF (LinePrice <= 0) AND (SpecialCostLineType = SpecialCostLineType::"Payment Cost") THEN
+        EXIT;
+
+      RecMgt.GetWebshop(Params.WebsiteId,Webshop,TRUE);
+      TestWebshop(Webshop,TRUE);
+
+      CASE SpecialCostLineType OF
+        SpecialCostLineType::"Payment Cost" :
+          BEGIN
+            LineType := Webshop."Payment Cost Type";
+            LineItemNo := Webshop."Payment Cost No.";
+          END;
+        SpecialCostLineType::"Shipping Cost" :
+          BEGIN
+            LineType := Webshop."Shipping Cost Type";
+            LineItemNo := Webshop."Shipping Cost No.";
+          END;
+      END;
+
+      IF NOT Params.SkipCalculations AND
+        (Params.B2bOnlinePayments = 'Prepayment') AND
+        (SpecialCostLineType = SpecialCostLineType::"Payment Cost") AND
+        (SalesHeader."Document Type" = SalesHeader."Document Type"::Order)
+      THEN BEGIN
+        RecMgt.GetCustomer(SalesHeader."Sell-to Customer No.",Customer,TRUE);
+        IF NOT Customer."B2C Customer" THEN
+          LinePrepaymentPct := 100;
+      END;
+
+      IF Params.Title <> '' THEN
+        LineTitle := COPYSTR(Params.Title,1,MAXSTRLEN(LineTitle));
+
+      SalesLine.INIT;
+      SalesLine.SetSalesHeader(SalesHeader);
+      IF IsTempSalesHeader(SalesHeader) THEN
+      SetTemporarySalesHeader(SalesLine,TRUE);
+      SetSuppressCheckItmeAvail(SalesLine,TRUE);
+      SetSuppressUpdateUnitPrice(SalesLine,TRUE);
+      SalesLine."Document Type" := SalesHeader."Document Type";
+      SalesLine."Document No." := SalesHeader."No.";
+      SalesLine."Line No." := LineNo;
+      SalesLine.VALIDATE(Type,LineType);
+      SalesLine.VALIDATE("No.",LineItemNo);
+      SalesLine.VALIDATE("Allow Invoice Disc.",FALSE);
+      SalesLine."Allow Line Disc." := FALSE;
+      SalesLine.Description := LineTitle;
+      SalesLine."Unit Price" := LinePrice;
+      SetSuppressUpdateUnitPrice(SalesLine,FALSE);
+      SalesLine.VALIDATE(Quantity,1);
+      IF SpecialCostLineType = SpecialCostLineType::"Payment Cost" THEN
+        SalesLine.VALIDATE("Prepayment %",LinePrepaymentPct);
+      SalesLine.INSERT(TRUE);
+
+      SalesDocLineExists := OrderFunc.FindSalesDocLine37(SalesLine,SalesDocLine);
+      SalesDocLine."Special Cost Line Type" := SpecialCostLineType;
+      IF SalesDocLineExists THEN
+        SalesDocLine.MODIFY(TRUE)
+      ELSE BEGIN
+        SalesDocLine."Document No." := SalesLine."Document No.";
+        SalesDocLine."Document Type" := SalesLine."Document Type";
+        SalesDocLine."Line No." := SalesLine."Line No.";
+        SalesDocLine."Unique Line Id" := Params.LineId;
+        SalesDocLine.INSERT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE SanaOrderExists@11123332(VAR SalesHeader@11123302 : Record 36;VAR Params@11123303 : Record 11123310) : Boolean;
+    VAR
+      SalesDocHeader@11123304 : Record 11123323;
+    BEGIN
+      IF Params.SanaOrderId = '' THEN
+        EXIT;
+
+      WITH SalesDocHeader DO BEGIN
+        RESET;
+        CASE Params.DocumentType OF
+          'Order' :
+          SETRANGE("Document Type","Document Type"::Order);
+          'Invoice' :
+            SETRANGE("Document Type","Document Type"::Invoice);
+          'PromotableQuote','Quote' :
+            SETRANGE("Document Type","Document Type"::Quote);
+          'CreditNote' :
+            SETRANGE("Document Type","Document Type"::"Credit Memo");
+          'ReturnOrder' :
+            SETRANGE("Document Type","Document Type"::"Return Order");
+        ELSE
+          ERROR(Text11123302,Params.DocumentType);
+        END;
+
+        SETRANGE("Sana Order No.",Params.SanaOrderId);
+
+        IF FINDFIRST THEN BEGIN
+          SalesHeader.SETRANGE("Document Type","Document Type");
+          SalesHeader.SETRANGE("No.","Document No.");
+          EXIT(NOT SalesHeader.ISEMPTY);
+        END;
+      END;
+    END;
+
+    PROCEDURE ReadPromotionLineFromXML@11123334(SalesHeader@11123302 : Record 36;VAR Params@11123305 : Record 11123310);
+    VAR
+      SalesDocHeader@11123308 : Record 11123323;
+      OrderFunc@11123309 : Codeunit 11123319;
+      DecimalVar@11123307 : Decimal;
+    BEGIN
+      IF NOT OrderFunc.FindSalesDocHeader36(SalesHeader,SalesDocHeader) THEN
+        OrderFunc.InsertSalesDocHeader36(SalesHeader,SalesDocHeader);
+
+      IF Params.Basket THEN
+        SalesDocHeader.BasketCalculation(TRUE);
+
+      SalesDocHeader."Promotion Type" := SalesDocHeader."Promotion Type"::Promotion;
+      SalesDocHeader.VALIDATE("Promotion Code",Params.ProductId);
+
+      IF Params.Title <> '' THEN
+        SalesDocHeader.VALIDATE("Promotion Title",COPYSTR(Params.Title,1,MAXSTRLEN(SalesDocHeader."Promotion Title")));
+
+      IF Params.DiscountType <> '' THEN
+        CASE Params.DiscountType OF
+          'FixedAmount' :
+            SalesDocHeader."Promotion Discount Type" := SalesDocHeader."Promotion Discount Type"::"Fixed Amount";
+          'Percentage':
+            SalesDocHeader."Promotion Discount Type" := SalesDocHeader."Promotion Discount Type"::Percentage;
+        END;
+
+      IF Params.DiscountValue <> 0 THEN
+        DecimalVar := Params.DiscountValue;
+
+      IF SalesDocHeader."Promotion Discount Type" = SalesDocHeader."Promotion Discount Type"::Percentage THEN
+        DecimalVar := DecimalVar * 100;
+      SalesDocHeader."Promotion Discount Value" := DecimalVar;
+
+      IF Params.SkipCalculations THEN BEGIN
+        IF Params.Price <> 0 THEN
+          SalesDocHeader."Promotion Discount Amount" := -Params.Price;
+      END;
+      SalesDocHeader.MODIFY(TRUE);
+    END;
+
+    PROCEDURE AddPfsLocalizedDescriptions@11123335(VAR NodeBuff@11123302 : Record 11123303;SalesLine@11123304 : Record 37;NormalSalesLine@11123305 : Boolean;VAR Params@1000000000 : Record 11123310);
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE IsPrepackCodeToInventory@11123336() : Boolean;
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE InsertSalesHeader@11123337(VAR SalesHeader@11123302 : Record 36;Basket@11123303 : Boolean;VAR Params@11123304 : Record 11123310);
+    VAR
+      SalesDocHeader@11123306 : Record 11123323;
+      NoSeriesMgt@11123307 : Codeunit 396;
+      EventMgt@11123305 : Codeunit 11123331;
+      WebshopNoSeries@11123308 : Code[10];
+    BEGIN
+      TestAccountCodeAndType(Params);
+
+      SalesHeader.INIT;
+      SalesHeader.SetHideValidationDialog(TRUE);
+      SalesHeader."Document Type" := GetDocumentType(Params);
+      IF Basket THEN BEGIN
+        SalesHeader."No." := COPYSTR(FORMAT(CREATEGUID),2,20);
+        Params.DocumentState := SalesDocHeader."Document State"::Basket;
+      END ELSE BEGIN
+        WebshopNoSeries := GetNoSeriesCode(SalesHeader,Params);
+      END;
+
+      SalesHeader."Unique Webshop Document Id" := CREATEGUID;
+
+      IF WebshopNoSeries <> '' THEN
+        NoSeriesMgt.InitSeries(WebshopNoSeries,'',SalesHeader."Posting Date",SalesHeader."No.",SalesHeader."No. Series");
+
+      // <TPZ1301>
+      //SalesHeader."Shortcut Dimension 5 Code" := 'E'; //<TPZ2503>
+      // </TPZ1301>
+      SalesHeader."Shortcut Dimension 5 Code" := Params.Division;//<TPZ2503>
+      SalesHeader.IspickupOrder := Params.IsPickupOrder;//TPZ3154>
+
+      EventMgt.OnInitDocument(SalesHeader,Params);
+
+      SalesHeader.INSERT(TRUE);
+
+      Params.DocumentId := SalesHeader."No.";
+      IF Params.Wishlist THEN
+        Params.DocumentState := SalesDocHeader."Document State"::"Wish List";
+    END;
+
+    PROCEDURE GetNoSeriesCode@9(VAR SalesHeader@11123302 : Record 36;VAR Params@11123303 : Record 11123310) : Code[10];
+    VAR
+      RecMgt@11123305 : Codeunit 11123326;
+      Webshop@11123304 : Record 11123313;
+    BEGIN
+      RecMgt.GetWebshop(Params.WebsiteId,Webshop,TRUE);
+
+      CASE SalesHeader."Document Type" OF
+        SalesHeader."Document Type"::Quote:
+          EXIT(Webshop."Quote Nos.");
+        SalesHeader."Document Type"::Order:
+          EXIT(Webshop."Order Nos.");
+        SalesHeader."Document Type"::"Return Order":
+          EXIT('');
+      END;
+    END;
+
+    PROCEDURE GetDocumentType@11123340(VAR Params@11123303 : Record 11123310) : Integer;
+    VAR
+      TempSalesHeader@11123302 : TEMPORARY Record 36;
+    BEGIN
+      IF Params.DocumentType = 'ReturnOrder' THEN
+        EXIT(TempSalesHeader."Document Type"::"Return Order");
+
+      IF (Params.DocumentType IN ['Quote','PromotableQuote']) OR (Params.AccountType = 'Contact') THEN
+        TempSalesHeader."Document Type" := TempSalesHeader."Document Type"::Quote
+      ELSE
+        TempSalesHeader."Document Type" := TempSalesHeader."Document Type"::Order;
+
+      EXIT(TempSalesHeader."Document Type");
+    END;
+
+    PROCEDURE GetSpecialCostLineType@11123341(LineType@11123302 : Text[1024]) : Integer;
+    VAR
+      SpecialCostLineType@11123303 : ' ,Payment Cost,Shipping Cost';
+    BEGIN
+      CASE LineType OF
+        'paymentcosts' : EXIT(SpecialCostLineType::"Payment Cost");
+        'shippingcosts' : EXIT(SpecialCostLineType::"Shipping Cost");
+      END;
+    END;
+
+    PROCEDURE AutoReserve@11123342(SalesLine@11123302 : Record 37);
+    VAR
+      ReserveSalesLine@11123303 : Codeunit 99000832;
+      ReservMgt@11123304 : Codeunit 99000845;
+      QtyToReserve@11123306 : Decimal;
+      QtyToReserveBase@11123307 : Decimal;
+      DummyFullAutoReservation@11123305 : Boolean;
+    BEGIN
+      IF SalesLine.Reserve <> SalesLine.Reserve::Always THEN
+        EXIT;
+
+        ReserveSalesLine.ReservQuantity(SalesLine,QtyToReserve,QtyToReserveBase);
+        IF (QtyToReserve <> 0) AND (SalesLine."Shipment Date" <> 0D) THEN BEGIN
+          ReservMgt.SetSalesLine(SalesLine);
+          ReservMgt.AutoReserve(DummyFullAutoReservation,'',SalesLine."Shipment Date",QtyToReserve,QtyToReserveBase);
+        END;
+    END;
+
+    PROCEDURE TryDeleteSalesLines@11123343(SalesHeader@11123305 : Record 36;CommitWriteTranBeforeExecute@11123304 : Boolean;VAR Params@11123303 : Record 11123310);
+    VAR
+      CalcMgt@11123302 : Codeunit 11123325;
+    BEGIN
+      IF CommitWriteTranBeforeExecute THEN
+        COMMIT;
+
+      Params.CalcFunction := 'DeleteSalesLines';
+
+      IF NOT CalcMgt.RUN(Params) THEN BEGIN
+        CalcMgt.GetError(Params);
+        ERROR(
+          Text11123307,
+          SalesHeader."Document Type",
+          SalesHeader."No.",
+          Params.AccountType,
+          SalesHeader."Sell-to Customer No.",
+          Params.CalcErrorText);
+      END;
+    END;
+
+    PROCEDURE TestWebshop@11123347(Webshop@11123303 : Record 11123313;ShowError@11123302 : Boolean) : Boolean;
+    VAR
+      RecRef@11123307 : RecordRef;
+      Validation@11123306 : Codeunit 11123310;
+      TestSucceed@11123305 : Boolean;
+      ErrorText@11123304 : Text[250];
+    BEGIN
+      RecRef.GETTABLE(Webshop);
+      TestSucceed := Validation.RunValidationTests(RecRef,ErrorText);
+      IF NOT TestSucceed AND ShowError THEN
+        ERROR(ErrorText);
+      EXIT(TestSucceed);
+    END;
+
+    PROCEDURE TestSalesHeader@11123348(SalesHeader@11123303 : Record 36;ShowError@11123302 : Boolean) : Boolean;
+    VAR
+      RecRef@11123307 : RecordRef;
+      Validation@11123306 : Codeunit 11123310;
+      TestSucceed@11123305 : Boolean;
+      ErrorText@11123304 : Text[250];
+    BEGIN
+      RecRef.GETTABLE(SalesHeader);
+      TestSucceed := Validation.RunValidationTests(RecRef,ErrorText);
+      IF NOT TestSucceed AND ShowError THEN
+        ERROR(ErrorText);
+      EXIT(TestSucceed);
+    END;
+
+    PROCEDURE AddOrderImportInfo@11123344(SalesHeader@11123302 : Record 36;VAR Params@11123303 : Record 11123310);
+    VAR
+      OrderImportInfo@11123304 : Record 11123314;
+      SalesDocHeader@11123305 : Record 11123323;
+      OrderFunc@11123306 : Codeunit 11123319;
+    BEGIN
+      OrderFunc.FindSalesDocHeader36(SalesHeader,SalesDocHeader);
+      IF SalesDocHeader."Sana Order No." <> '' THEN
+        IF NOT OrderImportInfo.GET(SalesHeader."Document Type",SalesHeader."No.") THEN BEGIN
+          OrderImportInfo.INIT;
+          OrderImportInfo."Document Type" := SalesHeader."Document Type";
+          OrderImportInfo."Order No." := SalesHeader."No.";
+          OrderImportInfo."Sana Order No." := SalesDocHeader."Sana Order No.";
+          OrderImportInfo."Webshop Id" := Params.WebsiteId;
+          OrderImportInfo.INSERT;
+        END;
+    END;
+
+    PROCEDURE SetSalesDocHeader@11123345(RecordRef@11123302 : RecordRef;VAR Params@11123303 : Record 11123310);
+    VAR
+      SalesDocHeader@11123304 : Record 11123323;
+      SalesHeader@11123309 : Record 36;
+      SalesInvHeader@11123310 : Record 112;
+      Customer@11123307 : Record 18;
+      OrderFunc@11123305 : Codeunit 11123319;
+      RecMgt@11123306 : Codeunit 11123326;
+      TableNo@11123308 : Integer;
+    BEGIN
+      TableNo := RecordRef.NUMBER;
+
+      CASE TableNo OF
+       DATABASE::"Sales Header" :
+        BEGIN
+         RecordRef.SETTABLE(SalesHeader);
+         SetSalesDocHeader36(SalesHeader,Params);
+        END;
+       DATABASE::"Sales Invoice Header" :
+        BEGIN
+         RecordRef.SETTABLE(SalesInvHeader);
+         SetSalesDocHeader112(SalesInvHeader,Params);
+      END;
+      END;
+    END;
+
+    PROCEDURE CheckSalesDocHeaderValue@11123375(NewValue@11123302 : Text[80];Value@11123303 : Text[80]) : Boolean;
+    BEGIN
+      IF (NewValue <> '') AND (Value <> NewValue) THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE InitSalesLine@11123318(VAR SalesHeader@11123304 : Record 36;VAR SalesLine@11123302 : Record 37;LineNo@11123305 : Integer;VAR Params@11123303 : Record 11123310);
+    BEGIN
+      SalesLine.INIT;
+      SetSuppressCheckItmeAvail(SalesLine,TRUE);
+      SetSuppressUpdateUnitPrice(SalesLine,TRUE);
+      SalesLine.SetSalesHeader(SalesHeader);
+      SalesLine."Document Type" := SalesHeader."Document Type";
+      SalesLine."Document No." := SalesHeader."No.";
+      SalesLine."Line No." := LineNo;
+      SalesLine.VALIDATE(Type,SalesLine.Type::Item);
+      SalesLine.VALIDATE("No.",Params.ProductId);
+      IF Params.VariantId <> '' THEN
+        SalesLine.VALIDATE("Variant Code",Params.VariantId);
+    END;
+
+    PROCEDURE DeletePromotionCouponeInfo@11123319(VAR SalesHeader@11123302 : Record 36;VAR Params@11123303 : Record 11123310);
+    VAR
+      SalesDocHeader@11123304 : Record 11123323;
+      OrderFunc@11123305 : Codeunit 11123319;
+    BEGIN
+      IF OrderFunc.FindSalesDocHeader36(SalesHeader,SalesDocHeader) THEN BEGIN
+        SalesDocHeader."Promotion Type" := 0;
+        SalesDocHeader."Promotion Code" := '';
+        SalesDocHeader."Promotion Title" := '';
+        SalesDocHeader."Promotion Discount Type" := 0;
+        SalesDocHeader."Promotion Discount Value" := 0;
+        SalesDocHeader."Promotion Discount Amount" := 0;
+        SalesDocHeader.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE SplitLine@11123349(StringToSplit@11123302 : Text[1024];SplitLength@11123303 : Integer;VAR RestOfString@11123304 : Text[1024];VAR SplitString@11123305 : Text[1024]);
+    VAR
+      Position@11123306 : Integer;
+      TestSpace@11123307 : Text[30];
+      SpaceFound@11123308 : Boolean;
+      StringToTest@11123309 : Text[1024];
+    BEGIN
+      RestOfString := '';
+      SplitString := '';
+      IF (STRLEN(StringToSplit) = 0) OR (SplitLength = 0) THEN
+        EXIT;
+
+      IF STRLEN(StringToSplit) <= SplitLength THEN
+        SplitString := StringToSplit
+      ELSE BEGIN
+        StringToTest := COPYSTR(StringToSplit,1,SplitLength);
+        Position := STRLEN(StringToTest) + 1;
+        SpaceFound := FALSE;
+        REPEAT
+          Position := Position - 1;
+          TestSpace := COPYSTR(StringToTest,Position,1);
+          IF TestSpace = ' ' THEN
+            SpaceFound := TRUE;
+        UNTIL SpaceFound OR (Position = 1);
+
+        IF Position > 0 THEN BEGIN
+          SplitString := COPYSTR(StringToSplit,1,Position - 1);
+          RestOfString := COPYSTR(StringToSplit,Position + 1,Position + STRLEN(StringToSplit));
+        END;
+
+        IF Position = 1 THEN BEGIN
+          SplitString := COPYSTR(StringToTest,1);
+          RestOfString := COPYSTR(StringToSplit,SplitLength + 1);
+        END;
+      END;
+    END;
+
+    PROCEDURE InsertExtendedText@11123355(VAR SalesHeader@11123306 : Record 36;VAR SalesLine@11123302 : Record 37;VAR Params@11123305 : Record 11123310);
+    VAR
+      TempExtTextLine@11123304 : TEMPORARY Record 280;
+      MakeUpdateRequired@11123303 : Boolean;
+    BEGIN
+      IF SalesCheckIfAnyExtText(SalesHeader,SalesLine,TempExtTextLine,Params,MakeUpdateRequired) THEN
+        InsertSalesExtText(SalesLine,TempExtTextLine,MakeUpdateRequired);
+    END;
+
+    PROCEDURE SalesCheckIfAnyExtText@11123354(VAR SalesHeader@11123311 : Record 36;VAR SalesLine@11123303 : Record 37;VAR TempExtTextLine@11123310 : Record 280;VAR Params@11123308 : Record 11123310;VAR MakeUpdateRequired@11123302 : Boolean) : Boolean;
+    VAR
+      ExtTextHeader@11123307 : Record 279;
+      GLAcc@11123306 : Record 15;
+      Item@11123305 : Record 27;
+      Res@11123304 : Record 156;
+      AutoText@11123309 : Boolean;
+    BEGIN
+      MakeUpdateRequired := FALSE;
+      IF SalesLine."Line No." <> 0 THEN
+        MakeUpdateRequired := DeleteSalesLines(SalesLine);
+
+      AutoText := FALSE;
+
+      CASE SalesLine.Type OF
+        SalesLine.Type::" ":
+          AutoText := TRUE;
+        SalesLine.Type::"G/L Account":
+          IF GLAcc.GET(SalesLine."No.") THEN
+            AutoText := GLAcc."Automatic Ext. Texts";
+        SalesLine.Type::Item:
+          IF Item.GET(SalesLine."No.") THEN
+            AutoText := Item."Automatic Ext. Texts";
+        SalesLine.Type::Resource:
+          IF Res.GET(SalesLine."No.") THEN
+            AutoText := Res."Automatic Ext. Texts";
+      END;
+
+      IF AutoText THEN BEGIN
+        ExtTextHeader.SETRANGE("Table Name",SalesLine.Type);
+        ExtTextHeader.SETRANGE("No.",SalesLine."No.");
+        CASE SalesLine."Document Type" OF
+          SalesLine."Document Type"::Quote:
+            ExtTextHeader.SETRANGE("Sales Quote",TRUE);
+          SalesLine."Document Type"::"Blanket Order":
+            ExtTextHeader.SETRANGE("Sales Blanket Order",TRUE);
+          SalesLine."Document Type"::Order:
+            ExtTextHeader.SETRANGE("Sales Order",TRUE);
+          SalesLine."Document Type"::Invoice:
+            ExtTextHeader.SETRANGE("Sales Invoice",TRUE);
+          SalesLine."Document Type"::"Return Order":
+            ExtTextHeader.SETRANGE("Sales Return Order",TRUE);
+          SalesLine."Document Type"::"Credit Memo":
+            ExtTextHeader.SETRANGE("Sales Credit Memo",TRUE);
+        END;
+        EXIT(ReadLines(ExtTextHeader,TempExtTextLine,SalesHeader."Document Date",Params.LanguageId));
+      END;
+    END;
+
+    PROCEDURE InsertSalesExtText@11123353(VAR SalesLine@11123302 : Record 37;VAR TempExtTextLine@11123306 : Record 280;MakeUpdateRequired@11123304 : Boolean);
+    VAR
+      LineSpacing@11123305 : Integer;
+      NextLineNo@11123307 : Integer;
+      ParentLineNo@11123303 : Integer;
+    BEGIN
+      LineSpacing := 10000;
+      NextLineNo := SalesLine."Line No." + LineSpacing;
+      ParentLineNo := SalesLine."Line No.";
+
+      TempExtTextLine.RESET;
+      IF TempExtTextLine.FINDSET THEN BEGIN
+        REPEAT
+          SalesLine.INIT;
+          SalesLine."Document Type" := SalesLine."Document Type";
+          SalesLine."Document No." := SalesLine."Document No.";
+          SalesLine."Line No." := NextLineNo;
+          SalesLine."No." := TempExtTextLine."No.";
+          SalesLine.Description := TempExtTextLine.Text;
+          SalesLine."Attached to Line No." := ParentLineNo;
+          SalesLine.INSERT;
+          NextLineNo := NextLineNo + LineSpacing;
+        UNTIL TempExtTextLine.NEXT = 0;
+        MakeUpdateRequired := TRUE;
+      END;
+      TempExtTextLine.DELETEALL;
+    END;
+
+    PROCEDURE DeleteSalesLines@11123351(VAR SalesLine@11123302 : Record 37) : Boolean;
+    VAR
+      SalesLine2@11123303 : Record 37;
+      SalesLine3@11123304 : Record 37;
+      MakeUpdateRequired@11123305 : Boolean;
+    BEGIN
+      SalesLine3.SETRANGE("Document Type",SalesLine."Document Type");
+      SalesLine3.SETRANGE("Document No.",SalesLine."Document No.");
+      SalesLine3.SETRANGE("No.",SalesLine."No.");
+      IF SalesLine3.FINDSET THEN
+        REPEAT
+          SalesLine2.SETRANGE("Document Type",SalesLine3."Document Type");
+          SalesLine2.SETRANGE("Document No.",SalesLine3."Document No.");
+          SalesLine2.SETRANGE("Attached to Line No.",SalesLine3."Line No.");
+          IF NOT SalesLine2.ISEMPTY THEN BEGIN
+            SalesLine2.DELETEALL;
+            MakeUpdateRequired := TRUE;
+          END;
+        UNTIL SalesLine3.NEXT = 0;
+      EXIT(MakeUpdateRequired);
+    END;
+
+    LOCAL PROCEDURE ReadLines@11123350(VAR ExtTextHeader@11123304 : Record 279;VAR TempExtTextLine@11123306 : Record 280;DocDate@11123303 : Date;LanguageCode@11123302 : Code[10]) : Boolean;
+    VAR
+      ExtTextLine@11123305 : Record 280;
+    BEGIN
+      ExtTextHeader.SETCURRENTKEY(
+        "Table Name","No.","Language Code","All Language Codes","Starting Date","Ending Date");
+      ExtTextHeader.SETRANGE("Starting Date",0D,DocDate);
+      ExtTextHeader.SETFILTER("Ending Date",'%1..|%2',DocDate,0D);
+      IF LanguageCode = '' THEN BEGIN
+        ExtTextHeader.SETRANGE("Language Code",'');
+        IF NOT ExtTextHeader.FINDLAST THEN
+          EXIT;
+      END ELSE BEGIN
+        ExtTextHeader.SETRANGE("Language Code",LanguageCode);
+        IF NOT ExtTextHeader.FINDLAST THEN BEGIN
+          ExtTextHeader.SETRANGE("All Language Codes",TRUE);
+          ExtTextHeader.SETRANGE("Language Code",'');
+          IF NOT ExtTextHeader.FINDLAST THEN
+            EXIT;
+        END;
+      END;
+
+      ExtTextLine.SETRANGE("Table Name",ExtTextHeader."Table Name");
+      ExtTextLine.SETRANGE("No.",ExtTextHeader."No.");
+      ExtTextLine.SETRANGE("Language Code",ExtTextHeader."Language Code");
+      ExtTextLine.SETRANGE("Text No.",ExtTextHeader."Text No.");
+      IF ExtTextLine.FINDSET THEN BEGIN
+        TempExtTextLine.DELETEALL;
+        REPEAT
+          TempExtTextLine := ExtTextLine;
+          TempExtTextLine.INSERT;
+        UNTIL ExtTextLine.NEXT = 0;
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE ValidateSalesLineUOM@11123356(VAR SalesLine@11123302 : Record 37;VAR Params@11123303 : Record 11123310);
+    VAR
+      Item@11123304 : Record 27;
+      RecMgt@11123305 : Codeunit 11123326;
+      CatalogHelper@11123306 : Codeunit 11123318;
+    BEGIN
+      IF Params.UnitOfMeasureId = '' THEN BEGIN
+        RecMgt.GetItem(SalesLine."No.",Item,TRUE);
+        Params.UnitOfMeasureId := CatalogHelper.GetItemUOM(Item);
+      END;
+
+      IF Params.UnitOfMeasureId = SalesLine."Unit of Measure Code" THEN
+        SalesLine.VALIDATE("Unit of Measure Code")
+      ELSE
+        SalesLine.VALIDATE("Unit of Measure Code",Params.UnitOfMeasureId);
+    END;
+
+    PROCEDURE IsItemUOMVisible@11123372(Item@11123302 : Record 27;VAR Params@11123303 : Record 11123310) : Boolean;
+    VAR
+      ItemUOM@11123304 : Record 5404;
+      RecMgt@11123305 : Codeunit 11123326;
+      CatalogHelper@11123306 : Codeunit 11123318;
+    BEGIN
+      IF (Params.UnitOfMeasureId = '') OR
+         (Params.PrepackId <> '') OR
+         (Params.UnitOfMeasureId = CatalogHelper.GetItemUOM(Item))
+      THEN
+        EXIT(TRUE);
+
+      RecMgt.GetItemSalesUOM(Item."No.",Params.UnitOfMeasureId,ItemUOM,FALSE);
+      EXIT(ItemUOM."Visible in Webshop");
+    END;
+
+    PROCEDURE ValidItem@11123358(Item@11123302 : Record 27;VAR Params@11123303 : Record 11123310) : Boolean;
+    VAR
+      CatalogHelper@11123305 : Codeunit 11123318;
+      ErrorText@11123304 : Text[250];
+    BEGIN
+      IF NOT Item."Visible in Webshop" THEN
+        EXIT(FALSE);
+
+      IF NOT CatalogHelper.TestItem(Item,ErrorText,FALSE) THEN BEGIN
+        Params.CalcErrorText := ErrorText;
+        EXIT(FALSE);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE AutoSaveHeaderFields@11123313(VAR SalesHeader@11123302 : Record 36;VAR InXMLBuff@11123303 : Record 11123303);
+    VAR
+      CommonFunc@11123305 : Codeunit 11123309;
+      RecRef@11123304 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(SalesHeader);
+      CommonFunc.AutoSaveFields(RecRef,InXMLBuff);
+      RecRef.SETTABLE(SalesHeader);
+    END;
+
+    PROCEDURE AutoSaveLineFields@11123352(VAR SalesLine@11123303 : Record 37;VAR ResultNodeBuff@11123305 : Record 11123303);
+    VAR
+      RecRef@11123306 : RecordRef;
+      CommonFunc@11123302 : Codeunit 11123309;
+    BEGIN
+      RecRef.GETTABLE(SalesLine);
+      CommonFunc.AutoSaveFields(RecRef,ResultNodeBuff);
+      RecRef.SETTABLE(SalesLine);
+    END;
+
+    PROCEDURE InsertSalesLine@11123365(SalesHeader@11123302 : Record 36;VAR SalesLine@11123303 : Record 37;VAR Params@11123304 : Record 11123310);
+    BEGIN
+      SalesLine.INIT;
+      SalesLine.SetSalesHeader(SalesHeader);
+      SetSuppressCheckItmeAvail(SalesLine,TRUE);
+      SetSuppressUpdateUnitPrice(SalesLine,TRUE);
+
+      SalesLine."Document Type" := SalesHeader."Document Type";
+      SalesLine."Document No." := SalesHeader."No.";
+      SalesLine."Line No." := LineNoGlobal;
+
+      SalesLine.VALIDATE(Type,SalesLine.Type::Item);
+      SalesLine."No." := Params.ProductId;
+      SalesLine."Sell-to Customer No." := SalesHeader."Sell-to Customer No.";
+
+      IF (Params.PrepackId = '') OR IsPrepackCodeToInventory THEN
+        SalesLine.INSERT(TRUE);
+    END;
+
+    PROCEDURE ProcessSalesLine@11123364(SalesHeader@11123304 : Record 36;VAR SalesLine@11123303 : Record 37;VAR Params@11123302 : Record 11123310;PrepackHasVariants@11123305 : Boolean);
+    VAR
+      EventMgt@11123306 : Codeunit 11123331;
+      PrepackCodeToInventory@11123308 : Boolean;
+    BEGIN
+      PrepackCodeToInventory := IsPrepackCodeToInventory;
+
+      SalesLine.SetSalesHeader(SalesHeader);
+      SalesLine.VALIDATE("No.",Params.ProductId);
+
+      IF Params.ReturnReasonCode <> '' THEN
+        SalesLine.VALIDATE("Return Reason Code",Params.ReturnReasonCode);
+
+      SalesLine."VAT Bus. Posting Group" := SalesHeader."VAT Bus. Posting Group";
+      IF SalesLine."Requested Delivery Date" > SalesLine."Planned Delivery Date" THEN
+        SalesLine.VALIDATE("Requested Delivery Date",SalesHeader."Requested Delivery Date");
+
+      IF Params.VariantId <> '' THEN BEGIN
+        IF Params.PrepackId <> '' THEN BEGIN
+          IF PrepackCodeToInventory THEN
+            UpdatePrepackCodeToInvLine(SalesLine,Params)
+          ELSE
+            UpdatePrepackLine(SalesLine,Params,PrepackHasVariants);
+        END ELSE
+          UpdateVariantLine(SalesLine,Params);
+      END ELSE
+        UpdateItemLine(SalesLine,Params);
+
+      EventMgt.OnAddDocumentLine(SalesLine,Params);
+
+      IF NOT Params.Basket THEN
+        AutoReserve(SalesLine);
+
+      UpdateSkipCalculationLine(SalesLine,Params);
+    END;
+
+    PROCEDURE UpdatePrepackCodeToInvLine@11123363(VAR SalesLine@11123302 : Record 37;VAR Params@11123303 : Record 11123310);
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE UpdatePrepackLine@11123362(VAR SalesLine@11123303 : Record 37;VAR Params@11123302 : Record 11123310;PrepackHasVariants@11123305 : Boolean);
+    VAR
+      ItemVariant@11123306 : Record 5401;
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE UpdateVariantLine@11123361(VAR SalesLine@11123303 : Record 37;VAR Params@11123302 : Record 11123310);
+    BEGIN
+      SalesLine.VALIDATE("Variant Code",Params.VariantId);
+      IF CheckStock(NotInStockLinesBuffGlobal,DecrQtyLinesBuffGlobal,SalesLine,Params) THEN BEGIN
+        SalesLine.VALIDATE(Quantity,Params.Quantity);
+        RefreshCalulatedValues(SalesLine,Params);
+        SalesLine.MODIFY(TRUE);
+      END ELSE
+        SalesLine.DELETE(TRUE);
+    END;
+
+    PROCEDURE UpdateItemLine@11123360(VAR SalesLine@11123303 : Record 37;VAR Params@11123302 : Record 11123310);
+    BEGIN
+      IF CheckStock(NotInStockLinesBuffGlobal,DecrQtyLinesBuffGlobal,SalesLine,Params) THEN BEGIN
+        SalesLine.VALIDATE(Quantity,Params.Quantity);
+        SetSuppressUpdateUnitPrice(SalesLine,FALSE);
+        RefreshCalulatedValues(SalesLine,Params);
+        SalesLine.VALIDATE("Unit Price",GetSalePriceTopaz(SalesLine,Params));//<TPZ3099>
+        IF Params.Division <> 'L' THEN//UTK Electric Pricing
+         SalesLine.VALIDATE("Line Discount %",0);//UTK Electric Pricing
+        SalesLine.MODIFY(TRUE);
+      END ELSE
+        SalesLine.DELETE(TRUE);
+    END;
+
+    PROCEDURE UpdateSkipCalculationLine@11123359(VAR SalesLine@11123303 : Record 37;VAR Params@11123302 : Record 11123310);
+    BEGIN
+      IF Params.SkipCalculations THEN BEGIN
+        IF Params.PrepackId <> '' THEN
+          ERROR(Text11123305);
+
+        SalesLine.VALIDATE("Unit Price",Params.Price);
+        IF SalesLine.MODIFY(TRUE) THEN;
+      END;
+    END;
+
+    PROCEDURE RefreshCalulatedValues@11123366(VAR SalesLine@11123302 : Record 37;VAR Params@11123303 : Record 11123310);
+    BEGIN
+      SetSuppressUpdateUnitPrice(SalesLine,FALSE);
+      IF Params.PrepackId <> '' THEN BEGIN
+        EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+      END ELSE
+        ValidateSalesLineUOM(SalesLine,Params);
+
+      IF Params.Wishlist THEN
+        SalesLine.VALIDATE("Line Discount %",0);
+    END;
+
+    PROCEDURE SetLocationCodeFromWebshop@11123306(Webshop@11123305 : Record 11123313;VAR SalesHeader@11123302 : Record 36) : Boolean;
+    BEGIN
+      IF Webshop."Location Code Source" = Webshop."Location Code Source"::Webshop THEN BEGIN
+        SalesHeader.VALIDATE("Location Code",Webshop."Location Code");
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE AddPhysicalDimensions@11123367(VAR CollectionNodeBuff@11123302 : Record 11123303;VAR SalesLine@11123303 : Record 37);
+    VAR
+      CatalogHelper@11123304 : Codeunit 11123318;
+      GrossWeight@11123306 : Decimal;
+      Weight@11123309 : Decimal;
+      Length@11123308 : Decimal;
+      Width@11123307 : Decimal;
+      Height@11123305 : Decimal;
+    BEGIN
+      CatalogHelper.GetItemPhysicalDimensions(SalesLine."No.",SalesLine."Unit of Measure Code",Weight,Length,Width,Height);
+      GrossWeight := SalesLine.Quantity * Weight;
+      CollectionNodeBuff.AddFieldElement('Length',FORMAT(Length));
+      CollectionNodeBuff.AddFieldElement('Width',FORMAT(Width));
+      CollectionNodeBuff.AddFieldElement('Height',FORMAT(Height));
+      CollectionNodeBuff.AddFieldElement('GrossWeight',FORMAT(GrossWeight));
+    END;
+
+    PROCEDURE PromoteQuote@11123371(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      Params@11123304 : TEMPORARY Record 11123310;
+      SalesHeader@11123305 : Record 36;
+      OrderFunc@11123306 : Codeunit 11123319;
+    BEGIN
+      Params.InitParams(InXMLBuff,0);
+      SalesHeader.GET(SalesHeader."Document Type"::Quote,Params.DocumentId);
+      Params.OriginalOrderId := Params.DocumentId;
+
+      IF Params.DocumentType = 'Order' THEN
+          PromoteQuoteToOrder(SalesHeader,Params);
+
+      UpdatePromotedSalesDocHeader(SalesHeader,Params);
+
+      OrderFunc.CreateMainOrderBasketXmlNode(SalesHeader,OutXMLBuff,Params);
+    END;
+
+    PROCEDURE UpdatePromotedSalesDocHeader@11123373(SalesHeader@11123302 : Record 36;VAR Params@11123303 : Record 11123310);
+    VAR
+      SalesDocHeader@11123305 : Record 11123323;
+      OrderFunc@11123304 : Codeunit 11123319;
+    BEGIN
+      OrderFunc.FindSalesDocHeader36(SalesHeader,SalesDocHeader);
+      SalesDocHeader."Payment Method Status" := Params.PaymentStatus;
+      SalesDocHeader."Quote Promotable" := FALSE;
+      SalesDocHeader.MODIFY(TRUE);
+    END;
+
+    PROCEDURE SetPromotedSalesDocHeader@11123377(VAR SalesDocHeader@11123302 : Record 11123323;VAR Params@11123303 : Record 11123310) : Boolean;
+    VAR
+      Webshop@11123305 : Record 11123313;
+      RecMgt@11123304 : Codeunit 11123326;
+    BEGIN
+      IF SalesDocHeader."Document Type" <> SalesDocHeader."Document Type"::Quote THEN
+        EXIT;
+
+      RecMgt.GetWebshop(Params.WebsiteId,Webshop,TRUE);
+      IF NOT Webshop."Quote Promotable" THEN
+        EXIT;
+
+      IF Params.PaymentStatus <> '' THEN
+        EXIT;
+
+      SalesDocHeader."Quote Promotable" := TRUE;
+    END;
+
+    PROCEDURE CalculateBasket@11123413(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      Params@11123304 : TEMPORARY Record 11123310;
+      SalesHeader@11123305 : Record 36;
+      TempSalesHeader@11123306 : TEMPORARY Record 36;
+      SalesLine@11123307 : Record 37;
+      TempSalesLine@11123308 : TEMPORARY Record 37;
+      Webshop@11123312 : Record 11123313;
+      Context@11123309 : Codeunit 11123305;
+      RecordMgt@11123311 : Codeunit 11123326;
+      UseTempBasketCalculation@11123310 : Boolean;
+      OrderNodeBuff@1000000000 : TEMPORARY Record 11123303;
+    BEGIN
+      Params.InitParams(InXMLBuff,0);
+      InXMLBuff.SelectSingleNode('Basket',OrderNodeBuff);//<TPZ3154>
+      Params.InitFieldValues(OrderNodeBuff);//<TPZ3154>
+      Params.CurrentCurrencyId := Params.BaseCurrencyId;
+
+      RecordMgt.GetWebshop(Context.GetCurrentWebsiteID,Webshop,TRUE);
+
+      IF Context.PfsAddonIsUsed AND (NOT IsPrepackCodeToInventory) THEN
+        UseTempBasketCalculation := FALSE
+      ELSE
+        UseTempBasketCalculation := Webshop."Obsolete Field 23";
+
+      IF UseTempBasketCalculation THEN
+        ProcessCalcBasket(InXMLBuff,OutXMLBuff,TempSalesHeader,TempSalesLine,Params)
+      ELSE
+        ProcessCalcBasket(InXMLBuff,OutXMLBuff,SalesHeader,SalesLine,Params);
+    END;
+
+    PROCEDURE ProcessCalcBasket@11123410(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303;VAR SalesHeader@11123319 : Record 36;VAR SalesLine@11123306 : Record 37;VAR Params@11123304 : TEMPORARY Record 11123310);
+    VAR
+      TempSalesLine@11123311 : TEMPORARY Record 37;
+      ResultCollectionNodeBuff@11123308 : TEMPORARY Record 11123303;
+      OrderFunc@11123307 : Codeunit 11123319;
+      EventMgt@11123305 : Codeunit 11123331;
+      ChangeMgt@11123309 : Codeunit 11123324;
+      TotalDiscount@11123312 : Decimal;
+      VatPercent@11123313 : Decimal;
+      TotalVat@11123314 : Decimal;
+      AmountTotal@11123315 : Decimal;
+      AmountTotalInclVat@11123316 : Decimal;
+      AmountInvoiceDiscountTotal@11123317 : Decimal;
+      SubTotal@11123318 : Decimal;
+      PrepaymentPercentage@11123320 : Decimal;
+      PrepaymentAmount@11123321 : Decimal;
+      CustomerDivision@1000000002 : Record 50007;
+      Loc@1000000001 : Record 14;
+      CollectionNodeBuff@1000000000 : Record 11123303;
+    BEGIN
+      InsertSalesHeader(SalesHeader,TRUE,Params);
+      ValidateSalesHeader(SalesHeader,Params);
+      SetDocumentCurrency(SalesHeader,Params);
+      SetOrderShippingAddress(SalesHeader,InXMLBuff,Params);
+
+      EventMgt.OnBeforeSaveDocument(SalesHeader,Params);
+
+      SalesHeader.MODIFY(TRUE);
+
+      OutXMLBuff.AddElement(ResultCollectionNodeBuff,'SalesLines','');
+      AddBasketSalesLines(InXMLBuff,OutXMLBuff,ResultCollectionNodeBuff,SalesHeader,SalesLine,Params);
+
+      EventMgt.OnAfterAddDocumentLines(SalesHeader,Params);
+
+      IF NOT Params.Wishlist THEN BEGIN
+        TotalDiscount := 0;
+        VatPercent := 0;
+
+        CalcOrderDiscounts(SalesHeader,SalesLine,Params);
+
+        IF IsTempSalesHeader(SalesHeader) THEN
+          OrderFunc.GetOrderTotals(
+            SalesHeader,SalesLine,TotalVat,AmountInvoiceDiscountTotal,AmountTotal,AmountTotalInclVat,SubTotal,VatPercent)
+        ELSE BEGIN
+          OrderFunc.CopyRealSalesLinesToTempTable(SalesHeader."Document Type",SalesHeader."No.",TempSalesLine);
+          OrderFunc.GetOrderTotals(
+            SalesHeader,TempSalesLine,TotalVat,AmountInvoiceDiscountTotal,AmountTotal,AmountTotalInclVat,SubTotal,VatPercent);
+        END;
+
+        CalculateOnlinePrepayment(SalesHeader,SalesLine,AmountTotalInclVat,PrepaymentPercentage,PrepaymentAmount,Params);
+      END;
+
+      EventMgt.OnBeforeCreateDocResponse(SalesHeader,Params);
+
+      OutXMLBuff.AddFieldElement('Subtotal',FORMAT(SubTotal));
+      OutXMLBuff.AddFieldElement('TotalExclTax',FORMAT(AmountTotal));
+      OutXMLBuff.AddFieldElement('TotalInclTax',FORMAT(AmountTotalInclVat));
+      OutXMLBuff.AddFieldElement('InvoiceDiscount',FORMAT(AmountInvoiceDiscountTotal));
+      OutXMLBuff.AddFieldElement('TaxAmount',FORMAT(TotalVat));
+      OutXMLBuff.AddFieldElement('TaxPercent',FORMAT(VatPercent));
+      OutXMLBuff.AddFieldElement('PrepaymentPercentage',FORMAT(PrepaymentPercentage));
+      OutXMLBuff.AddFieldElement('PrepaymentAmount',FORMAT(PrepaymentAmount));
+      //<TPZ3154>
+      OutXMLBuff.AddFieldNameValueTypeElement('IsPickupOrder',FORMAT(SalesHeader.IspickupOrder,0,2),'Boolean');
+       IF SalesHeader.IspickupOrder = TRUE THEN BEGIN
+          CustomerDivision.RESET;
+          IF (CustomerDivision.GET(SalesHeader."Sell-to Customer No.",SalesHeader."Shortcut Dimension 5 Code")) AND (CustomerDivision."Location Code" <> '')THEN BEGIN
+            IF Loc.GET(CustomerDivision."Location Code" )THEN ;
+             OrderFunc.Addpickupline(OutXMLBuff,Loc,SalesHeader);
+          END;
+        END;
+      //</TPZ3154>
+
+      OrderFunc.AddSalesTaxBreakdownXML(OutXMLBuff);
+
+      SalesLine.RESET;
+      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+
+      CreateBasketLinesXMLResponse(ResultCollectionNodeBuff,SalesHeader,SalesLine,Params);
+      EventMgt.OnAfterCreateDocResponse(OutXMLBuff,SalesHeader,Params);
+
+      IF NOT IsTempSalesHeader(SalesHeader) THEN
+        ERROR('RollBackTransaction');
+
+      ChangeMgt.DeleteSalesHeaderRelatedData(SalesHeader);
+      ChangeMgt.DeleteSalesLineRelatedData(SalesLine);
+    END;
+
+    PROCEDURE CalcOrderDiscounts@11123376(VAR SalesHeader@11123302 : Record 36;VAR SalesLine@11123307 : Record 37;VAR Params@11123306 : Record 11123310);
+    VAR
+      SalesCalcDiscount@11123304 : Codeunit 60;
+    BEGIN
+      WITH SalesLine DO BEGIN
+        RESET;
+        SETCURRENTKEY("Document Type","Document No.");
+        SETRANGE("Document Type",SalesHeader."Document Type");
+        SETRANGE("Document No.",SalesHeader."No.");
+        IF NOT FINDFIRST THEN
+          EXIT;
+
+        SalesCalcDiscount.CalculateWithSalesHeader(SalesHeader,SalesLine);
+        CalcPromotionDiscount(SalesHeader,SalesLine,Params);
+      END;
+    END;
+
+    PROCEDURE GetLineNoMatrixSubline@11123384(VAR SalesLine@11123309 : Record 37;DocumentType@11123308 : Integer;DocumentNo@11123307 : Code[20];VAR Params@11123306 : Record 11123310;VAR LineNo@11123305 : Integer;VAR MatrixLineNo@11123304 : Integer;VAR Subline@11123303 : Boolean);
+    BEGIN
+      LineNo := 10000;
+      MatrixLineNo := 0;
+      Subline := FALSE;
+
+      WITH SalesLine DO BEGIN
+        RESET;
+        SETRANGE("Document Type",DocumentType);
+        SETRANGE("Document No.",DocumentNo);
+        IF FINDLAST THEN
+          LineNo := ROUND("Line No." + 10000,10000);
+      END;
+    END;
+
+    PROCEDURE CalculateOnlinePrepayment@11123391(VAR SalesHeader@11123302 : Record 36;VAR SalesLine@11123315 : Record 37;AmountTotalInclVat@11123303 : Decimal;VAR PrepaymentPercentage@11123305 : Decimal;VAR PrepaymentAmount@11123306 : Decimal;VAR Params@11123307 : Record 11123310);
+    VAR
+      Customer@11123304 : Record 18;
+      TempVATAmountLine@11123310 : TEMPORARY Record 290;
+      TempSalesLine@11123316 : TEMPORARY Record 37;
+      SalesPostPrepmt@11123308 : Codeunit 442;
+      RecMgt@11123314 : Codeunit 11123326;
+      PrepmtTotalAmount@11123313 : Decimal;
+      PrepmtVATAmount@11123311 : Decimal;
+      PrepmtVATAmountText@11123312 : Text[1024];
+      CalculatePrepayment@11123309 : Boolean;
+    BEGIN
+      IF Params.ShopAccountType IN ['Customer','Contact'] THEN
+        CalculatePrepayment := TRUE;
+
+      IF NOT CalculatePrepayment THEN
+        EXIT;
+
+      RecMgt.GetCustomer(SalesHeader."Sell-to Customer No.",Customer,TRUE);
+
+      IF Customer."B2C Customer" THEN BEGIN
+        PrepaymentPercentage := 100;
+        PrepaymentAmount := AmountTotalInclVat;
+      END ELSE BEGIN
+
+        IF (Params.B2bOnlinePayments = 'Prepayment') AND
+           (SalesHeader."Document Type" = SalesHeader."Document Type"::Order)
+        THEN BEGIN
+          PrepaymentPercentage := SalesHeader."Prepayment %";
+
+          IF NOT IsTempSalesHeader(SalesHeader) THEN BEGIN
+            SalesPostPrepmt.GetSalesLines(SalesHeader,0,TempSalesLine);
+            SalesPostPrepmt.SumPrepmt(
+              SalesHeader,TempSalesLine,TempVATAmountLine,PrepmtTotalAmount,PrepmtVATAmount,PrepmtVATAmountText);
+          END ELSE
+            SalesPostPrepmt.SumPrepmt(
+              SalesHeader,SalesLine,TempVATAmountLine,PrepmtTotalAmount,PrepmtVATAmount,PrepmtVATAmountText);
+
+          PrepaymentAmount := PrepmtTotalAmount + PrepmtVATAmount;
+
+          IF PrepaymentAmount > AmountTotalInclVat THEN BEGIN
+            PrepaymentAmount := AmountTotalInclVat;
+            PrepaymentPercentage := 100;
+          END;
+        END;
+
+        IF Params.B2bOnlinePayments = 'PayOnline' THEN BEGIN
+          PrepaymentPercentage := 100;
+          PrepaymentAmount := AmountTotalInclVat;
+        END;
+      END;
+    END;
+
+    PROCEDURE IsTempSalesHeader@11123385(VAR SalesHeader@11123302 : Record 36) : Boolean;
+    VAR
+      RecRef@11123303 : RecordRef;
+    BEGIN
+      IF NOT TempSalesHeaderInitGlobal THEN BEGIN
+        RecRef.GETTABLE(SalesHeader);
+        IsTempSalesHeaderGlobal := RecRef.ISTEMPORARY;
+        RecRef.CLOSE;
+        TempSalesHeaderInitGlobal := TRUE;
+      END;
+      EXIT(IsTempSalesHeaderGlobal);
+    END;
+
+    PROCEDURE SetTemporarySalesHeader@11123301(VAR SalesLine@11123304 : Record 37;Value@11123303 : Boolean);
+    BEGIN
+      // SalesLine.SetTemporarySalesHeader(Value); // Not supported for NAVApp
+    END;
+
+    PROCEDURE SetSuppressCheckItmeAvail@11123333(VAR SalesLine@11123304 : Record 37;Value@11123303 : Boolean);
+    BEGIN
+      // SalesLine.SetSuppressCheckItmeAvail(Value);   // Not supported for NAVApp
+    END;
+
+    PROCEDURE SetSuppressUpdateUnitPrice@11123379(VAR SalesLine@11123304 : Record 37;Value@11123303 : Boolean);
+    BEGIN
+      // SalesLine.SetSuppressUpdateUnitPrice(Value);   // Not supported for NAVApp
+    END;
+
+    LOCAL PROCEDURE CalcPromotionDiscount@11123314(VAR SalesHeader@11123305 : Record 36;VAR SalesLine@11123304 : Record 37;VAR Params@11123303 : Record 11123310);
+    VAR
+      TempVATAmountLine@11123320 : TEMPORARY Record 290;
+      SalesSetup@11123319 : Record 311;
+      SalesDocHeader@11123317 : Record 11123323;
+      CustInvDisc@11123316 : Record 19;
+      Currency@11123314 : Record 4;
+      OrderFunc@11123313 : Codeunit 11123319;
+      InvDiscBaseAmount@11123312 : Decimal;
+      InvDiscBase@11123311 : Decimal;
+      ChargeBase@11123310 : Decimal;
+      CalcInvoiceDiscount@11123309 : Boolean;
+      PromotionDiscountPercent@11123308 : Decimal;
+      CurrencyDate@11123307 : Date;
+      SalesDocHeaderExists@11123306 : Boolean;
+    BEGIN
+      SalesDocHeaderExists := OrderFunc.FindSalesDocHeader36(SalesHeader,SalesDocHeader);
+
+      IF SalesDocHeaderExists AND
+        (SalesDocHeader."Promotion Type" <> SalesDocHeader."Promotion Type"::Promotion)
+      THEN
+        SalesDocHeaderExists := FALSE
+      ELSE
+        IF (((SalesDocHeader."Promotion Discount Type" <> SalesDocHeader."Promotion Discount Type"::" ") AND
+            (SalesDocHeader."Promotion Discount Value" > 0)) OR
+          (SalesDocHeader."Promotion Discount Amount" > 0))
+        THEN BEGIN
+          CalcInvoiceDiscount := TRUE;
+
+          SalesLine.RESET;
+          SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+          SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+          SalesLine.SETFILTER(Type,'<>0');
+          IF SalesLine.FINDFIRST THEN;
+          SalesLine.CalcVATAmountLines(0,SalesHeader,SalesLine,TempVATAmountLine);
+          InvDiscBaseAmount := TempVATAmountLine.GetTotalInvDiscBaseAmount(FALSE,'');
+
+          IF InvDiscBaseAmount = 0 THEN
+            PromotionDiscountPercent := 0
+          ELSE
+            IF (SalesDocHeader."Promotion Discount Type" = SalesDocHeader."Promotion Discount Type"::"Fixed Amount") THEN
+              PromotionDiscountPercent := SalesDocHeader."Promotion Discount Value" / InvDiscBaseAmount * 100
+            ELSE
+              PromotionDiscountPercent := SalesDocHeader."Promotion Discount Value";
+
+          IF (PromotionDiscountPercent + CustInvDisc."Discount %") > 100 THEN
+            PromotionDiscountPercent := 100 - CustInvDisc."Discount %";
+
+          IF SalesHeader."Currency Code" = '' THEN
+            Currency.InitRoundingPrecision
+          ELSE
+            Currency.GET(SalesHeader."Currency Code");
+
+          SalesDocHeader."Promotion Discount Amount" :=
+            ROUND(PromotionDiscountPercent * InvDiscBaseAmount / 100,Currency."Amount Rounding Precision");
+        END;
+
+      IF CalcInvoiceDiscount THEN BEGIN
+       IF SalesDocHeaderExists THEN
+          SalesDocHeader.MODIFY(TRUE);
+
+        IF SalesHeader."Posting Date" = 0D THEN
+          CurrencyDate := WORKDATE
+        ELSE
+          CurrencyDate := SalesHeader."Posting Date";
+
+        InvDiscBase :=
+          TempVATAmountLine.GetTotalInvDiscBaseAmount(
+            SalesHeader."Prices Including VAT",SalesHeader."Currency Code");
+        ChargeBase :=
+          TempVATAmountLine.GetTotalLineAmount(
+            SalesHeader."Prices Including VAT",SalesHeader."Currency Code");
+        CustInvDisc.GetRec(
+                SalesHeader."Invoice Disc. Code",SalesHeader."Currency Code",CurrencyDate,InvDiscBase);
+
+        SalesSetup.GET;
+        TempVATAmountLine.SetInvoiceDiscountPercent(
+        CustInvDisc."Discount %" + PromotionDiscountPercent,SalesHeader."Currency Code",
+        SalesHeader."Prices Including VAT",SalesSetup."Calc. Inv. Disc. per VAT ID",
+        SalesHeader."VAT Base Discount %");
+
+        SalesLine.SetSalesHeader(SalesHeader);
+        SalesLine.UpdateVATOnLines(0,SalesHeader,SalesLine,TempVATAmountLine);
+      END;
+    END;
+
+    PROCEDURE SaveReturnOrder@11123339(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      OrderNodeBuff@11123307 : TEMPORARY Record 11123303;
+      Params@11123304 : TEMPORARY Record 11123310;
+      SalesHeader@11123306 : Record 36;
+      SalesHeaderExists@11123305 : Boolean;
+    BEGIN
+      Params.InitParams(InXMLBuff,0);
+      InXMLBuff.SelectSingleNode('Order',OrderNodeBuff);
+
+      IF Params.DocumentId <> '' THEN
+        CreateReturnOrderFromInvoice(OrderNodeBuff,OutXMLBuff,Params)
+      ELSE BEGIN
+        Params.InitFieldValues(OrderNodeBuff);
+        IF Params.ReturnOrderId <> '' THEN
+          SalesHeaderExists := SalesHeader.GET(GetDocumentType(Params),Params.ReturnOrderId);
+
+        IF SalesHeaderExists THEN
+          UpdateReturnOrder(OrderNodeBuff,OutXMLBuff,Params)
+        ELSE
+          CreateReturnOrder(OrderNodeBuff,OutXMLBuff,Params);
+      END;
+    END;
+
+    PROCEDURE CreateReturnOrderFromInvoice@11123387(VAR OrderNodeBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303;VAR Params@11123312 : Record 11123310);
+    VAR
+      SalesLineNodesBuff@11123313 : TEMPORARY Record 11123303;
+      SalesHeader@11123307 : Record 36;
+      SalesLine@11123322 : Record 37;
+      SalesInvHeader@11123311 : Record 112;
+      FromSalesInvLine@11123314 : Record 113;
+      TempSalesInvLine@11123317 : TEMPORARY Record 113;
+      TempSalesCommentLine@11123308 : TEMPORARY Record 44;
+      ToSalesCommentLine@11123315 : Record 44;
+      OrderFunc@11123318 : Codeunit 11123319;
+      NextLineNo@11123309 : Integer;
+      DocLineNo@11123304 : Integer;
+      SplitLine@11123305 : Boolean;
+      ExactCostRevMandatory@11123321 : Boolean;
+      PostedInvoiceNo@11123306 : Code[20];
+    BEGIN
+      PostedInvoiceNo := Params.DocumentId;
+      Params.InitFieldValues(OrderNodeBuff);
+      IF PostedInvoiceNo <> '' THEN BEGIN
+        ExactCostRevMandatory := IsExactCostRevMandatory;
+
+        SalesInvHeader.GET(PostedInvoiceNo);
+        Params.AccountId := SalesInvHeader."Sell-to Customer No.";
+
+        InsertSalesHeader(SalesHeader,FALSE,Params);
+        CopySalesInvHeader(SalesInvHeader,SalesHeader);
+        SetDocumentComments36(SalesHeader,OrderNodeBuff,0);
+        OrderNodeBuff.SelectNodes('//SalesLine',SalesLineNodesBuff);
+        WHILE SalesLineNodesBuff.NextNode DO BEGIN
+          Params.InitLineFieldValues(SalesLineNodesBuff);
+          IF FromSalesInvLine.GET(SalesInvHeader."No.",Params.LineNo) THEN BEGIN
+            TempSalesInvLine.TRANSFERFIELDS(FromSalesInvLine);
+
+            SplitLine := TempSalesInvLine.GET(SalesInvHeader."No.",Params.LineNo);
+            IF SplitLine THEN BEGIN
+              IF ExactCostRevMandatory THEN
+                ERROR(Text11123310);
+
+              IF TempSalesInvLine.FINDLAST THEN BEGIN
+                NextLineNo := TempSalesInvLine."Line No." + 100;
+                TempSalesInvLine."Line No." := NextLineNo;
+              END;
+            END;
+
+            TempSalesInvLine.Quantity := Params.Quantity;
+            TempSalesInvLine."Return Reason Code" := Params.ReturnReasonCode;
+            TempSalesInvLine.INSERT;
+
+            SetDocumentComments112(SalesInvHeader,SalesLineNodesBuff,TempSalesCommentLine,TempSalesInvLine."Line No.");
+          END;
+        END;
+
+        IF NOT TempSalesInvLine.ISEMPTY THEN BEGIN
+          CopySalesInvLinesToDoc(SalesHeader,TempSalesInvLine,Params);
+
+          IF ExactCostRevMandatory THEN
+            UpdateReturnQuantity(SalesHeader,TempSalesInvLine,Params)
+          ELSE
+            ValidateReturnQuantity(SalesHeader,Params);
+
+          CopyComentLinesToDoc(SalesHeader,TempSalesCommentLine,TempSalesInvLine,Params);
+        END;
+
+        SetDocAttachments(SalesHeader,OrderNodeBuff);
+        SetSalesDocHeader36(SalesHeader,Params);
+      END;
+
+      OrderFunc.CreateMainOrderBasketXmlNode(SalesHeader,OutXMLBuff,Params);
+    END;
+
+    PROCEDURE UpdateReturnOrder@11123389(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303;VAR Params@11123312 : Record 11123310);
+    VAR
+      SalesHeader@11123304 : Record 36;
+      SalesLine@11123307 : Record 37;
+      Context@11123305 : Codeunit 11123305;
+      Dispatcher@11123306 : Codeunit 11123306;
+      OrderFunc@11123309 : Codeunit 11123319;
+      ArchiveManager@11123308 : Codeunit 5063;
+    BEGIN
+      SalesHeader.GET(GetDocumentType(Params),Params.ReturnOrderId);
+      SalesHeader.SetHideValidationDialog(TRUE);
+
+      TestSalesHeader(SalesHeader,TRUE);
+      ArchiveManager.StoreSalesDocument(SalesHeader,FALSE);
+      TryDeleteSalesLines(SalesHeader,TRUE,Params);
+      SalesHeader.InitRecord;
+      ValidateSalesHeader(SalesHeader,Params);
+      SetDocumentCurrency(SalesHeader,Params);
+      SetDocumentProperties(SalesHeader,Params);
+      SalesHeader.MODIFY(TRUE);
+
+      SetDocAttachments(SalesHeader,InXMLBuff);
+      Context.SetXMLNodeBuff(InXMLBuff);
+      Params.DocumentId := Params.ReturnOrderId;
+      Dispatcher.DispatchInternal('AddOrderSalesLines',Params);
+
+      SetDocumentComments36(SalesHeader,OutXMLBuff,0);
+      AutoSaveHeaderFields(SalesHeader,OutXMLBuff);
+      SetDocAttachments(SalesHeader,OutXMLBuff);
+
+      SetSalesDocHeader36(SalesHeader,Params);
+
+      OrderFunc.CreateMainOrderBasketXmlNode(SalesHeader,OutXMLBuff,Params)
+    END;
+
+    PROCEDURE CreateReturnOrder@11123390(VAR OrderNodeBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303;VAR Params@11123312 : Record 11123310);
+    VAR
+      SalesHeader@11123308 : Record 36;
+      SalesLine@11123307 : Record 37;
+      Context@11123306 : Codeunit 11123305;
+      Dispatcher@11123305 : Codeunit 11123306;
+      OrderFunc@11123304 : Codeunit 11123319;
+    BEGIN
+      IF NOT SanaOrderExists(SalesHeader,Params) THEN BEGIN
+        InsertSalesHeader(SalesHeader,FALSE,Params);
+        ValidateSalesHeader(SalesHeader,Params);
+
+        SetDocumentCurrency(SalesHeader,Params);
+        SetDocumentProperties(SalesHeader,Params);
+        SetOrderShippingAddress(SalesHeader,OrderNodeBuff,Params);
+        UpdatePaymentStatus(SalesHeader,Params);
+        SetOrderShippingAgentService(SalesHeader,Params);
+        SalesHeader.MODIFY(TRUE);
+
+        SetDocAttachments(SalesHeader,OrderNodeBuff);
+        Context.SetXMLNodeBuff(OrderNodeBuff);
+        Dispatcher.DispatchInternal('AddOrderSalesLines',Params);
+
+        SetDocumentComments36(SalesHeader,OrderNodeBuff,0);
+        AutoSaveHeaderFields(SalesHeader,OrderNodeBuff);
+
+        SetSalesDocHeader36(SalesHeader,Params);
+
+        AddOrderImportInfo(SalesHeader,Params);
+      END;
+
+      OrderFunc.CreateMainOrderBasketXmlNode(SalesHeader,OutXMLBuff,Params)
+    END;
+
+    PROCEDURE UpdateReturnQuantity@11123388(SalesHeader@11123302 : Record 36;VAR SalesInvoiceLine@11123303 : Record 113;VAR Params@11123304 : Record 11123310);
+    VAR
+      SalesLine@11123306 : Record 37;
+      LineNo@11123307 : Integer;
+    BEGIN
+      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+      SalesLine.SETFILTER(Type,'<>%1',SalesLine.Type::" ");
+      SalesLine.SETFILTER("Appl.-from Item Entry",'<>%1',0);
+      IF SalesLine.FINDSET THEN
+        REPEAT
+          LineNo := GetOriginDocLineNo(SalesLine."Appl.-from Item Entry");
+          SalesInvoiceLine.SETRANGE("Line No.",LineNo);
+          IF SalesInvoiceLine.FINDFIRST THEN BEGIN
+            SalesLine.VALIDATE(Quantity,SalesInvoiceLine.Quantity);
+            SalesLine.MODIFY(TRUE);
+          END;
+        UNTIL SalesLine.NEXT = 0;
+    END;
+
+    PROCEDURE ValidateReturnQuantity@11123407(SalesHeader@11123302 : Record 36;VAR Paams@11123304 : Record 11123310);
+    VAR
+      SalesLine@11123306 : Record 37;
+      LineNo@11123307 : Integer;
+    BEGIN
+      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+      SalesLine.SETFILTER(Type,'<>%1',SalesLine.Type::" ");
+      IF SalesLine.FINDSET THEN
+        REPEAT
+          SalesLine.VALIDATE(Quantity);
+          SalesLine.MODIFY(TRUE);
+        UNTIL SalesLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE ClearPfsSalesFields@1210090000(VAR NewSalesHeader@1000 : Record 36);
+    BEGIN
+      // NOT SUPPORTED IN CURRENT IMPLEMENTATION
+    END;
+
+    LOCAL PROCEDURE ClearSalesBizTalkFields@25(VAR NewSalesHeader@1000 : Record 36);
+    BEGIN
+      // NOT SUPPORTED IN CURRENT IMPLEMENTATION
+    END;
+
+    PROCEDURE CopyOldSalesHeaderValues@11123402(FromSalesHeader@11123302 : Record 36;VAR ToSalesHeader@11123303 : Record 36);
+    BEGIN
+      WITH ToSalesHeader DO BEGIN
+        VALIDATE("Location Code");
+        "No. Series" := FromSalesHeader."No. Series";
+        "Posting Description" := FromSalesHeader."Posting Description";
+        "Posting No." := FromSalesHeader."Posting No.";
+        "Posting No. Series" := FromSalesHeader."Posting No. Series";
+        "Shipping No." := FromSalesHeader."Shipping No.";
+        "Shipping No. Series" := FromSalesHeader."Shipping No. Series";
+        "Return Receipt No." := FromSalesHeader."Return Receipt No.";
+        "Return Receipt No. Series" := FromSalesHeader."Return Receipt No. Series";
+        "Prepayment No. Series" := FromSalesHeader."Prepayment No. Series";
+        "Prepayment No." := FromSalesHeader."Prepayment No.";
+        "Prepmt. Posting Description" := FromSalesHeader."Prepmt. Posting Description";
+        "Prepmt. Cr. Memo No. Series" := FromSalesHeader."Prepmt. Cr. Memo No. Series";
+        "Prepmt. Cr. Memo No." := FromSalesHeader."Prepmt. Cr. Memo No.";
+        "Prepmt. Posting Description" := FromSalesHeader."Prepmt. Posting Description";
+        "No. Printed" := 0;
+        "Applies-to Doc. Type" := "Applies-to Doc. Type"::" ";
+        "Applies-to Doc. No." := '';
+        "Applies-to ID" := '';
+        "Opportunity No." := '';
+      END;
+    END;
+
+    PROCEDURE SetSalesDocHeader36@11123370(SalesHeader@11123302 : Record 36;VAR Params@11123303 : Record 11123310);
+    VAR
+      Customer@11123307 : Record 18;
+      SalesDocHeader@11123304 : Record 11123323;
+      OrderFunc@11123305 : Codeunit 11123319;
+      RecMgt@11123306 : Codeunit 11123326;
+    BEGIN
+      IF NOT OrderFunc.FindSalesDocHeader36(SalesHeader,SalesDocHeader) THEN
+        OrderFunc.InsertSalesDocHeader36(SalesHeader,SalesDocHeader);
+
+      WITH SalesDocHeader DO BEGIN
+        IF "Date Received" = 0D THEN
+          "Date Received" := TODAY;
+
+        IF "Time Received" = 0T THEN
+          "Time Received" := TIME;
+
+        IF CheckSalesDocHeaderValue(Params.SanaOrderId,"Sana Order No.") THEN
+          "Sana Order No." := Params.SanaOrderId;
+
+        IF RecMgt.GetCustomer(SalesHeader."Sell-to Customer No.",Customer,FALSE) THEN
+          IF CheckSalesDocHeaderValue(Customer."Sana Customer No.","Sana Customer No.") THEN
+            "Sana Customer No." := Customer."Sana Customer No.";
+
+        IF CheckSalesDocHeaderValue(Params.PaymentMethodName,"Payment Method Name") THEN
+          "Payment Method Name" := Params.PaymentMethodName;
+
+        IF CheckSalesDocHeaderValue(Params.PaymentTransactionId,"Payment Transaction Id") THEN
+          "Payment Transaction Id" := Params.PaymentTransactionId;
+
+        IF CheckSalesDocHeaderValue(Params.PaymentStatus,"Payment Method Status") THEN
+          "Payment Method Status" := Params.PaymentStatus;
+
+        IF CheckSalesDocHeaderValue(Params.ShippingMethodName,"Shipment Method Name") THEN
+          "Shipment Method Name" := Params.ShippingMethodName;
+
+        IF CheckSalesDocHeaderValue(Params.ShopAccountEmail,"Shop Account E-Mail") THEN
+          "Shop Account E-Mail" := Params.ShopAccountEmail;
+
+        IF CheckSalesDocHeaderValue(Params.WebsiteId,"Webshop ID") THEN
+          "Webshop ID" := Params.WebsiteId;
+
+        IF "Document State" <> Params.DocumentState THEN
+          "Document State" := Params.DocumentState;
+
+        IF CheckSalesDocHeaderValue(Params.AuthorizationStatus,"Authorization Status") THEN
+          "Authorization Status" := Params.AuthorizationStatus;
+
+        IF "Origin. Document No." = '' THEN BEGIN
+          "Origin. Document No." := SalesHeader."No.";
+          "Origin. Document Type" := SalesHeader."Document Type";
+          "Sell-to Customer No." := SalesHeader."Sell-to Customer No.";
+          "Sell-to Contact No." := SalesHeader."Sell-to Contact No.";
+        END;
+
+        "Unique Webshop Document Id" := SalesHeader."Unique Webshop Document Id";
+
+        SetPromotedSalesDocHeader(SalesDocHeader,Params);
+
+        MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE SetSalesDocHeader112@11123374(SalesInvHeader@11123302 : Record 112;VAR Params@11123303 : Record 11123310);
+    VAR
+      Customer@11123306 : Record 18;
+      SalesDocHeader@11123304 : Record 11123323;
+      OrderFunc@11123305 : Codeunit 11123319;
+    BEGIN
+      IF NOT OrderFunc.FindSalesDocHeader112(SalesInvHeader,SalesDocHeader) THEN
+        OrderFunc.InsertSalesDocHeader112(SalesInvHeader,SalesDocHeader);
+
+      WITH SalesDocHeader DO BEGIN
+        IF "Origin. Document No." = '' THEN BEGIN
+          "Origin. Document No." := SalesInvHeader."No.";
+          "Sell-to Customer No." := SalesInvHeader."Sell-to Customer No.";
+          "Sell-to Contact No." := SalesInvHeader."Sell-to Contact No.";
+        END;
+
+        IF CheckSalesDocHeaderValue(Params.SanaOrderId,"Sana Order No.") THEN
+          "Sana Order No." := Params.SanaOrderId;
+
+        IF CheckSalesDocHeaderValue(Params.WebsiteId,"Webshop ID") THEN
+          "Webshop ID" := Params.WebsiteId;
+
+        "Unique Webshop Document Id" := SalesInvHeader."Unique Webshop Document Id";
+        MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE CopySalesInvHeader@11123386(FromSalesInvHeader@11123302 : Record 112;VAR ToSalesHeader@11123303 : Record 36);
+    VAR
+      OldSalesHeader@11123307 : Record 36;
+      FromSalesHeader@11123315 : Record 36;
+      CustLedgEntry@11123310 : Record 21;
+      GLSetUp@11123312 : Record 98;
+      PaymentTerms@11123313 : Record 3;
+      FromDocNo@11123311 : Code[20];
+    BEGIN
+      WITH ToSalesHeader DO BEGIN
+        GLSetUp.GET;
+        FromDocNo := FromSalesInvHeader."No.";
+        FromSalesInvHeader.TESTFIELD("Prepayment Invoice",FALSE);
+
+        OldSalesHeader := ToSalesHeader;
+        ToSalesHeader.VALIDATE("Sell-to Customer No.",FromSalesInvHeader."Sell-to Customer No.");
+        TRANSFERFIELDS(FromSalesInvHeader,FALSE);
+        CopyOldSalesHeaderValues(OldSalesHeader,ToSalesHeader);
+        ClearSalesBizTalkFields(ToSalesHeader);
+        ClearPfsSalesFields(ToSalesHeader);
+
+        CustLedgEntry.SETRANGE("Document Type",CustLedgEntry."Document Type"::Invoice);
+        CustLedgEntry.SETRANGE("Document No.",FromDocNo);
+        CustLedgEntry.SETRANGE("Customer No.","Bill-to Customer No.");
+        CustLedgEntry.SETRANGE(Open,TRUE);
+        IF CustLedgEntry.FINDFIRST THEN BEGIN
+          "Applies-to Doc. Type" := "Applies-to Doc. Type"::Invoice;
+          "Applies-to Doc. No." := FromDocNo;
+          CustLedgEntry.CALCFIELDS("Remaining Amount");
+          CustLedgEntry."Amount to Apply" := CustLedgEntry."Remaining Amount";
+          CustLedgEntry."Accepted Payment Tolerance" := 0;
+          CustLedgEntry."Accepted Pmt. Disc. Tolerance" := FALSE;
+          CODEUNIT.RUN(CODEUNIT::"Cust. Entry-Edit",CustLedgEntry);
+        END;
+
+        Correction := FALSE;
+        "Shipment Date" := 0D;
+        Correction := GLSetUp."Mark Cr. Memos as Corrections";
+        IF ("Payment Terms Code" <> '') AND ("Document Date" <> 0D) THEN
+          PaymentTerms.GET("Payment Terms Code")
+        ELSE
+          CLEAR(PaymentTerms);
+
+        IF NOT PaymentTerms."Calc. Pmt. Disc. on Cr. Memos" THEN BEGIN
+          "Payment Terms Code" := '';
+          "Due Date" := 0D;
+          "Payment Discount %" := 0;
+          "Pmt. Discount Date" := 0D;
+        END;
+
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE CopySalesInvLinesToDoc@11123382(SalesHeader@11123302 : Record 36;VAR SalesInvLine@11123303 : Record 113;VAR Params@11123305 : Record 11123310);
+    VAR
+      CopyDocMgt@11123308 : Codeunit 6620;
+      LinesNotCopied@11123310 : Integer;
+      HideDialog@11123307 : Boolean;
+      IncludeHeader@11123311 : Boolean;
+      CreateToHeader@11123312 : Boolean;
+      RecalculateLines@11123306 : Boolean;
+      MissingExCostRevLink@11123309 : Boolean;
+      ExactCostRevMandatory@11123304 : Boolean;
+      ApplyFully@11123313 : Boolean;
+      MoveNegLines@11123314 : Boolean;
+    BEGIN
+      HideDialog := TRUE;
+      ExactCostRevMandatory := IsExactCostRevMandatory;
+      CopyDocMgt.SetProperties(
+        IncludeHeader,
+        RecalculateLines,
+        MoveNegLines,
+        CreateToHeader,
+        HideDialog,
+        ExactCostRevMandatory,
+        ApplyFully);
+      CopyDocMgt.CopySalesInvLinesToDoc(SalesHeader,SalesInvLine,LinesNotCopied,MissingExCostRevLink);
+    END;
+
+    PROCEDURE SetDocumentComments36@11123404(SalesHeader@11123302 : Record 36;VAR OrderNodeBuff@11123303 : Record 11123303;LineNo@11123307 : Integer);
+    VAR
+      RecRef@11123305 : RecordRef;
+      CommentNodesBuff@11123304 : TEMPORARY Record 11123303;
+      CommentLinesBuff@11123308 : TEMPORARY Record 11123303;
+      SalesCommentLine@11123306 : Record 44;
+    BEGIN
+      OrderNodeBuff.SelectSingleNode('CommentLines',CommentLinesBuff);
+      CommentLinesBuff.SelectNodes('CommentLine',CommentNodesBuff);
+
+      RecRef.GETTABLE(SalesHeader);
+      SetDocumentComments(CommentNodesBuff,RecRef,SalesCommentLine,LineNo);
+      RecRef.CLOSE;
+    END;
+
+    PROCEDURE SetDocumentComments112@11123405(SalesInvHeader@11123302 : Record 112;VAR OrderNodeBuff@11123304 : Record 11123303;VAR SalesCommentLine@11123312 : Record 44;LineNo@11123306 : Integer);
+    VAR
+      RecRef@11123305 : RecordRef;
+      CommentNodesBuff@11123303 : TEMPORARY Record 11123303;
+      CommentLinesBuff@11123307 : TEMPORARY Record 11123303;
+    BEGIN
+      OrderNodeBuff.SelectSingleNode('CommentLines',CommentLinesBuff);
+      CommentLinesBuff.SelectNodes('CommentLine',CommentNodesBuff);
+
+      RecRef.GETTABLE(SalesInvHeader);
+      SetDocumentComments(CommentNodesBuff,RecRef,SalesCommentLine,LineNo);
+      RecRef.CLOSE;
+    END;
+
+    PROCEDURE SetDocumentComments@11123397(VAR CommentNodesBuf@11123304 : Record 11123303;RecRef@11123302 : RecordRef;VAR SalesCommentLine@11123312 : Record 44;DocLineNo@11123313 : Integer);
+    VAR
+      FieldRef@11123319 : FieldRef;
+      CommonFunc@11123315 : Codeunit 11123309;
+      OrderFunc@11123317 : Codeunit 11123319;
+      DocNo@11123318 : Code[20];
+      NewDate@11123311 : Date;
+      RestOfString@11123310 : Text[1024];
+      SplitMessage@11123309 : Text[1024];
+      SplitString@11123308 : Text[1024];
+      FirstLineNo@11123307 : Integer;
+      LineSetNo@11123305 : Integer;
+      LastLineNo@11123303 : Integer;
+      TableNumber@11123314 : Integer;
+      DocType@11123316 : Integer;
+      Counter@11123306 : Integer;
+    BEGIN
+      TableNumber := CommonFunc.GetCorrectTableNoFromRecRef(RecRef);
+      CASE TableNumber OF
+        DATABASE::"Sales Header" :
+          OrderFunc.DefineSalesDocHeaderNoAndType(RecRef,DocNo,DocType);
+        DATABASE::"Sales Invoice Header" :
+          BEGIN
+            DocNo := CommonFunc.GetFieldValueByName(RecRef,'No.');
+            DocType := SalesCommentLine."Document Type"::"Posted Invoice";
+          END;
+      ELSE
+        ERROR(Text11123311,RecRef.NAME);
+      END;
+
+      SalesCommentLine.RESET;
+      SalesCommentLine.SETRANGE("Document Type",DocType);
+      SalesCommentLine.SETRANGE("No.",DocNo);
+      SalesCommentLine.SETRANGE("Document Line No.",DocLineNo);
+      SalesCommentLine.SETFILTER(Date,'<>%1',0D);
+      IF SalesCommentLine.FINDLAST THEN BEGIN
+        FirstLineNo := SalesCommentLine."Line No.";
+        LineSetNo := FirstLineNo;
+        SalesCommentLine.SETRANGE(Date);
+        IF SalesCommentLine.FINDLAST THEN BEGIN
+          LastLineNo := SalesCommentLine."Line No.";
+          SalesCommentLine.SETFILTER("Line No.",'%1..%2',FirstLineNo,LastLineNo);
+          SalesCommentLine.DELETEALL;
+        END;
+      END;
+
+      Counter := 0;
+      WHILE CommentNodesBuf.NextNode DO BEGIN
+        RestOfString := CommentNodesBuf.InnerText;
+        WHILE RestOfString <> '' DO BEGIN
+          NewDate := TODAY;
+          IF Counter <> 0 THEN
+            NewDate := 0D;
+          LineSetNo := LineSetNo + 10000;
+          SplitMessage := RestOfString;
+          SplitLine(SplitMessage,MAXSTRLEN(SalesCommentLine.Comment),RestOfString,SplitString);
+          SetSalesCommentLine(SalesCommentLine,DocType,DocNo,DocLineNo,LineSetNo,SplitString,NewDate);
+          Counter := Counter + 1;
+        END;
+      END;
+    END;
+
+    PROCEDURE SetSalesCommentLine@11123383(VAR SalesCommentLine@11123302 : Record 44;DocType@11123303 : Integer;DocNo@11123304 : Code[20];DocLineNo@11123305 : Integer;LineNo@11123306 : Integer;NewComment@11123307 : Text[80];NewDate@11123308 : Date);
+    BEGIN
+      WITH SalesCommentLine DO BEGIN
+        INIT;
+        "Document Type" := DocType;
+        "No." := DocNo;
+        "Document Line No." := DocLineNo;
+        "Line No." := LineNo;
+        Date := NewDate;
+        Comment := NewComment;
+        INSERT;
+      END;
+    END;
+
+    PROCEDURE CopyComentLinesToDoc@11123393(SalesHeader@11123302 : Record 36;VAR FromSalesCommentLine@11123303 : Record 44;VAR SalesInvLine@11123311 : Record 113;VAR Params@11123304 : Record 11123310);
+    VAR
+      SalesLine@11123306 : Record 37;
+      ToSalesCommentLine@11123309 : Record 44;
+      InvoiceLineNo@11123305 : Integer;
+      SalesLineLineNo@11123308 : Integer;
+      NextLineNo@11123310 : Integer;
+      ExactCostRevMandatory@11123307 : Boolean;
+      NewDate@11123312 : Date;
+    BEGIN
+      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+      SalesLine.SETFILTER(Type,'<>%1',SalesLine.Type::" ");
+      IF SalesLine.FINDSET THEN BEGIN
+        ExactCostRevMandatory := IsExactCostRevMandatory;
+        REPEAT
+          SalesLineLineNo := SalesLine."Line No.";
+          IF ExactCostRevMandatory THEN
+            InvoiceLineNo := GetOriginDocLineNo(SalesLine."Appl.-from Item Entry")
+          ELSE
+            InvoiceLineNo := TryDefineInvoiceLineNo(SalesInvLine,SalesLine);
+
+          IF InvoiceLineNo <> 0 THEN BEGIN
+            NextLineNo := 10000;
+            FromSalesCommentLine.RESET;
+            FromSalesCommentLine.SETRANGE("Document Line No.",InvoiceLineNo);
+            IF FromSalesCommentLine.FINDSET THEN
+              REPEAT
+                WITH ToSalesCommentLine DO BEGIN
+                  SETRANGE("Document Type",SalesHeader."Document Type");
+                  SETRANGE("No.",SalesHeader."No.");
+                  SETRANGE("Document Line No.",SalesLine."Line No.");
+                  IF FINDLAST THEN
+                    NextLineNo := "Line No." + 10000;
+                END;
+
+                NewDate := TODAY;
+                IF NextLineNo <> 10000 THEN
+                  NewDate := 0D;
+
+                SetSalesCommentLine(ToSalesCommentLine,SalesHeader."Document Type",SalesHeader."No.",
+                  SalesLine."Line No.",NextLineNo,FromSalesCommentLine.Comment,NewDate);
+
+              UNTIL FromSalesCommentLine.NEXT = 0;
+          END;
+        UNTIL SalesLine.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE GetOriginDocLineNo@11123392(ApplFromItemEntry@11123302 : Integer) : Integer;
+    VAR
+      ItemLedgEntry@11123304 : Record 32;
+      LineNo@11123303 : Integer;
+    BEGIN
+      IF ItemLedgEntry.GET(ApplFromItemEntry) THEN
+        LineNo := ItemLedgEntry."Document Line No.";
+
+      EXIT(LineNo);
+    END;
+
+    PROCEDURE IsExactCostRevMandatory@11123308() : Boolean;
+    VAR
+      SalesSetup@11123302 : Record 311;
+    BEGIN
+      SalesSetup.GET;
+      EXIT(SalesSetup."Exact Cost Reversing Mandatory");
+    END;
+
+    PROCEDURE TryDefineInvoiceLineNo@11123396(VAR SalesInvLine@11123302 : Record 113;SalesLine@11123303 : Record 37) : Integer;
+    VAR
+      LineNo@11123304 : Integer;
+    BEGIN
+      SalesInvLine.RESET;
+      SalesInvLine.SETRANGE(Type,SalesLine.Type);
+      SalesInvLine.SETRANGE("No.",SalesLine."No.");
+      SalesInvLine.SETRANGE("Variant Code",SalesLine."Variant Code");
+      SalesInvLine.SETRANGE(Quantity,SalesLine.Quantity);
+      SalesInvLine.SETRANGE("Unit of Measure Code",SalesLine."Unit of Measure Code");
+      SalesInvLine.SETRANGE("Return Reason Code",SalesLine."Return Reason Code");
+      IF SalesInvLine.FINDFIRST THEN
+        LineNo := SalesInvLine."Line No.";
+
+      EXIT(LineNo);
+    END;
+
+    PROCEDURE SetDocAttachments@11123312(SalesHeader@11123302 : Record 36;VAR OrderNodeBuff@11123303 : Record 11123303);
+    VAR
+      RecRef@11123308 : RecordRef;
+      AttachmentNodesBuff@11123304 : TEMPORARY Record 11123303;
+      RecordLink@11123305 : Record 2000000068;
+      RecId@11123309 : RecordID;
+      LinkId@11123307 : Integer;
+      Attachment@11123306 : Text[250];
+    BEGIN
+      OrderNodeBuff.SelectNodes('Attachments/Attachment',AttachmentNodesBuff);
+      RecRef.GETTABLE(SalesHeader);
+      RecId := RecRef.RECORDID;
+      DeleteRecordLinks(RecId);
+      RecRef.CLOSE;
+
+      WHILE AttachmentNodesBuff.NextNode DO BEGIN
+        Attachment := AttachmentNodesBuff.InnerText;
+        IF Attachment <> '' THEN BEGIN
+
+          IF RecordLink.FINDLAST THEN
+            LinkId := RecordLink."Link ID" + 1
+          ELSE
+            LinkId := 1;
+
+          SetRecordLink(RecordLink,LinkId,RecId,Attachment);
+        END;
+      END;
+    END;
+
+    PROCEDURE SetRecordLink@11123394(VAR RecordLink@11123305 : Record 2000000068;LinkId@11123302 : Integer;RecId@11123303 : RecordID;NewAttachment@11123304 : Text[250]);
+    VAR
+      CommonFunc@11123306 : Codeunit 11123309;
+    BEGIN
+      WITH RecordLink DO BEGIN
+        INIT;
+        "Link ID" := LinkId;
+        "Record ID" := RecId;
+        Type := RecordLink.Type::Link;
+        URL1 := NewAttachment;
+        Description := CommonFunc.GetFileName(RecordLink);
+        Created := CURRENTDATETIME;
+        "User ID" := USERID;
+        Company := COMPANYNAME;
+        INSERT;
+      END;
+    END;
+
+    PROCEDURE DeleteRecordLinks@11123400(RecId@11123303 : RecordID);
+    VAR
+      RecordLink@11123302 : Record 2000000068;
+    BEGIN
+      RecordLink.SETRANGE("Record ID",RecId);
+      IF RecordLink.FINDSET THEN
+        RecordLink.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE GetSalePriceTopaz@1000000001(VAR SalesLine@1000000001 : Record 37;VAR Params@1000000000 : Record 11123310) : Decimal;
+    VAR
+      RecMgt@1000000003 : Codeunit 11123326;
+      LastsalesPrice@1000000004 : Record 50004;
+      SalesLineBuffer@1000000005 : Record 50021;
+      Customer@1000000006 : Record 18;
+      LineNo@1000000007 : Integer;
+      Lastsalprice@1000000002 : Decimal;
+      SalesUOMCode@1000000008 : Code[10];
+      CatalogHelper@1000000009 : Codeunit 11123318;
+      ItemUOM@1000000010 : Record 5404;
+      ItemDivision@1000000011 : Record 27;
+    BEGIN
+      //<TPZ3352>
+      IF GetCallForPricetemAttr(SalesLine."No.") = TRUE THEN  BEGIN
+         Params.Price := 0;
+      END ELSE BEGIN //</TPZ3352>
+        //<TPZ3099>
+        {ItemDiv.RESET;
+        IF ItemDiv.GET(Params.ProductId) AND (ItemDiv."Shortcut Dimension 5 Code" <> 'L') THEN BEGIN
+        // IF Params.Type = SalesLine.Type :: Item THEN BEGIN}
+        IF SalesLine."Shortcut Dimension 5 Code" <> 'L' THEN BEGIN
+          RecMgt.GetCustomer(Params.AccountId,Customer,TRUE);
+          Lastsalprice :=0;
+          IF  SalesLineBuffer.FINDLAST THEN
+          LineNo:= SalesLineBuffer."Line No."+10000;
+            SalesLineBuffer.INIT;
+            SalesLineBuffer."Document Type" := SalesLineBuffer."Document Type"::Order;
+            SalesLineBuffer."Document No." := '111';
+            SalesLineBuffer."Line No." := LineNo;
+            SalesLineBuffer.INSERT;
+            SalesLineBuffer."Sell-to Customer No.":= Customer."No.";
+            SalesLineBuffer.Type := SalesLineBuffer.Type::Item;
+            SalesLineBuffer.VALIDATE("No.",Params.ProductId);
+           // SalesLineBuffer.VALIDATE("Unit of Measure",Params.UnitOfMeasureId);
+            SalesLineBuffer.MODIFY;
+            ///EXIT ((SalesLineBuffer."Recomm. Unit Price"));
+            Lastsalprice := SalesLineBuffer."Recomm. Unit Price";
+          // Lastsalprice := SalesLineBuffer."Unit Price";
+          //</TPZ2751>
+         END ELSE BEGIN //UTK}
+            RecMgt.GetCustomer(Params.AccountId,Customer,TRUE);
+           // MESSAGE(Customer."No.");
+            Lastsalprice :=0;
+            LastsalesPrice.RESET;
+            LastsalesPrice.ASCENDING;
+            LastsalesPrice.SETCURRENTKEY("Sell-to Customer No.","Item No.","Document Date");
+            LastsalesPrice.SETRANGE("Sell-to Customer No.",Customer."No.");
+            LastsalesPrice.SETRANGE("Item No.",SalesLine."No.");
+            LastsalesPrice.SETRANGE("Document Type",LastsalesPrice."Document Type"::"Stock Status");
+            LastsalesPrice.SETRANGE("Document Date",CALCDATE('-CM-12M',WORKDATE),WORKDATE);
+            IF LastsalesPrice.FINDLAST THEN// BEGIN
+             Lastsalprice := LastsalesPrice."Last Unit Price"
+            ELSE BEGIN
+              IF ItemDivision.GET(SalesLine."No.") THEN
+                Lastsalprice := ItemDivision."High Unit Price";
+            END ;
+         END;
+       END;//<TPZ3352>
+            SalesUOMCode := GetItemUOMTpz(SalesLine);
+            ItemUOM.RESET;
+            ItemUOM.SETRANGE("Item No.",SalesLine."No.");
+           // ItemUOM.SETFILTER(Code,'<>%1',SalesUOMCode);//<TPZ3319>
+            ItemUOM.SETRANGE("Visible in Webshop",TRUE);
+            IF ItemUOM.FINDSET THEN
+             REPEAT
+              IF ItemUOM.Code = SalesLine."Unit of Measure Code" THEN BEGIN
+               IF ItemUOM."Qty. per Unit of Measure" <> 1 THEN
+                Lastsalprice := Lastsalprice * ItemUOM."Qty. per Unit of Measure";
+              END;
+             UNTIL ItemUOM.NEXT = 0;
+                EXIT(Lastsalprice);
+         // END;
+
+      //END; //TPZ3099
+
+      //EXIT(SalesLine."Unit Price");
+    END;
+
+    PROCEDURE GetItemUOMTpz@1000000002(VAR SalesLine@11123302 : Record 37) : Code[10];
+    VAR
+      ItemRec@1000000000 : Record 27;
+      WebshopDefaultUOM@1000000001 : Code[10];
+    BEGIN
+      //<TPZ3319>
+      IF ItemRec.GET(SalesLine."No.") THEN
+        WebshopDefaultUOM := GetWebShopDefaultUOMTpz(ItemRec);
+       IF WebshopDefaultUOM <> '' THEN
+        EXIT(WebshopDefaultUOM);
+      //</TPZ3319>
+      //<TPZ3099>
+      IF ItemRec.GET(SalesLine."No.") THEN
+        IF ItemRec."Sales Unit of Measure" <> '' THEN
+          EXIT(ItemRec."Sales Unit of Measure");
+      EXIT(ItemRec."Base Unit of Measure");
+      //</TPZ3099>
+    END;
+
+    LOCAL PROCEDURE UpdateUOMQtytoPCS@1000000003(VAR SalesLine@1000000000 : Record 37);
+    VAR
+      ItemUOM@1000000001 : Record 5404;
+      ActUnitPrice@1000000002 : Decimal;
+    BEGIN
+      //<TPZ3099>
+        ActUnitPrice := 0;
+      IF SalesLine."Unit of Measure Code" <> 'PCS' THEN BEGIN
+        ItemUOM.RESET;
+       IF ItemUOM.GET(SalesLine."No.",SalesLine."Unit of Measure Code") THEN  BEGIN
+         ActUnitPrice := SalesLine."Unit Price"/ItemUOM."Qty. per Unit of Measure";
+         SalesLine.VALIDATE(Quantity,(SalesLine.Quantity*ItemUOM."Qty. per Unit of Measure"));
+         SalesLine.VALIDATE("Unit of Measure Code",'PCS');
+         SalesLine.VALIDATE("Actual Unit Price",ActUnitPrice);
+         SalesLine.VALIDATE("Recomm. Unit Price",ActUnitPrice);//<TPZ3403>
+         SalesLine.MODIFY(TRUE);
+        END;
+      END;
+      //</TPZ3099>
+    END;
+
+    PROCEDURE GetWebShopDefaultUOMTpz@1000000007(Item@1000000000 : Record 27) : Code[10];
+    VAR
+      ItemUOM@1000000001 : Record 5404;
+    BEGIN
+      //<TPZ3319>
+      ItemUOM.SETRANGE("Item No.",Item."No.");
+      ItemUOM.SETRANGE("Webshop Default",TRUE);
+      IF ItemUOM.FINDFIRST THEN
+        EXIT(ItemUOM.Code);
+      //</TPZ3319>
+    END;
+
+    LOCAL PROCEDURE GetCallForPricetemAttr@1000000009(VAR ItemNo@1000000000 : Code[20]) : Boolean;
+    VAR
+      ItemAttributeValueMapping@1000000001 : Record 7505;
+    BEGIN
+      //<TPZ3352>
+      ItemAttributeValueMapping.RESET;
+      ItemAttributeValueMapping.SETFILTER("Table ID",'27');
+      ItemAttributeValueMapping.SETRANGE("No.",ItemNo);
+      ItemAttributeValueMapping.SETFILTER("Item Attribute ID",'1063');//Call for Price
+      ItemAttributeValueMapping.SETFILTER("Item Attribute Value ID",'6724'); //Call for Price-Yes
+      IF ItemAttributeValueMapping.FINDFIRST THEN
+        EXIT(TRUE);
+
+      EXIT(FALSE);
+      //</TPZ3352>
+    END;
+
+    BEGIN
+    {
+      2016-02-16 TPZ1301 TAKHMETO
+        InsertSalesHeader function has been modified
+      2019-05-20 TPZ2503 UCHOUHAN
+        Block perveious code and added new code for Division Parameter in InsertSalesHeader Function.
+
+      001 UTK TPZ3108 03312021 - Added code for Shipping agent Detail for Pick up Order.
+      001 TPZ3099 UTK 03312021 - Added code for Sana Prices Topaz logic.
+      002 TPZ3154 UTK 05112021 Added code for Ispickuporder field updated for Pickup integration with Sana.
+      003 TPZ3319 UTK 08192021 - Code Changed for SANA Default UOM.
+      004 TPZ3352 UTK 09152021 - Price change to 0 for call for price item.
+      005 TPZ3403 UTK 11022021 - Added code for recomm. Unit Price.
+    }
+    END.
+  }
+}
+

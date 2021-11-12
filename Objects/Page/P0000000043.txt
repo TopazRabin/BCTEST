@@ -1,0 +1,3633 @@
+OBJECT Page 43 Sales Invoice
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/22/21;
+    Time=10:04:01 AM;
+    Modified=Yes;
+    Version List=NAVW111.00,NAVNA11.00,SE0.61;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Sales Invoice;
+               ESM=Factura venta;
+               FRC=Facture vente;
+               ENC=Sales Invoice];
+    SourceTable=Table36;
+    SourceTableView=WHERE(Document Type=FILTER(Invoice));
+    PageType=Document;
+    RefreshOnActivate=Yes;
+    PromotedActionCategoriesML=[ENU=New,Process,Report,Approve,Posting,Prepare,Invoice,Release,Request Approval,View;
+                                ESM=Nuevo,Procesar,Informar,Aprobar,Registrar,Preparar,Factura,Liberar,Solicitar aprobaci¢n,Ver;
+                                FRC=Nouveau,Traiter,D‚clarer,Approuver,Report,Pr‚parer,Facturer,Lib‚rer,Demander une approbation,Afficher;
+                                ENC=New,Process,Report,Approve,Posting,Prepare,Invoice,Release,Request Approval,View];
+    OnInit=VAR
+             SalesReceivablesSetup@1001 : Record 311;
+           BEGIN
+             JobQueuesUsed := SalesReceivablesSetup.JobQueueActive;
+             SetExtDocNoMandatoryCondition;
+           END;
+
+    OnOpenPage=VAR
+                 OfficeMgt@1000 : Codeunit 1630;
+                 PermissionManager@1001 : Codeunit 9002;
+               BEGIN
+                 IF UserMgt.GetSalesFilter <> '' THEN BEGIN
+                   FILTERGROUP(2);
+                   SETRANGE("Responsibility Center",UserMgt.GetSalesFilter);
+                   FILTERGROUP(0);
+                 END;
+                 //=======} MODIFIED
+                 Page43EventPublishers.Pg43_OnOPenPage(Rec,OSRCSRISRMfrRepEditable,CommHdlgVisible);//<TPZ2829> Event Conversion
+                 SetDocNoVisible;
+                 SetControlAppearance;
+
+                 IF "Quote No." <> '' THEN
+                   ShowQuoteNo := TRUE;
+
+                 IF "No." = '' THEN
+                   IF OfficeMgt.CheckForExistingInvoice("Sell-to Customer No.") THEN
+                     ERROR(''); // Cancel invoice creation
+                 //{=======} MODIFIED
+                 //{=======} TARGET
+                 IsSaaS := PermissionManager.SoftwareAsAService;
+                 IF ("No." <> '') AND ("Sell-to Customer No." = '') THEN
+                   DocumentIsPosted := (NOT GET("Document Type","No."));
+                 {<<<<<<<}
+                 ;ESACC_EasySecurity(TRUE);
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       SetControlAppearance;
+                       WorkDescription := GetWorkDescription;
+                       UpdateShipToBillToGroupVisibility
+                     END;
+
+    OnNewRecord=BEGIN
+                  xRec.INIT;
+                  "Responsibility Center" := UserMgt.GetSalesFilter;
+                  IF (NOT DocNoVisible) AND ("No." = '') THEN
+                    SetSellToCustomerFromFilter;
+
+                  SetDefaultPaymentServices;
+                  UpdateShipToBillToGroupVisibility;
+                END;
+
+    OnInsertRecord=BEGIN
+                     IF DocNoVisible THEN
+                       CheckCreditMaxBeforeInsert;
+
+                     IF ("Sell-to Customer No." = '') AND (GETFILTER("Sell-to Customer No.") <> '') THEN
+                       CurrPage.UPDATE(FALSE);
+                   END;
+
+    OnDeleteRecord=BEGIN
+                     CurrPage.SAVERECORD;
+                     EXIT(ConfirmDeletion);
+                   END;
+
+    OnQueryClosePage=BEGIN
+                       IF NOT DocumentIsPosted THEN
+                         EXIT(ConfirmCloseUnposted)
+                     END;
+
+    OnAfterGetCurrRecord=BEGIN
+                           CurrPage.IncomingDocAttachFactBox.PAGE.LoadDataFromRecord(Rec);
+                           CurrPage.ApprovalFactBox.PAGE.UpdateApprovalEntriesFromSourceRecord(RECORDID);
+                           ShowWorkflowStatus := CurrPage.WorkflowStatus.PAGE.SetFilterOnWorkflowRecord(RECORDID);
+
+                           UpdatePaymentService;
+                         END;
+
+    ActionList=ACTIONS
+    {
+      { 1900000003;0 ;ActionContainer;
+                      ActionContainerType=RelatedInformation }
+      { 57      ;1   ;ActionGroup;
+                      CaptionML=[ENU=&Invoice;
+                                 ESM=&Factura;
+                                 FRC=&Facture;
+                                 ENC=&Invoice];
+                      Image=Invoice }
+      { 59      ;2   ;Action    ;
+                      Name=Statistics;
+                      ShortCutKey=F7;
+                      CaptionML=[ENU=Statistics;
+                                 ESM=Estad¡sticas;
+                                 FRC=Statistiques;
+                                 ENC=Statistics];
+                      ToolTipML=[ENU=View statistical information, such as the value of posted entries, for the record.;
+                                 ESM=Permite ver informaci¢n estad¡stica del registro, como el valor de los movimientos registrados.;
+                                 FRC=Affichez les informations statistiques telles que la valeur des ‚critures report‚es pour l'enregistrement.;
+                                 ENC=View statistical information, such as the value of posted entries, for the record.];
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Visible=ESACC_C59_Visible;
+                      Enabled=ESACC_C59_Enabled AND ("No." <> '');
+                      Image=Statistics;
+                      PromotedCategory=Category7;
+                      OnAction=VAR
+                                 Handled@1000 : Boolean;
+                               BEGIN
+                                 OnBeforeStatisticsAction(Rec,Handled);
+                                 IF NOT Handled THEN BEGIN
+                                   CalcInvDiscForHeader;
+                                   COMMIT;
+                                   OnBeforeCalculateSalesTaxStatistics(Rec,TRUE);
+                                   IF "Tax Area Code" = '' THEN
+                                     PAGE.RUNMODAL(PAGE::"Sales Statistics",Rec)
+                                   ELSE
+                                     PAGE.RUNMODAL(PAGE::"Sales Order Stats.",Rec);
+                                 END
+                               END;
+                                }
+      { 171     ;2   ;Separator  }
+      { 61      ;2   ;Action    ;
+                      CaptionML=[ENU=Co&mments;
+                                 ESM=C&omentarios;
+                                 FRC=Co&mmentaires;
+                                 ENC=Co&mments];
+                      ToolTipML=[ENU=View or add comments for the record.;
+                                 ESM=Permite ver o agregar comentarios para el registro.;
+                                 FRC=Affichez ou ajoutez des commentaires pour l'enregistrement.;
+                                 ENC=View or add comments for the record.];
+                      ApplicationArea=#Advanced;
+                      RunObject=Page 67;
+                      RunPageLink=Document Type=FIELD(Document Type),
+                                  No.=FIELD(No.),
+                                  Document Line No.=CONST(0);
+                      Promoted=Yes;
+                      Visible=ESACC_C61_Visible;
+                      Enabled=ESACC_C61_Enabled;
+                      Image=ViewComments;
+                      PromotedCategory=Category7 }
+      { 1000000009;2 ;Action    ;
+                      CaptionML=ENU=Change Log Entries;
+                      Visible=ESACC_C1000000009_Visible;
+                      Enabled=ESACC_C1000000009_Enabled;
+                      Image=History;
+                      OnAction=VAR
+                                 ChangeLogEntry@1000000000 : Record 405;
+                                 Number@1000000001 : Integer;
+                                 ChangeLogMgt@1000000002 : Codeunit 423;
+                               BEGIN
+                                 //<TPZ2829> Event Conversion
+                                 {
+                                 //<TPZ1728>
+                                 Number := "Document Type";
+                                 //ChangeLogMgt.OpenSSRSReport(DATABASE::"Sales Header", FORMAT(Number), "No.",'');
+                                 EXIT;
+                                 //</TPZ1728>
+
+                                 // <TPZ129>
+                                 Number := "Document Type";
+                                 ChangeLogEntry.RESET;
+                                 ChangeLogEntry.SETRANGE("Table No.",DATABASE::"Sales Header");
+                                 ChangeLogEntry.SETRANGE("Primary Key Field 1 Value",FORMAT(Number));
+                                 ChangeLogEntry.SETRANGE("Primary Key Field 2 Value","No.");
+                                 PAGE.RUNMODAL(PAGE::"Change Log Entries",ChangeLogEntry);
+                                 // </TPZ129>
+                                 }
+                                 //<TPZ2829> Event Conversion
+                               END;
+                                }
+      { 14000708;2   ;Action    ;
+                      Name=<E-Mail List>;
+                      CaptionML=ENU=E-&Mail List;
+                      ToolTipML=ENU=Specifies a list of E-Mail Addresses associated to this record.;
+                      Visible=ESACC_C14000708_Visible;
+                      Enabled=ESACC_C14000708_Enabled;
+                      OnAction=VAR
+                                 EMailListEntry@1000000000 : Record 14000908;
+                               BEGIN
+                                 EMailListEntry.RESET;
+                                 EMailListEntry.SETRANGE("Table ID",DATABASE::"Sales Header");
+                                 EMailListEntry.SETRANGE(Type,"Document Type");
+                                 EMailListEntry.SETRANGE(Code,"No.");
+                                 PAGE.RUNMODAL(PAGE::"E-Mail List Entries",EMailListEntry);
+                               END;
+                                }
+      { 14000712;2   ;ActionGroup;
+                      Name=<Action14000712>;
+                      CaptionML=ENU=E-Ship }
+      { 14000709;3   ;Action    ;
+                      CaptionML=ENU=Bill of Ladings;
+                      ToolTipML=ENU=Shows a list of all Bills of Lading associated to the record.;
+                      RunObject=Page 14000828;
+                      RunPageLink=Type=CONST(Order),
+                                  No.=FIELD(No.),
+                                  Source Type=CONST(36),
+                                  Source Subtype=FIELD(Document Type),
+                                  Source ID=FIELD(No.);
+                      Visible=ESACC_C14000709_Visible;
+                      Enabled=ESACC_C14000709_Enabled }
+      { 14000710;3   ;Action    ;
+                      CaptionML=ENU=P&ackages;
+                      ToolTipML=ENU=Displays a list of open E-Ship packages associated to this record.;
+                      RunObject=Page 14000711;
+                      RunPageLink=Source Type=CONST(36),
+                                  Source Subtype=FIELD(Document Type),
+                                  Source ID=FIELD(No.);
+                      Visible=ESACC_C14000710_Visible;
+                      Enabled=ESACC_C14000710_Enabled }
+      { 14000711;3   ;Action    ;
+                      Name=<E-Ship Agent Options>;
+                      CaptionML=ENU=E-Ship Agent Options;
+                      ToolTipML=ENU=Based on the E-Ship Agent associated to the Sales Invoice, the carrierÂs Option page will display whereby the user may select an option that will follow through to the shipping process.;
+                      Visible=ESACC_C14000711_Visible;
+                      Enabled=ESACC_C14000711_Enabled }
+      { 14000829;3   ;Action    ;
+                      CaptionML=ENU=Export Documents;
+                      ToolTipML=ENU=For International shipping, displays a list of all Export Documents associated to the record.;
+                      RunObject=Page 14000984;
+                      RunPageLink=Source Type=CONST(36),
+                                  Source Subtype=FIELD(Document Type),
+                                  Source ID=FIELD(No.);
+                      Visible=ESACC_C14000829_Visible;
+                      Enabled=ESACC_C14000829_Enabled }
+      { 162     ;2   ;Action    ;
+                      Name=Approvals;
+                      AccessByPermission=TableData 454=R;
+                      CaptionML=[ENU=Approvals;
+                                 ESM=Aprobaciones;
+                                 FRC=Approbations;
+                                 ENC=Approvals];
+                      ToolTipML=[ENU=View a list of the records that are waiting to be approved. For example, you can see who requested the record to be approved, when it was sent, and when it is due to be approved.;
+                                 ESM=Permite ver una lista de los registros en espera de aprobaci¢n. Por ejemplo, puede ver qui‚n ha solicitado la aprobaci¢n del registro, cu ndo se envi¢ y la fecha de vencimiento de la aprobaci¢n.;
+                                 FRC=Affichez une liste des enregistrements en attente d'approbation. Par exemple, vous pouvez voir qui a demand‚ l'approbation de l'enregistrement, quand il a ‚t‚ envoy‚ et quand son approbation est due.;
+                                 ENC=View a list of the records that are waiting to be approved. For example, you can see who requested the record to be approved, when it was sent, and when it is due to be approved.];
+                      ApplicationArea=#Suite;
+                      Promoted=Yes;
+                      Visible=ESACC_C162_Visible;
+                      Enabled=ESACC_C162_Enabled;
+                      PromotedIsBig=Yes;
+                      Image=Approvals;
+                      PromotedCategory=Category9;
+                      PromotedOnly=Yes;
+                      OnAction=VAR
+                                 WorkflowsEntriesBuffer@1001 : Record 832;
+                               BEGIN
+                                 WorkflowsEntriesBuffer.RunWorkflowEntriesPage(RECORDID,DATABASE::"Sales Header","Document Type","No.");
+                               END;
+                                }
+      { 6       ;2   ;Action    ;
+                      Name=Function_CustomerCard;
+                      ShortCutKey=Shift+F7;
+                      CaptionML=[ENU=Customer;
+                                 ESM=Cliente;
+                                 FRC=Client;
+                                 ENC=Customer];
+                      ToolTipML=[ENU=View or edit detailed information about the customer.;
+                                 ESM=Permite ver o editar la informaci¢n detallada sobre el cliente.;
+                                 FRC=Affichez ou modifiez des informations d‚taill‚es sur le client.;
+                                 ENC=View or edit detailed information about the customer.];
+                      ApplicationArea=#Basic,#Suite;
+                      RunObject=Page 21;
+                      RunPageLink=No.=FIELD(Sell-to Customer No.);
+                      Promoted=Yes;
+                      Visible=ESACC_C6_Visible;
+                      Enabled=ESACC_C6_Enabled AND (IsCustomerOrContactNotEmpty);
+                      PromotedIsBig=Yes;
+                      Image=Customer;
+                      PromotedCategory=Category7;
+                      PromotedOnly=Yes }
+      { 116     ;2   ;Action    ;
+                      Name=Dimensions;
+                      AccessByPermission=TableData 348=R;
+                      ShortCutKey=Shift+Ctrl+D;
+                      CaptionML=[ENU=Dimensions;
+                                 ESM=Dimensiones;
+                                 FRC=Dimensions;
+                                 ENC=Dimensions];
+                      ToolTipML=[ENU=View or edit dimensions, such as area, project, or department, that you can assign to sales and purchase documents to distribute costs and analyze transaction history.;
+                                 ESM=Permite ver o editar dimensiones, como el  rea, el proyecto o el departamento, que pueden asignarse a los documentos de venta y compra para distribuir costos y analizar el historial de transacciones.;
+                                 FRC=Affichez ou modifiez les dimensions, telles que la zone, le projet ou le d‚partement que vous pouvez affecter aux documents vente et achat afin de distribuer les co–ts et analyser l'historique des transactions.;
+                                 ENC=View or edit dimensions, such as area, project, or department, that you can assign to sales and purchase documents to distribute costs and analyse transaction history.];
+                      ApplicationArea=#Suite;
+                      Promoted=Yes;
+                      Visible=ESACC_C116_Visible;
+                      Enabled=ESACC_C116_Enabled AND ("No." <> '');
+                      PromotedIsBig=Yes;
+                      Image=Dimensions;
+                      PromotedCategory=Category7;
+                      PromotedOnly=Yes;
+                      OnAction=BEGIN
+                                 ShowDocDim;
+                                 CurrPage.SAVERECORD;
+                               END;
+                                }
+      { 1900000004;  ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 29      ;1   ;ActionGroup;
+                      CaptionML=[ENU=Approval;
+                                 ESM=Aprobaci¢n;
+                                 FRC=Approbation;
+                                 ENC=Approval] }
+      { 27      ;2   ;Action    ;
+                      Name=Approve;
+                      CaptionML=[ENU=Approve;
+                                 ESM=Aprobar;
+                                 FRC=Approuver;
+                                 ENC=Approve];
+                      ToolTipML=[ENU=Approve the requested changes.;
+                                 ESM=Aprueba los cambios solicitados.;
+                                 FRC=Approuvez les modifications requises.;
+                                 ENC=Approve the requested changes.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Visible=ESACC_C27_Visible AND (OpenApprovalEntriesExistForCurrUser);
+                      Enabled=ESACC_C27_Enabled;
+                      PromotedIsBig=Yes;
+                      Image=Approve;
+                      PromotedCategory=Category4;
+                      OnAction=BEGIN
+                                 ApprovalsMgmt.ApproveRecordApprovalRequest(RECORDID);
+                               END;
+                                }
+      { 25      ;2   ;Action    ;
+                      Name=Reject;
+                      CaptionML=[ENU=Reject;
+                                 ESM=Rechazar;
+                                 FRC=Rejeter;
+                                 ENC=Reject];
+                      ToolTipML=[ENU=Reject the approval request.;
+                                 ESM=Rechaza la solicitud de aprobaci¢n.;
+                                 FRC=Rejetez la demande d'approbation.;
+                                 ENC=Reject the approval request.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Visible=ESACC_C25_Visible AND (OpenApprovalEntriesExistForCurrUser);
+                      Enabled=ESACC_C25_Enabled;
+                      PromotedIsBig=Yes;
+                      Image=Reject;
+                      PromotedCategory=Category4;
+                      OnAction=BEGIN
+                                 ApprovalsMgmt.RejectRecordApprovalRequest(RECORDID);
+                               END;
+                                }
+      { 23      ;2   ;Action    ;
+                      Name=Delegate;
+                      CaptionML=[ENU=Delegate;
+                                 ESM=Delegar;
+                                 FRC=D‚l‚guer;
+                                 ENC=Delegate];
+                      ToolTipML=[ENU=Delegate the approval to a substitute approver.;
+                                 ESM=Delega la aprobaci¢n a un aprobador sustituto.;
+                                 FRC=D‚l‚guez l'approbation … un approbateur rempla‡ant.;
+                                 ENC=Delegate the approval to a substitute approver.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Visible=ESACC_C23_Visible AND (OpenApprovalEntriesExistForCurrUser);
+                      Enabled=ESACC_C23_Enabled;
+                      Image=Delegate;
+                      PromotedCategory=Category4;
+                      OnAction=BEGIN
+                                 ApprovalsMgmt.DelegateRecordApprovalRequest(RECORDID);
+                               END;
+                                }
+      { 21      ;2   ;Action    ;
+                      Name=Comment;
+                      CaptionML=[ENU=Comments;
+                                 ESM=Comentarios;
+                                 FRC=Commentaires;
+                                 ENC=Comments];
+                      ToolTipML=[ENU=View or add comments for the record.;
+                                 ESM=Permite ver o agregar comentarios para el registro.;
+                                 FRC=Afficher ou ajouter des commentaires pour l'enregistrement.;
+                                 ENC=View or add comments for the record.];
+                      ApplicationArea=#All;
+                      Promoted=Yes;
+                      Visible=ESACC_C21_Visible AND (OpenApprovalEntriesExistForCurrUser);
+                      Enabled=ESACC_C21_Enabled;
+                      Image=ViewComments;
+                      PromotedCategory=Category4;
+                      OnAction=VAR
+                                 ApprovalsMgmt@1000 : Codeunit 1535;
+                               BEGIN
+                                 ApprovalsMgmt.GetApprovalComment(Rec);
+                               END;
+                                }
+      { 9       ;1   ;ActionGroup;
+                      CaptionML=[ENU=Release;
+                                 ESM=Lanzar;
+                                 FRC=Lancer;
+                                 ENC=Release];
+                      Image=ReleaseDoc }
+      { 123     ;2   ;Action    ;
+                      Name=Release;
+                      ShortCutKey=Ctrl+F9;
+                      CaptionML=[ENU=Re&lease;
+                                 ESM=Lan&zar;
+                                 FRC=&Lib‚rer;
+                                 ENC=Re&lease];
+                      ToolTipML=[ENU=Release the document to the next stage of processing. When a document is released, it will be included in all availability calculations from the expected receipt date of the items. You must reopen the document before you can make changes to it.;
+                                 ESM=Lance el documento a la siguiente etapa de procesamiento. Cuando se lanza un documento, este se incluir  en todos los c lculos de disponibilidad a partir de la fecha de recepci¢n esperada de los productos. Debe volver a abrir el documento antes de realizar cambios en ‚l.;
+                                 FRC=Lib‚rez le document … l'‚tape suivante du traitement. Lorsqu'un document est lib‚r‚, il est inclus dans tous les calculs de disponibilit‚ … partir de la date de r‚ception pr‚vue des articles. Vous devez rouvrir le document avant de pouvoir y apporter des modifications.;
+                                 ENC=Release the document to the next stage of processing. When a document is released, it will be included in all availability calculations from the expected receipt date of the items. You must reopen the document before you can make changes to it.];
+                      ApplicationArea=#Suite;
+                      Promoted=Yes;
+                      Visible=ESACC_C123_Visible;
+                      Enabled=ESACC_C123_Enabled AND (IsCustomerOrContactNotEmpty);
+                      PromotedIsBig=Yes;
+                      Image=ReleaseDoc;
+                      PromotedCategory=Category8;
+                      OnAction=VAR
+                                 ReleaseSalesDoc@1000 : Codeunit 414;
+                               BEGIN
+                                 ReleaseSalesDoc.PerformManualRelease(Rec);
+                               END;
+                                }
+      { 124     ;2   ;Action    ;
+                      Name=Reopen;
+                      CaptionML=[ENU=Re&open;
+                                 ESM=&Volver a abrir;
+                                 FRC=R‚&ouvrir;
+                                 ENC=Re&open];
+                      ToolTipML=[ENU=Reopen the document to change it after it has been approved. Approved documents have the Released status and must be opened before they can be changed.;
+                                 ESM=Permite volver a abrir el documento para cambiarlo una vez que se haya aprobado. Los documentos aprobados tienen el estado Lanzado y se deben abrir para poder cambiarlos.;
+                                 FRC=Rouvrez le document pour le modifier aprŠs son approbation. Les documents approuv‚s ont le statut Lanc‚ et doivent ˆtre ouverts pour pouvoir ˆtre modifi‚s.;
+                                 ENC=Reopen the document to change it after it has been approved. Approved documents have the Released status and must be opened before they can be changed.];
+                      ApplicationArea=#Suite;
+                      Promoted=Yes;
+                      Visible=ESACC_C124_Visible;
+                      Enabled=ESACC_C124_Enabled AND (Status <> Status::Open);
+                      PromotedIsBig=Yes;
+                      Image=ReOpen;
+                      PromotedCategory=Category8;
+                      PromotedOnly=Yes;
+                      OnAction=VAR
+                                 ReleaseSalesDoc@1001 : Codeunit 414;
+                               BEGIN
+                                 ReleaseSalesDoc.PerformManualReopen(Rec);
+                               END;
+                                }
+      { 62      ;1   ;ActionGroup;
+                      CaptionML=[ENU=F&unctions;
+                                 ESM=Acci&ones;
+                                 FRC=F&onctions;
+                                 ENC=F&unctions];
+                      Image=Action }
+      { 63      ;2   ;Action    ;
+                      AccessByPermission=TableData 19=R;
+                      CaptionML=[ENU=Calculate &Invoice Discount;
+                                 ESM=Calcular dto. en la &factura;
+                                 FRC=Calculer escompte &facture;
+                                 ENC=Calculate &Invoice Discount];
+                      ToolTipML=[ENU=Calculate the invoice discount for the entire document.;
+                                 ESM=Permite calcular el descuento en la factura para el documento completo.;
+                                 FRC=Calculez l'escompte facture pour l'ensemble du document.;
+                                 ENC=Calculate the invoice discount for the entire document.];
+                      ApplicationArea=#Basic,#Suite;
+                      Visible=ESACC_C63_Visible;
+                      Enabled=ESACC_C63_Enabled;
+                      Image=CalculateInvoiceDiscount;
+                      OnAction=BEGIN
+                                 ApproveCalcInvDisc;
+                                 SalesCalcDiscountByType.ResetRecalculateInvoiceDisc(Rec);
+                               END;
+                                }
+      { 74      ;2   ;Action    ;
+                      Name=CreatePurchaseInvoice;
+                      CaptionML=[ENU=Create Purchase Invoice;
+                                 ESM=Crear factura de compra;
+                                 FRC=Cr‚er une facture achat;
+                                 ENC=Create Purchase Invoice];
+                      ToolTipML=[ENU=Create a new purchase invoice to buy all the items that are required by the sales document, even if some of the items are already available.;
+                                 ESM=Permite crear una nueva factura de compra para comprar todos los productos solicitados en el documento de venta, aunque algunos de los productos ya est‚n disponibles.;
+                                 FRC=Cr‚ez une facture achat pour acheter tous les articles qui sont requis par le document vente, mˆme si certains articles sont d‚j… disponibles.;
+                                 ENC=Create a new purchase invoice to buy all the items that are required by the sales document, even if some of the items are already available.];
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=No;
+                      Visible=ESACC_C74_Visible;
+                      Enabled=ESACC_C74_Enabled;
+                      PromotedIsBig=Yes;
+                      Image=NewPurchaseInvoice;
+                      PromotedCategory=Category7;
+                      OnAction=VAR
+                                 SelectedSalesLine@1001 : Record 37;
+                                 PurchDocFromSalesDoc@1000 : Codeunit 1314;
+                               BEGIN
+                                 CurrPage.SalesLines.PAGE.SETSELECTIONFILTER(SelectedSalesLine);
+                                 PurchDocFromSalesDoc.CreatePurchaseInvoice(Rec,SelectedSalesLine);
+                               END;
+                                }
+      { 66      ;2   ;Action    ;
+                      Name=GetRecurringSalesLines;
+                      Ellipsis=Yes;
+                      CaptionML=[ENU=Get Recurring Sales Lines;
+                                 ESM=Obtener l¡neas de venta peri¢dicas;
+                                 FRC=Extraire les lignes vente r‚currentes;
+                                 ENC=Get Recurring Sales Lines];
+                      ToolTipML=[ENU=Insert sales document lines that you have set up for the customer as recurring. Recurring sales lines could be for a monthly replenishment order or a fixed freight expense.;
+                                 ESM=Inserta las l¡neas del documento de venta que se configuraron para el cliente como peri¢dicas. Las l¡neas de venta peri¢dicas pueden ser un pedido de reposici¢n mensual o un gasto de flete fijo.;
+                                 FRC=Ins‚rez les lignes document vente que vous avez param‚tr‚es comme r‚currentes pour le client. Les lignes vente r‚currentes peuvent repr‚senter un ordre de r‚approvisionnement mensuel ou une d‚pense de fret fixe.;
+                                 ENC=Insert sales document lines that you have set up for the customer as recurring. Recurring sales lines could be for a monthly replenishment order or a fixed freight expense.];
+                      ApplicationArea=#Suite;
+                      Visible=ESACC_C66_Visible;
+                      Enabled=ESACC_C66_Enabled AND (IsCustomerOrContactNotEmpty);
+                      PromotedIsBig=Yes;
+                      Image=CustomerCode;
+                      PromotedCategory=Category7;
+                      OnAction=VAR
+                                 StdCustSalesCode@1000 : Record 172;
+                               BEGIN
+                                 StdCustSalesCode.InsertSalesLines(Rec);
+                               END;
+                                }
+      { 64      ;2   ;Action    ;
+                      Name=CopyDocument;
+                      Ellipsis=Yes;
+                      CaptionML=[ENU=Copy Document;
+                                 ESM=Copiar l¡neas;
+                                 FRC=Copier document;
+                                 ENC=Copy Document];
+                      ToolTipML=[ENU=Copy document lines and header information from another sales document to this document. You can copy a posted sales invoice into a new sales invoice to quickly create a similar document.;
+                                 ESM=Copia las l¡neas del documento y la informaci¢n de cabecera de otro documento de venta en este. Una factura de venta registrada se puede copiar en una nueva factura de venta para crear un documento similar con rapidez.;
+                                 FRC=Copiez les lignes document et les informations d'en-tˆte d'un autre document vente vers celui-ci. Vous pouvez copier une facture vente valid‚e dans une nouvelle facture vente pour cr‚er rapidement un document similaire.;
+                                 ENC=Copy document lines and header information from another sales document to this document. You can copy a posted sales invoice into a new sales invoice to quickly create a similar document.];
+                      ApplicationArea=#Suite;
+                      Visible=ESACC_C64_Visible;
+                      Enabled=ESACC_C64_Enabled;
+                      Image=CopyDocument;
+                      OnAction=BEGIN
+                                 CopySalesDoc.SetSalesHeader(Rec);
+                                 CopySalesDoc.RUNMODAL;
+                                 CLEAR(CopySalesDoc);
+                                 IF GET("Document Type","No.") THEN;
+                               END;
+                                }
+      { 115     ;2   ;Action    ;
+                      Ellipsis=Yes;
+                      CaptionML=[ENU=Move Negative Lines;
+                                 ESM=Mover l¡neas negativas;
+                                 FRC=D‚placer lignes n‚gatives;
+                                 ENC=Move Negative Lines];
+                      ToolTipML=[ENU=Prepare to create a replacement sales order in a sales return process.;
+                                 ESM=Preparar un pedido de venta de reposici¢n en un proceso de devoluci¢n de venta.;
+                                 FRC=Pr‚parez-vous … cr‚er un document de vente de remplacement dans un processus de retour vente.;
+                                 ENC=Prepare to create a replacement sales order in a sales return process.];
+                      ApplicationArea=#Advanced;
+                      Promoted=Yes;
+                      Visible=ESACC_C115_Visible;
+                      Enabled=ESACC_C115_Enabled;
+                      Image=MoveNegativeLines;
+                      PromotedCategory=Category6;
+                      OnAction=BEGIN
+                                 CLEAR(MoveNegSalesLines);
+                                 MoveNegSalesLines.SetSalesHeader(Rec);
+                                 MoveNegSalesLines.RUNMODAL;
+                                 MoveNegSalesLines.ShowDocument;
+                               END;
+                                }
+      { 47      ;2   ;ActionGroup;
+                      CaptionML=[ENU=Incoming Document;
+                                 ESM=Documento entrante;
+                                 FRC=Document entrant;
+                                 ENC=Incoming Document];
+                      ActionContainerType=NewDocumentItems;
+                      Image=Documents }
+      { 45      ;3   ;Action    ;
+                      Name=IncomingDocCard;
+                      CaptionML=[ENU=View Incoming Document;
+                                 ESM=Ver documento entrante;
+                                 FRC=Afficher le document entrant;
+                                 ENC=View Incoming Document];
+                      ToolTipML=[ENU=View any incoming document records and file attachments that exist for the entry or document.;
+                                 ESM=Permite ver los registros de documentos entrantes y los archivos adjuntos que existen para el movimiento o el documento.;
+                                 FRC=Affichez tout enregistrement et fichier joint de document entrant qui existe pour l'‚criture ou le document.;
+                                 ENC=View any incoming document records and file attachments that exist for the entry or document.];
+                      ApplicationArea=#Basic,#Suite;
+                      Visible=ESACC_C45_Visible;
+                      Enabled=ESACC_C45_Enabled AND (HasIncomingDocument);
+                      Image=ViewOrder;
+                      OnAction=VAR
+                                 IncomingDocument@1000 : Record 130;
+                               BEGIN
+                                 IncomingDocument.ShowCardFromEntryNo("Incoming Document Entry No.");
+                               END;
+                                }
+      { 41      ;3   ;Action    ;
+                      Name=SelectIncomingDoc;
+                      AccessByPermission=TableData 130=R;
+                      CaptionML=[ENU=Select Incoming Document;
+                                 ESM=Seleccionar documento entrante;
+                                 FRC=S‚lectionner le document entrant;
+                                 ENC=Select Incoming Document];
+                      ToolTipML=[ENU=Select an incoming document record and file attachment that you want to link to the entry or document.;
+                                 ESM=Permite seleccionar un registro de documento entrante y un archivo adjunto que desee vincular al movimiento o al documento.;
+                                 FRC=S‚lectionnez un fichier joint ou un enregistrement de document entrant que vous voulez associer … l'‚criture ou au document.;
+                                 ENC=Select an incoming document record and file attachment that you want to link to the entry or document.];
+                      ApplicationArea=#Basic,#Suite;
+                      Visible=ESACC_C41_Visible;
+                      Enabled=ESACC_C41_Enabled;
+                      Image=SelectLineToApply;
+                      OnAction=VAR
+                                 IncomingDocument@1000 : Record 130;
+                               BEGIN
+                                 VALIDATE("Incoming Document Entry No.",IncomingDocument.SelectIncomingDocument("Incoming Document Entry No.",RECORDID));
+                               END;
+                                }
+      { 39      ;3   ;Action    ;
+                      Name=IncomingDocAttachFile;
+                      Ellipsis=Yes;
+                      CaptionML=[ENU=Create Incoming Document from File;
+                                 ESM=Crear documento entrante desde archivo;
+                                 FRC=Cr‚er un document entrant … partir d'un fichier;
+                                 ENC=Create Incoming Document from File];
+                      ToolTipML=[ENU=Create an incoming document record by selecting a file to attach, and then link the incoming document record to the entry or document.;
+                                 ESM=Permite crear un registro de documento entrante al seleccionar un archivo que se ha de adjuntar y luego vincular el registro de documento entrante al movimiento o al documento.;
+                                 FRC=Cr‚ez un enregistrement de document entrant en s‚lectionnant un fichier … joindre, puis associez l'enregistrement de document entrant … l'‚criture ou au document.;
+                                 ENC=Create an incoming document record by selecting a file to attach, and then link the incoming document record to the entry or document.];
+                      ApplicationArea=#Basic,#Suite;
+                      Visible=ESACC_C39_Visible;
+                      Enabled=ESACC_C39_Enabled AND (NOT HasIncomingDocument);
+                      Image=Attach;
+                      OnAction=VAR
+                                 IncomingDocumentAttachment@1000 : Record 133;
+                               BEGIN
+                                 IncomingDocumentAttachment.NewAttachmentFromSalesDocument(Rec);
+                               END;
+                                }
+      { 37      ;3   ;Action    ;
+                      Name=RemoveIncomingDoc;
+                      CaptionML=[ENU=Remove Incoming Document;
+                                 ESM=Eliminar documento entrante;
+                                 FRC=Supprimer le document entrant;
+                                 ENC=Remove Incoming Document];
+                      ToolTipML=[ENU=Remove any incoming document records and file attachments.;
+                                 ESM=Elimina cualquier registro de documentos entrantes y los archivos adjuntos.;
+                                 FRC=Supprimer tous les fichiers joints et les enregistrements de document entrant.;
+                                 ENC=Remove any incoming document records and file attachments.];
+                      ApplicationArea=#Basic,#Suite;
+                      Visible=ESACC_C37_Visible;
+                      Enabled=ESACC_C37_Enabled AND (HasIncomingDocument);
+                      Image=RemoveLine;
+                      OnAction=VAR
+                                 IncomingDocument@1000 : Record 130;
+                               BEGIN
+                                 IF IncomingDocument.GET("Incoming Document Entry No.") THEN
+                                   IncomingDocument.RemoveLinkToRelatedRecord;
+                                 "Incoming Document Entry No." := 0;
+                                 MODIFY(TRUE);
+                               END;
+                                }
+      { 49      ;1   ;ActionGroup;
+                      CaptionML=[ENU=Request Approval;
+                                 ESM=Aprobaci¢n solic.;
+                                 FRC=Approbation demande achat;
+                                 ENC=Request Approval] }
+      { 159     ;2   ;Action    ;
+                      Name=SendApprovalRequest;
+                      CaptionML=[ENU=Send A&pproval Request;
+                                 ESM=Enviar solicitud a&probaci¢n;
+                                 FRC=Envoyer demande d'a&pprobation;
+                                 ENC=Send A&pproval Request];
+                      ToolTipML=[ENU=Request approval of the document.;
+                                 ESM=Permite solicitar la aprobaci¢n del documento.;
+                                 FRC=Demander l'approbation du document.;
+                                 ENC=Request approval of the document.];
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Visible=ESACC_C159_Visible;
+                      Enabled=ESACC_C159_Enabled AND (NOT OpenApprovalEntriesExist AND CanRequestApprovalForFlow);
+                      Image=SendApprovalRequest;
+                      PromotedCategory=Category9;
+                      PromotedOnly=Yes;
+                      OnAction=BEGIN
+                                 IF ApprovalsMgmt.CheckSalesApprovalPossible(Rec) THEN
+                                   ApprovalsMgmt.OnSendSalesDocForApproval(Rec);
+                               END;
+                                }
+      { 160     ;2   ;Action    ;
+                      Name=CancelApprovalRequest;
+                      CaptionML=[ENU=Cancel Approval Re&quest;
+                                 ESM=&Cancelar solicitud aprobaci¢n;
+                                 FRC=Annuler demande d'appro&bation;
+                                 ENC=Cancel Approval Re&quest];
+                      ToolTipML=[ENU=Cancel the approval request.;
+                                 ESM=Cancela la solicitud de aprobaci¢n.;
+                                 FRC=Annulez la demande d'approbation.;
+                                 ENC=Cancel the approval request.];
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Visible=ESACC_C160_Visible;
+                      Enabled=ESACC_C160_Enabled AND (CanCancelApprovalForRecord OR CanCancelApprovalForFlow);
+                      Image=CancelApprovalRequest;
+                      PromotedCategory=Category9;
+                      PromotedOnly=Yes;
+                      OnAction=VAR
+                                 WorkflowWebhookMgt@1000 : Codeunit 1543;
+                               BEGIN
+                                 ApprovalsMgmt.OnCancelSalesApprovalRequest(Rec);
+                                 WorkflowWebhookMgt.FindAndCancel(RECORDID);
+                               END;
+                                }
+      { 14000705;2   ;Action    ;
+                      Name=<E-Mail Confirmation>;
+                      CaptionML=ENU=E-&Mail Confirmation;
+                      ToolTipML=ENU=Select to send an E-Mail Confirmation to the E-Mail Addresses associated to the record.;
+                      Visible=ESACC_C14000705_Visible;
+                      Enabled=ESACC_C14000705_Enabled }
+      { 14000822;2   ;ActionGroup;
+                      CaptionML=ENU=E-Ship }
+      { 14000823;3   ;Action    ;
+                      Name=<Create Bill of Lading>;
+                      CaptionML=ENU=Create Bill of Lading;
+                      ToolTipML=ENU=Select in order to create Bill of Lading for the record.;
+                      Visible=ESACC_C14000823_Visible;
+                      Enabled=ESACC_C14000823_Enabled }
+      { 14000824;3   ;Action    ;
+                      Name=<Fast Pack>;
+                      ShortCutKey=Alt+F11;
+                      CaptionML=ENU=Fast Pack;
+                      ToolTipML=ENU=Opens Fast Pack in order to pack the packages associated to the record.;
+                      Visible=ESACC_C14000824_Visible;
+                      Enabled=ESACC_C14000824_Enabled }
+      { 14000825;3   ;Action    ;
+                      Name=<Test E-Ship Requirement>;
+                      CaptionML=ENU=Test E-Ship Requirement;
+                      ToolTipML=ENU=Select for the system to review the record for all applicable E-Ship data in order to ship successfully.;
+                      Visible=ESACC_C14000825_Visible;
+                      Enabled=ESACC_C14000825_Enabled }
+      { 140000826;3  ;Action    ;
+                      Name=<Quote Rate>;
+                      CaptionML=ENU=Quote Rate;
+                      Visible=ESACC_C140000826_Visible;
+                      Enabled=ESACC_C140000826_Enabled }
+      { 14000827;3   ;Action    ;
+                      Name=<Rate Shop>;
+                      ShortCutKey=Ctrl+F11;
+                      CaptionML=ENU=Rate Shop;
+                      ToolTipML=ENU=Rate Shop all E-Ship Agent Services flagged to rate shop. The user may then select the chosen carrier to update the Sales Header and add a quoted freight amount to the Sales Lines.;
+                      Promoted=Yes;
+                      Visible=ESACC_C14000827_Visible;
+                      Enabled=ESACC_C14000827_Enabled;
+                      Image=Calculate;
+                      PromotedCategory=Process }
+      { 14000830;3   ;Action    ;
+                      Name=<Add to Export Document>;
+                      CaptionML=ENU=Add to Export Document;
+                      ToolTipML=ENU=For International Shipments, select to add the record to an Export Document.;
+                      Visible=ESACC_C14000830_Visible;
+                      Enabled=ESACC_C14000830_Enabled }
+      { 69      ;1   ;ActionGroup;
+                      CaptionML=[ENU=P&osting;
+                                 ESM=&Registro;
+                                 FRC=Rep&ort;
+                                 ENC=P&osting];
+                      Image=Post }
+      { 71      ;2   ;Action    ;
+                      Name=Post;
+                      ShortCutKey=F9;
+                      CaptionML=[ENU=P&ost;
+                                 ESM=&Registrar;
+                                 FRC=Rep&orter;
+                                 ENC=P&ost];
+                      ToolTipML=[ENU=Finalize the document or journal by posting the amounts and quantities to the related accounts in your company books.;
+                                 ESM=Finaliza el documento o el diario registrando los importes y las cantidades en las cuentas relacionadas de los libros de su empresa.;
+                                 FRC=Finalisez le document ou le journal en reportant les montants et les quantit‚s sur les comptes concern‚s dans la comptabilit‚ de la compagnie.;
+                                 ENC=Finalize the document or journal by posting the amounts and quantities to the related accounts in your company books.];
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Visible=ESACC_C71_Visible;
+                      Enabled=ESACC_C71_Enabled;
+                      PromotedIsBig=Yes;
+                      Image=PostOrder;
+                      PromotedCategory=Category5;
+                      PromotedOnly=Yes;
+                      OnAction=BEGIN
+                                 Post(CODEUNIT::"Sales-Post (Yes/No)",NavigateAfterPost::"Posted Document");
+                               END;
+                                }
+      { 7       ;2   ;Action    ;
+                      Name=PostAndNew;
+                      ShortCutKey=Shift+F9;
+                      Ellipsis=Yes;
+                      CaptionML=[ENU=Post and New;
+                                 ESM=Registrar y nuevo;
+                                 FRC=Valider et Cr‚er;
+                                 ENC=Post and New];
+                      ToolTipML=[ENU=Post the sales document and create a new, empty one.;
+                                 ESM=Registrar el documento de ventas y crear un nuevo vac¡o.;
+                                 FRC=Reportez le document vente et cr‚ez-en un nouveau, vide.;
+                                 ENC=Post the sales document and create a new, empty one.];
+                      ApplicationArea=#Advanced;
+                      Promoted=Yes;
+                      Visible=ESACC_C7_Visible;
+                      Enabled=ESACC_C7_Enabled;
+                      Image=PostOrder;
+                      PromotedCategory=Category5;
+                      OnAction=BEGIN
+                                 Post(CODEUNIT::"Sales-Post (Yes/No)",NavigateAfterPost::"New Document");
+                               END;
+                                }
+      { 76      ;2   ;Action    ;
+                      Name=PostAndSend;
+                      Ellipsis=Yes;
+                      CaptionML=[ENU=Post and &Send;
+                                 ESM=Registrar y &enviar;
+                                 FRC=Valider et en&voyer;
+                                 ENC=Post and &Send];
+                      ToolTipML=[ENU=Finalize and prepare to send the document according to the customer's sending profile, such as attached to an email. The Send document to window opens first so you can confirm or select a sending profile.;
+                                 ESM=Permite finalizar y preparar el documento para enviarlo seg£n el perfil que cuenta con las preferencias de env¡o del cliente, por ejemplo, adjunto en un correo electr¢nico. La ventana "Enviar documento a" se abre primero para que se pueda confirmar o seleccionar un perfil de env¡o.;
+                                 FRC=Finalisez et pr‚parez-vous … envoyer le document en fonction du profil d'envoi du client, par exemple en piŠce jointe d'un e-mail. La fenˆtre Envoyer le document … s'ouvre en premier pour que vous puissiez confirmer ou s‚lectionner un profil d'envoi.;
+                                 ENC=Finalize and prepare to send the document according to the customer's sending profile, such as attached to an email. The Send document to window opens first so you can confirm or select a sending profile.];
+                      ApplicationArea=#Basic,#Suite;
+                      Promoted=Yes;
+                      Visible=ESACC_C76_Visible;
+                      Enabled=ESACC_C76_Enabled;
+                      Image=PostSendTo;
+                      PromotedCategory=Category5;
+                      PromotedOnly=Yes;
+                      OnAction=BEGIN
+                                 Post(CODEUNIT::"Sales-Post and Send",NavigateAfterPost::Nowhere);
+                               END;
+                                }
+      { 68      ;2   ;Action    ;
+                      Name=Preview;
+                      CaptionML=[ENU=Preview Posting;
+                                 ESM=Vista previa de registro;
+                                 FRC=Aper‡u compta.;
+                                 ENC=Preview Posting];
+                      ToolTipML=[ENU=Review the different types of entries that will be created when you post the document or journal.;
+                                 ESM=Permite revisar los diferentes tipos de movimientos que se crear n al registrar el documento o el diario.;
+                                 FRC=Examinez les diff‚rents types d'‚critures qui seront cr‚‚s lorsque vous reportez le document ou le journal.;
+                                 ENC=Review the different types of entries that will be created when you post the document or journal.];
+                      ApplicationArea=#Basic,#Suite;
+                      Visible=ESACC_C68_Visible;
+                      Enabled=ESACC_C68_Enabled;
+                      Image=ViewPostedOrder;
+                      PromotedCategory=Category5;
+                      OnAction=BEGIN
+                                 ShowPreview;
+                               END;
+                                }
+      { 55      ;2   ;Action    ;
+                      Name=DraftInvoice;
+                      Ellipsis=Yes;
+                      CaptionML=[ENU=Print Draft Invoice;
+                                 ESM=Borrador de factura;
+                                 FRC=Facture provisoire;
+                                 ENC=Draft Invoice];
+                      ToolTipML=[ENU=View or print the sales invoice as a draft before you perform the actual posting.;
+                                 ESM=Ver o imprimir la factura de venta como borrador antes de realizar el registro propiamente dicho.;
+                                 FRC=Affichez ou imprimez les factures vente en tant que brouillon avant de proc‚der … la validation effective.;
+                                 ENC=View or print the sales invoice as a draft before you perform the actual posting.];
+                      ApplicationArea=#Basic,#Suite;
+                      Visible=ESACC_C55_Visible;
+                      Enabled=ESACC_C55_Enabled;
+                      Image=ViewPostedOrder;
+                      PromotedCategory=Category5;
+                      OnAction=VAR
+                                 DocumentPrint@1000 : Codeunit 229;
+                               BEGIN
+                                 DocumentPrint.PrintSalesHeader(Rec);
+                               END;
+                                }
+      { 50      ;2   ;Action    ;
+                      Name=ProformaInvoice;
+                      Ellipsis=Yes;
+                      CaptionML=[ENU=Pro Forma Invoice;
+                                 ESM=Factura proforma;
+                                 FRC=Facture pro forma;
+                                 ENC=Pro Forma Invoice];
+                      ToolTipML=[ENU=View or print the pro forma sales invoice.;
+                                 ESM=Permite ver o imprimir la factura de venta proforma.;
+                                 FRC=Affichez ou imprimez la facture vente pro forma.;
+                                 ENC=View or print the pro forma sales invoice.];
+                      Visible=false;
+                      Enabled=ESACC_C50_Enabled;
+                      Image=ViewPostedOrder;
+                      PromotedCategory=Category5;
+                      OnAction=VAR
+                                 DocumentPrint@1000 : Codeunit 229;
+                               BEGIN
+                                 DocumentPrint.PrintProformaSalesInvoice(Rec);
+                               END;
+                                }
+      { 78      ;2   ;Action    ;
+                      Ellipsis=Yes;
+                      CaptionML=[ENU=Test Report;
+                                 ESM=Informe prueba;
+                                 FRC=Impression test;
+                                 ENC=Test Report];
+                      ToolTipML=[ENU=View a test report so that you can find and correct any errors before you perform the actual posting of the journal or document.;
+                                 ESM=Permite ver un informe de prueba para poder encontrar y corregir cualquier error antes de hacer el registro real del diario o el documento.;
+                                 FRC=Affichez un rapport de test afin que vous puissiez trouver et corriger les ‚ventuelles erreurs avant de proc‚der au report effectif du journal ou du document.;
+                                 ENC=View a test report so that you can find and correct any errors before you perform the actual posting of the journal or document.];
+                      ApplicationArea=#Advanced;
+                      Promoted=Yes;
+                      Visible=ESACC_C78_Visible;
+                      Enabled=ESACC_C78_Enabled;
+                      Image=TestReport;
+                      PromotedCategory=Category5;
+                      OnAction=BEGIN
+                                 ReportPrint.PrintSalesHeader(Rec);
+                               END;
+                                }
+      { 3       ;2   ;Action    ;
+                      CaptionML=[ENU=Remove From Job Queue;
+                                 ESM=Quitar de cola de proyecto;
+                                 FRC=Supprimer de la file d'attente des travaux;
+                                 ENC=Remove From Job Queue];
+                      ToolTipML=[ENU=Remove the scheduled processing of this record from the job queue.;
+                                 ESM=Permite quitar el procesamiento programado de este registro de la cola de proyectos.;
+                                 FRC=Supprimez le traitement programm‚ de cet enregistrement … partir de la file d'attente d'attente des travaux.;
+                                 ENC=Remove the scheduled processing of this record from the job queue.];
+                      ApplicationArea=#Advanced;
+                      Visible=ESACC_C3_Visible;
+                      Enabled=ESACC_C3_Enabled;
+                      Image=RemoveLine;
+                      OnAction=BEGIN
+                                 CancelBackgroundPosting;
+                               END;
+                                }
+      { 14000351;2   ;ActionGroup;
+                      CaptionML=ENU=EDI }
+      { 14000352;3   ;Action    ;
+                      Name=EDI Trace;
+                      CaptionML=ENU=Trace;
+                      ToolTipML=ENU=Lists all system and EDI records containing the same 'EDI Internal Doc No.' or associated records.;
+                      Visible=ESACC_C14000352_Visible;
+                      Enabled=ESACC_C14000352_Enabled;
+                      Image=Trace;
+                      OnAction=VAR
+                                 EDITrace@1000000001 : Page 14002386;
+                               BEGIN
+                                 CLEAR(EDITrace);
+                                 EDITrace.SetDoc("EDI Internal Doc. No.");
+                                 EDITrace.RUNMODAL;
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1900000001;0;Container;
+                ContainerType=ContentArea }
+
+    { 1   ;1   ;Group     ;
+                CaptionML=[ENU=General;
+                           ESM=General;
+                           FRC=G‚n‚ral;
+                           ENC=General];
+                GroupType=Group }
+
+    { 2   ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the number of the sales document. The field can be filled automatically or manually and can be set up to be invisible.;
+                           ESM=Especifica el n£mero del documento de ventas. El campo se puede rellenar autom tica o manualmente y se puede configurar como invisible.;
+                           FRC=Sp‚cifie le num‚ro du document vente. Le champ peut ˆtre rempli automatiquement ou manuellement et ˆtre configur‚ pour ˆtre invisible.;
+                           ENC=Specifies the number of the sales document. The field can be filled automatically or manually and can be set up to be invisible.];
+                ApplicationArea=#All;
+                SourceExpr="No.";
+                Importance=Additional;
+                Visible=ESACC_F3_Visible AND (DocNoVisible);
+                Editable=ESACC_F3_Editable;
+                HideValue=ESACC_F3_HideValue;
+                OnAssistEdit=BEGIN
+                               IF AssistEdit(xRec) THEN
+                                 CurrPage.UPDATE;
+                             END;
+                              }
+
+    { 53  ;2   ;Field     ;
+                CaptionML=[ESM=N.§ de cliente;
+                           FRC=Nø client;
+                           ENC=Customer No.];
+                ToolTipML=[ENU=Specifies the number of the customer who will receive the products and be billed by default.;
+                           ESM=Especifica el n£mero del cliente que recibir  los productos y al que se facturar  de forma predeterminada.;
+                           FRC=Sp‚cifie le num‚ro du client qui va recevoir les produits et ˆtre factur‚ par d‚faut.;
+                           ENC=Specifies the number of the customer who will receive the products and be billed by default.];
+                NotBlank=Yes;
+                SourceExpr="Sell-to Customer No.";
+                Visible=ESACC_F2_Visible AND (NOT IsSaaS);
+                Editable=ESACC_F2_Editable;
+                HideValue=ESACC_F2_HideValue;
+                OnValidate=BEGIN
+                             SelltoCustomerNoOnAfterValidate(Rec,xRec);
+                             CurrPage.UPDATE;
+                           END;
+                            }
+
+    { 4   ;2   ;Field     ;
+                CaptionML=[ENU=Customer;
+                           ESM=Cliente;
+                           FRC=Client;
+                           ENC=Customer];
+                ToolTipML=[ENU=Specifies the name of the customer who will receive the products and be billed by default.;
+                           ESM=Especifica el nombre del cliente que recibir  los productos y al que se facturar  de forma predeterminada.;
+                           FRC=Sp‚cifie le nom du client qui recevra les produits et sera factur‚ par d‚faut.;
+                           ENC=Specifies the name of the customer who will receive the products and be billed by default.];
+                ApplicationArea=#Basic,#Suite;
+                NotBlank=Yes;
+                SourceExpr="Sell-to Customer Name";
+                Importance=Promoted;
+                Visible=ESACC_F79_Visible;
+                Editable=ESACC_F79_Editable;
+                HideValue=ESACC_F79_HideValue;
+                OnValidate=VAR
+                             ApplicationAreaSetup@1000 : Record 9178;
+                           BEGIN
+                             SelltoCustomerNoOnAfterValidate(Rec,xRec);
+
+                             IF ApplicationAreaSetup.IsFoundationEnabled THEN
+                               SalesCalcDiscountByType.ApplyDefaultInvoiceDiscount(0,Rec);
+
+                             CurrPage.UPDATE;
+                           END;
+
+                ShowMandatory=TRUE }
+
+    { 1000000000;2;Field  ;
+                SourceExpr="Shortcut Dimension 5 Code";
+                Visible=ESACC_F50200_Visible;
+                Enabled=ESACC_F50200_Editable;
+                Editable=ESACC_F50200_Editable;
+                HideValue=ESACC_F50200_HideValue;
+                OnValidate=BEGIN
+                             //ShortcutDimension2CodeOnAfterV;
+                           END;
+                            }
+
+    { 1000000008;2;Field  ;
+                SourceExpr="Non Divisional";
+                Visible=ESACC_F50030_Visible;
+                Editable=FALSE;
+                HideValue=ESACC_F50030_HideValue }
+
+    { 100 ;2   ;Group     ;
+                CaptionML=[ENU=Sell-to;
+                           ESM=Direcci¢n venta;
+                           FRC=Donneur d'ordre;
+                           ENC=Sell-to];
+                GroupType=Group }
+
+    { 75  ;3   ;Field     ;
+                CaptionML=[ENU=Address;
+                           ESM=Direcci¢n;
+                           FRC=Adresse;
+                           ENC=Address];
+                ToolTipML=[ENU=Specifies the address where the customer is located.;
+                           ESM=Especifica la direcci¢n donde reside el cliente.;
+                           FRC=Sp‚cifie l'adresse o— se trouve le client.;
+                           ENC=Specifies the address where the customer is located.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Sell-to Address";
+                Importance=Additional;
+                Visible=ESACC_F81_Visible;
+                Editable=FALSE;
+                HideValue=ESACC_F81_HideValue }
+
+    { 77  ;3   ;Field     ;
+                CaptionML=[ENU=Address 2;
+                           ESM=Direcci¢n 2;
+                           FRC=Adresse (2Šme ligne);
+                           ENC=Address 2];
+                ToolTipML=[ENU=Specifies additional address information.;
+                           ESM=Especifica informaci¢n adicional sobre la direcci¢n.;
+                           FRC=Sp‚cifie des informations d'adresse suppl‚mentaires.;
+                           ENC=Specifies additional address information.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Sell-to Address 2";
+                Importance=Additional;
+                Visible=ESACC_F82_Visible;
+                Editable=FALSE;
+                HideValue=ESACC_F82_HideValue }
+
+    { 79  ;3   ;Field     ;
+                CaptionML=[ENU=City;
+                           ESM=Poblaci¢n;
+                           FRC=Ville;
+                           ENC=City];
+                ToolTipML=[ENU=Specifies the city of the customer on the sales document.;
+                           ESM=Especifica el municipio/ciudad del cliente en el documento de ventas.;
+                           FRC=Sp‚cifie la ville du client sur le document vente.;
+                           ENC=Specifies the city of the customer on the sales document.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Sell-to City";
+                Importance=Additional;
+                Visible=ESACC_F83_Visible;
+                Enabled=ESACC_F83_Editable;
+                Editable=FALSE;
+                HideValue=ESACC_F83_HideValue }
+
+    { 1020005;3;Field     ;
+                CaptionML=[ENU=State;
+                           ESM=Estado;
+                           FRC=Province;
+                           ENC=Province/State];
+                ToolTipML=[ENU=Specifies the state as a part of the address.;
+                           ESM=Especifica el estado o provincia como parte de la direcci¢n.;
+                           FRC=Sp‚cifie la province comme partie de l'adresse.;
+                           ENC=Specifies the province/state as a part of the address.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Sell-to County";
+                Importance=Additional;
+                Visible=ESACC_F89_Visible;
+                Editable=FALSE;
+                HideValue=ESACC_F89_HideValue }
+
+    { 80  ;3   ;Field     ;
+                CaptionML=[ENU=ZIP Code;
+                           ESM=C¢digo postal;
+                           FRC=Code postal;
+                           ENC=Postal/ZIP Code];
+                ToolTipML=[ENU=Specifies the ZIP code.;
+                           ESM=Especifica el c¢digo postal.;
+                           FRC=Sp‚cifie le code postal.;
+                           ENC=Specifies the postal code.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Sell-to Post Code";
+                Importance=Additional;
+                Visible=ESACC_F88_Visible;
+                Enabled=ESACC_F88_Editable;
+                Editable=FALSE;
+                HideValue=ESACC_F88_HideValue }
+
+    { 87  ;3   ;Field     ;
+                CaptionML=[ENU=Contact No.;
+                           ESM=N§ contacto;
+                           FRC=Nø contact;
+                           ENC=Contact No.];
+                ToolTipML=[ENU=Specifies the number of the contact that the sales document will be sent to.;
+                           ESM=Especifica el n£mero del contacto a quien se enviar  el documento de venta.;
+                           FRC=Sp‚cifie le num‚ro du contact auquel vous envoyez le document vente.;
+                           ENC=Specifies the number of the contact that the sales document will be sent to.];
+                ApplicationArea=#Advanced;
+                SourceExpr="Sell-to Contact No.";
+                Importance=Additional;
+                Visible=ESACC_F5052_Visible;
+                Enabled=ESACC_F5052_Editable;
+                Editable=ESACC_F5052_Editable;
+                HideValue=ESACC_F5052_HideValue;
+                OnValidate=BEGIN
+                             IF ApplicationAreaSetup.IsAdvanced THEN
+                               IF GETFILTER("Sell-to Contact No.") = xRec."Sell-to Contact No." THEN
+                                 IF "Sell-to Contact No." <> xRec."Sell-to Contact No." THEN
+                                   SETRANGE("Sell-to Contact No.");
+                           END;
+                            }
+
+    { 8   ;2   ;Field     ;
+                CaptionML=[ENU=Contact;
+                           ESM=Contacto;
+                           FRC=Contact;
+                           ENC=Contact];
+                ToolTipML=[ENU=Specifies the name of the person to contact at the customer.;
+                           ESM=Especifica el nombre de la persona de contacto del cliente.;
+                           FRC=Sp‚cifie le nom de la personne … contacter chez le client.;
+                           ENC=Specifies the name of the person to contact at the customer.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Sell-to Contact";
+                Visible=ESACC_F84_Visible;
+                Enabled=ESACC_F84_Editable;
+                Editable=ESACC_F84_Editable AND ("Sell-to Customer No." <> '');
+                HideValue=ESACC_F84_HideValue }
+
+    { 19  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the customer's reference. The contents will be printed on sales documents.;
+                           ESM=Especifica la referencia del cliente. El contenido se imprimir  en los documentos de venta.;
+                           FRC=Sp‚cifie la r‚f‚rence du client. La valeur du champ est imprim‚e sur les documents vente.;
+                           ENC=Specifies the customer's reference. The contents will be printed on sales documents.];
+                ApplicationArea=#Advanced;
+                SourceExpr="Your Reference";
+                Importance=Additional;
+                Visible=ESACC_F11_Visible;
+                Editable=ESACC_F11_Editable;
+                HideValue=ESACC_F11_HideValue }
+
+    { 43  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the date on which you created the sales document.;
+                           ESM=Especifica la fecha de creaci¢n del documento de venta.;
+                           FRC=Sp‚cifie la date … laquelle vous avez cr‚‚ le document vente.;
+                           ENC=Specifies the date on which you created the sales document.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Document Date";
+                Importance=Additional;
+                Visible=ESACC_F99_Visible;
+                Editable=ESACC_F99_Editable;
+                HideValue=ESACC_F99_HideValue }
+
+    { 12  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the date when the posting of the sales document will be recorded.;
+                           ESM=Especifica la fecha en que se registrar  el registro del documento de venta.;
+                           FRC=Sp‚cifie la date … laquelle la validation du document vente sera valid‚e.;
+                           ENC=Specifies the date when the posting of the sales document will be recorded.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Posting Date";
+                Importance=Promoted;
+                Visible=ESACC_F20_Visible;
+                Editable=ESACC_F20_Editable;
+                HideValue=ESACC_F20_HideValue }
+
+    { 28  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies when the sales invoice must be paid.;
+                           ESM=Especifica cu ndo se debe pagar la factura de venta.;
+                           FRC=Sp‚cifie la date … laquelle la facture vente doit ˆtre pay‚e.;
+                           ENC=Specifies when the sales invoice must be paid.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Due Date";
+                Importance=Promoted;
+                Visible=ESACC_F24_Visible;
+                Editable=ESACC_F24_Editable;
+                HideValue=ESACC_F24_HideValue }
+
+    { 13  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the number of the incoming document that this sales document is created for.;
+                           ESM=Especifica el n£mero del documento entrante para el que se crea este documento de venta.;
+                           FRC=Sp‚cifie le num‚ro du document entrant pour lequel ce document vente est cr‚‚.;
+                           ENC=Specifies the number of the incoming document that this sales document is created for.];
+                ApplicationArea=#Advanced;
+                SourceExpr="Incoming Document Entry No.";
+                Importance=Additional;
+                Visible=FALSE;
+                Editable=ESACC_F165_Editable;
+                HideValue=ESACC_F165_HideValue }
+
+    { 126 ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the number that the customer uses in their own system to refer to this sales document.;
+                           ESM=Especifica el n£mero que usa el cliente en su propio sistema para hacer referencia a este documento de venta.;
+                           FRC=Sp‚cifie le num‚ro que le client doit utiliser dans son propre systŠme pour faire r‚f‚rence … ce document vente.;
+                           ENC=Specifies the number that the customer uses in their own system to refer to this sales document.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="External Document No.";
+                Importance=Additional;
+                Visible=ESACC_F100_Visible;
+                Editable=ESACC_F100_Editable;
+                HideValue=ESACC_F100_HideValue;
+                ShowMandatory=ExternalDocNoMandatory }
+
+    { 1000000002;2;Field  ;
+                SourceExpr="RSM Code";
+                Visible=ESACC_F50035_Visible;
+                Editable=ESACC_F50035_Editable;
+                HideValue=ESACC_F50035_HideValue }
+
+    { 1000000098;2;Field  ;
+                SourceExpr="Mfr. Rep. Code";
+                Visible=ESACC_F50100_Visible;
+                Editable=ESACC_F50100_Editable AND (OSRCSRISRMfrRepEditable);
+                HideValue=ESACC_F50100_HideValue }
+
+    { 10  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the name of the salesperson who is assigned to the customer.;
+                           ESM=Especifica el nombre del vendedor asignado al cliente.;
+                           FRC=Sp‚cifie le nom du vendeur affect‚ au client.;
+                           ENC=Specifies the name of the salesperson who is assigned to the customer.];
+                ApplicationArea=#Suite;
+                SourceExpr="Salesperson Code";
+                Importance=Additional;
+                Visible=ESACC_F43_Visible;
+                Editable=ESACC_F43_Editable AND (OSRCSRISRMfrRepEditable);
+                HideValue=ESACC_F43_HideValue;
+                OnValidate=BEGIN
+                             SalespersonCodeOnAfterValidate;
+                           END;
+                            }
+
+    { 1000000209;2;Field  ;
+                SourceExpr="ISR Code";
+                Visible=ESACC_F50101_Visible;
+                Editable=ESACC_F50101_Editable AND (OSRCSRISRMfrRepEditable);
+                HideValue=ESACC_F50101_HideValue }
+
+    { 1000000210;2;Field  ;
+                SourceExpr="CSR Code";
+                Visible=ESACC_F50102_Visible;
+                Editable=ESACC_F50102_Editable AND (OSRCSRISRMfrRepEditable);
+                HideValue=ESACC_F50102_HideValue }
+
+    { 129 ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the number of the campaign that the document is linked to.;
+                           ESM=Especifica el n£mero de la campa¤a a la que est  vinculado el documento.;
+                           FRC=Sp‚cifie le num‚ro de campagne auquel le document est li‚.;
+                           ENC=Specifies the number of the campaign that the document is linked to.];
+                ApplicationArea=#RelationshipMgmt;
+                SourceExpr="Campaign No.";
+                Importance=Additional;
+                Visible=ESACC_F5050_Visible;
+                Editable=ESACC_F5050_Editable;
+                HideValue=ESACC_F5050_HideValue }
+
+    { 118 ;2   ;Field     ;
+                AccessByPermission=TableData 5714=R;
+                ToolTipML=[ENU=Specifies the code of the responsibility center that is associated with the user, company, or vendor.;
+                           ESM=Especifica el c¢digo del centro de responsabilidad asociado al usuario, la empresa o el proveedor.;
+                           FRC=Sp‚cifie le code du centre de gestion qui est associ‚ … l'utilisateur, … la soci‚t‚ ou au fournisseur.;
+                           ENC=Specifies the code of the responsibility centre that is associated with the user, company, or vendor.];
+                ApplicationArea=#Advanced;
+                SourceExpr="Responsibility Center";
+                Importance=Additional;
+                Visible=ESACC_F5700_Visible;
+                Editable=ESACC_F5700_Editable;
+                HideValue=ESACC_F5700_HideValue }
+
+    { 67  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the ID of the user who is responsible for the document.;
+                           ESM=Especifica el id. del usuario responsable del documento.;
+                           FRC=Sp‚cifie le code de l'utilisateur qui est responsable du document.;
+                           ENC=Specifies the ID of the user who is responsible for the document.];
+                ApplicationArea=#Advanced;
+                SourceExpr="Assigned User ID";
+                Importance=Additional;
+                Visible=ESACC_F9000_Visible;
+                Editable=ESACC_F9000_Editable;
+                HideValue=ESACC_F9000_HideValue }
+
+    { 112 ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies whether the document is open, waiting to be approved, has been invoiced for prepayment, or has been released to the next stage of processing.;
+                           ESM=Especifica si el documento est  pendiente, en espera de aprobaci¢n, facturado para prepago o ha pasado a la etapa siguiente de procesamiento.;
+                           FRC=Sp‚cifie si le document est ouvert, est en attente d'approbation, a ‚t‚ factur‚ pour acompte ou a ‚t‚ lanc‚ pour l'‚tape suivante du traitement.;
+                           ENC=Specifies whether the document is open, waiting to be approved, has been invoiced for prepayment, or has been released to the next stage of processing.];
+                ApplicationArea=#Suite;
+                SourceExpr=Status;
+                Importance=Additional;
+                Visible=ESACC_F120_Visible;
+                Editable=ESACC_F120_Editable;
+                HideValue=ESACC_F120_HideValue }
+
+    { 1000000007;2;Field  ;
+                SourceExpr=Comment;
+                Visible=ESACC_F46_Visible;
+                HideValue=ESACC_F46_HideValue }
+
+    { 1000000006;2;Field  ;
+                SourceExpr="Customer Comments";
+                Visible=ESACC_F50097_Visible;
+                Editable=FALSE;
+                HideValue=ESACC_F50097_HideValue }
+
+    { 1000000005;2;Field  ;
+                SourceExpr="Finance Comments";
+                Visible=ESACC_F50098_Visible;
+                Editable=FALSE;
+                HideValue=ESACC_F50098_HideValue }
+
+    { 1000000004;2;Field  ;
+                SourceExpr="Shipping Comments";
+                Visible=ESACC_F50099_Visible;
+                Editable=FALSE;
+                HideValue=ESACC_F50099_HideValue }
+
+    { 1000000003;2;Field  ;
+                SourceExpr="Hard Copy PO Available";
+                Visible=ESACC_F50095_Visible;
+                Editable=ESACC_F50095_Editable;
+                HideValue=ESACC_F50095_HideValue }
+
+    { 1000000001;2;Field  ;
+                SourceExpr="Quote Version No.";
+                Visible=ESACC_F50096_Visible;
+                Editable=FALSE;
+                HideValue=ESACC_F50096_HideValue }
+
+    { 5   ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the status of a job queue entry or task that handles the posting of sales invoices.;
+                           ESM=Especifica el estado de un movimiento de la cola de proyectos o de una tarea que controla el registro de las facturas de venta.;
+                           FRC=Sp‚cifie l'‚tat d'une ‚criture file d'attente des travaux ou d'une tƒche qui gŠre le report des factures vente.;
+                           ENC=Specifies the status of a job queue entry or task that handles the posting of sales invoices.];
+                ApplicationArea=#All;
+                SourceExpr="Job Queue Status";
+                Importance=Additional;
+                Visible=ESACC_F160_Visible AND (JobQueuesUsed);
+                Enabled=ESACC_F160_Editable;
+                Editable=ESACC_F160_Editable;
+                HideValue=ESACC_F160_HideValue }
+
+    { 1000000012;2;Field  ;
+                SourceExpr="Reason Code";
+                Visible=ESACC_F73_Visible;
+                Editable=ESACC_F73_Editable;
+                HideValue=ESACC_F73_HideValue }
+
+    { 1000000011;2;Field  ;
+                SourceExpr="Lost Opportunity Description";
+                Visible=ESACC_F50001_Visible;
+                Editable=ESACC_F50001_Editable;
+                HideValue=ESACC_F50001_HideValue }
+
+    { 1000000013;2;Field  ;
+                ToolTipML=[ENU=Specifies the CFDI purpose required for reporting to the Mexican tax authorities (SAT).;
+                           ESM=Especifica el prop¢sito de CFDI necesario para informar a las autoridades fiscales mexicanas (SAT).;
+                           FRC=Sp‚cifie l'objet CFDI requis pour la d‚claration aux autorit‚s fiscales mexicaines (SAT).;
+                           ENC=Specifies the CFDI purpose required for reporting to the Mexican tax authorities (SAT).];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="CFDI Purpose";
+                Importance=Additional;
+                Visible=ESACC_F27000_Visible;
+                Editable=ESACC_F27000_Editable;
+                HideValue=ESACC_F27000_HideValue }
+
+    { 1000000010;2;Field  ;
+                ToolTipML=[ENU="Specifies the relation of the CFDI document. ";
+                           ESM=Especifica la relaci¢n del documento CFDI.;
+                           FRC="Sp‚cifie la relation du document CFDI. ";
+                           ENC="Specifies the relation of the CFDI document. "];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="CFDI Relation";
+                Importance=Additional;
+                Visible=ESACC_F27001_Visible;
+                Editable=ESACC_F27001_Editable;
+                HideValue=ESACC_F27001_HideValue }
+
+    { 135 ;2   ;Group     ;
+                CaptionML=[ENU=Work Description;
+                           ESM=Descripci¢n del trabajo;
+                           FRC=Description du travail;
+                           ENC=Work Description];
+                GroupType=Group }
+
+    { 117 ;3   ;Field     ;
+                ToolTipML=[ENU=Specifies the products or service being offered;
+                           ESM=Especifica los productos o servicios que se ofrecen.;
+                           FRC=Sp‚cifie les produits ou services offerts;
+                           ENC=Specifies the products or service being offered];
+                ApplicationArea=#Advanced;
+                SourceExpr=WorkDescription;
+                Importance=Additional;
+                MultiLine=Yes;
+                OnValidate=BEGIN
+                             SetWorkDescription(WorkDescription);
+                           END;
+
+                ShowCaption=No }
+
+    { 56  ;1   ;Part      ;
+                Name=SalesLines;
+                ApplicationArea=#Basic,#Suite;
+                SubPageLink=Document No.=FIELD(No.);
+                PagePartID=Page47;
+                Enabled="Sell-to Customer No." <> '';
+                Editable="Sell-to Customer No." <> '' }
+
+    { 1905885101;1;Group  ;
+                CaptionML=[ENU=Invoice Details;
+                           ESM=Detalles factura;
+                           FRC=D‚tails facture;
+                           ENC=Invoice Details];
+                GroupType=Group }
+
+    { 107 ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the currency of amounts on the sales document.;
+                           ESM=Especifica la divisa de los importes en el documento de venta.;
+                           FRC=Sp‚cifie la devise des montants sur le document vente.;
+                           ENC=Specifies the currency of amounts on the sales document.];
+                ApplicationArea=#Suite;
+                SourceExpr="Currency Code";
+                Importance=Promoted;
+                Visible=ESACC_F32_Visible;
+                Editable=ESACC_F32_Editable;
+                HideValue=ESACC_F32_HideValue;
+                OnValidate=BEGIN
+                             CurrPage.SAVERECORD;
+                             SalesCalcDiscountByType.ApplyDefaultInvoiceDiscount(0,Rec);
+                           END;
+
+                OnAssistEdit=BEGIN
+                               CLEAR(ChangeExchangeRate);
+                               IF "Posting Date" <> 0D THEN
+                                 ChangeExchangeRate.SetParameter("Currency Code","Currency Factor","Posting Date")
+                               ELSE
+                                 ChangeExchangeRate.SetParameter("Currency Code","Currency Factor",WORKDATE);
+                               IF ChangeExchangeRate.RUNMODAL = ACTION::OK THEN BEGIN
+                                 VALIDATE("Currency Factor",ChangeExchangeRate.GetParameter);
+                                 CurrPage.UPDATE;
+                               END;
+                               CLEAR(ChangeExchangeRate);
+                             END;
+                              }
+
+    { 48  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies when items on the document are shipped or were shipped. A shipment date is usually calculated from a requested delivery date plus lead time.;
+                           ESM=Especifica cu ndo se van a enviar o se han enviado los productos del documento. Se calcula normalmente una fecha de env¡o con la fecha de entrega solicitada y el plazo de seguridad.;
+                           FRC=Sp‚cifie quand les articles du document sont livr‚s ou ont ‚t‚ livr‚s. Une date de livraison est g‚n‚ralement calcul‚e … partir d'une date de livraison demand‚e avec un d‚lai de s‚curit‚.;
+                           ENC=Specifies when items on the document are shipped or were shipped. A shipment date is usually calculated from a requested delivery date plus lead time.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Shipment Date";
+                Importance=Promoted;
+                Visible=ESACC_F21_Visible;
+                Editable=ESACC_F21_Editable;
+                HideValue=ESACC_F21_HideValue }
+
+    { 83  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the number of the sales quote that the sales order was created from. You can track the number to sales quote documents that you have printed, saved, or emailed.;
+                           ESM=Especifica el n£mero de la oferta de venta a partir de la cual se cre¢ el pedido de venta. Puede hacer un seguimiento del n£mero y ver los documentos de oferta de venta que imprimi¢, guard¢ o envi¢ por correo electr¢nico.;
+                           FRC=Sp‚cifie le num‚ro du devis … partir duquel la commande vente a ‚t‚ cr‚‚e. Vous pouvez suivre le num‚ro des documents devis que vous avez imprim‚s, enregistr‚s ou envoy‚s par e-mail.;
+                           ENC=Specifies the number of the sales quote that the sales order was created from. You can track the number to sales quote documents that you have printed, saved, or emailed.];
+                ApplicationArea=#All;
+                SourceExpr="Quote No.";
+                Visible=ESACC_F151_Visible AND (ShowQuoteNo);
+                Editable=ESACC_F151_Editable;
+                HideValue=ESACC_F151_HideValue }
+
+    { 26  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies a formula that calculates the payment due date, payment discount date, and payment discount amount on the sales document.;
+                           ESM=Especifica una f¢rmula que calcula la fecha de vencimiento del pago, la fecha de descuento por pronto pago y el importe de descuento por pronto pago en el documento de venta.;
+                           FRC=Sp‚cifie une formule qui calcule la date d'‚ch‚ance du paiement, la date d'escompte et le montant de la remise sur le document de vente.;
+                           ENC=Specifies a formula that calculates the payment due date, payment discount date, and payment discount amount on the sales document.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Payment Terms Code";
+                Importance=Promoted;
+                Visible=ESACC_F23_Visible;
+                Editable=ESACC_F23_Editable;
+                HideValue=ESACC_F23_HideValue }
+
+    { 101 ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies how the customer must pay for products on the sales document.;
+                           ESM=Especifica el modo en que el cliente debe pagar los productos en el documento de venta.;
+                           FRC=Sp‚cifie de quelle maniŠre le client doit r‚gler les produits figurant sur le document vente.;
+                           ENC=Specifies how the customer must pay for products on the sales document.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Payment Method Code";
+                Importance=Additional;
+                Visible=ESACC_F104_Visible;
+                Editable=ESACC_F104_Editable;
+                HideValue=ESACC_F104_HideValue;
+                OnValidate=BEGIN
+                             UpdatePaymentService;
+                           END;
+                            }
+
+    { 1020002;2;Field     ;
+                ToolTipML=[ENU=Specifies if the customer or vendor is liable for sales tax.;
+                           ESM=Especifica si el cliente o proveedor est  sujeto al impuesto sobre las ventas.;
+                           FRC=Sp‚cifie si le client ou fournisseur est soumis … la taxe de vente.;
+                           ENC=Specifies if the customer or vendor is liable for sales tax.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Tax Liable";
+                Importance=Promoted;
+                Visible=ESACC_F115_Visible;
+                Editable=ESACC_F115_Editable;
+                HideValue=ESACC_F115_HideValue }
+
+    { 1020000;2;Field     ;
+                ToolTipML=[ENU=Specifies the tax area that is used to calculate and post sales tax.;
+                           ESM=Especifica el  rea de impuesto que se usa para calcular y registrar el impuesto sobre las ventas.;
+                           FRC=Sp‚cifie la r‚gion fiscale utilis‚e pour calculer et reporter la taxe de vente.;
+                           ENC=Specifies the tax area that is used to calculate and post sales tax.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Tax Area Code";
+                Importance=Promoted;
+                Visible=ESACC_F114_Visible;
+                Editable=ESACC_F114_Editable;
+                HideValue=ESACC_F114_HideValue;
+                OnValidate=BEGIN
+                             CurrPage.SalesLines.PAGE.RedistributeTotalsOnAfterValidate;
+                           END;
+                            }
+
+    { 174 ;2   ;Group     ;
+                Visible=PaymentServiceVisible;
+                GroupType=Group }
+
+    { 175 ;3   ;Field     ;
+                Name=SelectedPayments;
+                CaptionML=[ENU=Payment Service;
+                           ESM=Servicio de pago;
+                           FRC=Service de paiement;
+                           ENC=Payment Service];
+                ToolTipML=[ENU=Specifies the online payment service, such as PayPal, that customers can use to pay the sales document.;
+                           ESM=Especifica el servicio de pago en l¡nea, como PayPal, que los clientes pueden usar para pagar el documento de venta.;
+                           FRC=Sp‚cifie le service de paiement en ligne, tel que PayPal, que les clients peuvent utiliser pour payer le document vente.;
+                           ENC=Specifies the online payment service, such as PayPal, that customers can use to pay the sales document.];
+                ApplicationArea=#All;
+                SourceExpr=GetSelectedPaymentServicesText;
+                Enabled=PaymentServiceEnabled;
+                Editable=FALSE;
+                MultiLine=Yes;
+                OnAssistEdit=BEGIN
+                               ChangePaymentServiceSetting;
+                             END;
+                              }
+
+    { 52  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the type of transaction that the sales document represents, for the purpose of reporting to INTRASTAT.;
+                           ESM=Especifica el tipo de transacci¢n que representa el documento de venta con el fin de informar a INTRASTAT.;
+                           FRC=Sp‚cifie le type de transaction que repr‚sente le document vente, … des fins de compte rendu … INTRASTAT.;
+                           ENC=Specifies the type of transaction that the sales document represents, for the purpose of reporting to INTRASTAT.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Transaction Type";
+                Visible=ESACC_F76_Visible;
+                Editable=ESACC_F76_Editable;
+                HideValue=ESACC_F76_HideValue }
+
+    { 84  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the code for Shortcut Dimension 1, which is one of two global dimension codes that you set up in the General Ledger Setup window.;
+                           ESM=Especifica el c¢digo de dimensi¢n del acceso directo 1, que es uno de los dos c¢digos de dimensi¢n globales que se configuran en la ventana Configuraci¢n de contabilidad.;
+                           FRC=Sp‚cifie le code du raccourci dimensionÿ1 qui est l'un des codes de dimension principaux que vous configurez dans la fenˆtre configuration du grand livre.;
+                           ENC=Specifies the code for Shortcut Dimension 1, which is one of two global dimension codes that you set up in the General Ledger Setup window.];
+                ApplicationArea=#Suite;
+                SourceExpr="Shortcut Dimension 1 Code";
+                Visible=ESACC_F29_Visible;
+                Editable=ESACC_F29_Editable;
+                HideValue=ESACC_F29_HideValue;
+                OnValidate=BEGIN
+                             CurrPage.UPDATE;
+                           END;
+                            }
+
+    { 88  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the code for Shortcut Dimension 2, which is one of two global dimension codes that you set up in the General Ledger Setup window.;
+                           ESM=Especifica el c¢digo de dimensi¢n del acceso directo 2, que es uno de los dos c¢digos de dimensi¢n globales que se configuran en la ventana Configuraci¢n de contabilidad.;
+                           FRC=Sp‚cifie le code du raccourci dimensionÿ2 qui est l'un des codes de dimension principaux que vous configurez dans la fenˆtre configuration du grand livre.;
+                           ENC=Specifies the code for Shortcut Dimension 2, which is one of two global dimension codes that you set up in the General Ledger Setup window.];
+                ApplicationArea=#Suite;
+                SourceExpr="Shortcut Dimension 2 Code";
+                Visible=ESACC_F30_Visible;
+                Editable=ESACC_F30_Editable;
+                HideValue=ESACC_F30_HideValue;
+                OnValidate=BEGIN
+                             CurrPage.UPDATE;
+                           END;
+                            }
+
+    { 30  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the payment discount percentage granted if the customer pays on or before the date entered in the Pmt. Discount Date field.;
+                           ESM=Especifica el porcentaje de descuento por pronto pago concedido si el cliente paga en o antes de la fecha introducida en el campo Fecha dto. P.P.;
+                           FRC=Sp‚cifie le pourcentage escompte accord‚ si le client paie au plus tard … la date saisie dans le champ Date d'escompte.;
+                           ENC=Specifies the payment discount percentage granted if the customer pays on or before the date entered in the Pmt. Discount Date field.];
+                ApplicationArea=#Advanced;
+                SourceExpr="Payment Discount %";
+                Visible=ESACC_F25_Visible;
+                Editable=ESACC_F25_Editable;
+                HideValue=ESACC_F25_HideValue }
+
+    { 32  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the date on which the amount in the entry must be paid for a payment discount to be granted.;
+                           ESM=Especifica cu ndo hay que pagar el importe del movimiento para conseguir un descuento por pronto pago.;
+                           FRC=Sp‚cifie la date … laquelle le montant de l'‚criture doit ˆtre pay‚ pour obtenir un escompte de paiement.;
+                           ENC=Specifies the date on which the amount in the entry must be paid for a payment discount to be granted.];
+                ApplicationArea=#Advanced;
+                SourceExpr="Pmt. Discount Date";
+                Importance=Additional;
+                Visible=ESACC_F26_Visible;
+                Editable=ESACC_F26_Editable;
+                HideValue=ESACC_F26_HideValue }
+
+    { 15  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the direct-debit mandate that the customer has signed to allow direct debit collection of payments.;
+                           ESM=Especifica la orden de domiciliaci¢n de adeudo directo que el cliente ha firmado para permitir realizar cobros por domiciliaci¢n de pagos.;
+                           FRC=Sp‚cifie le mandat de pr‚lŠvement que le client a sign‚ pour autoriser un pr‚lŠvement automatique des paiements.;
+                           ENC=Specifies the direct-debit mandate that the customer has signed to allow direct debit collection of payments.];
+                ApplicationArea=#Advanced;
+                SourceExpr="Direct Debit Mandate ID";
+                Visible=ESACC_F1200_Visible;
+                Editable=ESACC_F1200_Editable;
+                HideValue=ESACC_F1200_HideValue }
+
+    { 90  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the location from where inventory items to the customer on the sales document are to be shipped by default.;
+                           ESM=Especifica la ubicaci¢n desde la que se env¡an de forma predeterminada los productos de inventario al cliente en el documento de venta.;
+                           FRC=Sp‚cifie l'emplacement … partir duquel des articles d'inventaire doivent ˆtre livr‚s par d‚faut au client figurant sur le document vente.;
+                           ENC=Specifies the location from where inventory items to the customer on the sales document are to be shipped by default.];
+                ApplicationArea=#Location;
+                SourceExpr="Location Code";
+                Importance=Additional;
+                Visible=ESACC_F28_Visible;
+                Editable=ESACC_F28_Editable;
+                HideValue=ESACC_F28_HideValue }
+
+    { 1000000020;2;Field  ;
+                SourceExpr="E-Mail (ASN)";
+                Visible=ESACC_F50050_Visible;
+                Editable=ESACC_F50050_Editable;
+                HideValue=ESACC_F50050_HideValue }
+
+    { 1900000002;1;Group  ;
+                CaptionML=[ENU=Shipping and Billing;
+                           ESM=Env¡o y facturaci¢n;
+                           FRC=Exp‚dition et facturation;
+                           ENC=Shipping and Billing];
+                Enabled="Sell-to Customer No." <> '';
+                GroupType=Group }
+
+    { 34  ;2   ;Group     ;
+                GroupType=Group }
+
+    { 200 ;3   ;Group     ;
+                GroupType=Group }
+
+    { 201 ;4   ;Field     ;
+                Name=ShippingOptions;
+                CaptionML=[ENU=Ship-to;
+                           ESM=Direcci¢n de env¡o;
+                           FRC=Destinataire;
+                           ENC=Ship-to];
+                ToolTipML=[ENU=Specifies the address that the products on the sales document are shipped to. Default (Sell-to Address): The same as the customer's sell-to address. Alternate Ship-to Address: One of the customer's alternate ship-to addresses. Custom Address: Any ship-to address that you specify in the fields below.;
+                           ESM=Especifica la direcci¢n a la que se env¡an los productos del documento de venta. Predeterminada (direcci¢n de env¡o): la misma que la direcci¢n de env¡o del cliente. Direcci¢n de env¡o alternativa: una de las direcciones de env¡o alternativas del cliente. Direcci¢n personalizada: cualquier direcci¢n que especifique en los campos siguientes.;
+                           FRC=Sp‚cifie l'adresse … laquelle les produits figurant sur le document vente sont exp‚di‚s. Par d‚faut (Adresse donneur d'ordre)ÿ: identique … l'adresse donneur d'ordre du client. Autre adresse destinataireÿ: une des autres adresses destinataire du client. Adresse personnalis‚eÿ: toute adresse destinataire que vous sp‚cifiez dans les champs ci-dessous.;
+                           ENC=Specifies the address that the products on the sales document are shipped to. Default (Sell-to Address): The same as the customer's sell-to address. Alternate Ship-to Address: One of the customer's alternate ship-to addresses. Custom Address: Any ship-to address that you specify in the fields below.];
+                OptionCaptionML=[ENU=Default (Sell-to Address),Alternate Shipping Address,Custom Address;
+                                 ESM=Predeterminada (direcci¢n de venta),Direcci¢n de env¡o alternativa,Direcci¢n personalizada;
+                                 FRC=Par d‚faut (Adresse du d‚biteur),Autre adresse de livraison,Adresse personnalis‚e;
+                                 ENC=Default (Sell-to Address),Alternate Shipping Address,Custom Address];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=ShipToOptions;
+                OnValidate=VAR
+                             ShipToAddress@1001 : Record 222;
+                             ShipToAddressList@1000 : Page 301;
+                           BEGIN
+                             CASE ShipToOptions OF
+                               ShipToOptions::"Default (Sell-to Address)":
+                                 BEGIN
+                                   VALIDATE("Ship-to Code",'');
+                                   CopySellToAddressToShipToAddress;
+                                 END;
+                               ShipToOptions::"Alternate Shipping Address":
+                                 BEGIN
+                                   ShipToAddress.SETRANGE("Customer No.","Sell-to Customer No.");
+                                   ShipToAddressList.LOOKUPMODE := TRUE;
+                                   ShipToAddressList.SETTABLEVIEW(ShipToAddress);
+
+                                   IF ShipToAddressList.RUNMODAL = ACTION::LookupOK THEN BEGIN
+                                     ShipToAddressList.GETRECORD(ShipToAddress);
+                                     VALIDATE("Ship-to Code",ShipToAddress.Code);
+                                   END ELSE
+                                     ShipToOptions := ShipToOptions::"Custom Address";
+                                 END;
+                               ShipToOptions::"Custom Address":
+                                 VALIDATE("Ship-to Code",'');
+                             END;
+                           END;
+                            }
+
+    { 202 ;4   ;Group     ;
+                Visible=NOT (ShipToOptions = ShipToOptions::"Default (Sell-to Address)");
+                GroupType=Group }
+
+    { 65  ;5   ;Field     ;
+                CaptionML=[ENU=Code;
+                           ESM=C¢digo;
+                           FRC=Code;
+                           ENC=Code];
+                ToolTipML=[ENU=Specifies the code for another shipment address than the customer's own address, which is entered by default.;
+                           ESM=Especifica el c¢digo para otra direcci¢n de env¡o distinta a la propia direcci¢n del cliente, que se especifica de forma predeterminada.;
+                           FRC=Sp‚cifie le code d'une adresse de livraison diff‚rente de l'adresse du client, qui est entr‚e par d‚faut.;
+                           ENC=Specifies the code for another shipment address than the customer's own address, which is entered by default.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Ship-to Code";
+                Importance=Promoted;
+                Visible=ESACC_F12_Visible;
+                Editable=ESACC_F12_Editable AND (ShipToOptions = ShipToOptions::"Alternate Shipping Address");
+                HideValue=ESACC_F12_HideValue;
+                OnValidate=BEGIN
+                             IF (xRec."Ship-to Code" <> '') AND ("Ship-to Code" = '') THEN
+                               ERROR(EmptyShipToCodeErr);
+                           END;
+                            }
+
+    { 36  ;5   ;Field     ;
+                CaptionML=[ENU=Name;
+                           ESM=Nombre;
+                           FRC=Nom;
+                           ENC=Name];
+                ToolTipML=[ENU=Specifies the name that products on the sales document will be shipped to.;
+                           ESM=Especifica el nombre al que se enviar n los productos en el documento de venta.;
+                           FRC=Sp‚cifie le nom auquel les produits mentionn‚s sur le document vente seront exp‚di‚s.;
+                           ENC=Specifies the name that products on the sales document will be shipped to.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Ship-to Name";
+                Visible=ESACC_F13_Visible;
+                Editable=ESACC_F13_Editable AND (ShipToOptions = ShipToOptions::"Custom Address");
+                HideValue=ESACC_F13_HideValue }
+
+    { 38  ;5   ;Field     ;
+                CaptionML=[ENU=Address;
+                           ESM=Direcci¢n;
+                           FRC=Adresse;
+                           ENC=Address];
+                ToolTipML=[ENU=Specifies the address that products on the sales document will be shipped to.;
+                           ESM=Especifica la direcci¢n a la que se enviar n los productos en el documento de venta.;
+                           FRC=Sp‚cifie l'adresse … laquelle les produits mentionn‚s sur le document vente seront exp‚di‚s.;
+                           ENC=Specifies the address that products on the sales document will be shipped to.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Ship-to Address";
+                Visible=ESACC_F15_Visible;
+                Editable=ESACC_F15_Editable AND (ShipToOptions = ShipToOptions::"Custom Address");
+                HideValue=ESACC_F15_HideValue }
+
+    { 40  ;5   ;Field     ;
+                CaptionML=[ENU=Address 2;
+                           ESM=Direcci¢n 2;
+                           FRC=Adresse (2Šme ligne);
+                           ENC=Address 2];
+                ToolTipML=[ENU=Specifies additional address information.;
+                           ESM=Especifica informaci¢n adicional sobre la direcci¢n.;
+                           FRC=Sp‚cifie des informations d'adresse suppl‚mentaires.;
+                           ENC=Specifies additional address information.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Ship-to Address 2";
+                Visible=ESACC_F16_Visible;
+                Editable=ESACC_F16_Editable AND (ShipToOptions = ShipToOptions::"Custom Address");
+                HideValue=ESACC_F16_HideValue }
+
+    { 42  ;5   ;Field     ;
+                CaptionML=[ENU=City;
+                           ESM=Poblaci¢n;
+                           FRC=Ville;
+                           ENC=City];
+                ToolTipML=[ENU=Specifies the city of the customer on the sales document.;
+                           ESM=Especifica el municipio/ciudad del cliente en el documento de ventas.;
+                           FRC=Sp‚cifie la ville du client sur le document vente.;
+                           ENC=Specifies the city of the customer on the sales document.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Ship-to City";
+                Visible=ESACC_F17_Visible;
+                Enabled=ESACC_F17_Editable;
+                Editable=ESACC_F17_Editable AND (ShipToOptions = ShipToOptions::"Custom Address");
+                HideValue=ESACC_F17_HideValue }
+
+    { 1020011;5;Field     ;
+                CaptionML=[ENU=State;
+                           ESM=Estado;
+                           FRC=Province;
+                           ENC=Province/State];
+                ToolTipML=[ENU=Specifies the state as a part of the address.;
+                           ESM=Especifica el estado o provincia como parte de la direcci¢n.;
+                           FRC=Sp‚cifie la province comme partie de l'adresse.;
+                           ENC=Specifies the province/state as a part of the address.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Ship-to County";
+                Visible=ESACC_F92_Visible;
+                Editable=ESACC_F92_Editable AND (ShipToOptions = ShipToOptions::"Custom Address");
+                HideValue=ESACC_F92_HideValue }
+
+    { 93  ;5   ;Field     ;
+                CaptionML=[ENU=ZIP Code;
+                           ESM=C¢digo postal;
+                           FRC=Code postal;
+                           ENC=Postal/ZIP Code];
+                ToolTipML=[ENU=Specifies the ZIP code.;
+                           ESM=Especifica el c¢digo postal.;
+                           FRC=Sp‚cifie le code postal.;
+                           ENC=Specifies the postal code.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Ship-to Post Code";
+                Visible=ESACC_F91_Visible;
+                Enabled=ESACC_F91_Editable;
+                Editable=ESACC_F91_Editable AND (ShipToOptions = ShipToOptions::"Custom Address");
+                HideValue=ESACC_F91_HideValue }
+
+    { 17  ;5   ;Field     ;
+                CaptionML=[ENU=Country/Region;
+                           ESM=Pa¡s/regi¢n;
+                           FRC=Pays/r‚gion;
+                           ENC=Country/Region];
+                ToolTipML=[ENU=Specifies the customer's country/region.;
+                           ESM=Especifica el pa¡s o regi¢n del cliente.;
+                           FRC=Sp‚cifie le code pays/r‚gion du client.;
+                           ENC=Specifies the customer's country/region.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Ship-to Country/Region Code";
+                Importance=Additional;
+                Visible=ESACC_F93_Visible;
+                Editable=ESACC_F93_Editable AND (ShipToOptions = ShipToOptions::"Custom Address");
+                HideValue=ESACC_F93_HideValue }
+
+    { 1020013;5;Field     ;
+                CaptionML=[ENU=UPS Zone;
+                           ESM=Zona UPS;
+                           FRC=Zone UPS;
+                           ENC=UPS Zone];
+                ToolTipML=[ENU=Specifies a UPS Zone code for this document if UPS is used for shipments.;
+                           ESM=Especifica el c¢digo de zona de porte (UPS) de este documento, si va a usar la zona UPS para realizar los env¡os.;
+                           FRC=Sp‚cifie un code Zone UPS pour ce document si le service est utilis‚ pour les livraisons.;
+                           ENC=Specifies a UPS Zone code for this document if UPS is used for shipments.];
+                SourceExpr="Ship-to UPS Zone";
+                Visible=ESACC_F10005_Visible;
+                Editable=ESACC_F10005_Editable;
+                HideValue=ESACC_F10005_HideValue }
+
+    { 44  ;4   ;Field     ;
+                CaptionML=[ENU=Contact;
+                           ESM=Contacto;
+                           FRC=Contact;
+                           ENC=Contact];
+                ToolTipML=[ENU=Specifies the name of the contact person at the address that products on the sales document will be shipped to.;
+                           ESM=Especifica el nombre de la persona de contacto en la direcci¢n a la que se enviar n los productos en el documento de venta.;
+                           FRC=Sp‚cifie le nom de la personne contact … l'adresse d'exp‚dition des produits figurant sur le document vente.;
+                           ENC=Specifies the name of the contact person at the address that products on the sales document will be shipped to.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Ship-to Contact";
+                Visible=ESACC_F18_Visible;
+                Editable=ESACC_F18_Editable;
+                HideValue=ESACC_F18_HideValue }
+
+    { 16  ;3   ;Group     ;
+                CaptionML=[ENU=Shipment Method;
+                           ESM=Condiciones env¡o;
+                           FRC=Conditions de livraison;
+                           ENC=Shipment Method];
+                GroupType=Group }
+
+    { 46  ;4   ;Field     ;
+                CaptionML=[ENU=Code;
+                           ESM=C¢digo;
+                           FRC=Code;
+                           ENC=Code];
+                ToolTipML=[ENU=Specifies how items on the sales document are shipped to the customer.;
+                           ESM=Especifica la manera en que los productos del documento de venta se env¡an al cliente.;
+                           FRC=Sp‚cifie le mode d'exp‚dition au client des articles figurant sur le document vente.;
+                           ENC=Specifies how items on the sales document are shipped to the customer.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Shipment Method Code";
+                Importance=Additional;
+                Visible=ESACC_F27_Visible;
+                Editable=ESACC_F27_Editable;
+                HideValue=ESACC_F27_HideValue }
+
+    { 103 ;4   ;Field     ;
+                CaptionML=[ENU=Agent;
+                           ESM=Agente;
+                           FRC=Transporteur;
+                           ENC=Agent];
+                ToolTipML=[ENU=Specifies which shipping agent is used to transport the items on the sales document to the customer.;
+                           ESM=Especifica el transportista que se usa para transportar los productos del documento de venta al cliente.;
+                           FRC=Sp‚cifie le transporteur utilis‚ pour exp‚dier au client les articles figurant sur le document vente.;
+                           ENC=Specifies which shipping agent is used to transport the items on the sales document to the customer.];
+                ApplicationArea=#Suite;
+                SourceExpr="Shipping Agent Code";
+                Importance=Additional;
+                Visible=ESACC_F105_Visible;
+                Editable=ESACC_F105_Editable;
+                HideValue=ESACC_F105_HideValue }
+
+    { 11  ;4   ;Field     ;
+                CaptionML=[ENU=Agent service;
+                           ESM=Servicio de agente;
+                           FRC=Prestation transporteur;
+                           ENC=Agent service];
+                ToolTipML=[ENU=Specifies which shipping agent service is used to transport the items on the sales document to the customer.;
+                           ESM=Especifica el servicio de transportista que se usa para transportar los productos del documento de venta al cliente.;
+                           FRC=Sp‚cifie le transporteur utilis‚ pour exp‚dier au client les articles figurant sur le document vente.;
+                           ENC=Specifies which shipping agent service is used to transport the items on the sales document to the customer.];
+                ApplicationArea=#Suite;
+                SourceExpr="Shipping Agent Service Code";
+                Importance=Additional;
+                Visible=ESACC_F5794_Visible;
+                Editable=ESACC_F5794_Editable;
+                HideValue=ESACC_F5794_HideValue }
+
+    { 105 ;4   ;Field     ;
+                ToolTipML=[ENU=Specifies the shipping agent's package number.;
+                           ESM=Especifica el n£mero de paquete del transportista.;
+                           FRC=Sp‚cifie le num‚ro r‚c‚piss‚ du transporteur.;
+                           ENC=Specifies the shipping agent's package number.];
+                ApplicationArea=#Suite;
+                SourceExpr="Package Tracking No.";
+                Importance=Additional;
+                Visible=ESACC_F106_Visible;
+                Editable=ESACC_F106_Editable;
+                HideValue=ESACC_F106_HideValue }
+
+    { 203 ;2   ;Group     ;
+                GroupType=Group }
+
+    { 204 ;3   ;Field     ;
+                CaptionML=[ENU=Bill-to;
+                           ESM=Direcci¢n facturaci¢n;
+                           FRC=Facturation;
+                           ENC=Bill-to];
+                ToolTipML=[ENU=Specifies the customer that the sales invoice will be sent to. Default (Customer): The same as the customer on the sales invoice. Another Customer: Any customer that you specify in the fields below.;
+                           ESM=Especifica el cliente al que se enviar  la factura de venta. Predeterminado (cliente): el mismo que el cliente en la factura de venta. Otro cliente: cualquier cliente que especifique en los campos siguientes.;
+                           FRC=Sp‚cifie le client auquel la facture vente sera envoy‚e. Par d‚faut (Client)ÿ: identique au client figurant sur la facture vente. Autre clientÿ: tout client que vous sp‚cifiez dans les champs ci-dessous.;
+                           ENC=Specifies the customer that the sales invoice will be sent to. Default (Customer): The same as the customer on the sales invoice. Another Customer: Any customer that you specify in the fields below.];
+                OptionCaptionML=[ENU=Default (Customer),Another Customer;
+                                 ESM=Predeterminado (cliente),Otro cliente;
+                                 FRC=Par d‚faut (Clients),Autre client;
+                                 ENC=Default (Customer),Another Customer];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=BillToOptions;
+                OnValidate=BEGIN
+                             IF BillToOptions = BillToOptions::"Default (Customer)" THEN BEGIN
+                               VALIDATE("Bill-to Customer No.","Sell-to Customer No.");
+                               RecallModifyAddressNotification(GetModifyBillToCustomerAddressNotificationId);
+                             END;
+
+                             CopySellToAddressToBillToAddress;
+                           END;
+                            }
+
+    { 205 ;3   ;Group     ;
+                Visible=BillToOptions = BillToOptions::"Another Customer";
+                GroupType=Group }
+
+    { 14  ;4   ;Field     ;
+                CaptionML=[ENU=Name;
+                           ESM=Nombre;
+                           FRC=Nom;
+                           ENC=Name];
+                ToolTipML=[ENU=Specifies the customer to whom you will send the sales invoice, when different from the customer that you are selling to.;
+                           ESM=Especifica el cliente al que se enviar  la factura de venta, cuando es distinto del cliente al que se realiza la venta.;
+                           FRC=Sp‚cifie le nom du client auquel vous envoyez la facture vente, s'il diffŠre du client auquel vous vendez.;
+                           ENC=Specifies the customer to whom you will send the sales invoice, when different from the customer that you are selling to.];
+                ApplicationArea=#Basic,#Suite;
+                NotBlank=Yes;
+                SourceExpr="Bill-to Name";
+                Importance=Promoted;
+                Visible=ESACC_F5_Visible;
+                Editable=ESACC_F5_Editable;
+                HideValue=ESACC_F5_HideValue;
+                OnValidate=VAR
+                             ApplicationAreaSetup@1000 : Record 9178;
+                           BEGIN
+                             IF GETFILTER("Bill-to Customer No.") = xRec."Bill-to Customer No." THEN
+                               IF "Bill-to Customer No." <> xRec."Bill-to Customer No." THEN
+                                 SETRANGE("Bill-to Customer No.");
+
+                             IF ApplicationAreaSetup.IsFoundationEnabled THEN
+                               SalesCalcDiscountByType.ApplyDefaultInvoiceDiscount(0,Rec);
+
+                             CurrPage.UPDATE;
+                           END;
+                            }
+
+    { 18  ;4   ;Field     ;
+                CaptionML=[ENU=Address;
+                           ESM=Direcci¢n;
+                           FRC=Adresse;
+                           ENC=Address];
+                ToolTipML=[ENU=Specifies the address of the customer that you will send the invoice to.;
+                           ESM=Especifica la direcci¢n del cliente a quien se enviar  la factura.;
+                           FRC=Sp‚cifie l'adresse du client qui sera factur‚.;
+                           ENC=Specifies the address of the customer that you will send the invoice to.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bill-to Address";
+                Importance=Additional;
+                Visible=ESACC_F7_Visible;
+                Enabled="Bill-to Customer No." <> "Sell-to Customer No.";
+                Editable=ESACC_F7_Editable AND ("Bill-to Customer No." <> "Sell-to Customer No.");
+                HideValue=ESACC_F7_HideValue }
+
+    { 20  ;4   ;Field     ;
+                CaptionML=[ENU=Address 2;
+                           ESM=Direcci¢n 2;
+                           FRC=Adresse (2Šme ligne);
+                           ENC=Address 2];
+                ToolTipML=[ENU=Specifies additional address information.;
+                           ESM=Especifica informaci¢n adicional sobre la direcci¢n.;
+                           FRC=Sp‚cifie des informations d'adresse suppl‚mentaires.;
+                           ENC=Specifies additional address information.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bill-to Address 2";
+                Importance=Additional;
+                Visible=ESACC_F8_Visible;
+                Enabled="Bill-to Customer No." <> "Sell-to Customer No.";
+                Editable=ESACC_F8_Editable AND ("Bill-to Customer No." <> "Sell-to Customer No.");
+                HideValue=ESACC_F8_HideValue }
+
+    { 22  ;4   ;Field     ;
+                CaptionML=[ENU=City;
+                           ESM=Poblaci¢n;
+                           FRC=Ville;
+                           ENC=City];
+                ToolTipML=[ENU=Specifies the city of the customer on the sales document.;
+                           ESM=Especifica el municipio/ciudad del cliente en el documento de ventas.;
+                           FRC=Sp‚cifie la ville du client sur le document vente.;
+                           ENC=Specifies the city of the customer on the sales document.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bill-to City";
+                Importance=Additional;
+                Visible=ESACC_F9_Visible;
+                Enabled=ESACC_F9_Editable AND ("Bill-to Customer No." <> "Sell-to Customer No.");
+                Editable=ESACC_F9_Editable AND ("Bill-to Customer No." <> "Sell-to Customer No.");
+                HideValue=ESACC_F9_HideValue }
+
+    { 1020008;4;Field     ;
+                CaptionML=[ENU=State;
+                           ESM=Estado;
+                           FRC=Province;
+                           ENC=Province/State];
+                ToolTipML=[ENU=Specifies the state as a part of the address.;
+                           ESM=Especifica el estado o provincia como parte de la direcci¢n.;
+                           FRC=Sp‚cifie la province comme partie de l'adresse.;
+                           ENC=Specifies the province/state as a part of the address.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bill-to County";
+                Importance=Additional;
+                Visible=ESACC_F86_Visible;
+                Enabled="Bill-to Customer No." <> "Sell-to Customer No.";
+                Editable=ESACC_F86_Editable AND ("Bill-to Customer No." <> "Sell-to Customer No.");
+                HideValue=ESACC_F86_HideValue }
+
+    { 85  ;4   ;Field     ;
+                CaptionML=[ENU=ZIP Code;
+                           ESM=C¢digo postal;
+                           FRC=Code postal;
+                           ENC=Postal/ZIP Code];
+                ToolTipML=[ENU=Specifies the ZIP code.;
+                           ESM=Especifica el c¢digo postal.;
+                           FRC=Sp‚cifie le code postal.;
+                           ENC=Specifies the postal code.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bill-to Post Code";
+                Importance=Additional;
+                Visible=ESACC_F85_Visible;
+                Enabled=ESACC_F85_Editable AND ("Bill-to Customer No." <> "Sell-to Customer No.");
+                Editable=ESACC_F85_Editable AND ("Bill-to Customer No." <> "Sell-to Customer No.");
+                HideValue=ESACC_F85_HideValue }
+
+    { 86  ;4   ;Field     ;
+                CaptionML=[ENU=Contact No.;
+                           ESM=N§ contacto;
+                           FRC=Nø contact;
+                           ENC=Contact No.];
+                ToolTipML=[ENU=Specifies the number of the contact the invoice will be sent to.;
+                           ESM=Especifica el n£mero del contacto a quien se enviar  la factura.;
+                           FRC=Sp‚cifie le num‚ro du contact auquel vous envoyez la facture.;
+                           ENC=Specifies the number of the contact the invoice will be sent to.];
+                ApplicationArea=#Advanced;
+                SourceExpr="Bill-to Contact No.";
+                Importance=Additional;
+                Visible=ESACC_F5053_Visible;
+                Enabled=ESACC_F5053_Editable AND ("Bill-to Customer No." <> "Sell-to Customer No.");
+                Editable=ESACC_F5053_Editable AND ("Bill-to Customer No." <> "Sell-to Customer No.");
+                HideValue=ESACC_F5053_HideValue }
+
+    { 24  ;4   ;Field     ;
+                CaptionML=[ENU=Contact;
+                           ESM=Contacto;
+                           FRC=Contact;
+                           ENC=Contact];
+                ToolTipML=[ENU=Specifies the name of the person you should contact at the customer who you are sending the invoice to.;
+                           ESM=Especifica el nombre de la persona con quien contactarse cuando es necesario comunicarse con el cliente al que se enviar  la factura.;
+                           FRC=Sp‚cifie le nom de la personne que vous devez contacter chez le client auquel vous envoyez la facture.;
+                           ENC=Specifies the name of the person you should contact at the customer who you are sending the invoice to.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr="Bill-to Contact";
+                Visible=ESACC_F10_Visible;
+                Enabled=ESACC_F10_Editable AND ("Bill-to Customer No." <> "Sell-to Customer No.");
+                Editable=ESACC_F10_Editable AND ("Bill-to Customer No." <> "Sell-to Customer No.");
+                HideValue=ESACC_F10_HideValue }
+
+    { 1907468901;1;Group  ;
+                CaptionML=[ENU=Foreign Trade;
+                           ESM=Comercio exterior;
+                           FRC=International;
+                           ENC=Foreign Trade];
+                GroupType=Group }
+
+    { 1000000014;2;Field  ;
+                ToolTipML=[ENU=Specifies whether the sales document is part of a three-party trade.;
+                           ESM=Especifica si el documento de venta forma parte de una operaci¢n triangular.;
+                           FRC=Sp‚cifie si le document vente fait partie d'une transaction tripartite.;
+                           ENC=Specifies whether the sales document is part of a three-party trade.];
+                SourceExpr="EU 3-Party Trade";
+                Visible=ESACC_F75_Visible;
+                Editable=ESACC_F75_Editable;
+                HideValue=ESACC_F75_HideValue }
+
+    { 99  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies a code for the sales document's transaction specification, for the purpose of reporting to INTRASTAT.;
+                           ESM=Especifica un c¢digo para el r‚gimen estad¡stico del documento de venta con el fin de informar a INTRASTAT.;
+                           FRC=Sp‚cifie un code pour le r‚gime du document vente, … des fins de compte-rendu … INTRASTAT.;
+                           ENC=Specifies a code for the sales document's transaction specification, for the purpose of reporting to INTRASTAT.];
+                ApplicationArea=#Advanced;
+                SourceExpr="Transaction Specification";
+                Visible=ESACC_F102_Visible;
+                Editable=ESACC_F102_Editable;
+                HideValue=ESACC_F102_HideValue }
+
+    { 54  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the transport method, for the purpose of reporting to INTRASTAT.;
+                           ESM=Especifica el modo de transporte con el fin de informar a INTRASTAT.;
+                           FRC=Sp‚cifie le mode de transport, … des fins de compte-rendu … INTRASTAT.;
+                           ENC=Specifies the transport method, for the purpose of reporting to INTRASTAT.];
+                ApplicationArea=#Advanced;
+                SourceExpr="Transport Method";
+                Visible=ESACC_F77_Visible;
+                Editable=ESACC_F77_Editable;
+                HideValue=ESACC_F77_HideValue }
+
+    { 95  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the point of exit through which you ship the items out of your country/region, for reporting to Intrastat.;
+                           ESM=Especifica el punto de salida a trav‚s del cual se enviar n los productos fuera de su pa¡s o regi¢n, con el fin de informar a Intrastat.;
+                           FRC=Sp‚cifie le point de sortie par lequel les articles sortent de votre pays/r‚gion, … des fins de compte-rendu … Intrastat.;
+                           ENC=Specifies the point of exit through which you ship the items out of your country/region, for reporting to Intrastat.];
+                ApplicationArea=#Advanced;
+                SourceExpr="Exit Point";
+                Visible=ESACC_F97_Visible;
+                Editable=ESACC_F97_Editable;
+                HideValue=ESACC_F97_HideValue }
+
+    { 97  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the area of the customer's address, for the purpose of reporting to INTRASTAT.;
+                           ESM=Especifica el  rea de la direcci¢n del cliente con el fin de informar a INTRASTAT.;
+                           FRC=Sp‚cifie la r‚gion de l'adresse du client, … des fins de compte-rendu … INTRASTAT.;
+                           ENC=Specifies the area of the customer's address, for the purpose of reporting to INTRASTAT.];
+                ApplicationArea=#Advanced;
+                SourceExpr=Area;
+                Visible=ESACC_F101_Visible;
+                Editable=ESACC_F101_Editable;
+                HideValue=ESACC_F101_HideValue }
+
+    { 1000000215;1;Group  ;
+                CaptionML=ENU=Commissions;
+                Visible=CommHdlgVisible;
+                GroupType=Group }
+
+    { 1000000214;2;Field  ;
+                SourceExpr="Mfr. Rep. Comm. %";
+                Visible=ESACC_F51700_Visible;
+                Editable=ESACC_F51700_Editable;
+                HideValue=ESACC_F51700_HideValue }
+
+    { 1000000213;2;Field  ;
+                SourceExpr="Mfr. Rep. Comm. Amount";
+                Visible=ESACC_F51701_Visible;
+                HideValue=ESACC_F51701_HideValue }
+
+    { 1000000212;2;Field  ;
+                SourceExpr="Location Hdlg. %";
+                Visible=ESACC_F51702_Visible;
+                Editable=ESACC_F51702_Editable;
+                HideValue=ESACC_F51702_HideValue }
+
+    { 1000000211;2;Field  ;
+                SourceExpr="Location Hdlg. Amount";
+                Visible=ESACC_F51703_Visible;
+                HideValue=ESACC_F51703_HideValue }
+
+    { 1240020014;1;Group  ;
+                CaptionML=ENU=E-Ship }
+
+    { 1240020013;2;Field  ;
+                Name=<Shipping Agent Code2>;
+                SourceExpr="Shipping Agent Code";
+                Importance=Promoted;
+                Visible=ESACC_F105_Visible;
+                Editable=ESACC_F105_Editable;
+                HideValue=ESACC_F105_HideValue }
+
+    { 1240020012;2;Field  ;
+                Lookup=Yes;
+                SourceExpr="E-Ship Agent Service";
+                Importance=Promoted;
+                Visible=ESACC_F14000701_Visible;
+                Editable=ESACC_F14000701_Editable;
+                LookupPageID=E-Ship Agent Svcs List Alt.;
+                HideValue=ESACC_F14000701_HideValue }
+
+    { 1240020011;2;Field  ;
+                SourceExpr="Residential Delivery";
+                Visible=ESACC_F14000704_Visible;
+                Editable=ESACC_F14000704_Editable;
+                HideValue=ESACC_F14000704_HideValue }
+
+    { 1240020010;2;Field  ;
+                SourceExpr="Blind Shipment";
+                Visible=ESACC_F14000710_Visible;
+                Editable=ESACC_F14000710_Editable;
+                HideValue=ESACC_F14000710_HideValue }
+
+    { 1240020009;2;Field  ;
+                SourceExpr="Double Blind Shipment";
+                Visible=ESACC_F14000711_Visible;
+                Editable=ESACC_F14000711_Editable;
+                HideValue=ESACC_F14000711_HideValue }
+
+    { 1240020008;2;Field  ;
+                SourceExpr="Double Blind Ship-from Cust No";
+                Visible=ESACC_F14000712_Visible;
+                Editable=ESACC_F14000712_Editable;
+                HideValue=ESACC_F14000712_HideValue }
+
+    { 1240020007;2;Field  ;
+                SourceExpr="Ship-for Code";
+                Visible=ESACC_F14000825_Visible;
+                Editable=ESACC_F14000825_Editable;
+                HideValue=ESACC_F14000825_HideValue }
+
+    { 1000000015;2;Field  ;
+                CaptionML=ENU=Packing Status;
+                SourceExpr=PackingStatus;
+                Importance=Promoted }
+
+    { 1240020005;2;Field  ;
+                SourceExpr="Shipping Payment Type";
+                Importance=Promoted;
+                Visible=ESACC_F14000716_Visible;
+                Editable=ESACC_F14000716_Editable;
+                HideValue=ESACC_F14000716_HideValue }
+
+    { 1240020004;2;Field  ;
+                Lookup=Yes;
+                SourceExpr="Third Party Ship. Account No.";
+                Importance=Promoted;
+                Visible=ESACC_F14000717_Visible;
+                Editable=ESACC_F14000717_Editable;
+                LookupPageID=Shipping Accounts Alt.;
+                HideValue=ESACC_F14000717_HideValue }
+
+    { 1240020003;2;Field  ;
+                SourceExpr="Shipping Insurance";
+                Visible=ESACC_F14000718_Visible;
+                Editable=ESACC_F14000718_Editable;
+                HideValue=ESACC_F14000718_HideValue }
+
+    { 1240020002;2;Field  ;
+                SourceExpr="Free Freight";
+                Visible=ESACC_F14000705_Visible;
+                Editable=ESACC_F14000705_Editable;
+                HideValue=ESACC_F14000705_HideValue }
+
+    { 1240020001;2;Field  ;
+                SourceExpr="E-Mail Confirmation Handled";
+                Visible=ESACC_F14000901_Visible;
+                Editable=ESACC_F14000901_Editable;
+                HideValue=ESACC_F14000901_HideValue }
+
+    { 1240020000;2;Field  ;
+                SourceExpr="Invoice for Bill of Lading No.";
+                Visible=ESACC_F14000829_Visible;
+                Editable=ESACC_F14000829_Editable;
+                HideValue=ESACC_F14000829_HideValue }
+
+    { 1900000007;0;Container;
+                ContainerType=FactBoxArea }
+
+    { 31  ;1   ;Part      ;
+                ApplicationArea=#All;
+                SubPageLink=Table ID=CONST(36),
+                            Document Type=FIELD(Document Type),
+                            Document No.=FIELD(No.);
+                PagePartID=Page9103;
+                Visible=OpenApprovalEntriesExistForCurrUser;
+                PartType=Page }
+
+    { 1903720907;1;Part   ;
+                ApplicationArea=#Advanced;
+                SubPageLink=No.=FIELD(Sell-to Customer No.);
+                PagePartID=Page9080;
+                Visible=FALSE;
+                PartType=Page }
+
+    { 1907234507;1;Part   ;
+                ApplicationArea=#Advanced;
+                SubPageLink=No.=FIELD(Bill-to Customer No.);
+                PagePartID=Page9081;
+                Visible=FALSE;
+                PartType=Page }
+
+    { 1902018507;1;Part   ;
+                ApplicationArea=#Advanced;
+                SubPageLink=No.=FIELD(Bill-to Customer No.);
+                PagePartID=Page9082;
+                PartType=Page }
+
+    { 1900316107;1;Part   ;
+                ApplicationArea=#Advanced;
+                SubPageLink=No.=FIELD(Sell-to Customer No.);
+                PagePartID=Page9084;
+                PartType=Page }
+
+    { 1906127307;1;Part   ;
+                ApplicationArea=#Advanced;
+                SubPageLink=Document Type=FIELD(Document Type),
+                            Document No.=FIELD(Document No.),
+                            Line No.=FIELD(Line No.);
+                PagePartID=Page9087;
+                ProviderID=56;
+                Visible=FALSE;
+                PartType=Page }
+
+    { 1901314507;1;Part   ;
+                ApplicationArea=#Advanced;
+                SubPageLink=No.=FIELD(No.);
+                PagePartID=Page9089;
+                ProviderID=56;
+                PartType=Page }
+
+    { 33  ;1   ;Part      ;
+                Name=IncomingDocAttachFactBox;
+                ApplicationArea=#Advanced;
+                PagePartID=Page193;
+                Visible=FALSE;
+                PartType=Page;
+                ShowFilter=No }
+
+    { 1906354007;1;Part   ;
+                Name=ApprovalFactBox;
+                ApplicationArea=#Advanced;
+                PagePartID=Page9092;
+                Visible=FALSE;
+                PartType=Page }
+
+    { 1907012907;1;Part   ;
+                ApplicationArea=#Advanced;
+                SubPageLink=No.=FIELD(No.);
+                PagePartID=Page9108;
+                ProviderID=56;
+                Visible=FALSE;
+                PartType=Page }
+
+    { 51  ;1   ;Part      ;
+                Name=WorkflowStatus;
+                ApplicationArea=#All;
+                PagePartID=Page1528;
+                Visible=ShowWorkflowStatus;
+                Enabled=FALSE;
+                Editable=FALSE;
+                PartType=Page;
+                ShowFilter=No }
+
+    { 1900383207;1;Part   ;
+                Visible=FALSE;
+                PartType=System;
+                SystemPartID=RecordLinks }
+
+    { 1905767507;1;Part   ;
+                PartType=System;
+                SystemPartID=Notes }
+
+  }
+  CODE
+  {
+    VAR
+      ESACC_ESFLADSMgt@14123801 : Codeunit 14123801;
+      ESACC_C3_Visible@905000030 : Boolean INDATASET;
+      ESACC_C3_Enabled@905000033 : Boolean INDATASET;
+      ESACC_C6_Visible@905000060 : Boolean INDATASET;
+      ESACC_C6_Enabled@905000063 : Boolean INDATASET;
+      ESACC_C7_Visible@905000070 : Boolean INDATASET;
+      ESACC_C7_Enabled@905000073 : Boolean INDATASET;
+      ESACC_C21_Visible@905000210 : Boolean INDATASET;
+      ESACC_C21_Enabled@905000213 : Boolean INDATASET;
+      ESACC_C23_Visible@905000230 : Boolean INDATASET;
+      ESACC_C23_Enabled@905000233 : Boolean INDATASET;
+      ESACC_C25_Visible@905000250 : Boolean INDATASET;
+      ESACC_C25_Enabled@905000253 : Boolean INDATASET;
+      ESACC_C27_Visible@905000270 : Boolean INDATASET;
+      ESACC_C27_Enabled@905000273 : Boolean INDATASET;
+      ESACC_C37_Visible@905000370 : Boolean INDATASET;
+      ESACC_C37_Enabled@905000373 : Boolean INDATASET;
+      ESACC_C39_Visible@905000390 : Boolean INDATASET;
+      ESACC_C39_Enabled@905000393 : Boolean INDATASET;
+      ESACC_C41_Visible@905000410 : Boolean INDATASET;
+      ESACC_C41_Enabled@905000413 : Boolean INDATASET;
+      ESACC_C45_Visible@905000450 : Boolean INDATASET;
+      ESACC_C45_Enabled@905000453 : Boolean INDATASET;
+      ESACC_C50_Visible@905000500 : Boolean INDATASET;
+      ESACC_C50_Enabled@905000503 : Boolean INDATASET;
+      ESACC_C55_Visible@905000550 : Boolean INDATASET;
+      ESACC_C55_Enabled@905000553 : Boolean INDATASET;
+      ESACC_C59_Visible@905000590 : Boolean INDATASET;
+      ESACC_C59_Enabled@905000593 : Boolean INDATASET;
+      ESACC_C61_Visible@905000610 : Boolean INDATASET;
+      ESACC_C61_Enabled@905000613 : Boolean INDATASET;
+      ESACC_C63_Visible@905000630 : Boolean INDATASET;
+      ESACC_C63_Enabled@905000633 : Boolean INDATASET;
+      ESACC_C64_Visible@905000640 : Boolean INDATASET;
+      ESACC_C64_Enabled@905000643 : Boolean INDATASET;
+      ESACC_C66_Visible@905000660 : Boolean INDATASET;
+      ESACC_C66_Enabled@905000663 : Boolean INDATASET;
+      ESACC_C68_Visible@905000680 : Boolean INDATASET;
+      ESACC_C68_Enabled@905000683 : Boolean INDATASET;
+      ESACC_C71_Visible@905000710 : Boolean INDATASET;
+      ESACC_C71_Enabled@905000713 : Boolean INDATASET;
+      ESACC_C74_Visible@905000740 : Boolean INDATASET;
+      ESACC_C74_Enabled@905000743 : Boolean INDATASET;
+      ESACC_C76_Visible@905000760 : Boolean INDATASET;
+      ESACC_C76_Enabled@905000763 : Boolean INDATASET;
+      ESACC_C78_Visible@905000780 : Boolean INDATASET;
+      ESACC_C78_Enabled@905000783 : Boolean INDATASET;
+      ESACC_C115_Visible@905001150 : Boolean INDATASET;
+      ESACC_C115_Enabled@905001153 : Boolean INDATASET;
+      ESACC_C116_Visible@905001160 : Boolean INDATASET;
+      ESACC_C116_Enabled@905001163 : Boolean INDATASET;
+      ESACC_C123_Visible@905001230 : Boolean INDATASET;
+      ESACC_C123_Enabled@905001233 : Boolean INDATASET;
+      ESACC_C124_Visible@905001240 : Boolean INDATASET;
+      ESACC_C124_Enabled@905001243 : Boolean INDATASET;
+      ESACC_C159_Visible@905001590 : Boolean INDATASET;
+      ESACC_C159_Enabled@905001593 : Boolean INDATASET;
+      ESACC_C160_Visible@905001600 : Boolean INDATASET;
+      ESACC_C160_Enabled@905001603 : Boolean INDATASET;
+      ESACC_C162_Visible@905001620 : Boolean INDATASET;
+      ESACC_C162_Enabled@905001623 : Boolean INDATASET;
+      ESACC_C216_Visible@905002160 : Boolean INDATASET;
+      ESACC_C216_Enabled@905002163 : Boolean INDATASET;
+      ESACC_C217_Visible@905002170 : Boolean INDATASET;
+      ESACC_C217_Enabled@905002173 : Boolean INDATASET;
+      ESACC_C14000352_Visible@955003520 : Boolean INDATASET;
+      ESACC_C14000352_Enabled@955003523 : Boolean INDATASET;
+      ESACC_C14000705_Visible@955007050 : Boolean INDATASET;
+      ESACC_C14000705_Enabled@955007053 : Boolean INDATASET;
+      ESACC_C14000708_Visible@955007080 : Boolean INDATASET;
+      ESACC_C14000708_Enabled@955007083 : Boolean INDATASET;
+      ESACC_C14000709_Visible@955007090 : Boolean INDATASET;
+      ESACC_C14000709_Enabled@955007093 : Boolean INDATASET;
+      ESACC_C14000710_Visible@955007100 : Boolean INDATASET;
+      ESACC_C14000710_Enabled@955007103 : Boolean INDATASET;
+      ESACC_C14000711_Visible@955007110 : Boolean INDATASET;
+      ESACC_C14000711_Enabled@955007113 : Boolean INDATASET;
+      ESACC_C14000823_Visible@955008230 : Boolean INDATASET;
+      ESACC_C14000823_Enabled@955008233 : Boolean INDATASET;
+      ESACC_C14000824_Visible@955008240 : Boolean INDATASET;
+      ESACC_C14000824_Enabled@955008243 : Boolean INDATASET;
+      ESACC_C14000825_Visible@955008250 : Boolean INDATASET;
+      ESACC_C14000825_Enabled@955008253 : Boolean INDATASET;
+      ESACC_C14000827_Visible@955008270 : Boolean INDATASET;
+      ESACC_C14000827_Enabled@955008273 : Boolean INDATASET;
+      ESACC_C14000829_Visible@955008290 : Boolean INDATASET;
+      ESACC_C14000829_Enabled@955008293 : Boolean INDATASET;
+      ESACC_C14000830_Visible@955008300 : Boolean INDATASET;
+      ESACC_C14000830_Enabled@955008303 : Boolean INDATASET;
+      ESACC_C140000826_Visible@955008260 : Boolean INDATASET;
+      ESACC_C140000826_Enabled@955008263 : Boolean INDATASET;
+      ESACC_C1000000009_Visible@915000090 : Boolean INDATASET;
+      ESACC_C1000000009_Enabled@915000093 : Boolean INDATASET;
+      ESACC_F2_Visible@900000020 : Boolean INDATASET;
+      ESACC_F2_Editable@900000021 : Boolean INDATASET;
+      ESACC_F2_HideValue@900000022 : Boolean INDATASET;
+      ESACC_F3_Visible@900000030 : Boolean INDATASET;
+      ESACC_F3_Editable@900000031 : Boolean INDATASET;
+      ESACC_F3_HideValue@900000032 : Boolean INDATASET;
+      ESACC_F5_Visible@900000050 : Boolean INDATASET;
+      ESACC_F5_Editable@900000051 : Boolean INDATASET;
+      ESACC_F5_HideValue@900000052 : Boolean INDATASET;
+      ESACC_F7_Visible@900000070 : Boolean INDATASET;
+      ESACC_F7_Editable@900000071 : Boolean INDATASET;
+      ESACC_F7_HideValue@900000072 : Boolean INDATASET;
+      ESACC_F8_Visible@900000080 : Boolean INDATASET;
+      ESACC_F8_Editable@900000081 : Boolean INDATASET;
+      ESACC_F8_HideValue@900000082 : Boolean INDATASET;
+      ESACC_F9_Visible@900000090 : Boolean INDATASET;
+      ESACC_F9_Editable@900000091 : Boolean INDATASET;
+      ESACC_F9_HideValue@900000092 : Boolean INDATASET;
+      ESACC_F10_Visible@900000100 : Boolean INDATASET;
+      ESACC_F10_Editable@900000101 : Boolean INDATASET;
+      ESACC_F10_HideValue@900000102 : Boolean INDATASET;
+      ESACC_F11_Visible@900000110 : Boolean INDATASET;
+      ESACC_F11_Editable@900000111 : Boolean INDATASET;
+      ESACC_F11_HideValue@900000112 : Boolean INDATASET;
+      ESACC_F12_Visible@900000120 : Boolean INDATASET;
+      ESACC_F12_Editable@900000121 : Boolean INDATASET;
+      ESACC_F12_HideValue@900000122 : Boolean INDATASET;
+      ESACC_F13_Visible@900000130 : Boolean INDATASET;
+      ESACC_F13_Editable@900000131 : Boolean INDATASET;
+      ESACC_F13_HideValue@900000132 : Boolean INDATASET;
+      ESACC_F15_Visible@900000150 : Boolean INDATASET;
+      ESACC_F15_Editable@900000151 : Boolean INDATASET;
+      ESACC_F15_HideValue@900000152 : Boolean INDATASET;
+      ESACC_F16_Visible@900000160 : Boolean INDATASET;
+      ESACC_F16_Editable@900000161 : Boolean INDATASET;
+      ESACC_F16_HideValue@900000162 : Boolean INDATASET;
+      ESACC_F17_Visible@900000170 : Boolean INDATASET;
+      ESACC_F17_Editable@900000171 : Boolean INDATASET;
+      ESACC_F17_HideValue@900000172 : Boolean INDATASET;
+      ESACC_F18_Visible@900000180 : Boolean INDATASET;
+      ESACC_F18_Editable@900000181 : Boolean INDATASET;
+      ESACC_F18_HideValue@900000182 : Boolean INDATASET;
+      ESACC_F20_Visible@900000200 : Boolean INDATASET;
+      ESACC_F20_Editable@900000201 : Boolean INDATASET;
+      ESACC_F20_HideValue@900000202 : Boolean INDATASET;
+      ESACC_F21_Visible@900000210 : Boolean INDATASET;
+      ESACC_F21_Editable@900000211 : Boolean INDATASET;
+      ESACC_F21_HideValue@900000212 : Boolean INDATASET;
+      ESACC_F23_Visible@900000230 : Boolean INDATASET;
+      ESACC_F23_Editable@900000231 : Boolean INDATASET;
+      ESACC_F23_HideValue@900000232 : Boolean INDATASET;
+      ESACC_F24_Visible@900000240 : Boolean INDATASET;
+      ESACC_F24_Editable@900000241 : Boolean INDATASET;
+      ESACC_F24_HideValue@900000242 : Boolean INDATASET;
+      ESACC_F25_Visible@900000250 : Boolean INDATASET;
+      ESACC_F25_Editable@900000251 : Boolean INDATASET;
+      ESACC_F25_HideValue@900000252 : Boolean INDATASET;
+      ESACC_F26_Visible@900000260 : Boolean INDATASET;
+      ESACC_F26_Editable@900000261 : Boolean INDATASET;
+      ESACC_F26_HideValue@900000262 : Boolean INDATASET;
+      ESACC_F27_Visible@900000270 : Boolean INDATASET;
+      ESACC_F27_Editable@900000271 : Boolean INDATASET;
+      ESACC_F27_HideValue@900000272 : Boolean INDATASET;
+      ESACC_F28_Visible@900000280 : Boolean INDATASET;
+      ESACC_F28_Editable@900000281 : Boolean INDATASET;
+      ESACC_F28_HideValue@900000282 : Boolean INDATASET;
+      ESACC_F29_Visible@900000290 : Boolean INDATASET;
+      ESACC_F29_Editable@900000291 : Boolean INDATASET;
+      ESACC_F29_HideValue@900000292 : Boolean INDATASET;
+      ESACC_F30_Visible@900000300 : Boolean INDATASET;
+      ESACC_F30_Editable@900000301 : Boolean INDATASET;
+      ESACC_F30_HideValue@900000302 : Boolean INDATASET;
+      ESACC_F32_Visible@900000320 : Boolean INDATASET;
+      ESACC_F32_Editable@900000321 : Boolean INDATASET;
+      ESACC_F32_HideValue@900000322 : Boolean INDATASET;
+      ESACC_F43_Visible@900000430 : Boolean INDATASET;
+      ESACC_F43_Editable@900000431 : Boolean INDATASET;
+      ESACC_F43_HideValue@900000432 : Boolean INDATASET;
+      ESACC_F46_Visible@900000460 : Boolean INDATASET;
+      ESACC_F46_HideValue@900000462 : Boolean INDATASET;
+      ESACC_F73_Visible@900000730 : Boolean INDATASET;
+      ESACC_F73_Editable@900000731 : Boolean INDATASET;
+      ESACC_F73_HideValue@900000732 : Boolean INDATASET;
+      ESACC_F75_Visible@900000750 : Boolean INDATASET;
+      ESACC_F75_Editable@900000751 : Boolean INDATASET;
+      ESACC_F75_HideValue@900000752 : Boolean INDATASET;
+      ESACC_F76_Visible@900000760 : Boolean INDATASET;
+      ESACC_F76_Editable@900000761 : Boolean INDATASET;
+      ESACC_F76_HideValue@900000762 : Boolean INDATASET;
+      ESACC_F77_Visible@900000770 : Boolean INDATASET;
+      ESACC_F77_Editable@900000771 : Boolean INDATASET;
+      ESACC_F77_HideValue@900000772 : Boolean INDATASET;
+      ESACC_F79_Visible@900000790 : Boolean INDATASET;
+      ESACC_F79_Editable@900000791 : Boolean INDATASET;
+      ESACC_F79_HideValue@900000792 : Boolean INDATASET;
+      ESACC_F81_Visible@900000810 : Boolean INDATASET;
+      ESACC_F81_Editable@900000811 : Boolean INDATASET;
+      ESACC_F81_HideValue@900000812 : Boolean INDATASET;
+      ESACC_F82_Visible@900000820 : Boolean INDATASET;
+      ESACC_F82_Editable@900000821 : Boolean INDATASET;
+      ESACC_F82_HideValue@900000822 : Boolean INDATASET;
+      ESACC_F83_Visible@900000830 : Boolean INDATASET;
+      ESACC_F83_Editable@900000831 : Boolean INDATASET;
+      ESACC_F83_HideValue@900000832 : Boolean INDATASET;
+      ESACC_F84_Visible@900000840 : Boolean INDATASET;
+      ESACC_F84_Editable@900000841 : Boolean INDATASET;
+      ESACC_F84_HideValue@900000842 : Boolean INDATASET;
+      ESACC_F85_Visible@900000850 : Boolean INDATASET;
+      ESACC_F85_Editable@900000851 : Boolean INDATASET;
+      ESACC_F85_HideValue@900000852 : Boolean INDATASET;
+      ESACC_F86_Visible@900000860 : Boolean INDATASET;
+      ESACC_F86_Editable@900000861 : Boolean INDATASET;
+      ESACC_F86_HideValue@900000862 : Boolean INDATASET;
+      ESACC_F88_Visible@900000880 : Boolean INDATASET;
+      ESACC_F88_Editable@900000881 : Boolean INDATASET;
+      ESACC_F88_HideValue@900000882 : Boolean INDATASET;
+      ESACC_F89_Visible@900000890 : Boolean INDATASET;
+      ESACC_F89_Editable@900000891 : Boolean INDATASET;
+      ESACC_F89_HideValue@900000892 : Boolean INDATASET;
+      ESACC_F91_Visible@900000910 : Boolean INDATASET;
+      ESACC_F91_Editable@900000911 : Boolean INDATASET;
+      ESACC_F91_HideValue@900000912 : Boolean INDATASET;
+      ESACC_F92_Visible@900000920 : Boolean INDATASET;
+      ESACC_F92_Editable@900000921 : Boolean INDATASET;
+      ESACC_F92_HideValue@900000922 : Boolean INDATASET;
+      ESACC_F93_Visible@900000930 : Boolean INDATASET;
+      ESACC_F93_Editable@900000931 : Boolean INDATASET;
+      ESACC_F93_HideValue@900000932 : Boolean INDATASET;
+      ESACC_F97_Visible@900000970 : Boolean INDATASET;
+      ESACC_F97_Editable@900000971 : Boolean INDATASET;
+      ESACC_F97_HideValue@900000972 : Boolean INDATASET;
+      ESACC_F99_Visible@900000990 : Boolean INDATASET;
+      ESACC_F99_Editable@900000991 : Boolean INDATASET;
+      ESACC_F99_HideValue@900000992 : Boolean INDATASET;
+      ESACC_F100_Visible@900001000 : Boolean INDATASET;
+      ESACC_F100_Editable@900001001 : Boolean INDATASET;
+      ESACC_F100_HideValue@900001002 : Boolean INDATASET;
+      ESACC_F101_Visible@900001010 : Boolean INDATASET;
+      ESACC_F101_Editable@900001011 : Boolean INDATASET;
+      ESACC_F101_HideValue@900001012 : Boolean INDATASET;
+      ESACC_F102_Visible@900001020 : Boolean INDATASET;
+      ESACC_F102_Editable@900001021 : Boolean INDATASET;
+      ESACC_F102_HideValue@900001022 : Boolean INDATASET;
+      ESACC_F104_Visible@900001040 : Boolean INDATASET;
+      ESACC_F104_Editable@900001041 : Boolean INDATASET;
+      ESACC_F104_HideValue@900001042 : Boolean INDATASET;
+      ESACC_F105_Visible@900001050 : Boolean INDATASET;
+      ESACC_F105_Editable@900001051 : Boolean INDATASET;
+      ESACC_F105_HideValue@900001052 : Boolean INDATASET;
+      ESACC_F106_Visible@900001060 : Boolean INDATASET;
+      ESACC_F106_Editable@900001061 : Boolean INDATASET;
+      ESACC_F106_HideValue@900001062 : Boolean INDATASET;
+      ESACC_F114_Visible@900001140 : Boolean INDATASET;
+      ESACC_F114_Editable@900001141 : Boolean INDATASET;
+      ESACC_F114_HideValue@900001142 : Boolean INDATASET;
+      ESACC_F115_Visible@900001150 : Boolean INDATASET;
+      ESACC_F115_Editable@900001151 : Boolean INDATASET;
+      ESACC_F115_HideValue@900001152 : Boolean INDATASET;
+      ESACC_F120_Visible@900001200 : Boolean INDATASET;
+      ESACC_F120_Editable@900001201 : Boolean INDATASET;
+      ESACC_F120_HideValue@900001202 : Boolean INDATASET;
+      ESACC_F151_Visible@900001510 : Boolean INDATASET;
+      ESACC_F151_Editable@900001511 : Boolean INDATASET;
+      ESACC_F151_HideValue@900001512 : Boolean INDATASET;
+      ESACC_F160_Visible@900001600 : Boolean INDATASET;
+      ESACC_F160_Editable@900001601 : Boolean INDATASET;
+      ESACC_F160_HideValue@900001602 : Boolean INDATASET;
+      ESACC_F165_Visible@900001650 : Boolean INDATASET;
+      ESACC_F165_Editable@900001651 : Boolean INDATASET;
+      ESACC_F165_HideValue@900001652 : Boolean INDATASET;
+      ESACC_F1200_Visible@900012000 : Boolean INDATASET;
+      ESACC_F1200_Editable@900012001 : Boolean INDATASET;
+      ESACC_F1200_HideValue@900012002 : Boolean INDATASET;
+      ESACC_F5050_Visible@900050500 : Boolean INDATASET;
+      ESACC_F5050_Editable@900050501 : Boolean INDATASET;
+      ESACC_F5050_HideValue@900050502 : Boolean INDATASET;
+      ESACC_F5052_Visible@900050520 : Boolean INDATASET;
+      ESACC_F5052_Editable@900050521 : Boolean INDATASET;
+      ESACC_F5052_HideValue@900050522 : Boolean INDATASET;
+      ESACC_F5053_Visible@900050530 : Boolean INDATASET;
+      ESACC_F5053_Editable@900050531 : Boolean INDATASET;
+      ESACC_F5053_HideValue@900050532 : Boolean INDATASET;
+      ESACC_F5700_Visible@900057000 : Boolean INDATASET;
+      ESACC_F5700_Editable@900057001 : Boolean INDATASET;
+      ESACC_F5700_HideValue@900057002 : Boolean INDATASET;
+      ESACC_F5794_Visible@900057940 : Boolean INDATASET;
+      ESACC_F5794_Editable@900057941 : Boolean INDATASET;
+      ESACC_F5794_HideValue@900057942 : Boolean INDATASET;
+      ESACC_F9000_Visible@900090000 : Boolean INDATASET;
+      ESACC_F9000_Editable@900090001 : Boolean INDATASET;
+      ESACC_F9000_HideValue@900090002 : Boolean INDATASET;
+      ESACC_F10005_Visible@900100050 : Boolean INDATASET;
+      ESACC_F10005_Editable@900100051 : Boolean INDATASET;
+      ESACC_F10005_HideValue@900100052 : Boolean INDATASET;
+      ESACC_F27000_Visible@900270000 : Boolean INDATASET;
+      ESACC_F27000_Editable@900270001 : Boolean INDATASET;
+      ESACC_F27000_HideValue@900270002 : Boolean INDATASET;
+      ESACC_F27001_Visible@900270010 : Boolean INDATASET;
+      ESACC_F27001_Editable@900270011 : Boolean INDATASET;
+      ESACC_F27001_HideValue@900270012 : Boolean INDATASET;
+      ESACC_F50001_Visible@900500010 : Boolean INDATASET;
+      ESACC_F50001_Editable@900500011 : Boolean INDATASET;
+      ESACC_F50001_HideValue@900500012 : Boolean INDATASET;
+      ESACC_F50030_Visible@900500300 : Boolean INDATASET;
+      ESACC_F50030_Editable@900500301 : Boolean INDATASET;
+      ESACC_F50030_HideValue@900500302 : Boolean INDATASET;
+      ESACC_F50035_Visible@900500350 : Boolean INDATASET;
+      ESACC_F50035_Editable@900500351 : Boolean INDATASET;
+      ESACC_F50035_HideValue@900500352 : Boolean INDATASET;
+      ESACC_F50050_Visible@900500500 : Boolean INDATASET;
+      ESACC_F50050_Editable@900500501 : Boolean INDATASET;
+      ESACC_F50050_HideValue@900500502 : Boolean INDATASET;
+      ESACC_F50095_Visible@900500950 : Boolean INDATASET;
+      ESACC_F50095_Editable@900500951 : Boolean INDATASET;
+      ESACC_F50095_HideValue@900500952 : Boolean INDATASET;
+      ESACC_F50096_Visible@900500960 : Boolean INDATASET;
+      ESACC_F50096_Editable@900500961 : Boolean INDATASET;
+      ESACC_F50096_HideValue@900500962 : Boolean INDATASET;
+      ESACC_F50097_Visible@900500970 : Boolean INDATASET;
+      ESACC_F50097_Editable@900500971 : Boolean INDATASET;
+      ESACC_F50097_HideValue@900500972 : Boolean INDATASET;
+      ESACC_F50098_Visible@900500980 : Boolean INDATASET;
+      ESACC_F50098_Editable@900500981 : Boolean INDATASET;
+      ESACC_F50098_HideValue@900500982 : Boolean INDATASET;
+      ESACC_F50099_Visible@900500990 : Boolean INDATASET;
+      ESACC_F50099_Editable@900500991 : Boolean INDATASET;
+      ESACC_F50099_HideValue@900500992 : Boolean INDATASET;
+      ESACC_F50100_Visible@900501000 : Boolean INDATASET;
+      ESACC_F50100_Editable@900501001 : Boolean INDATASET;
+      ESACC_F50100_HideValue@900501002 : Boolean INDATASET;
+      ESACC_F50101_Visible@900501010 : Boolean INDATASET;
+      ESACC_F50101_Editable@900501011 : Boolean INDATASET;
+      ESACC_F50101_HideValue@900501012 : Boolean INDATASET;
+      ESACC_F50102_Visible@900501020 : Boolean INDATASET;
+      ESACC_F50102_Editable@900501021 : Boolean INDATASET;
+      ESACC_F50102_HideValue@900501022 : Boolean INDATASET;
+      ESACC_F50200_Visible@900502000 : Boolean INDATASET;
+      ESACC_F50200_Editable@900502001 : Boolean INDATASET;
+      ESACC_F50200_HideValue@900502002 : Boolean INDATASET;
+      ESACC_F51700_Visible@900517000 : Boolean INDATASET;
+      ESACC_F51700_Editable@900517001 : Boolean INDATASET;
+      ESACC_F51700_HideValue@900517002 : Boolean INDATASET;
+      ESACC_F51701_Visible@900517010 : Boolean INDATASET;
+      ESACC_F51701_HideValue@900517012 : Boolean INDATASET;
+      ESACC_F51702_Visible@900517020 : Boolean INDATASET;
+      ESACC_F51702_Editable@900517021 : Boolean INDATASET;
+      ESACC_F51702_HideValue@900517022 : Boolean INDATASET;
+      ESACC_F51703_Visible@900517030 : Boolean INDATASET;
+      ESACC_F51703_HideValue@900517032 : Boolean INDATASET;
+      ESACC_F14000701_Visible@950007010 : Boolean INDATASET;
+      ESACC_F14000701_Editable@950007011 : Boolean INDATASET;
+      ESACC_F14000701_HideValue@950007012 : Boolean INDATASET;
+      ESACC_F14000704_Visible@950007040 : Boolean INDATASET;
+      ESACC_F14000704_Editable@950007041 : Boolean INDATASET;
+      ESACC_F14000704_HideValue@950007042 : Boolean INDATASET;
+      ESACC_F14000705_Visible@950007050 : Boolean INDATASET;
+      ESACC_F14000705_Editable@950007051 : Boolean INDATASET;
+      ESACC_F14000705_HideValue@950007052 : Boolean INDATASET;
+      ESACC_F14000710_Visible@950007100 : Boolean INDATASET;
+      ESACC_F14000710_Editable@950007101 : Boolean INDATASET;
+      ESACC_F14000710_HideValue@950007102 : Boolean INDATASET;
+      ESACC_F14000711_Visible@950007110 : Boolean INDATASET;
+      ESACC_F14000711_Editable@950007111 : Boolean INDATASET;
+      ESACC_F14000711_HideValue@950007112 : Boolean INDATASET;
+      ESACC_F14000712_Visible@950007120 : Boolean INDATASET;
+      ESACC_F14000712_Editable@950007121 : Boolean INDATASET;
+      ESACC_F14000712_HideValue@950007122 : Boolean INDATASET;
+      ESACC_F14000716_Visible@950007160 : Boolean INDATASET;
+      ESACC_F14000716_Editable@950007161 : Boolean INDATASET;
+      ESACC_F14000716_HideValue@950007162 : Boolean INDATASET;
+      ESACC_F14000717_Visible@950007170 : Boolean INDATASET;
+      ESACC_F14000717_Editable@950007171 : Boolean INDATASET;
+      ESACC_F14000717_HideValue@950007172 : Boolean INDATASET;
+      ESACC_F14000718_Visible@950007180 : Boolean INDATASET;
+      ESACC_F14000718_Editable@950007181 : Boolean INDATASET;
+      ESACC_F14000718_HideValue@950007182 : Boolean INDATASET;
+      ESACC_F14000825_Visible@950008250 : Boolean INDATASET;
+      ESACC_F14000825_Editable@950008251 : Boolean INDATASET;
+      ESACC_F14000825_HideValue@950008252 : Boolean INDATASET;
+      ESACC_F14000829_Visible@950008290 : Boolean INDATASET;
+      ESACC_F14000829_Editable@950008291 : Boolean INDATASET;
+      ESACC_F14000829_HideValue@950008292 : Boolean INDATASET;
+      ESACC_F14000901_Visible@950009010 : Boolean INDATASET;
+      ESACC_F14000901_Editable@950009011 : Boolean INDATASET;
+      ESACC_F14000901_HideValue@950009012 : Boolean INDATASET;
+      ApplicationAreaSetup@1011 : Record 9178;
+      CopySalesDoc@1002 : Report 292;
+      MoveNegSalesLines@1006 : Report 6699;
+      ReportPrint@1003 : Codeunit 228;
+      UserMgt@1004 : Codeunit 5700;
+      SalesCalcDiscountByType@1007 : Codeunit 56;
+      ApprovalsMgmt@1013 : Codeunit 1535;
+      LinesInstructionMgt@1015 : Codeunit 1320;
+      CustomerMgt@1059 : Codeunit 1302;
+      ChangeExchangeRate@1001 : Page 511;
+      NavigateAfterPost@1017 : 'Posted Document,New Document,Nowhere';
+      WorkDescription@1018 : Text;
+      HasIncomingDocument@1012 : Boolean;
+      DocNoVisible@1005 : Boolean;
+      ExternalDocNoMandatory@1008 : Boolean;
+      OpenApprovalEntriesExistForCurrUser@1009 : Boolean;
+      OpenApprovalEntriesExist@1000 : Boolean;
+      ShowWorkflowStatus@1010 : Boolean;
+      PaymentServiceVisible@1032 : Boolean;
+      PaymentServiceEnabled@1033 : Boolean;
+      OpenPostedSalesInvQst@1020 : TextConst 'ENU=The invoice has been posted and moved to the Posted Sales Invoices window.\\Do you want to open the posted invoice?;ESM=La factura se registr¢ y se movi¢ a la ventana de facturas de venta registradas.\\¨Quiere abrir la factura registrada?;FRC=La facture a ‚t‚ valid‚e et d‚plac‚e dans la fenˆtre Factures vente enregistr‚es.\\Souhaitez-vous ouvrir la facture enregistr‚eÿ?;ENC=The invoice has been posted and moved to the Posted Sales Invoices window.\\Do you want to open the posted invoice?';
+      IsCustomerOrContactNotEmpty@1021 : Boolean;
+      ShowQuoteNo@1029 : Boolean;
+      JobQueuesUsed@1031 : Boolean;
+      CanCancelApprovalForRecord@1014 : Boolean;
+      DocumentIsPosted@1016 : Boolean;
+      ShipToOptions@1050 : 'Default (Sell-to Address),Alternate Shipping Address,Custom Address';
+      BillToOptions@1051 : 'Default (Customer),Another Customer';
+      EmptyShipToCodeErr@1052 : TextConst 'ENU=The Code field can only be empty if you select Custom Address in the Ship-to field.;ESM=El campo C¢digo solo puede estar vac¡o si selecciona Direcci¢n personalizada en el campo Direcci¢n de env¡o.;FRC=Le champ Code ne peut ˆtre vide que si vous s‚lectionnez Adresse personnalis‚e dans le champ Destinataire.;ENC=The Code field can only be empty if you select Custom Address in the Ship-to field.';
+      CommHdlgVisible@1000000000 : Boolean;
+      BillOfLading@14000700 : Record 14000822;
+      Shipping@14000701 : Codeunit 14000701;
+      Text14000701@14000702 : TextConst 'ENU=%1 %2 added to Bill of Lading %3.';
+      Text14000702@14000703 : TextConst 'ENU=Information is OK';
+      OSRCSRISRMfrRepEditable@1000000001 : Boolean;
+      Page43EventPublishers@1000000002 : Codeunit 51801;
+      IsSaaS@1019 : Boolean;
+      CanRequestApprovalForFlow@1023 : Boolean;
+      CanCancelApprovalForFlow@1022 : Boolean;
+
+    LOCAL PROCEDURE ESACC_EasySecurity@14123801(OpenObject@14123801 : Boolean);
+    VAR
+      SetFilters@14123802 : Codeunit 14123812;
+      TempBoolean@14123803 : Boolean;
+    BEGIN
+      IF OpenObject THEN BEGIN
+        SetFilters.Filter36(Rec,8,43);
+
+        TempBoolean := CurrPage.EDITABLE;
+        IF ESACC_ESFLADSMgt.PageGeneral(36,43,TempBoolean) THEN
+          CurrPage.EDITABLE := TempBoolean;
+      END;
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,3,
+        ESACC_C3_Visible,ESACC_C3_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,6,
+        ESACC_C6_Visible,ESACC_C6_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,7,
+        ESACC_C7_Visible,ESACC_C7_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,21,
+        ESACC_C21_Visible,ESACC_C21_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,23,
+        ESACC_C23_Visible,ESACC_C23_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,25,
+        ESACC_C25_Visible,ESACC_C25_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,27,
+        ESACC_C27_Visible,ESACC_C27_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,37,
+        ESACC_C37_Visible,ESACC_C37_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,39,
+        ESACC_C39_Visible,ESACC_C39_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,41,
+        ESACC_C41_Visible,ESACC_C41_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,45,
+        ESACC_C45_Visible,ESACC_C45_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,50,
+        ESACC_C50_Visible,ESACC_C50_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,55,
+        ESACC_C55_Visible,ESACC_C55_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,59,
+        ESACC_C59_Visible,ESACC_C59_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,61,
+        ESACC_C61_Visible,ESACC_C61_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,63,
+        ESACC_C63_Visible,ESACC_C63_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,64,
+        ESACC_C64_Visible,ESACC_C64_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,66,
+        ESACC_C66_Visible,ESACC_C66_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,68,
+        ESACC_C68_Visible,ESACC_C68_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,71,
+        ESACC_C71_Visible,ESACC_C71_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,74,
+        ESACC_C74_Visible,ESACC_C74_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,76,
+        ESACC_C76_Visible,ESACC_C76_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,78,
+        ESACC_C78_Visible,ESACC_C78_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,115,
+        ESACC_C115_Visible,ESACC_C115_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,116,
+        ESACC_C116_Visible,ESACC_C116_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,123,
+        ESACC_C123_Visible,ESACC_C123_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,124,
+        ESACC_C124_Visible,ESACC_C124_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,159,
+        ESACC_C159_Visible,ESACC_C159_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,160,
+        ESACC_C160_Visible,ESACC_C160_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,162,
+        ESACC_C162_Visible,ESACC_C162_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,216,
+        ESACC_C216_Visible,ESACC_C216_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,217,
+        ESACC_C217_Visible,ESACC_C217_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,14000352,
+        ESACC_C14000352_Visible,ESACC_C14000352_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,14000705,
+        ESACC_C14000705_Visible,ESACC_C14000705_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,14000708,
+        ESACC_C14000708_Visible,ESACC_C14000708_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,14000709,
+        ESACC_C14000709_Visible,ESACC_C14000709_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,14000710,
+        ESACC_C14000710_Visible,ESACC_C14000710_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,14000711,
+        ESACC_C14000711_Visible,ESACC_C14000711_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,14000823,
+        ESACC_C14000823_Visible,ESACC_C14000823_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,14000824,
+        ESACC_C14000824_Visible,ESACC_C14000824_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,14000825,
+        ESACC_C14000825_Visible,ESACC_C14000825_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,14000827,
+        ESACC_C14000827_Visible,ESACC_C14000827_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,14000829,
+        ESACC_C14000829_Visible,ESACC_C14000829_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,14000830,
+        ESACC_C14000830_Visible,ESACC_C14000830_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,140000826,
+        ESACC_C140000826_Visible,ESACC_C140000826_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,1,1000000009,
+        ESACC_C1000000009_Visible,ESACC_C1000000009_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,2,
+        ESACC_F2_Visible,ESACC_F2_Editable,ESACC_F2_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,3,
+        ESACC_F3_Visible,ESACC_F3_Editable,ESACC_F3_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,5,
+        ESACC_F5_Visible,ESACC_F5_Editable,ESACC_F5_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,7,
+        ESACC_F7_Visible,ESACC_F7_Editable,ESACC_F7_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,8,
+        ESACC_F8_Visible,ESACC_F8_Editable,ESACC_F8_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,9,
+        ESACC_F9_Visible,ESACC_F9_Editable,ESACC_F9_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,10,
+        ESACC_F10_Visible,ESACC_F10_Editable,ESACC_F10_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,11,
+        ESACC_F11_Visible,ESACC_F11_Editable,ESACC_F11_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,12,
+        ESACC_F12_Visible,ESACC_F12_Editable,ESACC_F12_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,13,
+        ESACC_F13_Visible,ESACC_F13_Editable,ESACC_F13_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,15,
+        ESACC_F15_Visible,ESACC_F15_Editable,ESACC_F15_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,16,
+        ESACC_F16_Visible,ESACC_F16_Editable,ESACC_F16_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,17,
+        ESACC_F17_Visible,ESACC_F17_Editable,ESACC_F17_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,18,
+        ESACC_F18_Visible,ESACC_F18_Editable,ESACC_F18_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,20,
+        ESACC_F20_Visible,ESACC_F20_Editable,ESACC_F20_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,21,
+        ESACC_F21_Visible,ESACC_F21_Editable,ESACC_F21_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,23,
+        ESACC_F23_Visible,ESACC_F23_Editable,ESACC_F23_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,24,
+        ESACC_F24_Visible,ESACC_F24_Editable,ESACC_F24_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,25,
+        ESACC_F25_Visible,ESACC_F25_Editable,ESACC_F25_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,26,
+        ESACC_F26_Visible,ESACC_F26_Editable,ESACC_F26_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,27,
+        ESACC_F27_Visible,ESACC_F27_Editable,ESACC_F27_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,28,
+        ESACC_F28_Visible,ESACC_F28_Editable,ESACC_F28_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,29,
+        ESACC_F29_Visible,ESACC_F29_Editable,ESACC_F29_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,30,
+        ESACC_F30_Visible,ESACC_F30_Editable,ESACC_F30_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,32,
+        ESACC_F32_Visible,ESACC_F32_Editable,ESACC_F32_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,43,
+        ESACC_F43_Visible,ESACC_F43_Editable,ESACC_F43_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,46,
+        ESACC_F46_Visible,TempBoolean,ESACC_F46_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,73,
+        ESACC_F73_Visible,ESACC_F73_Editable,ESACC_F73_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,75,
+        ESACC_F75_Visible,ESACC_F75_Editable,ESACC_F75_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,76,
+        ESACC_F76_Visible,ESACC_F76_Editable,ESACC_F76_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,77,
+        ESACC_F77_Visible,ESACC_F77_Editable,ESACC_F77_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,79,
+        ESACC_F79_Visible,ESACC_F79_Editable,ESACC_F79_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,81,
+        ESACC_F81_Visible,ESACC_F81_Editable,ESACC_F81_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,82,
+        ESACC_F82_Visible,ESACC_F82_Editable,ESACC_F82_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,83,
+        ESACC_F83_Visible,ESACC_F83_Editable,ESACC_F83_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,84,
+        ESACC_F84_Visible,ESACC_F84_Editable,ESACC_F84_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,85,
+        ESACC_F85_Visible,ESACC_F85_Editable,ESACC_F85_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,86,
+        ESACC_F86_Visible,ESACC_F86_Editable,ESACC_F86_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,88,
+        ESACC_F88_Visible,ESACC_F88_Editable,ESACC_F88_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,89,
+        ESACC_F89_Visible,ESACC_F89_Editable,ESACC_F89_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,91,
+        ESACC_F91_Visible,ESACC_F91_Editable,ESACC_F91_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,92,
+        ESACC_F92_Visible,ESACC_F92_Editable,ESACC_F92_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,93,
+        ESACC_F93_Visible,ESACC_F93_Editable,ESACC_F93_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,97,
+        ESACC_F97_Visible,ESACC_F97_Editable,ESACC_F97_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,99,
+        ESACC_F99_Visible,ESACC_F99_Editable,ESACC_F99_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,100,
+        ESACC_F100_Visible,ESACC_F100_Editable,ESACC_F100_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,101,
+        ESACC_F101_Visible,ESACC_F101_Editable,ESACC_F101_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,102,
+        ESACC_F102_Visible,ESACC_F102_Editable,ESACC_F102_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,104,
+        ESACC_F104_Visible,ESACC_F104_Editable,ESACC_F104_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,105,
+        ESACC_F105_Visible,ESACC_F105_Editable,ESACC_F105_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,105,
+        ESACC_F105_Visible,ESACC_F105_Editable,ESACC_F105_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,106,
+        ESACC_F106_Visible,ESACC_F106_Editable,ESACC_F106_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,114,
+        ESACC_F114_Visible,ESACC_F114_Editable,ESACC_F114_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,115,
+        ESACC_F115_Visible,ESACC_F115_Editable,ESACC_F115_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,120,
+        ESACC_F120_Visible,ESACC_F120_Editable,ESACC_F120_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,151,
+        ESACC_F151_Visible,ESACC_F151_Editable,ESACC_F151_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,160,
+        ESACC_F160_Visible,ESACC_F160_Editable,ESACC_F160_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,165,
+        ESACC_F165_Visible,ESACC_F165_Editable,ESACC_F165_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,1200,
+        ESACC_F1200_Visible,ESACC_F1200_Editable,ESACC_F1200_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,5050,
+        ESACC_F5050_Visible,ESACC_F5050_Editable,ESACC_F5050_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,5052,
+        ESACC_F5052_Visible,ESACC_F5052_Editable,ESACC_F5052_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,5053,
+        ESACC_F5053_Visible,ESACC_F5053_Editable,ESACC_F5053_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,5700,
+        ESACC_F5700_Visible,ESACC_F5700_Editable,ESACC_F5700_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,5794,
+        ESACC_F5794_Visible,ESACC_F5794_Editable,ESACC_F5794_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,9000,
+        ESACC_F9000_Visible,ESACC_F9000_Editable,ESACC_F9000_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,10005,
+        ESACC_F10005_Visible,ESACC_F10005_Editable,ESACC_F10005_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,27000,
+        ESACC_F27000_Visible,ESACC_F27000_Editable,ESACC_F27000_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,27001,
+        ESACC_F27001_Visible,ESACC_F27001_Editable,ESACC_F27001_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,50001,
+        ESACC_F50001_Visible,ESACC_F50001_Editable,ESACC_F50001_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,50030,
+        ESACC_F50030_Visible,ESACC_F50030_Editable,ESACC_F50030_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,50035,
+        ESACC_F50035_Visible,ESACC_F50035_Editable,ESACC_F50035_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,50050,
+        ESACC_F50050_Visible,ESACC_F50050_Editable,ESACC_F50050_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,50095,
+        ESACC_F50095_Visible,ESACC_F50095_Editable,ESACC_F50095_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,50096,
+        ESACC_F50096_Visible,ESACC_F50096_Editable,ESACC_F50096_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,50097,
+        ESACC_F50097_Visible,ESACC_F50097_Editable,ESACC_F50097_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,50098,
+        ESACC_F50098_Visible,ESACC_F50098_Editable,ESACC_F50098_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,50099,
+        ESACC_F50099_Visible,ESACC_F50099_Editable,ESACC_F50099_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,50100,
+        ESACC_F50100_Visible,ESACC_F50100_Editable,ESACC_F50100_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,50101,
+        ESACC_F50101_Visible,ESACC_F50101_Editable,ESACC_F50101_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,50102,
+        ESACC_F50102_Visible,ESACC_F50102_Editable,ESACC_F50102_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,50200,
+        ESACC_F50200_Visible,ESACC_F50200_Editable,ESACC_F50200_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,51700,
+        ESACC_F51700_Visible,ESACC_F51700_Editable,ESACC_F51700_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,51701,
+        ESACC_F51701_Visible,TempBoolean,ESACC_F51701_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,51702,
+        ESACC_F51702_Visible,ESACC_F51702_Editable,ESACC_F51702_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,51703,
+        ESACC_F51703_Visible,TempBoolean,ESACC_F51703_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,14000701,
+        ESACC_F14000701_Visible,ESACC_F14000701_Editable,ESACC_F14000701_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,14000704,
+        ESACC_F14000704_Visible,ESACC_F14000704_Editable,ESACC_F14000704_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,14000705,
+        ESACC_F14000705_Visible,ESACC_F14000705_Editable,ESACC_F14000705_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,14000710,
+        ESACC_F14000710_Visible,ESACC_F14000710_Editable,ESACC_F14000710_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,14000711,
+        ESACC_F14000711_Visible,ESACC_F14000711_Editable,ESACC_F14000711_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,14000712,
+        ESACC_F14000712_Visible,ESACC_F14000712_Editable,ESACC_F14000712_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,14000716,
+        ESACC_F14000716_Visible,ESACC_F14000716_Editable,ESACC_F14000716_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,14000717,
+        ESACC_F14000717_Visible,ESACC_F14000717_Editable,ESACC_F14000717_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,14000718,
+        ESACC_F14000718_Visible,ESACC_F14000718_Editable,ESACC_F14000718_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,14000825,
+        ESACC_F14000825_Visible,ESACC_F14000825_Editable,ESACC_F14000825_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,14000829,
+        ESACC_F14000829_Visible,ESACC_F14000829_Editable,ESACC_F14000829_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,43,0,14000901,
+        ESACC_F14000901_Visible,ESACC_F14000901_Editable,ESACC_F14000901_HideValue);
+
+      ESACC_EasySecurityManual(OpenObject);
+    END;
+
+    LOCAL PROCEDURE ESACC_EasySecurityManual@14123811(OpenObject@14123811 : Boolean);
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE Post@4(PostingCodeunitID@1000 : Integer;Navigate@1005 : Option);
+    VAR
+      SalesHeader@1002 : Record 36;
+      SalesInvoiceHeader@1003 : Record 112;
+      OfficeMgt@1004 : Codeunit 1630;
+      InstructionMgt@1006 : Codeunit 1330;
+      PreAssignedNo@1001 : Code[20];
+      IsScheduledPosting@1007 : Boolean;
+    BEGIN
+      LinesInstructionMgt.SalesCheckAllLinesHaveQuantityAssigned(Rec);
+      PreAssignedNo := "No.";
+
+      SendToPosting(PostingCodeunitID);
+
+      IsScheduledPosting := "Job Queue Status" = "Job Queue Status"::"Scheduled for Posting";
+      DocumentIsPosted := (NOT SalesHeader.GET("Document Type","No.")) OR IsScheduledPosting;
+
+      IF IsScheduledPosting THEN
+        CurrPage.CLOSE;
+      CurrPage.UPDATE(FALSE);
+
+      IF PostingCodeunitID <> CODEUNIT::"Sales-Post (Yes/No)" THEN
+        EXIT;
+
+      IF OfficeMgt.IsAvailable THEN BEGIN
+        SalesInvoiceHeader.SETCURRENTKEY("Pre-Assigned No.");
+        SalesInvoiceHeader.SETRANGE("Pre-Assigned No.",PreAssignedNo);
+        IF SalesInvoiceHeader.FINDFIRST THEN
+          PAGE.RUN(PAGE::"Posted Sales Invoice",SalesInvoiceHeader);
+      END ELSE
+        CASE Navigate OF
+          NavigateAfterPost::"Posted Document":
+            IF InstructionMgt.IsEnabled(InstructionMgt.ShowPostedConfirmationMessageCode) THEN
+              ShowPostedConfirmationMessage(PreAssignedNo);
+          NavigateAfterPost::"New Document":
+            IF DocumentIsPosted THEN BEGIN
+              SalesHeader.INIT;
+              SalesHeader.VALIDATE("Document Type",SalesHeader."Document Type"::Invoice);
+              SalesHeader.INSERT(TRUE);
+              PAGE.RUN(PAGE::"Sales Invoice",SalesHeader);
+            END;
+        END;
+    END;
+
+    LOCAL PROCEDURE ApproveCalcInvDisc@8();
+    BEGIN
+      CurrPage.SalesLines.PAGE.ApproveCalcInvDisc;
+    END;
+
+    LOCAL PROCEDURE ShowPostedConfirmationMessage@17(PreAssignedNo@1001 : Code[20]);
+    VAR
+      SalesInvoiceHeader@1000 : Record 112;
+      InstructionMgt@1002 : Codeunit 1330;
+    BEGIN
+      SalesInvoiceHeader.SETCURRENTKEY("Pre-Assigned No.");
+      SalesInvoiceHeader.SETRANGE("Pre-Assigned No.",PreAssignedNo);
+      IF SalesInvoiceHeader.FINDFIRST THEN
+        IF InstructionMgt.ShowConfirm(OpenPostedSalesInvQst,InstructionMgt.ShowPostedConfirmationMessageCode) THEN
+          PAGE.RUN(PAGE::"Posted Sales Invoice",SalesInvoiceHeader);
+    END;
+
+    LOCAL PROCEDURE SalespersonCodeOnAfterValidate@19011896();
+    BEGIN
+      CurrPage.SalesLines.PAGE.UpdatePage(TRUE);
+    END;
+
+    LOCAL PROCEDURE SetDocNoVisible@3();
+    VAR
+      DocumentNoVisibility@1000 : Codeunit 1400;
+      DocType@1003 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order,Reminder,FinChMemo';
+    BEGIN
+      DocNoVisible := DocumentNoVisibility.SalesDocumentNoIsVisible(DocType::Invoice,"No.");
+    END;
+
+    LOCAL PROCEDURE SetExtDocNoMandatoryCondition@2();
+    VAR
+      SalesReceivablesSetup@1000 : Record 311;
+    BEGIN
+      SalesReceivablesSetup.GET;
+      ExternalDocNoMandatory := SalesReceivablesSetup."Ext. Doc. No. Mandatory"
+    END;
+
+    LOCAL PROCEDURE ShowPreview@5();
+    VAR
+      SalesPostYesNo@1000 : Codeunit 81;
+    BEGIN
+      SalesPostYesNo.Preview(Rec);
+    END;
+
+    LOCAL PROCEDURE SetControlAppearance@6();
+    VAR
+      ApprovalsMgmt@1002 : Codeunit 1535;
+      WorkflowWebhookMgt@1000 : Codeunit 1543;
+    BEGIN
+      HasIncomingDocument := "Incoming Document Entry No." <> 0;
+      SetExtDocNoMandatoryCondition;
+
+      OpenApprovalEntriesExistForCurrUser := ApprovalsMgmt.HasOpenApprovalEntriesForCurrentUser(RECORDID);
+      OpenApprovalEntriesExist := ApprovalsMgmt.HasOpenApprovalEntries(RECORDID);
+      CanCancelApprovalForRecord := ApprovalsMgmt.CanCancelApprovalForRecord(RECORDID);
+
+      IsCustomerOrContactNotEmpty := ("Sell-to Customer No." <> '') OR ("Sell-to Contact No." <> '');
+
+      WorkflowWebhookMgt.GetCanRequestAndCanCancel(RECORDID,CanRequestApprovalForFlow,CanCancelApprovalForFlow);
+    END;
+
+    LOCAL PROCEDURE UpdatePaymentService@7();
+    VAR
+      PaymentServiceSetup@1000 : Record 1060;
+    BEGIN
+      PaymentServiceVisible := PaymentServiceSetup.IsPaymentServiceVisible;
+      PaymentServiceEnabled := PaymentServiceSetup.CanChangePaymentService(Rec);
+    END;
+
+    LOCAL PROCEDURE UpdateShipToBillToGroupVisibility@9();
+    BEGIN
+      CustomerMgt.CalculateShipToBillToOptions(ShipToOptions,BillToOptions,Rec);
+    END;
+
+    [Integration]
+    [External]
+    LOCAL PROCEDURE OnBeforeStatisticsAction@1(VAR SalesHeader@1000 : Record 36;VAR Handled@1001 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    LOCAL PROCEDURE OnBeforeCalculateSalesTaxStatistics@1020000(VAR SalesHeader@1000 : Record 36;ShowDialog@1001 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      TOP140 KT ABCSI Modification to Payment Terms Customers 12302014
+      TOP020 KT ABCSI Sales Orders by Division Code 01272015
+        - Added field "Shortcut Dimension 5 Code" on General FastTab
+
+      TOP110 KT ABCSI Salesperson 03302015
+        - Added a new field RSM Code after Salesperson Code field on the General FastTab
+
+      TOP170 KT ABCSI Sales Order Updates 04012015
+        - Added fields Comment, Customer Comments, Finance Comments, Shipping Comments, Hard Copy PO Available, Quote Version No.
+
+      TOP130 KT ABCSI Item List Sort and Filter by Status 04092015
+        - Added a new field "Non Divisional"
+        - Fields Customer Comments, Finance Comments, Shipping Comments made non editable
+
+      TOP060 KT ABCSI ASN Via Email 04172015
+        - Added field E-Mail (ASN) on the Shipping FastTab
+
+      TOP230 KT ABCSI CRP 2 Fixes 06052015
+        - Added new fields Reason Code, Lost Opportunity Description
+
+      2015-03-24 TPZ535 VCHERNYA
+        Sell-to State / ZIP Code caption for Sell-to State (Sell-to County) field has been removed
+        State / ZIP Code caption for State (Bill-to County) field has been removed
+        Ship-to State / ZIP Code caption for Ship-to State (Ship-to County) field has been removed
+      2015-04-07 TPZ572 VCHERNYA
+        Mfr. Rep. Code, ISR Code, and CSR Code fields have been added
+      2015-04-22 TPZ092 TAKHMETO
+        Group Commissions and Mfr. Rep. Comm. %, Mfr. Rep. Comm. Amount, Location Comm. %, Location Comm. Amount fields have been created
+      2015-06-25 TPZ129 TAKHMETO
+        Action Change Log Entries has been added
+      2015-07-30 TPZ858 TAKHMETO
+        Managing of commission / handling visibility has been added
+      2015-11-16 TPZ1279 TAKHMETO
+        Sell-to Customer Name, Sell-to Address, Sell-to Address 2, Sell-to City, Sell-to County,
+        Sell-to Post Code, Sell-to Country/Region Code fields have been made uneditable
+      2016-01-29 TPZ1015 TAKHMETO
+        Managing of OSR CSR ISR Mfr. Rep. field editability has been added
+      2016-11-06 TPZ1728 TMEI
+       Use SSRS report to display change log entry
+    }
+    END.
+  }
+}
+

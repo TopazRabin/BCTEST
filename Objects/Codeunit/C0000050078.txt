@@ -1,0 +1,1483 @@
+OBJECT Codeunit 50078 Table36EventSubscribers
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/01/21;
+    Time=[ 7:28:12 AM];
+    Modified=Yes;
+    Version List=NAVEVENT,TPZ2829,TPZ2792,001,TPZ2981,005;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      FromOnInsert@1000000001 : Boolean;
+      Cust@1000000002 : Record 18;
+      ab001@1000000004 : TextConst 'ENU=Please Select Value for Division Code.';
+      SalesSetup@1000000005 : Record 311;
+      Table37EventSubscribers@1000000006 : Codeunit 50077;
+      LocationDivHdlgPct@1000000010 : Record 51712;
+
+    [EventSubscriber(Table,36,OnAfterInsertEvent)]
+    PROCEDURE Tb36_OnInsert@1000000002(VAR Rec@1000000000 : Record 36;RunTrigger@1000000001 : Boolean);
+    VAR
+      ArchiveManagement@1000000002 : Codeunit 5063;
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      WITH Rec DO BEGIN
+        // <TPZ834>
+      "Assigned User ID" := USERID;
+      // </TPZ834>
+
+      FromOnInsert := TRUE; //TOP020 KT ABCSI Sales Orders by Division Code 09012015
+      IF GETFILTER("Sell-to Customer No.") <> '' THEN
+        IF GETRANGEMIN("Sell-to Customer No.") = GETRANGEMAX("Sell-to Customer No.") THEN
+          VALIDATE("Sell-to Customer No.",GETRANGEMIN("Sell-to Customer No."));
+
+      IF GETFILTER("Sell-to Contact No.") <> '' THEN
+        IF GETRANGEMIN("Sell-to Contact No.") = GETRANGEMAX("Sell-to Contact No.") THEN
+          VALIDATE("Sell-to Contact No.",GETRANGEMIN("Sell-to Contact No."));
+
+      "Doc. No. Occurrence" := ArchiveManagement.GetNextOccurrenceNo(DATABASE::"Sales Header","Document Type","No.");
+      FromOnInsert := FALSE; //TOP020 KT ABCSI Sales Orders by Division Code 09012015
+
+      //SetSellToCustomerFromFilter; EB 2017 commant out  =
+
+      //InsertMode := FALSE; //Not Customized
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50079,Tb_36_OnDelete)]
+    PROCEDURE Tb36_OnDelete@1000000006(VAR Sender@1000000000 : Codeunit 50079;VAR Rec@1000000001 : Record 36;VAR SkipDeleteReceiveHeaderGlobal@1000000003 : Boolean);
+    VAR
+      ReceiveHeader@1000000002 : Record 14000601;
+    BEGIN
+      WITH Rec DO BEGIN
+       //<TPZ1931>
+       IF NOT SkipDeleteReceiveHeaderGlobal THEN BEGIN
+        IF "Document Type" IN ["Document Type"::"Credit Memo","Document Type"::"Return Order"] THEN BEGIN
+          ReceiveHeader.RESET;
+          ReceiveHeader.SETCURRENTKEY("Source Type","Source Subtype","Source ID");
+          ReceiveHeader.SETRANGE("Source Type",DATABASE::"Sales Header");
+          ReceiveHeader.SETRANGE("Source Subtype","Document Type");
+          ReceiveHeader.SETRANGE("Source ID","No.");
+          ReceiveHeader.DELETEALL(TRUE);
+        END;
+       END;
+      //<TPZ1931>
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50079,Tb_36_OnSeltocustNoValidatel)]
+    PROCEDURE Tb36_SelltoCustNo_OnValidate@1000000001(VAR Sender@1000000000 : Codeunit 50079;VAR SalesHeader@1000000001 : Record 36;VAR Customer@1000000002 : Record 18;VAR SkipCustBlock1@1000000003 : Boolean;CurrFieldNo@1000000005 : Integer);
+    VAR
+      Text0001@1000000004 : TextConst 'ENU=The Customer %1 is Blocked for Type %2';
+    BEGIN
+      //Cust := Customer;
+      //<TPZ1666>
+      IF ((Customer.Blocked = Customer.Blocked::Ship) AND (SalesHeader."Document Type" IN [SalesHeader."Document Type"::Quote, SalesHeader."Document Type"::Order]))THEN BEGIN //EB TPZ1666
+          MESSAGE(Text0001,SalesHeader."Sell-to Customer No.",Customer.Blocked);
+          SkipCustBlock1:=TRUE;
+      END;
+      //<TPZ1666>
+
+      //<TPZ9131>
+      //IF NOT SkipCustBlock THEN
+      //<TPZ9131>
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Sell-to Customer No.")]
+    PROCEDURE Tb36_SelltoCustNo_OnValidate_1@1000000004(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      CustomerDiv@1000000003 : Record 50007;
+      CustDivisionError@1000000005 : TextConst 'ENU=Customer Division is not setup for customer %1';
+    BEGIN
+      GetCust_Event(Rec);
+      WITH Rec DO BEGIN
+        //<TPZ9018> 2016-16-03 EBAGIM
+        "RSM Code" := Cust."RSM Code";
+        //<TPZ9018>
+        //TOP170 KT ABCSI Sales Order Updates 04022015
+        "Customer Comments" := Cust."Customer Comments";
+        "Finance Comments" := Cust."Finance Comments";
+        "Shipping Comments" := Cust."Shipping Comments";
+        //TOP170 KT ABCSI Sales Order Updates 04022015
+        //>> Shipping
+        //"External Sell-to No." := Cust."External No.";
+        //<< Shipping
+        // <TPZ162>
+        Mail := Cust.Mail;
+        Fax := Cust.Fax;
+        // </TPZ162>
+        //<TPZ1409>
+        CustomerDiv.SETRANGE("Customer No.","Sell-to Customer No.");
+        IF NOT CustomerDiv.FINDFIRST THEN
+           ERROR(CustDivisionError,"Sell-to Customer No.");
+        //<TPZ1409>
+        Tb36_CheckPackingStatus(Rec,xRec);//<TPZ2583>
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50079,Tb_36_OnSeltocustNoValidatel)]
+    PROCEDURE Tb36_SelltoCustNo_OnValidate_Campaign@1000000003(VAR Sender@1000000000 : Codeunit 50079;VAR SalesHeader@1000000001 : Record 36;VAR Customer@1000000002 : Record 18;VAR SkipCustBlock1@1000000003 : Boolean;CurrFieldNo@1000000012 : Integer);
+    VAR
+      Text0002@1000000005 : TextConst 'ENU=The Customer: "%1" has following active campaign/s: \\%2';
+      CustomerCampaign@1000000004 : Record 50053;
+      Campaign@1000000006 : Record 5071;
+      LongText@1000000007 : Text;
+      ActiveCampaign@1000000009 : Boolean;
+      Text0003@1000000010 : TextConst 'ENU=[Start Date: "%1" - End Date: "%2"]';
+      Crlf@1000000008 : Text[2];
+      Text0004@1000000011 : TextConst 'ENU=%1 - %2';
+    BEGIN
+      //>>TPZ2764
+
+      IF NOT GUIALLOWED THEN
+        EXIT;
+
+      Crlf[1] := 10;
+      Crlf[2] := 13;
+      IF (SalesHeader."Document Type" = SalesHeader."Document Type"::Order) THEN BEGIN
+        CustomerCampaign.RESET;
+        CustomerCampaign.SETRANGE("Customer No.",SalesHeader."Sell-to Customer No.");
+        IF CustomerCampaign.FINDFIRST THEN BEGIN
+          CLEAR(LongText);
+          CLEAR(ActiveCampaign);
+          REPEAT
+            Campaign.RESET;
+            Campaign.SETRANGE("No.",CustomerCampaign."Campaign No.");
+            IF Campaign.FINDFIRST THEN
+              IF (TODAY >= Campaign."Starting Date") AND (TODAY <= Campaign."Ending Date") THEN BEGIN
+                ActiveCampaign := TRUE;
+                LongText += STRSUBSTNO(Text0004,Campaign."No.",Campaign.Description) + FORMAT(Crlf[2]);
+                LongText += STRSUBSTNO(Text0003,Campaign."Starting Date",Campaign."Ending Date") + FORMAT(Crlf[2]) + FORMAT(Crlf[2]);
+              END;
+          UNTIL CustomerCampaign.NEXT = 0;
+          IF ActiveCampaign AND (CurrFieldNo <> 0) THEN //<TPZ2809>
+            MESSAGE(Text0002,SalesHeader."Sell-to Customer No.",LongText);
+        END;
+      END;
+      //<<TPZ2764
+    END;
+
+    [EventSubscriber(Codeunit,50079,Tb_36_OnBilltocustNoValidatel)]
+    PROCEDURE Tb36_BiltoCustNo_OnValidate@1000000007(VAR Sender@1000000000 : Codeunit 50079;VAR SalesHeader@1000000001 : Record 36;VAR Customer@1000000002 : Record 18;VAR SkipCustBlock1@1000000003 : Boolean;VAR HideValidationDialog@1000000005 : Boolean;CurrFieldNo@1000000006 : Integer);
+    VAR
+      Text0001@1000000004 : TextConst 'ENU=The Customer %1 is Blocked for Type %2';
+      CustomerDivision@1000000008 : Record 50007;
+      UserSetup@1000000007 : Record 91;
+    BEGIN
+      Cust := Customer;
+      //<TPZ1666>
+      IF ((Customer.Blocked = Customer.Blocked::Ship) AND (SalesHeader."Document Type" IN [SalesHeader."Document Type"::Quote, SalesHeader."Document Type"::Order]))THEN BEGIN //EB TPZ1666
+          MESSAGE(Text0001,SalesHeader."Sell-to Customer No.",Customer.Blocked);
+          SkipCustBlock1:=TRUE;
+      END;
+      //<TPZ1666>
+
+      //<TPZ9131>
+      IF NOT SkipCustBlock1 THEN
+      //<TPZ9131>
+      Cust.CheckBlockedCustOnDocs(Cust,SalesHeader."Document Type",FALSE,FALSE);//EB Match Function placment to 2013
+
+      //TOP020 KT ABCSI Sales Orders by Division Code 01272015
+      IF (UserSetup.GET(USERID)) THEN BEGIN
+        IF UserSetup."Shortcut Dimension 5 Code" <> '' THEN BEGIN
+          // <TPZ721>
+          IF CustomerDivision.GET(SalesHeader."Sell-to Customer No.",UserSetup."Shortcut Dimension 5 Code") THEN
+          // </TPZ721>
+            SalesHeader.VALIDATE("Shortcut Dimension 5 Code",UserSetup."Shortcut Dimension 5 Code")
+          ELSE BEGIN
+            IF NOT HideValidationDialog AND GUIALLOWED AND (CurrFieldNo <> 0) THEN //<TPZ2809>
+              MESSAGE(ab001);
+          END
+        END ELSE BEGIN
+          IF NOT HideValidationDialog AND GUIALLOWED AND (CurrFieldNo <> 0) THEN //<TPZ2809>
+          MESSAGE(ab001);
+        END;
+      END;
+      //TOP020 KT ABCSI Sales Orders by Division Code 01272015
+    END;
+
+    [EventSubscriber(Table,36,OnAfterSetFieldsBilltoCustomer)]
+    PROCEDURE Tb36_BiltoCustNo_OnValidate_1@1000000005(VAR SalesHeader@1000000000 : Record 36;Customer@1000000001 : Record 18);
+    VAR
+      CustDivisionError@1000000005 : TextConst 'ENU=Customer Division is not setup for customer %1';
+      CustomerDivision@1000000002 : Record 50007;
+    BEGIN
+      GetCust_Event(SalesHeader);
+      WITH SalesHeader DO BEGIN
+        {"Non Divisional" := Cust."Non Divisional"; //TOP130 KT ABCSI Item List Sort and Filter by Status 04092015
+
+      // <TPZ848>
+        CheckEDIOrder();
+      // </TPZ848>
+
+
+      //TOP140 KT ABCSI Modification to Payment Terms 12302014
+      SalesSetup.GET;
+      IF SalesSetup."Payment Terms by Division" THEN BEGIN
+        IF "Shortcut Dimension 5 Code" <> '' THEN BEGIN
+          IF CustomerDivision.GET("Bill-to Customer No.","Shortcut Dimension 5 Code") THEN BEGIN
+            CustomerDivision.TESTFIELD("Payment Terms Code");
+            "Payment Terms Code" := CustomerDivision."Payment Terms Code"
+          END ELSE
+      "Payment Terms Code" := Cust."Payment Terms Code";
+        END ELSE
+          "Payment Terms Code" := Cust."Payment Terms Code";
+      END ELSE
+        "Payment Terms Code" := Cust."Payment Terms Code";
+      //TOP140 KT ABCSI Modification to Payment Terms 12302014
+      "Payment Method Code" := Cust."Payment Method Code"; //TPZ1948}
+      // <TPZ162>
+      Mail := Cust.Mail;
+      Fax := Cust.Fax;
+      // </TPZ162>
+
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Bill-to Customer No.")]
+    PROCEDURE Tb36_BiltoCustNo_OnValidate_2@1000000000(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      //TOP020 KT ABCSI Sales Orders by Division 02042015
+      IF Rec."Shortcut Dimension 5 Code" <> '' THEN
+        Rec.VALIDATE("Shortcut Dimension 5 Code");
+      //TOP020 KT ABCSI Sales Orders by Division 02042015
+    END;
+
+    [EventSubscriber(Codeunit,50079,Tb_36_OnShip_to_Code)]
+    PROCEDURE Tb36_ShiptoCode_onValidate@1000000040(VAR Sender@1000000000 : Codeunit 50079;VAR SlaesHeader@1000000001 : Record 36;VAR ShipToAddr@1000000002 : Record 222);
+    VAR
+      SellToCustTemplate@1000000006 : Record 5105;
+      ShipToAddrDivision@1000000005 : Record 51002;
+      CustomerDivision@1000000004 : Record 50007;
+      ShippingAccount@1000000003 : Record 14000714;
+    BEGIN
+      GetCust_Event(SlaesHeader);
+      WITH SlaesHeader DO BEGIN
+         // <TPZ208>
+          ShipToAddr.TESTFIELD(Blocked,FALSE);
+          // </TPZ208>
+          "E-Mail (ASN)" := ShipToAddr."E-Mail"; //TOP060 KT ABCSI ASN Via Email 04172015
+           // <TPZ460>
+          "Ship-to Phone No." := ShipToAddr."Phone No.";
+          // </TPZ460>
+          // <TPZ848>
+          "EDI Ship-to Code" := '';
+          // </TPZ848>
+          // <TPZ717>
+          IF ShipToAddrDivision.GET("Sell-to Customer No.","Ship-to Code","Shortcut Dimension 5 Code") THEN BEGIN
+            IF ShipToAddrDivision."Location Code" <> '' THEN
+              VALIDATE("Location Code",ShipToAddrDivision."Location Code");
+          END;// ELSE BEGIN
+           //IF ShipToAddr."Location Code" <> '' THEN
+            //VALIDATE("Location Code",ShipToAddr."Location Code");
+           //END;
+           // <TPZ717>
+          IF ShipToAddrDivision.GET("Sell-to Customer No.","Ship-to Code","Shortcut Dimension 5 Code") THEN BEGIN
+            // <TPZ1342>
+            "Shipping Advice" := ShipToAddrDivision."Shipping Advice";
+            // </TPZ1342>
+           IF ShipToAddrDivision."Shipping Agent Code" <> '' THEN BEGIN
+             VALIDATE("Shipping Agent Code",ShipToAddrDivision."Shipping Agent Code");
+            IF ShipToAddrDivision."E-Ship Agent Service" <> '' THEN
+             VALIDATE("E-Ship Agent Service",ShipToAddrDivision."E-Ship Agent Service");
+           END;
+          "Shipping Payment Type" := ShipToAddrDivision."Shipping Payment Type";
+          END ELSE BEGIN
+            // <TPZ1342,TPZ1516>
+            IF CustomerDivision.GET("Sell-to Customer No.","Shortcut Dimension 5 Code") THEN BEGIN
+              "Shipping Advice" := CustomerDivision."Shipping Advice";
+              "Shipping Payment Type" := CustomerDivision."Shipping Payment Type";
+            END ELSE BEGIN
+              "Shipping Advice" := Cust."Shipping Advice";
+              "Shipping Payment Type" := Cust."Shipping Payment Type";
+            END;
+            // </TPZ1342,TPZ1516>
+
+            IF ShipToAddr."Shipping Agent Code" <> '' THEN BEGIN
+              VALIDATE("Shipping Agent Code",ShipToAddr."Shipping Agent Code");
+              IF ShipToAddr."E-Ship Agent Service" <> '' THEN
+                VALIDATE("E-Ship Agent Service",ShipToAddr."E-Ship Agent Service");
+            END;
+            // <TPZ1516>
+            //"Shipping Payment Type" := ShipToAddr."Shipping Payment Type";
+            // </TPZ1516>
+          END;
+          // <TPZ717>
+         "Shipping Insurance" := ShipToAddr."Shipping Insurance";
+          IF "Shipping Payment Type" = "Shipping Payment Type"::Prepaid THEN
+            VALIDATE("Third Party Ship. Account No.",'')
+          ELSE
+           IF ShippingAccount.GetPrimaryShippingAccountNo(
+               "Shipping Agent Code",ShippingAccount."Ship-to Type"::Customer,
+               "Sell-to Customer No.","Ship-to Code")
+           THEN
+            VALIDATE("Third Party Ship. Account No.",ShippingAccount."Account No.");
+         IF NOT "Free Freight" THEN BEGIN
+         // <TPZ717>
+            IF ShipToAddrDivision.GET("Sell-to Customer No.","Ship-to Code","Shortcut Dimension 5 Code") THEN
+              "Free Freight" := ShipToAddrDivision."Free Freight"
+            ELSE
+              "Free Freight" := ShipToAddr."Free Freight";
+            // </TPZ717>
+          "No Free Freight Lines on Order" := ShipToAddr."No Free Freight Lines on Order";
+          //<TPZ2959>
+          IF ShipToAddrDivision.GET("Sell-to Customer No.","Ship-to Code","Shortcut Dimension 5 Code") THEN BEGIN
+            IF ShipToAddrDivision."Salesperson Code" <> '' THEN
+              "Salesperson Code" := ShipToAddrDivision."Salesperson Code";
+          END;
+          //</TPZ2959>
+
+         END;
+        "Residential Delivery" := ShipToAddr."Residential Delivery";
+        "Blind Shipment" := ShipToAddr."Blind Shipment";
+        "Double Blind Shipment" := ShipToAddr."Double Blind Shipment";
+        VALIDATE("Double Blind Ship-from Cust No",ShipToAddr."Double Blind Ship-from Cust No");
+        "External Ship-to No." := ShipToAddr."External No.";
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50079,Tb_36_OnShip_to_Code_1)]
+    PROCEDURE Tb36_ShiptoCode_onValidate_1@1000000043(VAR Sender@1000000000 : Codeunit 50079;VAR SlaesHeader@1000000001 : Record 36;VAR cust@1000000002 : Record 18);
+    VAR
+      CustomerDivision@1000000003 : Record 50007;
+    BEGIN
+      GetCust_Event(SlaesHeader);
+      WITH SlaesHeader DO BEGIN
+        "E-Mail (ASN)" := cust."E-Mail"; //TOP060 KT ABCSI ASN Via Email 04172015
+        // <TPZ460>
+        "Ship-to Phone No." := cust."Phone No."; //<Tpz2792> Event COnversion
+        // </TPZ460>
+        // <TPZ1342,TPZ1516>
+           IF CustomerDivision.GET("Sell-to Customer No.","Shortcut Dimension 5 Code") THEN BEGIN
+            "Shipping Advice" := CustomerDivision."Shipping Advice";
+            "Shipping Payment Type" := CustomerDivision."Shipping Payment Type";
+          END ELSE BEGIN
+            "Shipping Advice" := cust."Shipping Advice";
+            "Shipping Payment Type" := cust."Shipping Payment Type";
+          END;
+          // </TPZ1342,TPZ1516>
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Ship-to Code")]
+    PROCEDURE Tb36_ShiptoCode_onValidate_2@1000000046(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      EDIIntegration@1000000003 : Codeunit 14000363;
+    BEGIN
+      WITH Rec DO BEGIN
+        // <TPZ848>
+      //IF NOT RunFromEDI AND
+      IF ("EDI Order") AND
+         ("Document Type" IN ["Document Type"::Quote,"Document Type"::Order,"Document Type"::Invoice])
+      THEN
+        EDIIntegration.EDIShipToCodeValidate(Rec);
+      // <TPZ848>
+      Tb36_CheckPackingStatus(Rec,xRec);//<TPZ2583>
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnBeforeValidateEvent,"Ship-to Address")]
+    PROCEDURE Tb36_ShiptoAdd_OnValidate@1000000008(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+
+      Tb36_CheckPackingStatus(Rec,xRec);
+    END;
+
+    [EventSubscriber(Table,36,OnBeforeValidateEvent,"Ship-to Address 2")]
+    PROCEDURE Tb36_ShiptoAdd2_OnValidate@1000000010(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+
+      Tb36_CheckPackingStatus(Rec,xRec);
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Ship-to City")]
+    PROCEDURE Tb36_ShiptoCity_OnValidate@1000000011(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+
+      Tb36_CheckPackingStatus(Rec,xRec);
+    END;
+
+    [EventSubscriber(Codeunit,50079,Tb_36_OnPaymentTermCodeValidate)]
+    PROCEDURE Tb36_PaymentTermCode_onValidate@1000000013(VAR Sender@1000000000 : Codeunit 50079;VAR SalesHeader@1000000001 : Record 36;VAR PaymentTerms@1000000003 : Record 3);
+    VAR
+      PaymentTermDayRange@1000000002 : Record 50033;
+    BEGIN
+       // <TPZ1029>
+      WITH SalesHeader DO BEGIN
+        PaymentTermDayRange.RESET;
+        PaymentTermDayRange.SETRANGE(Code,PaymentTerms.Code);
+        PaymentTermDayRange.SETFILTER("From Day",'<=%1',DATE2DMY("Document Date",1));
+        PaymentTermDayRange.SETFILTER("To Day",'>=%1',DATE2DMY("Document Date",1));
+        IF PaymentTermDayRange.FINDFIRST THEN BEGIN
+          "Due Date" := CALCDATE(PaymentTermDayRange."Due Date Calculation","Document Date");
+          "Due Date" := CALCDATE(PaymentTerms."Due Date Calculation","Due Date");
+          "Pmt. Discount Date" := CALCDATE(PaymentTermDayRange."Discount Date Calculation","Document Date");
+          "Pmt. Discount Date" := CALCDATE(PaymentTerms."Discount Date Calculation","Pmt. Discount Date");
+        END;{ ELSE BEGIN
+        "Due Date" := CALCDATE(PaymentTerms."Due Date Calculation","Document Date");
+        "Pmt. Discount Date" := CALCDATE(PaymentTerms."Discount Date Calculation","Document Date");
+        END;}
+      END;
+          // <TPZ1029>
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Location Code")]
+    PROCEDURE Tb36_LocationCode_OnValidate@1000000014(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      WITH Rec DO BEGIN
+        // <TPZ92>
+        Tb36_GetLocationDivHdlgPct("Location Code","Shortcut Dimension 5 Code");
+        "Location Hdlg. %" := LocationDivHdlgPct."Handling %";
+      // </TPZ92>
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Salesperson Code")]
+    PROCEDURE Tb36_SalesPersonCode_OnValidate@1000000061(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      DimMgt@1000000003 : Codeunit 408;
+    BEGIN
+      WITH Rec DO BEGIN
+        //ValidateShortcutDimCode(5,"Shortcut Dimension 5 Code");
+        DimMgt.ValidateShortcutDimValues(5,"Shortcut Dimension 5 Code","Dimension Set ID");//TPZ2948
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnBeforeValidateEvent,"Reason Code")]
+    PROCEDURE Tb36_ReasonCode_OnValidate@1000000016(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      ReasonCode@1000000003 : Record 231;
+    BEGIN
+      WITH Rec DO BEGIN
+          //TOP030B KT ABCSI Lost Opportunities 03092015
+        TESTFIELD(Status,Status::Open);
+        //TOP230 KT ABCSI CRP 2 Fixes 06052015
+        IF ReasonCode.GET("Reason Code") AND (ReasonCode.Type = ReasonCode.Type::"Lost Opportunity") THEN
+          "Lost Opportunity Description" := ReasonCode.Description
+        ELSE
+          "Lost Opportunity Description" := '';
+        //TOP230 KT ABCSI CRP 2 Fixes 06052015
+        UpdateSalesLines(FIELDCAPTION("Reason Code"),FALSE);
+        Tb36_UpdateLostOpportunity(Rec);
+        //TOP030B KT ABCSI Lost Opportunities 03092015
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Sell-to Address")]
+    PROCEDURE Tb36_SelltoAdd_OnValidate@1000000018(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+
+      Tb36_CheckPackingStatus(Rec,xRec);
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Sell-to Address 2")]
+    PROCEDURE Tb36_SelltoAdd2_OnValidate@1000000017(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+
+      Tb36_CheckPackingStatus(Rec,xRec);
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Sell-to City")]
+    PROCEDURE Tb36_SelltoCity_OnValidate@1000000020(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+
+      Tb36_CheckPackingStatus(Rec,xRec);
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Sell-to Post Code")]
+    PROCEDURE Tb36_SelltoPostCode_OnValidate@1000000022(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+
+      Tb36_CheckPackingStatus(Rec,xRec);
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Sell-to County")]
+    PROCEDURE Tb36_SelltoCounty_OnValidate@1000000023(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+
+      Tb36_CheckPackingStatus(Rec,xRec);
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Sell-to Country/Region Code")]
+    PROCEDURE Tb36_SellltoCountyRegionCode_OnValidate@1000000064(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+
+      Tb36_CheckPackingStatus(Rec,xRec);
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Ship-to Post Code")]
+    PROCEDURE Tb36_ShiptoPostCode_OnValidate@1000000025(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      USPSAddressVerification@1000000006 : Codeunit 50082;
+      USPSAddressRecords@1000000005 : Record 50057;
+      SalesHeaderShipto@1000000004 : Record 36;
+      USPSAddressRecordPage@1000000003 : Page 50079;
+    BEGIN
+
+      Tb36_CheckPackingStatus(Rec,xRec);
+
+      WITH Rec DO BEGIN
+        //<<001 TPZ2877
+        IF ("Sell-to Customer No." <>'') AND ("Ship-to Code" = 'DS') AND ("Ship-to Post Code" <> '')THEN BEGIN
+          USPSAddressVerification.SETShiToAdd1(Rec);
+          USPSAddressVerification.RUN;
+          USPSAddressRecords.RESET;
+          USPSAddressRecords.SETRANGE("Original Customer No","Sell-to Customer No.");
+          USPSAddressRecords.SETRANGE("Original Ship-to Code","Ship-to Code");
+          IF USPSAddressRecords.FINDFIRST THEN;
+          CLEAR(USPSAddressRecordPage);
+          USPSAddressRecordPage.ShiptoAddressVerfiy(Rec);
+          USPSAddressRecordPage.SETTABLEVIEW(USPSAddressRecords);
+          USPSAddressRecordPage.SETRECORD(USPSAddressRecords);
+          USPSAddressRecordPage.RUNMODAL;
+          USPSAddressRecordPage.OnOk(Rec);
+        END;
+        //<<001 TPZ2877
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnBeforeValidateEvent,"Ship-to County")]
+    PROCEDURE Tb36_ShipltoCounty_OnValidate@1000000024(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+
+      Tb36_CheckPackingStatus(Rec,xRec);
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Ship-to Country/Region Code")]
+    PROCEDURE Tb36_ShipltoCountyRegionCode_OnValidate@1000000026(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+
+      Tb36_CheckPackingStatus(Rec,xRec);
+    END;
+
+    [EventSubscriber(Table,36,OnBeforeValidateEvent,"External Document No.")]
+    PROCEDURE Tb36_ExternalDocumentNo_OnValidate@1000000029(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      LocSalesHeader@1000000004 : Record 36;
+      LocSalesInvHeader@1000000003 : Record 112;
+      Text51010@1000000006 : TextConst 'ENU=%1 %2 was already used on Sales Order No. %3 %4 %5 for Customer No. %6. Do you want to use it again?';
+      Text51011@1000000005 : TextConst 'ENU=%1 %2 was already used on Posted Sales Invoice No. %3 %4 %5 for Customer No. %6. Do you want to use it again?';
+    BEGIN
+      WITH Rec DO BEGIN
+        // <TOP450>
+      SalesSetup.GET;
+      IF NOT SalesSetup."Dupl. Ext. Doc. No. Warning" THEN
+        EXIT;
+      IF ("Document Type" = "Document Type"::Order) AND
+         ("Sell-to Customer No." <> '') AND
+         ("External Document No." <> '') AND
+         (CurrFieldNo = FIELDNO("External Document No."))
+      THEN BEGIN
+        LocSalesHeader.RESET;
+        LocSalesHeader.SETRANGE("Document Type","Document Type"::Order);
+        LocSalesHeader.SETFILTER("No.",'<>%1',"No.");
+        LocSalesHeader.SETRANGE("Sell-to Customer No.","Sell-to Customer No.");
+        LocSalesHeader.SETRANGE("External Document No.","External Document No.");
+        IF LocSalesHeader.FINDFIRST THEN
+          IF NOT
+               CONFIRM(
+                 Text51010,
+                 FALSE,
+                 FIELDCAPTION("External Document No."),
+                 "External Document No.",
+                 LocSalesHeader."No.",
+                 FIELDCAPTION("Shortcut Dimension 5 Code"),LocSalesHeader."Shortcut Dimension 5 Code",
+                 "Sell-to Customer No.")
+      //</TPZ2694>
+          THEN
+            ERROR('');
+        LocSalesInvHeader.RESET;
+        LocSalesInvHeader.SETRANGE("Sell-to Customer No.","Sell-to Customer No.");
+        LocSalesInvHeader.SETRANGE("External Document No.","External Document No.");
+        IF LocSalesInvHeader.FINDFIRST THEN
+          IF NOT
+               CONFIRM(
+                 Text51011,
+                 FALSE,
+                 FIELDCAPTION("External Document No."),
+                 "External Document No.",
+                 LocSalesInvHeader."No.",
+                   FIELDCAPTION("Shortcut Dimension 5 Code"),LocSalesInvHeader."Shortcut Dimension 5 Code",
+                 "Sell-to Customer No.")
+      //</TPZ2694>
+          THEN
+            ERROR('');
+      END;
+      // </TOP450>
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnBeforeValidateEvent,"Shipping Agent Code")]
+    PROCEDURE Tb36_ShippingAgentCode_OnValidate@1000000019(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      UserSetup@1000000003 : Record 91;
+    BEGIN
+
+      Tb36_CheckPackingStatus(Rec,xRec);
+
+      //<NAVEVENT>
+      IF UserSetup.GET(USERID) AND (UserSetup."Warehouse Employee") AND ((Rec."Shipping Agent Code" <> xRec."Shipping Agent Code") AND
+        (Rec.Status=Rec.Status::Released)) THEN
+        Rec.Status := Rec.Status::Open;
+      //</NAVEVENT>
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Shipping Agent Code")]
+    PROCEDURE Tb36_ShippingAgentCode_OnValidate1@1000000021(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      OWRMgt@1000000003 : Codeunit 14002863;
+    BEGIN
+      WITH Rec DO BEGIN
+        //<TPZ1446>
+      IF ("Free Freight" = FALSE) AND ("Free Freight Reason Code" <> '') THEN
+        "Free Freight Reason Code" := '';
+      //<TPZ1446>
+      END;
+
+      OWRMgt.UpdateWRShippingAgentInfo(Rec);
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Shipping Agent Code")]
+    LOCAL PROCEDURE Tb36_ShippingAgentCode_OnValidate_2@1000000031(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      UserSetup@1000000004 : Record 91;
+      WarehouseRequest@1000000003 : Record 5765;
+    BEGIN
+      //<NAVEVENT>
+      IF UserSetup.GET(USERID) AND ( UserSetup."Warehouse Employee") AND ((Rec."Shipping Agent Code" <> xRec."Shipping Agent Code") AND
+        (xRec.Status=xRec.Status::Released)) THEN
+        Rec.Status := Rec.Status::Released;
+      //</NAVEVENT>
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Campaign No.")]
+    PROCEDURE "Tb36_CampaignNo._OnValidate"@1000000067(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      WITH Rec DO BEGIN
+        ValidateShortcutDimCode(5,"Shortcut Dimension 5 Code");
+      END;
+    END;
+
+    PROCEDURE Tb36_GetLocationDivHdlgPct@1000000015(LocationCode@1000000001 : Code[10];ShortcutDim5Code@1000000000 : Code[20]);
+    BEGIN
+      // <TPZ92>
+      IF LocationCode <> '' THEN BEGIN
+        IF LocationCode <> LocationDivHdlgPct."Location Code" THEN
+          IF NOT LocationDivHdlgPct.GET(LocationCode,ShortcutDim5Code) THEN
+            CLEAR(LocationDivHdlgPct);
+      END ELSE
+        CLEAR(LocationDivHdlgPct);
+      // </TPZ92>
+    END;
+
+    PROCEDURE Tb36_GetMfrRepDivComm@1000000028(MfrRepCode@1000000001 : Code[20];ShortcutDim5Code@1000000000 : Code[20];VAR MfrRepDivComm@1000000003 : Record 51711);
+    BEGIN
+      // <TPZ92>
+      IF MfrRepCode <> '' THEN BEGIN
+        IF MfrRepCode <> MfrRepDivComm."Mfr. Rep. Code" THEN
+          IF NOT MfrRepDivComm.GET(MfrRepCode,ShortcutDim5Code) THEN
+            CLEAR(MfrRepDivComm);
+      END ELSE
+        CLEAR(MfrRepDivComm);
+      // </TPZ92>
+    END;
+
+    PROCEDURE Tb36_GetMfrRepExcp@1000000034(MfrRepCode@1000000002 : Code[20];ShortcutDim5Code@1000000001 : Code[20];CustomerNo@1000000000 : Code[20];VAR MfrRepCommExcp@1000000005 : Record 51701) : Boolean;
+    VAR
+      MfrCode@1000000003 : Code[20];
+    BEGIN
+
+      // <TPZ92>  <TPZ1790 - removed code>
+
+      IF MfrRepCommExcp.GET(MfrRepCode,ShortcutDim5Code,CustomerNo,MfrCode) THEN
+        EXIT(TRUE)
+      ELSE
+        CustomerNo := '';
+      {<<<<<<<}
+
+      IF MfrRepCommExcp.GET(MfrRepCode,ShortcutDim5Code,CustomerNo,MfrCode) THEN
+        EXIT(TRUE);
+
+      EXIT(FALSE);
+      // </TPZ92>
+    END;
+
+    [EventSubscriber(Codeunit,50079,Tb_36_SetSecurityFilterOnRespCenter)]
+    PROCEDURE Tb36_SetSecurityFilterOnRespCenter@1000000027(VAR Sender@1000000000 : Codeunit 50079;VAR Rec@1000000001 : Record 36);
+    VAR
+      UserSetupMgt@1000000002 : Codeunit 5700;
+    BEGIN
+      // <TPZ159>
+      WITH Rec DO BEGIN
+
+        // <TPZ159>
+        IF UserSetupMgt.GetDivisionFilter <> '' THEN BEGIN
+          FILTERGROUP(2);
+          SETFILTER("Shortcut Dimension 5 Code",UserSetupMgt.GetDivisionFilter);
+          FILTERGROUP(0);
+        END;
+
+        IF UserSetupMgt.GetMfrRepSalesFilter <> '' THEN BEGIN
+          FILTERGROUP(2);
+          SETFILTER("Mfr. Rep. Code",UserSetupMgt.GetMfrRepSalesFilter);
+          FILTERGROUP(0);
+        END;
+        // </TPZ159>
+      END;
+       // </TPZ159>
+    END;
+
+    [EventSubscriber(Codeunit,50079,Tb_36_UpdateSalesLine_1)]
+    PROCEDURE Tb36_UpdateSalesLine@1000000030(VAR Sender@1000000000 : Codeunit 50079;VAR Rec@1000000001 : Record 36;VAR SalesLine@1000000002 : Record 37;VAR ChangeFieldName@1000000003 : Text[100];VAR ExclSalesLineDocumentType@1000000004 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';VAR ExclSalesLineDocumentNo@1000000005 : Code[20];VAR ExclSalesLineLineNo@1000000006 : Integer);
+    BEGIN
+      WITH Rec DO BEGIN
+        // <TPZ1278>
+          IF NOT
+               ((SalesLine."Document Type" = ExclSalesLineDocumentType) AND
+                (SalesLine."Document No." = ExclSalesLineDocumentNo) AND
+                (SalesLine."Line No." = ExclSalesLineLineNo))
+          THEN
+          // </TPZ1278>
+          //<TPZ1556>
+          IF ChangeFieldName = FIELDCAPTION("Shipping Agent Code") THEN
+              SalesLine.SuspendStatusCheck(TRUE);
+          //</TPZ1556>
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnUpdateSalesLineByChangedFieldName)]
+    PROCEDURE Tb36_UpdateSalesLine_OnUpdateSalesLineByChangedFieldName@1000000032(SalesHeader@1000000000 : Record 36;VAR SalesLine@1000000001 : Record 37;ChangedFieldName@1000000002 : Text[100]);
+    VAR
+      JobTransferLine@1000000007 : Codeunit 1004;
+      PermissionManager@1000000006 : Codeunit 9002;
+      Question@1000000005 : Text[250];
+      NotRunningOnSaaS@1000000004 : Boolean;
+      CustProdComm@1000000003 : Record 50039;
+    BEGIN
+
+      WITH SalesHeader DO BEGIN
+      //<Tpz2792> Event COnversion
+           //TOP030B KT ABCSI Lost Opportunities 03092015
+        CASE ChangedFieldName OF
+            FIELDCAPTION("Reason Code") :
+              IF ((SalesLine."Quantity Shipped" = 0) AND (SalesLine.Type = SalesLine.Type::Item)) THEN BEGIN
+                SalesLine.VALIDATE("Reason Code","Reason Code");
+                SalesLine."Lost Opportunity Description" := "Lost Opportunity Description"; //TOP230 KT ABCSI CRP 2 Fixes 06052015
+              END;
+            //TOP030B KT ABCSI Lost Opportunities 03092015
+             //<Tpz2792> Event COnversion
+          //<Tpz2792> Event COnversion
+
+            // <TPZ572>
+            FIELDCAPTION("Mfr. Rep. Code"):
+              IF SalesLine."No." <> '' THEN
+                SalesLine.VALIDATE("Mfr. Rep. Code","Mfr. Rep. Code");
+            FIELDCAPTION("ISR Code"):
+              IF SalesLine."No." <> '' THEN
+                SalesLine.VALIDATE("ISR Code","ISR Code");
+            FIELDCAPTION("CSR Code"):
+              IF SalesLine."No." <> '' THEN
+                SalesLine.VALIDATE("CSR Code","CSR Code");
+            // </TPZ572>
+            // <TPZ92,TPZ1539>
+            FIELDCAPTION("Mfr. Rep. Comm. %"):
+            BEGIN //<TPZ1641>
+              IF (SalesLine.Type = SalesLine.Type::Item) OR
+                 ((SalesLine.Type = SalesLine.Type::"G/L Account") AND
+                  SalesLine."Commission Payable") OR
+                 ((SalesLine.Type = SalesLine.Type::"Charge (Item)") AND
+                  SalesLine."Commission Payable")
+              THEN
+                SalesLine.VALIDATE("Mfr. Rep. Comm. %","Mfr. Rep. Comm. %");
+            // </TPZ92,TPZ1539>
+
+              //<TPZ1641>
+
+               IF CustProdComm.GET(SalesLine."Sell-to Customer No.",SalesLine."Item Category Code",SalesLine."Product Group Code",SalesLine."Shortcut Dimension 5 Code") THEN
+                  IF (CustProdComm."Commission %" <> 0) AND
+                   ((SalesLine.Type = SalesLine.Type::Item) OR
+                    ((SalesLine.Type = SalesLine.Type::"G/L Account") AND
+                     SalesLine."Commission Payable") OR
+                    ((SalesLine.Type = SalesLine.Type::"Charge (Item)") AND
+                     SalesLine."Commission Payable"))
+                THEN  BEGIN
+                  SalesLine.VALIDATE("Mfr. Rep. Comm. %",CustProdComm."Commission %");
+                  //"Mfr. Rep. Comm. Amount" := (CustProdComm."Commission %"  * "Line Amount" ) / 100;
+
+               END;
+             END;
+          END;
+                //</TPZ1641>
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50079,Tab_36_ValidateShortCutDim_Function)]
+    PROCEDURE Tb36_ValidateShortcutDimCode@1000000045(VAR Rec@1000000000 : Record 36;VAR FromOnInsert@1000000001 : Boolean;VAR OldDimSetID@1000000002 : Integer);
+    BEGIN
+      {WITH Rec Do begin
+        IF NOT FromOnInsert THEN  //TOP020 KT ABCSI Sales Orders by Division Code 09012015
+          MODIFY;
+
+        IF (OldDimSetID <> "Dimension Set ID") AND ("No." <> '') THEN BEGIN  //RS1.06
+        //IF OldDimSetID <> "Dimension Set ID" THEN BEGIN //RS1.06
+          IF NOT FromOnInsert THEN  //TOP020 KT ABCSI Sales Orders by Division Code 09012015
+           MODIFY;
+      END;
+      }
+    END;
+
+    [EventSubscriber(Codeunit,50079,Tb_36UpdateSellToCust)]
+    PROCEDURE Tb36_UpdateSellToCust@1000000036(VAR Sender@1000000000 : Codeunit 50079;VAR SalesHeader@1000000001 : Record 36;VAR ContComp@1000000002 : Record 5050);
+    BEGIN
+      WITH SalesHeader DO BEGIN
+      // <TPZ460>
+          "Ship-to Phone No." := ContComp."Phone No.";
+          // </TPZ460>
+      END;
+    END;
+
+    PROCEDURE Tb36_CheckEDIOrders@1000000051(VAR Rec@1000000000 : Record 36;RunFromEDI@1000000001 : Boolean);
+    VAR
+      EDIIntegration@1000000002 : Codeunit 14000363;
+      EDITradePrtnrDivExcp@1000000003 : Record 50040;
+    BEGIN
+      WITH Rec DO BEGIN
+        // <TPZ848>
+      //GetCust("Sell-to Customer No.");   //TPZEDI
+      GetCust_Event(Rec);//UTK
+
+      IF NOT RunFromEDI AND ("Document Type" IN ["Document Type"::Quote,"Document Type"::Order,"Document Type"::Invoice])
+      THEN
+        CASE Cust."EDI Invoice" OF
+          Cust."EDI Invoice"::Always:
+            BEGIN
+              "EDI Order" := TRUE;
+              "EDI Invoice" := TRUE;
+              "EDI Trade Partner" := Cust."EDI Trade Partner";
+              EDIIntegration.EDISellToCodeValidate(Rec);
+              IF EDITradePrtnrDivExcp.GET(Cust."EDI Trade Partner","Shortcut Dimension 5 Code") AND
+                 EDITradePrtnrDivExcp.Exclude
+              THEN BEGIN
+                "EDI Order" := FALSE;
+                "EDI Invoice" := FALSE;
+              END;
+              IF "EDI Order" THEN
+                EDIIntegration.EDIShipToCodeValidate(Rec);
+            END;
+          Cust."EDI Invoice"::Never:
+            "EDI Order" := FALSE;
+          Cust."EDI Invoice"::"Rec. Doc. Control":
+            BEGIN
+              "EDI Order" := FALSE;
+              "EDI Invoice" := FALSE;
+              "EDI Trade Partner" := '';
+              "EDI Sell-to Code" := '';
+              "External Sell-to No." := '';
+              "EDI Ship-to Code" := '';
+              "External Ship-to No." := '';
+            END;
+        END;
+      // </TPZ848>
+      END;
+    END;
+
+    PROCEDURE Tb36_UpdateLostOpportunity@1000000055(VAR Rec@1000000000 : Record 36);
+    BEGIN
+      //<Tpz2792> Event COnversion
+      WITH Rec DO BEGIN
+      //TOP030B KT ABCSI Lost Opportunities 03092015
+      CALCFIELDS("No. of Lost Opporunity Lines");
+      IF "No. of Lost Opporunity Lines" > 0 THEN "Lost Opportunity" := TRUE
+      ELSE CLEAR("Lost Opportunity");
+      //TOP030B KT ABCSI Lost Opportunities 03092015
+
+      END;
+      //<Tpz2792> Event COnversion
+    END;
+
+    PROCEDURE Tb36_LookupShortcutDimCode@1000000056(VAR rec@1000000002 : Record 36;VAR xRec@1000000014 : Record 36;FieldNumber@1000000001 : Integer;VAR ShortcutDimCode@1000000000 : Code[20];VAR EDITemp@1000000007 : Boolean);
+    VAR
+      DimVal@1000000006 : Record 349;
+      CustDiv@1000000005 : Record 50007;
+      CustDivFilter@1000000004 : Text;
+      SLines@1000000003 : Record 37;
+      ab004@1000000012 : TextConst 'ENU=%1 %2 is not defined in the User Setup';
+      ab005@1000000011 : TextConst 'ENU=This Shortcut Dimension is not defined in the %1.;ESM=Este Shortcut de dimensi¢n no est  def. en el %1.;FRC=La dimension de ce raccourci n''est pas d‚finie dans le %1.;ENC=This Shortcut Dimension is not defined in the %1.';
+      ab006@1000000010 : TextConst 'ENU=Sales Lines Exists for %1 %2 \ Are You Sure to Change %1: %2? \ All the Sales Lines will be deleted.';
+      ab007@1000000009 : TextConst 'ENU=is not valid.';
+      ab008@1000000008 : TextConst 'ENU=Operation aborted to respect the User Selection';
+      GLSetup@1000000013 : Record 98;
+      SalesLine@1000000015 : Record 37;
+    BEGIN
+      WITH rec DO BEGIN
+          // >> EDI
+        IF EDITemp THEN
+          EXIT;
+        // << EDI
+
+        //TOP140 KT ABCSI - Payment Terms for Multiple Divisions 06032015
+        GLSetup.GET;
+        IF GLSetup."Shortcut Dimension 5 Code" = '' THEN
+          ERROR(ab005,GLSetup.TABLECAPTION);
+
+        CLEAR(CustDivFilter);
+        CustDiv.RESET;
+        CustDiv.SETRANGE("Customer No.","Bill-to Customer No.");
+        IF CustDiv.FINDSET THEN REPEAT
+          IF CustDivFilter <> '' THEN
+            CustDivFilter += '|' + CustDiv."Shortcut Dimension 5 Code"
+          ELSE
+            CustDivFilter := CustDiv."Shortcut Dimension 5 Code";
+        UNTIL CustDiv.NEXT = 0;
+        DimVal.SETRANGE("Dimension Code",GLSetup."Shortcut Dimension 5 Code");
+        DimVal.SETFILTER(Code,CustDivFilter);
+        DimVal."Dimension Code" := GLSetup."Shortcut Dimension 5 Code";
+        IF PAGE.RUNMODAL(0,DimVal) = ACTION::LookupOK THEN BEGIN
+          ShortcutDimCode := DimVal.Code;
+        END;
+        //TOP140 KT ABCSI - Payment Terms for Multiple Divisions 06032015
+        //DimMgt.LookupDimValueCode(FieldNumber,ShortcutDimCode);
+
+        //TOP130 - Item List Sort and filter by Status and Division 06042015
+        GLSetup.GET;
+        IF NOT DimVal.GET(GLSetup."Shortcut Dimension 5 Code","Shortcut Dimension 5 Code") THEN
+          FIELDERROR("Shortcut Dimension 5 Code",ab007);
+
+        IF ("Shortcut Dimension 5 Code" <> '') AND (xRec."Shortcut Dimension 5 Code" <> '') AND ("Shortcut Dimension 5 Code" <> xRec."Shortcut Dimension 5 Code") THEN BEGIN
+
+          SalesLine.RESET;
+          SalesLine.SETRANGE("Document Type","Document Type");
+          SalesLine.SETRANGE("Document No.","No.");
+          IF SalesLine.FINDFIRST THEN
+
+            IF CONFIRM(ab006,FALSE,FIELDCAPTION("Document Type"),"No.",FIELDCAPTION("Shortcut Dimension 5 Code"),"Shortcut Dimension 5 Code") THEN BEGIN
+              SLines.RESET;
+              SLines.SETRANGE("Document Type","Document Type");
+              SLines.SETRANGE("Document No.","No.");
+              SLines.DELETEALL(TRUE);
+            END ELSE ERROR(ab008);
+          END;
+        //TOP130 - Item List Sort and filter by Status and Division 06042015
+
+        ValidateShortcutDimCode(FieldNumber,ShortcutDimCode);
+      END;
+    END;
+
+    PROCEDURE Tb36_ClearQtySalesLines@1000000041(VAR RecSalesHeader@1000000000 : Record 36);
+    VAR
+      recSalesLine@1000000001 : Record 37;
+    BEGIN
+      WITH RecSalesHeader DO BEGIN
+        recSalesLine.RESET;
+        recSalesLine.SETRANGE("Document Type","Document Type");
+        recSalesLine.SETRANGE("Document No.","No.");
+        recSalesLine.SETRANGE(Type,recSalesLine.Type::Item);
+        recSalesLine.SETRANGE("Lost Opportunity",TRUE);
+        IF recSalesLine.FINDSET THEN REPEAT
+         recSalesLine.VALIDATE(Quantity,0);
+         recSalesLine.MODIFY(TRUE);
+        UNTIL recSalesLine.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE Tb36_ShowItemAvailByLoc@1000000054(VAR Rec@1000000014 : Record 36);
+    VAR
+      SalesLineRec@1000000012 : Record 37;
+      MatrixRecord@1000000011 : Record 14;
+      MatrixRecords@1000000010 : ARRAY [32] OF Record 14;
+      MatrixRecordRef@1000000009 : RecordRef;
+      SalesItemsByLocMtx@1000000008 : Page 51171;
+      MatrixMgt@1000000007 : Codeunit 9200;
+      MATRIX_SetWanted@1000000006 : 'Initial,Previous,Same,Next';
+      MATRIX_CaptionSet@1000000005 : ARRAY [32] OF Text[1024];
+      MATRIX_CaptionRange@1000000004 : Text[100];
+      MATRIX_PKFirstRecInCurrSet@1000000003 : Text[100];
+      MATRIX_CurrSetLength@1000000002 : Integer;
+      CaptionFieldNo@1000000001 : Integer;
+      CurrentMatrixRecordOrdinal@1000000000 : Integer;
+      Table14EventPublishers@1000000013 : Codeunit 50074;
+    BEGIN
+      // <TPZ493>
+      MatrixRecord.SETRANGE("Use As In-Transit",FALSE);
+
+      // <TPZ159>
+      //<TPZ2632>
+      //MatrixRecord.SetSecurityFilter;
+      Table14EventPublishers.Tb14_OnSetSecurityFilter(MatrixRecord);
+      //</TPZ2632>
+      // </TPZ159>
+
+      CLEAR(MATRIX_CaptionSet);
+      CLEAR(MatrixRecords);
+      CurrentMatrixRecordOrdinal := 1;
+
+      MatrixRecordRef.GETTABLE(MatrixRecord);
+      MatrixRecordRef.SETTABLE(MatrixRecord);
+
+      CaptionFieldNo := MatrixRecord.FIELDNO(Code);
+
+      MatrixMgt.GenerateMatrixData(MatrixRecordRef,0,ARRAYLEN(MatrixRecords),CaptionFieldNo,MATRIX_PKFirstRecInCurrSet,
+        MATRIX_CaptionSet,MATRIX_CaptionRange,MATRIX_CurrSetLength);
+
+      IF MATRIX_CurrSetLength > 0 THEN BEGIN
+        MatrixRecord.SETPOSITION(MATRIX_PKFirstRecInCurrSet);
+        MatrixRecord.FIND;
+        REPEAT
+          MatrixRecords[CurrentMatrixRecordOrdinal].COPY(MatrixRecord);
+          CurrentMatrixRecordOrdinal := CurrentMatrixRecordOrdinal + 1;
+        UNTIL (CurrentMatrixRecordOrdinal > MATRIX_CurrSetLength) OR (MatrixRecord.NEXT <> 1);
+      END;
+      WITH Rec DO BEGIN
+        SalesLineRec.RESET;
+        SalesLineRec.SETRANGE("Document Type","Document Type");
+        SalesLineRec.SETRANGE("Document No.","No.");
+        SalesItemsByLocMtx.Load(MATRIX_CaptionSet,MatrixRecords,MatrixRecord);
+        SalesItemsByLocMtx.SETTABLEVIEW(SalesLineRec);
+        SalesItemsByLocMtx.RUNMODAL;
+      END;
+      // </TPZ493>
+    END;
+
+    PROCEDURE Tb36_CalcFreeFreight@1000000038(VAR Rec@1000000000 : Record 36);
+    BEGIN
+      // <TPZ573>
+      SalesSetup.GET;
+      IF SalesSetup."Calc. Free Freight" THEN
+        CODEUNIT.RUN(CODEUNIT::"Sales-Calc. Free Freight",Rec);
+      // </TPZ573>
+    END;
+
+    PROCEDURE Tb36_CopyLastUnitPriceToActualUnitPrice@1000000039(VAR Rec@1000000000 : Record 36);
+    VAR
+      SalesLine2@1000000001 : Record 37;
+    BEGIN
+      // <TPZ929>
+      WITH Rec DO BEGIN
+        SalesLine2.RESET;
+        SalesLine2.SETRANGE("Document Type", "Document Type");
+        SalesLine2.SETRANGE("Document No.", "No.");
+        SalesLine2.SETRANGE(Type, SalesLine2.Type::Item);
+        IF SalesLine2.FIND('-') THEN BEGIN
+          REPEAT
+            //SalesLine2.GetLastSalesPrice(SalesLine2);
+            Table37EventSubscribers.Tb37_GetLastSalesPrice(SalesLine2);
+            SalesLine2.VALIDATE("Actual Unit Price", SalesLine2."Last Unit Price");
+            SalesLine2.MODIFY;
+          UNTIL SalesLine2.NEXT = 0;
+        END;
+      END;
+      // </TPZ929>
+    END;
+
+    PROCEDURE Tb36_ClearActualUnitPrice@1000000042(VAR Rec@1000000000 : Record 36);
+    VAR
+      SalesLine2@1000000001 : Record 37;
+    BEGIN
+      // <TPZ929>
+      WITH Rec DO BEGIN
+        // <TPZ929>
+        SalesLine2.RESET;
+        SalesLine2.SETRANGE("Document Type", "Document Type");
+        SalesLine2.SETRANGE("Document No.", "No.");
+        SalesLine2.SETRANGE(Type, SalesLine2.Type::Item);
+        IF SalesLine2.FIND('-') THEN
+        REPEAT
+          SalesLine2.VALIDATE("Actual Unit Price",0);
+          SalesLine2.MODIFY;
+        UNTIL SalesLine2.NEXT = 0;
+      END;
+      // </TPZ929>
+    END;
+
+    PROCEDURE Tb36_ValidateReasonComments@1000000047(VAR rec@1000000004 : Record 36);
+    VAR
+      SalesCommentLine@1000000002 : Record 44;
+      recReasonCode@1000000001 : Record 231;
+      recSalesLine@1000000000 : Record 37;
+    BEGIN
+      WITH rec DO BEGIN
+        recSalesLine.RESET;
+        recSalesLine.SETRANGE("Document Type","Document Type");
+        recSalesLine.SETRANGE("Document No.","No.");
+        IF recSalesLine.FINDSET THEN
+        REPEAT
+          IF recReasonCode.GET(recSalesLine."Reason Code") THEN BEGIN
+            IF recReasonCode.Mandatory THEN BEGIN
+              SalesCommentLine.RESET;
+              SalesCommentLine.SETRANGE("Document Type","Document Type");
+              SalesCommentLine.SETRANGE("No.",recSalesLine."Document No.");
+              SalesCommentLine.SETRANGE("Document Line No.",recSalesLine."Line No.");
+              IF SalesCommentLine.ISEMPTY THEN
+                ERROR('Please Insert Sales Line Comments for Sales Order %1 Line No. %2',recSalesLine."Document No.",recSalesLine."Line No.");
+            END;
+          END;
+        UNTIL recSalesLine.NEXT=0;
+      END;
+    END;
+
+    PROCEDURE Tb36_ValidateReturnReasonComments@1000000048(VAR rec@1000000004 : Record 36);
+    VAR
+      SalesCommentLine@1000000002 : Record 44;
+      ReturnReason@1000000001 : Record 6635;
+      recSalesLine@1000000000 : Record 37;
+    BEGIN
+      //<TPZ2568>
+      WITH rec DO BEGIN
+        recSalesLine.RESET;
+        recSalesLine.SETRANGE("Document Type","Document Type");
+        recSalesLine.SETRANGE("Document No.","No.");
+        IF recSalesLine.FINDSET THEN
+        REPEAT
+          IF ReturnReason.GET(recSalesLine."Return Reason Code") THEN BEGIN
+            IF ReturnReason.Mandatory THEN BEGIN
+              SalesCommentLine.RESET;
+              SalesCommentLine.SETRANGE("Document Type","Document Type");
+              SalesCommentLine.SETRANGE("No.",recSalesLine."Document No.");
+              SalesCommentLine.SETRANGE("Document Line No.",recSalesLine."Line No.");
+              IF SalesCommentLine.ISEMPTY THEN
+                ERROR('Please Insert Sales Line Comments for Sales Order %1 Line No. %2',recSalesLine."Document No.",recSalesLine."Line No.");
+            END;
+          END;
+        UNTIL recSalesLine.NEXT=0;
+      END;
+      //</TPZ2568>
+    END;
+
+    PROCEDURE Tb36_CheckPackingStatus@1000000050(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36);
+    VAR
+      UserSetup@1000000003 : Record 91;
+      WarehouseRequest@1000000002 : Record 5765;
+    BEGIN
+      IF
+        (Rec."Sell-to Address" <> xRec."Sell-to Address") OR (Rec."Sell-to Address 2" <> xRec."Sell-to Address 2") OR (Rec."Sell-to City" <>
+            xRec."Sell-to City") OR (Rec."Sell-to Post Code" <> xRec."Sell-to Post Code") OR (Rec."Sell-to County" <> xRec."Sell-to County")
+            OR (Rec."Sell-to Country/Region Code" <> xRec."Sell-to Country/Region Code") OR (Rec."Ship-to Address" <> xRec."Ship-to Address")
+            OR (Rec."Ship-to Address 2" <> xRec."Ship-to Address 2") OR (Rec."Ship-to City" <> xRec."Ship-to City") OR (Rec."Ship-to Post Code"<>
+            xRec."Ship-to Post Code") OR (Rec."Ship-to County" <> xRec."Ship-to County") OR (Rec."Ship-to Country/Region Code" <> xRec."Ship-to Country/Region Code")
+             OR (UserSetup.GET(USERID) AND (NOT UserSetup."Warehouse Employee") AND ((Rec."Shipping Agent Code" <> xRec."Shipping Agent Code")OR
+           (Rec."E-Ship Agent Service" <> xRec."E-Ship Agent Service")))
+
+      = TRUE THEN
+      BEGIN
+        WITH Rec DO BEGIN
+          //<TPZ2583>
+          IF ("Document Type" = "Document Type"::Order) THEN BEGIN
+              WarehouseRequest.RESET;
+              WarehouseRequest.SETRANGE("Source Type",37);
+              WarehouseRequest.SETRANGE("Source Document",WarehouseRequest."Source Document"::"Sales Order");
+              WarehouseRequest.SETRANGE("Source No.","No.");
+              //WarehouseRequest.SETRANGE("Document Status",WarehouseRequest."Document Status"::Released);
+              WarehouseRequest.SETFILTER("Activity Status",'%1|%2|%3',WarehouseRequest."Activity Status"::"Pick Created",WarehouseRequest."Activity Status"::"Pick Registered",
+                WarehouseRequest."Activity Status"::Packed);
+              //WarehouseRequest.SETRANGE("Location Code","Location Code");
+              IF NOT WarehouseRequest.ISEMPTY THEN BEGIN
+                //RollBackAddress;
+                //<TPZ2659>
+                 IF "Shortcut Dimension 5 Code"<>'I' THEN
+                //</TPZ2659>
+                  ERROR('Pick is Created For Sales Order %1',"No.") ;
+                  {ELSE IF Status = Status::Released THEN //NAVEVENT
+                     Status := Status::Open;}
+
+              END;
+          END;
+          //</TPZ2583>
+        END;
+      END;
+    END;
+
+    PROCEDURE Tb36_CreatePick@1000000053(VAR Rec@1000000003 : Record 36);
+    VAR
+      WarehouseRequest@1000000002 : Record 5765;
+      OutboundWhseRequestFilter@1000000001 : Record 14002863;
+      OutboundWhseRequestMgt1@1000000000 : Codeunit 51002;
+    BEGIN
+      //TPZ2665
+      WITH Rec DO BEGIN
+       TESTFIELD(Status,Status::Released);
+       IF OutboundWhseRequestFilter.GET('DEFAULT') THEN;
+       WarehouseRequest.RESET;
+       WarehouseRequest.SETRANGE("Source Type",37);
+       WarehouseRequest.SETRANGE("Source Document",WarehouseRequest."Source Document"::"Sales Order");
+       WarehouseRequest.SETRANGE("Source No.","No.");
+       IF WarehouseRequest.FINDFIRST THEN
+        OutboundWhseRequestMgt1.CreatePick(WarehouseRequest,OutboundWhseRequestFilter,'','');
+      END;
+      //TPZ2665
+    END;
+
+    [EventSubscriber(Codeunit,50079,Tab_36_ShowDOcDim_Func)]
+    PROCEDURE Tb36_ShowDocDim@1000000052(VAR Sender@1000000000 : Codeunit 50079;VAR Rec@1000000001 : Record 36;HideValidationDialog@1000000005 : Boolean);
+    VAR
+      DimMgt@1000000002 : Codeunit 408;
+      Cu225EventSubscriber@1000000003 : Codeunit 51908;
+      OldDimSetID@1000000004 : Integer;
+    BEGIN
+      WITH Rec DO BEGIN
+        OldDimSetID := "Dimension Set ID";
+
+        "Dimension Set ID" :=
+            {  DimMgt.EditDimensionSet2Custom(
+                 "Dimension Set ID",STRSUBSTNO('%1 %2',"Document Type","No."),
+                 "Shortcut Dimension 1 Code","Shortcut Dimension 2 Code","Shortcut Dimension 5 Code");}
+              Cu225EventSubscriber.Cu408_EditDimensionSet2Custom(
+                "Dimension Set ID",STRSUBSTNO('%1 %2',"Document Type","No."),
+                 "Shortcut Dimension 1 Code","Shortcut Dimension 2 Code","Shortcut Dimension 5 Code");
+
+        IF OldDimSetID <> "Dimension Set ID" THEN BEGIN
+          MODIFY;
+        IF SalesLinesExist THEN
+          Tb36_UpdateAllLineDim_FuncEvent(Rec,"Dimension Set ID",OldDimSetID,HideValidationDialog);
+        END;
+      MODIFY();
+      END;
+      COMMIT;
+      ERROR('');
+    END;
+
+    [EventSubscriber(Codeunit,50079,Tab_36_UpdateAllDim_Func)]
+    PROCEDURE Tb36_UpdateALLDim@1000000049(VAR Sender@1000000000 : Codeunit 50079;VAR Rec@1000000001 : Record 36;VAR SalesLine@1000000003 : Record 37;VAR NewDimSetID@1000000004 : Integer);
+    VAR
+      SalesLineOldDimSetID@1000000002 : Integer;
+      DimMgt@1000000005 : Codeunit 408;
+      Cu225EventSubscriber@1000000006 : Codeunit 51908;
+    BEGIN
+      WITH Rec DO BEGIN
+        SalesLineOldDimSetID := SalesLine."Dimension Set ID";
+            SalesLine."Dimension Set ID" := NewDimSetID;
+            //TOP020 KT ABCSI Sales Orders by Division Code 01272015
+            {DimMgt.UpdateGlobalDimFromDimSetIDCustom(
+              SalesLine."Dimension Set ID",SalesLine."Shortcut Dimension 1 Code",SalesLine."Shortcut Dimension 2 Code",SalesLine."Shortcut Dimension 5 Code");}
+             Cu225EventSubscriber.Cu408_UpdateGlobalDimFromDimSetIDCustom(
+              SalesLine."Dimension Set ID",SalesLine."Shortcut Dimension 1 Code",SalesLine."Shortcut Dimension 2 Code",SalesLine."Shortcut Dimension 5 Code");
+      END;
+    END;
+
+    PROCEDURE GetCust_Event@2(VAR Rec@1000000000 : Record 36);
+    BEGIN
+      IF NOT ((Rec."Document Type" = Rec."Document Type"::Quote) AND (Rec."Sell-to Customer No." = '')) THEN BEGIN
+        IF Rec."Sell-to Customer No." <> Cust."No." THEN
+        //EDITPZ
+        //Cust.GET(CustNo);
+         IF NOT Cust.GET(Rec."Sell-to Customer No.") THEN
+          CLEAR(Cust);
+       //EDITPZ
+      END ELSE
+        CLEAR(Cust);
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Campaign No.")]
+    LOCAL PROCEDURE Tb36_CampaignNo_OnValidate@1000000035(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      Campaign@1000000005 : Record 5071;
+      CustomerCampaign@1000000004 : Record 50053;
+      TermExNotification@1000000003 : Notification;
+      TermExtNotMsg@1000000006 : TextConst 'ENU=Due Date Changed to %1 Pmt. Disc. Date Changed to %2 As Per Term Externsion on Campaign %3';
+      NotificationSent@1000000007 : Boolean;
+      TermExNotificationCust@1000000008 : Notification;
+    BEGIN
+      //<TPZ2832 >
+      WITH Rec DO BEGIN
+        IF Rec."Document Type" <> Rec."Document Type"::Order THEN
+          EXIT;
+
+        TermExNotification.ID := '00000000-7800-0000-0000-000000000001';
+        IF Campaign.GET("Campaign No.") AND (FORMAT(Campaign."Term Extension") <> '') AND ("Shortcut Dimension 5 Code" = 'E') THEN BEGIN
+          "Due Date" := CALCDATE(Campaign."Term Extension","Due Date");
+          VALIDATE("Due Date");
+          "Pmt. Discount Date" := CALCDATE(Campaign."Term Extension","Pmt. Discount Date");
+          TermExNotification.MESSAGE := STRSUBSTNO(TermExtNotMsg,FORMAT("Due Date"),FORMAT("Pmt. Discount Date"),Campaign."No.");
+          TermExNotification.SCOPE := NOTIFICATIONSCOPE::LocalScope;
+          TermExNotification.SEND;
+        END ELSE BEGIN
+          TermExNotification.RECALL;
+          VALIDATE("Payment Terms Code");
+        END;
+      END;
+      //</TPZ2832 >
+    END;
+
+    LOCAL PROCEDURE Tb36_UpdateAllLineDim_FuncEvent@34(VAR SalesHeaderPara@1000000003 : Record 36;NewParentDimSetID@1000 : Integer;OldParentDimSetID@1001 : Integer;HideValidationDialog@1000000001 : Boolean);
+    VAR
+      ATOLink@1003 : Record 904;
+      NewDimSetID@1002 : Integer;
+      ShippedReceivedItemLineDimChangeConfirmed@1004 : Boolean;
+      SalesLineOldDimSetID@1000000000 : Integer;
+      Text064@1000000002 : TextConst 'ENU=You may have changed a dimension.\\Do you want to update the lines?;ESM=Puede que haya cambiado una dimensi¢n.\\¨Desea actualizar las l¡neas?;FRC=Vous avez probablement modifi‚ une dimension.\\Souhaitez-vous mettre … jour les lignesÿ?;ENC=You may have changed a dimension.\\Do you want to update the lines?';
+      SalesLine@1000000004 : Record 37;
+      DimMgt@1000000005 : Codeunit 408;
+      Table36EventPublisher@1000000006 : Codeunit 50079;
+    BEGIN
+      // Update all lines with changed dimensions.
+
+      IF NewParentDimSetID = OldParentDimSetID THEN
+        EXIT;
+      IF NOT HideValidationDialog AND GUIALLOWED THEN
+        IF NOT CONFIRM(Text064) THEN
+          EXIT;
+      WITH SalesHeaderPara DO BEGIN
+        SalesLine.RESET;
+        SalesLine.SETRANGE("Document Type","Document Type");
+        SalesLine.SETRANGE("Document No.","No.");
+        SalesLine.LOCKTABLE;
+        IF SalesLine.FIND('-') THEN
+          REPEAT
+            NewDimSetID := DimMgt.GetDeltaDimSetID(SalesLine."Dimension Set ID",NewParentDimSetID,OldParentDimSetID);
+            IF SalesLine."Dimension Set ID" <> NewDimSetID THEN BEGIN
+              SalesLine."Dimension Set ID" := NewDimSetID;
+
+              //IF NOT HideValidationDialog AND GUIALLOWED THEN
+                //VerifyShippedReceivedItemLineDimChange(ShippedReceivedItemLineDimChangeConfirmed);
+
+              //<Tpz2792> Event COnversion
+              {
+              SalesLineOldDimSetID := SalesLine."Dimension Set ID";
+              SalesLine."Dimension Set ID" := NewDimSetID;
+              //TOP020 KT ABCSI Sales Orders by Division Code 01272015
+              DimMgt.UpdateGlobalDimFromDimSetIDCustom(
+                SalesLine."Dimension Set ID",SalesLine."Shortcut Dimension 1 Code",SalesLine."Shortcut Dimension 2 Code",SalesLine."Shortcut Dimension 5 Code");
+                }
+                //<Tpz2792> Event COnversion
+
+              //Comment Start - TOP020
+              //DimMgt.UpdateGlobalDimFromDimSetID(
+                //SalesLine."Dimension Set ID",SalesLine."Shortcut Dimension 1 Code",SalesLine."Shortcut Dimension 2 Code");
+              //Comment End - TOP020
+              //TOP020 KT ABCSI Sales Orders by Division Code 01272015
+              Table36EventPublisher.Tab_36_UpdateAllDim_Func(SalesHeaderPara,SalesLine,NewDimSetID);  //<Tpz2792> Event COnversion
+              SalesLine.MODIFY;
+              ATOLink.UpdateAsmDimFromSalesLine(SalesLine);
+            END;
+          UNTIL SalesLine.NEXT = 0;
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Delivery Date")]
+    LOCAL PROCEDURE Tb36_DeliveryDate_OnValidate@1000000009(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      tmpLocation@1000000003 : Record 14;
+      ShippingAgents@1000000004 : Record 291;
+      CalendarMgmt@1000000005 : Codeunit 7600;
+      WarehouseRequestLoc@1000000006 : Record 5765;
+    BEGIN
+      //Change shipment date on update delivery date
+      tmpLocation.GET(Rec."Location Code");
+      ShippingAgents.GET(Rec."Shipping Agent Code");
+      IF (Rec."Document Type" = Rec."Document Type"::Order) AND (tmpLocation."Shipping Location") AND
+         (ShippingAgents.Type = ShippingAgents.Type::"Local") THEN BEGIN
+        Rec."Shipment Date" := CalendarMgmt.CalcDateBOC('-1WD',Rec."Delivery Date",0,'1','', 0, '', '', FALSE);
+        Rec.MODIFY;
+        //-->TPZ3277
+        WarehouseRequestLoc.RESET;
+        WarehouseRequestLoc.SETRANGE("Source No.",Rec."No.");
+        IF WarehouseRequestLoc.FINDFIRST THEN BEGIN
+          WarehouseRequestLoc.MODIFYALL("Shipment Date" , Rec."Shipment Date");
+          //WarehouseRequestLoc.MODIFY;
+        END;
+        //<--TPZ3277
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnBeforeValidateEvent,"Ship-to Name")]
+    LOCAL PROCEDURE Tb36_ShipToName_OnValidate@1170000000(VAR Rec@1170000000 : Record 36;VAR xRec@1170000001 : Record 36;CurrFieldNo@1170000002 : Integer);
+    BEGIN
+      //TPZ2981
+      IF STRLEN(Rec."Ship-to Name") > 35 THEN
+        ERROR('More than 35 Char not allowed');
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Shipping Agent Code")]
+    LOCAL PROCEDURE UpdateShippingAgentinMOP@1000000012(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      WhseShipLineLoc@1000000003 : Record 7321;
+      SourceNo@1000000004 : Code[20];
+      lrecSalesHeader@1000000005 : Record 36;
+      WhseShipLineLoc1@1000000006 : Record 7321;
+    BEGIN
+      //-->TPZ2895 PKS
+      WhseShipLineLoc.RESET;
+      WhseShipLineLoc.SETCURRENTKEY("No.","Source Document","Source No.");
+      WhseShipLineLoc.SETRANGE("Source No.",Rec."No.");
+      IF WhseShipLineLoc.FINDFIRST THEN BEGIN
+        WhseShipLineLoc1.SETRANGE("No.",WhseShipLineLoc."No.");
+        IF WhseShipLineLoc1.FINDSET THEN
+          REPEAT
+            IF (SourceNo <> WhseShipLineLoc1."Source No.") AND (WhseShipLineLoc1."Source No." <> Rec."No.") THEN
+              IF lrecSalesHeader.GET(lrecSalesHeader."Document Type"::Order, WhseShipLineLoc1."Source No.") THEN BEGIN
+                lrecSalesHeader."Shipping Agent Code" := Rec."Shipping Agent Code";
+                lrecSalesHeader."Shipping Agent Service Code" := Rec."Shipping Agent Service Code";
+                lrecSalesHeader."Shipment Method Code" := Rec."Shipment Method Code";
+                lrecSalesHeader."E-Ship Agent Service" := Rec."E-Ship Agent Service";
+                lrecSalesHeader.MODIFY(FALSE);
+              END;
+            SourceNo := WhseShipLineLoc1."Source No.";
+          UNTIL WhseShipLineLoc1.NEXT = 0;
+      END;
+      //<--
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"E-Ship Agent Service")]
+    LOCAL PROCEDURE UpdateEShippingAgentServinMOP@1000000057(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      WhseShipLineLoc@1000000003 : Record 7321;
+      SourceNo@1000000004 : Code[20];
+      lrecSalesHeader@1000000005 : Record 36;
+      WhseShipLineLoc1@1000000006 : Record 7321;
+    BEGIN
+      //-->TPZ2895 PKS
+      WhseShipLineLoc.RESET;
+      WhseShipLineLoc.SETCURRENTKEY("No.","Source Document","Source No.");
+      WhseShipLineLoc.SETRANGE("Source No.",Rec."No.");
+      IF WhseShipLineLoc.FINDFIRST THEN BEGIN
+        WhseShipLineLoc1.SETRANGE("No.",WhseShipLineLoc."No.");
+        IF WhseShipLineLoc1.FINDSET THEN
+          REPEAT
+            IF (SourceNo <> WhseShipLineLoc1."Source No.") AND (WhseShipLineLoc1."Source No." <> Rec."No.") THEN
+              IF lrecSalesHeader.GET(lrecSalesHeader."Document Type"::Order, WhseShipLineLoc1."Source No.") THEN BEGIN
+                lrecSalesHeader."Shipping Agent Code" := Rec."Shipping Agent Code";
+                lrecSalesHeader."Shipping Agent Service Code" := Rec."Shipping Agent Service Code";
+                lrecSalesHeader."Shipment Method Code" := Rec."Shipment Method Code";
+                lrecSalesHeader."E-Ship Agent Service" := Rec."E-Ship Agent Service";
+                lrecSalesHeader.MODIFY(FALSE);
+              END;
+            SourceNo := WhseShipLineLoc1."Source No.";
+          UNTIL WhseShipLineLoc1.NEXT = 0;
+      END;
+      //<--
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"E-Ship Agent Service")]
+    LOCAL PROCEDURE Tb36_EshipAgentService@1000000033(VAR Rec@1000000000 : Record 36;VAR xRec@1000000001 : Record 36;CurrFieldNo@1000000002 : Integer);
+    VAR
+      OWRMgt@1000000003 : Codeunit 14002863;
+    BEGIN
+       //<TPZ3334>
+       OWRMgt.UpdateWRShippingAgentInfo(Rec);
+       //</TPZ3334>
+    END;
+
+    BEGIN
+    {
+
+      001 TPZ2877 UTK 07292020 - Auto Validate Drop ship Address in sales orders.
+      TPZ2948 UTK 09232020 - change code to validate dim at Salesperson Code - Onvalidate
+      TPZ2959 UTK 10262020 - Added code to update Salesperson Code (OSR Code) from Ship-to address division Table.
+      002 TPZ2981 VAH 11182020
+      003 TPZ2895 PKS 06072021 Added new function to update shipping agent and service code to MOP orders if change to anyone.
+      004 TPZ3277 PKS 07192021 Added code to update shipment date in OWR when change delivery date on SO
+      005 TPZ3334 UTK 10-01-2021  Added code to update Shipping and E-ship agent code in OWR.
+    }
+    END.
+  }
+}
+

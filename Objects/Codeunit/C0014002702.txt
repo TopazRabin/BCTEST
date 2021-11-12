@@ -1,0 +1,236 @@
+OBJECT Codeunit 14002702 Item Forecast Review
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    TableNo=14097469;
+    OnRun=VAR
+            ItemUsageReviewBatchType@1000 : Record 14097468;
+          BEGIN
+            ItemUsageReviewBatchType.GET("Batch Type");
+            ItemUsageReviewBatchType.TESTFIELD("Posting Codeunit ID", 14002702);
+            AdjustUsageAndForecast("Batch Type", "Batch Name");
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AdvForSetup@1240020010 : Record 14002651;
+      ForcInvPer@1240020022 : Record 14000552;
+      ItemUsageReview@1240020000 : Record 14097467;
+      ItemUsageReviewPrev@1240020002 : Record 14097467;
+      ProcUnit@1240020027 : Record 14000555;
+      UsageAdjReason@1240020018 : Record 14000559;
+      ProgWindow@1240020003 : Dialog;
+      Text001@1240020004 : TextConst 'ENU=Location';
+      Text002@1240020005 : TextConst 'ENU=Item';
+      Text003@1240020006 : TextConst 'ENU=Adjustments';
+      NewValue@1240020007 : Decimal;
+      PrevValue@1240020008 : Decimal;
+      Period@1240020009 : Integer;
+      HistStartDateArray@1240020011 : ARRAY [52] OF Date;
+      HistEndDateArray@1240020015 : ARRAY [52] OF Date;
+      ForcStartDateArray@1240020012 : ARRAY [52] OF Date;
+      i@1240020013 : Integer;
+      Counter@1240020023 : Integer;
+      EntryNo@1240020016 : Integer;
+      LineNo@1240020017 : Integer;
+      Text004@1240020019 : TextConst 'ENU=USAGEREV';
+      Text005@1240020020 : TextConst 'ENU=Cre. By Usage Review';
+      Text006@1240020021 : TextConst 'ENU=Forecast Review Adjustment';
+      Text007@1240020024 : TextConst 'ENU=Do you wish to post all adjustments?';
+      Text008@1240020025 : TextConst 'ENU=Adjustments not posted.';
+      Text009@1240020026 : TextConst 'ENU=%1 Adjustments Posted.';
+
+    PROCEDURE AdjustUsageAndForecast@1240020000(BatchType@1240020000 : Code[10];BatchName@1240020001 : Code[10]);
+    VAR
+      ReforecastItem@1001 : Codeunit 14000571;
+      UpdateProcUnitLocFilters@1000 : Codeunit 14000581;
+      NonStockCounter@1240020002 : Integer;
+    BEGIN
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(Text007,FALSE) THEN BEGIN
+          MESSAGE(Text008);
+          EXIT;
+        END;
+
+      IF GUIALLOWED THEN
+        ProgWindow.OPEN(
+          PADSTR(Text001,15) + '#1########\' +
+          PADSTR(Text002,15) + '#2############################\' +
+          PADSTR(Text003,15) + '#3########');
+
+      AdvForSetup.GET;
+
+      ItemUsageReview.RESET;
+      ItemUsageReview.LOCKTABLE;
+      ItemUsageReview.SETCURRENTKEY("Item No.","Location Code","Variant Code",Type);
+      ItemUsageReview.SETRANGE(Type,ItemUsageReview.Type::"Forecast Adjust");
+      ItemUsageReview.SETRANGE("Batch Type", BatchType);
+      ItemUsageReview.SETRANGE("Batch Name", BatchName);
+      ItemUsageReview.SETRANGE(Changed,TRUE);
+      IF ItemUsageReview.FINDSET THEN BEGIN
+        LoadDateArray;
+        REPEAT
+          IF NOT ItemUsageReview."Nonstock Unit" THEN BEGIN
+            Period := 0;
+            REPEAT
+              Period := Period + 1;
+              PrevValue := ItemUsageReview.GetField(Period);
+              NewValue := ItemUsageReview.GetComparisonField(Period);
+              IF (NewValue <> PrevValue) THEN BEGIN
+                MakeAdjustment(Period,PrevValue,NewValue);
+              END;
+            UNTIL Period = ItemUsageReview."History Periods" + ItemUsageReview."Forecast Periods";
+
+            IF GUIALLOWED THEN BEGIN
+              ProgWindow.UPDATE(1,ItemUsageReview."Location Code");
+              ProgWindow.UPDATE(2,ItemUsageReview."Item No.");
+            END;
+            ItemUsageReview.MARK(TRUE);
+          END ELSE BEGIN
+            NonStockCounter += 1;
+          END;
+        UNTIL ItemUsageReview.NEXT = 0;
+      END;
+
+      ItemUsageReview.MARKEDONLY(TRUE);
+      ItemUsageReview.MODIFYALL(Changed, FALSE);
+      //ItemUsageReview.DELETEALL;
+      ItemUsageReview.RESET;
+
+      IF GUIALLOWED THEN
+        ProgWindow.CLOSE;
+
+      IF GUIALLOWED THEN
+        MESSAGE(Text009,Counter);
+    END;
+
+    PROCEDURE MakeAdjustment@1240020002(CurrPeriod@1240020000 : Integer;CurrPrevValue@1240020001 : Decimal;CurrNewValue@1240020002 : Decimal);
+    VAR
+      ForecastAdj@1240020003 : Record 14002707;
+      ItemUsageAdj@1240020004 : Record 14000558;
+    BEGIN
+      IF CurrPeriod <= ItemUsageReview."History Periods" THEN BEGIN
+        ItemUsageAdj.RESET;
+        ItemUsageAdj.SETCURRENTKEY(
+          "Item No.","Location Code","Variant Code","Starting Date","Ending Date","Line No.");
+        ItemUsageAdj.SETRANGE("Item No.",ItemUsageReview."Item No.");
+        ItemUsageAdj.SETRANGE("Location Code",ItemUsageReview."Location Code");
+        ItemUsageAdj.SETRANGE("Variant Code",ItemUsageReview."Variant Code");
+        ItemUsageAdj.SETRANGE("Starting Date",HistStartDateArray[CurrPeriod]);
+        ItemUsageAdj.SETRANGE("Ending Date",HistEndDateArray[CurrPeriod]);
+        IF ItemUsageAdj.FINDLAST THEN
+          LineNo := ItemUsageAdj."Line No."
+        ELSE
+          LineNo := 0;
+        ItemUsageAdj.RESET;
+        ItemUsageAdj.INIT;
+        ItemUsageAdj."Location Code" := ItemUsageReview."Location Code";
+        ItemUsageAdj."Item No." := ItemUsageReview."Item No.";
+        ItemUsageAdj."Variant Code" := ItemUsageReview."Variant Code";
+        ItemUsageAdj."Starting Date" := HistStartDateArray[CurrPeriod];
+        ItemUsageAdj."Ending Date" := HistEndDateArray[CurrPeriod];
+        LineNo := LineNo + 10000;
+        ItemUsageAdj."Line No." := LineNo;
+        ItemUsageAdj."Adjustment Quantity" := CurrNewValue - CurrPrevValue;
+        IF NOT UsageAdjReason.GET(UsageAdjReason.Type::"Usage Adjustment",Text004) THEN BEGIN
+          UsageAdjReason.Type := UsageAdjReason.Type::"Usage Adjustment";
+          UsageAdjReason.Code := Text004;
+          UsageAdjReason.Description := Text005;
+          UsageAdjReason.INSERT;
+        END;
+        ItemUsageAdj.Reason := UsageAdjReason.Code;
+        ItemUsageAdj."Adjusted By" := USERID;
+        ItemUsageAdj."Adjusted Date" := TODAY;
+        ItemUsageAdj."Original Location Code" := ItemUsageReview."Location Code";;
+        ItemUsageAdj."Original Item No." := ItemUsageReview."Item No.";
+        ItemUsageAdj."Original Variant Code" := ItemUsageReview."Variant Code";
+        ItemUsageAdj.INSERT;
+        Counter := Counter + 1;
+        IF GUIALLOWED THEN
+          ProgWindow.UPDATE(3,Counter);
+      END ELSE BEGIN
+        // delete existing forecast adjusts if not foreast summary or promos
+        // if another frozen forecast exists then if its not from this source error?
+        ForecastAdj.SETCURRENTKEY("Item No.","Variant Code","Location Code","Starting Date","Promotion Code","Forecast Summary Code");
+        ForecastAdj.SETRANGE("Item No.", ItemUsageReview."Item No.");
+        ForecastAdj.SETRANGE("Location Code", ItemUsageReview."Location Code");
+        ForecastAdj.SETRANGE("Starting Date", ForcStartDateArray[Period - ItemUsageReview."History Periods"]);
+        ForecastAdj.SETRANGE("Forecast Summary Code", '');
+        ForecastAdj.SETRANGE("Promotion Code", '');
+        IF NOT ForecastAdj.ISEMPTY THEN
+          ForecastAdj.DELETEALL(TRUE);
+
+        ForecastAdj.RESET;
+        IF ForecastAdj.FINDLAST THEN
+          EntryNo := ForecastAdj."Entry No."
+        ELSE
+          EntryNo := 0;
+        ForecastAdj.INIT;
+        EntryNo := EntryNo + 1;
+        ForecastAdj."Entry No." := EntryNo;
+        ForecastAdj."Location Code" := ItemUsageReview."Location Code";
+        ForecastAdj."Item No." := ItemUsageReview."Item No.";
+        ForecastAdj."Variant Code" := ItemUsageReview."Variant Code";
+        ForecastAdj."Starting Date" := ForcStartDateArray[Period - ItemUsageReview."History Periods"];
+        //ForecastAdj.Quantity := CurrNewValue - CurrPrevValue;
+        ForecastAdj.Quantity := CurrNewValue;
+        ForecastAdj."User ID" := USERID;
+        ForecastAdj."Date Adjusted" := TODAY;
+        ForecastAdj."Time Adjusted" := TIME;
+        ForecastAdj."Frozen Forecast" := TRUE;
+        ForecastAdj."Adjustment Note" := Text006;
+        ForecastAdj.INSERT;
+        Counter := Counter + 1;
+        IF GUIALLOWED THEN
+          ProgWindow.UPDATE(3,Counter);
+      END;
+    END;
+
+    PROCEDURE LoadDateArray@1240020003();
+    BEGIN
+      ForcInvPer.RESET;
+      ForcInvPer.SETRANGE(Type,ForcInvPer.Type::Calculate);
+      ForcInvPer.SETFILTER("Starting Date",'%1..',ItemUsageReview."Starting Date");
+      ForcInvPer.FINDSET;
+      i := 0;
+
+      i := 0;
+      CLEAR(ForcStartDateArray);
+      REPEAT
+        i := i + 1;
+        ForcStartDateArray[i] := ForcInvPer."Starting Date";
+      UNTIL (ForcInvPer.NEXT = 0) OR
+            (i >= ItemUsageReview."Forecast Periods");
+    END;
+
+    LOCAL PROCEDURE DeleteForecastAdjust@1240020005(LocCode@1240020002 : Code[10];ItemNo@1240020003 : Code[50];VariantCode@1240020004 : Code[10];StartingDate@1240020005 : Date;DeleteFrozenOnly@1240020000 : Boolean);
+    VAR
+      ForecastAdj@1240020001 : Record 14002707;
+    BEGIN
+      ForecastAdj.SETCURRENTKEY("Item No.","Variant Code","Location Code","Starting Date","Promotion Code","Forecast Summary Code");
+
+      ForecastAdj.SETRANGE("Item No.", ItemNo);
+      ForecastAdj.SETRANGE("Location Code", LocCode);
+      ForecastAdj.SETRANGE("Variant Code", VariantCode);
+      ForecastAdj.SETRANGE("Starting Date", StartingDate);
+      ForecastAdj.SETRANGE("Forecast Summary Code", '');
+      ForecastAdj.SETRANGE("Promotion Code", '');
+      IF DeleteFrozenOnly THEN
+        ForecastAdj.SETRANGE("Frozen Forecast", TRUE);
+      IF NOT ForecastAdj.ISEMPTY THEN
+        ForecastAdj.DELETEALL(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

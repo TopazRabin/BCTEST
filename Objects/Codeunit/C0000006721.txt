@@ -1,0 +1,223 @@
+OBJECT Codeunit 6721 Booking Manager
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/25/19;
+    Time=12:00:00 PM;
+    Version List=NAVW111.00.00.28629;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    PROCEDURE GetAppointmentConnectionName@11() : Text;
+    BEGIN
+      EXIT('BOOKINGAPPOINTMENTS');
+    END;
+
+    PROCEDURE GetBookingItems@1(VAR TempBookingItem@1000 : TEMPORARY Record 6707);
+    VAR
+      BookingItem@1001 : Record 6707;
+      BookingSync@1004 : Record 6702;
+      DateFilterCalc@1002 : Codeunit 358;
+      Now@1003 : DateTime;
+    BEGIN
+      IF NOT BookingSync.IsSetup THEN
+        EXIT;
+
+      RegisterAppointmentConnection;
+
+      BookingItem.SETRANGE("Invoice Status",BookingItem."Invoice Status"::draft);
+      BookingItem.SETFILTER("Invoice No.",'=''''');
+      Now := DateFilterCalc.ConvertToUtcDateTime(CURRENTDATETIME);
+      IF TryFindAppointments(BookingItem) THEN
+        REPEAT
+          TempBookingItem.INIT;
+          BookingItem.CALCFIELDS("Start Date","End Date");
+          TempBookingItem.TRANSFERFIELDS(BookingItem);
+          WITH BookingItem DO
+            IF ("Invoice No." = '') AND ("Invoice Status" = "Invoice Status"::draft) THEN
+              IF GetStartDate < Now THEN
+                TempBookingItem.INSERT;
+        UNTIL BookingItem.NEXT = 0;
+    END;
+
+    PROCEDURE GetBookingMailboxes@2(VAR TempBookingMailbox@1000 : TEMPORARY Record 6704);
+    BEGIN
+      OnGetBookingMailboxes(TempBookingMailbox);
+    END;
+
+    PROCEDURE GetBookingServiceForBooking@10(VAR TempBookingItem@1000 : TEMPORARY Record 6707;VAR TempBookingService@1001 : TEMPORARY Record 6703);
+    BEGIN
+      OnGetBookingServiceForBooking(TempBookingItem,TempBookingService);
+    END;
+
+    PROCEDURE InvoiceBookingItems@3();
+    VAR
+      TempBookingItem@1000 : TEMPORARY Record 6707;
+    BEGIN
+      GetBookingItems(TempBookingItem);
+      PAGE.RUN(PAGE::"Booking Items",TempBookingItem);
+    END;
+
+    PROCEDURE RegisterAppointmentConnection@15();
+    BEGIN
+      OnRegisterAppointmentConnection;
+    END;
+
+    PROCEDURE SetBookingItemInvoiced@9(InvoicedBookingItem@1001 : Record 1638);
+    BEGIN
+      OnSetBookingItemInvoiced(InvoicedBookingItem);
+    END;
+
+    PROCEDURE Synchronize@8(VAR BookingItem@1000 : Record 6707);
+    BEGIN
+      OnSynchronize(BookingItem);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE TryFindAppointments@5(VAR BookingItem@1000 : Record 6707);
+    BEGIN
+      BookingItem.FINDSET;
+    END;
+
+    LOCAL PROCEDURE CanHandleHeader@21(VAR SalesHeader@1000 : Record 36) : Boolean;
+    BEGIN
+      IF SalesHeader.ISTEMPORARY THEN
+        EXIT(FALSE);
+
+      IF SalesHeader."Document Type" <> SalesHeader."Document Type"::Invoice THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CanHandleLine@14(VAR SalesLine@1000 : Record 37) : Boolean;
+    BEGIN
+      IF SalesLine.ISTEMPORARY THEN
+        EXIT(FALSE);
+
+      IF SalesLine."Document Type" <> SalesLine."Document Type"::Invoice THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    [EventSubscriber(Table,36,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnAfterModifySalesHeader@12(VAR Rec@1000 : Record 36;VAR xRec@1001 : Record 36;RunTrigger@1002 : Boolean);
+    VAR
+      InvoicedBookingItem@1003 : Record 1638;
+    BEGIN
+      IF NOT CanHandleHeader(Rec) THEN
+        EXIT;
+
+      InvoicedBookingItem.SETRANGE("Document No.",Rec."No.");
+      IF InvoicedBookingItem.FINDFIRST THEN
+        SetBookingItemInvoiced(InvoicedBookingItem);
+    END;
+
+    [EventSubscriber(Table,37,OnAfterInsertEvent)]
+    LOCAL PROCEDURE OnAfterInsertSalesLine@20(VAR Rec@1000 : Record 37;RunTrigger@1001 : Boolean);
+    VAR
+      InvoicedBookingItem@1002 : Record 1638;
+    BEGIN
+      IF NOT CanHandleLine(Rec) THEN
+        EXIT;
+
+      InvoicedBookingItem.SETRANGE("Document No.",Rec."Document No.");
+      IF InvoicedBookingItem.FINDFIRST THEN
+        SetBookingItemInvoiced(InvoicedBookingItem);
+    END;
+
+    [EventSubscriber(Table,1638,OnAfterInsertEvent)]
+    PROCEDURE OnAfterInsertInvoicedBookingItem@16(VAR Rec@1000 : Record 1638;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF Rec.ISTEMPORARY THEN
+        EXIT;
+
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      SetBookingItemInvoiced(Rec);
+    END;
+
+    [EventSubscriber(Table,37,OnAfterModifyEvent)]
+    LOCAL PROCEDURE OnAfterModifySalesLine@18(VAR Rec@1000 : Record 37;VAR xRec@1001 : Record 37;RunTrigger@1003 : Boolean);
+    VAR
+      InvoicedBookingItem@1002 : Record 1638;
+    BEGIN
+      IF NOT CanHandleLine(Rec) THEN
+        EXIT;
+
+      InvoicedBookingItem.SETRANGE("Document No.",Rec."Document No.");
+      IF InvoicedBookingItem.FINDFIRST THEN
+        SetBookingItemInvoiced(InvoicedBookingItem);
+    END;
+
+    [EventSubscriber(Codeunit,80,OnAfterPostSalesDoc)]
+    LOCAL PROCEDURE OnAfterPostSalesDoc@4(VAR SalesHeader@1000 : Record 36;VAR GenJnlPostLine@1002 : Codeunit 12;SalesShptHdrNo@1003 : Code[20];RetRcpHdrNo@1004 : Code[20];SalesInvHdrNo@1005 : Code[20];SalesCrMemoHdrNo@1006 : Code[20]);
+    VAR
+      InvoicedBookingItem@1007 : Record 1638;
+    BEGIN
+      IF NOT CanHandleHeader(SalesHeader) THEN
+        EXIT;
+
+      InvoicedBookingItem.SETRANGE("Document No.",SalesHeader."No.");
+      IF InvoicedBookingItem.ISEMPTY THEN
+        EXIT;
+
+      InvoicedBookingItem.MODIFYALL(Posted,TRUE);
+      InvoicedBookingItem.MODIFYALL("Document No.",SalesInvHdrNo);
+      InvoicedBookingItem.SETRANGE("Document No.",SalesInvHdrNo);
+      IF InvoicedBookingItem.FINDFIRST THEN
+        SetBookingItemInvoiced(InvoicedBookingItem);
+    END;
+
+    [EventSubscriber(Table,36,OnBeforeDeleteEvent)]
+    LOCAL PROCEDURE OnDeleteSalesInvoice@7(VAR Rec@1000 : Record 36;RunTrigger@1001 : Boolean);
+    VAR
+      InvoicedBookingItem@1002 : Record 1638;
+    BEGIN
+      IF NOT (RunTrigger AND CanHandleHeader(Rec)) THEN
+        EXIT;
+
+      InvoicedBookingItem.SETRANGE("Document No.",Rec."No.");
+      IF InvoicedBookingItem.FINDFIRST THEN
+        SetBookingItemInvoiced(InvoicedBookingItem);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnGetBookingMailboxes@6(VAR TempBookingMailbox@1000 : TEMPORARY Record 6704);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnGetBookingServiceForBooking@19(VAR TempBookingItem@1000 : TEMPORARY Record 6707;VAR TempBookingService@1001 : TEMPORARY Record 6703);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnRegisterAppointmentConnection@17();
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnSetBookingItemInvoiced@22(VAR InvoicedBookingItem@1000 : Record 1638);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnSynchronize@13(VAR BookingItem@1000 : Record 6707);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

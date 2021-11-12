@@ -1,0 +1,333 @@
+OBJECT Codeunit 51701 Comm. Jnl.-Post Line
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=TPZ000.00.00;
+  }
+  PROPERTIES
+  {
+    TableNo=51705;
+    Permissions=TableData 51709=imd;
+    OnRun=BEGIN
+            RunWithCheck(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NeedsRoundingErr@1000 : TextConst 'ENU=%1 needs to be rounded;ESM=%1 necesita redondearse;FRC=%1 doit ˆtre arrondie;ENC=%1 needs to be rounded';
+      PurchaseAlreadyExistsErr@1003 : TextConst '@@@="%1 = Document Type; %2 = Document No.";ENU=Purchase %1 %2 already exists for this vendor.;ESM=El documento de compra %1 %2 ya existe para este proveedor.;FRC=L''achat %1 %2 existe d‚j… pour ce fournisseur.;ENC=Purchase %1 %2 already exists for this vendor.';
+      BankPaymentTypeMustNotBeFilledErr@1004 : TextConst 'ENU=Bank Payment Type must not be filled if Currency Code is different in Gen. Journal Line and Bank Account.;ESM=Tipo pago por banco no debe rellenarse si C¢d. divisa es diferente en L¡n. diario general y Banco.;FRC=Le Mode ‚mission paiement ne doit pas ˆtre renseign‚ si le Code devise est diff‚rent dans Ligne journal g‚n‚ral et Compte bancaire.;ENC=Bank Payment Type must not be filled if Currency Code is different in Gen. Journal Line and Bank Account.';
+      DocNoMustBeEnteredErr@1005 : TextConst 'ENU=Document No. must be entered when Bank Payment Type is %1.;ESM=Si el Tipo pago por banco es %1, se debe especificar el campo N§ documento.;FRC=Nø document doit ˆtre renseign‚ si Mode ‚mission paiement correspond … %1.;ENC=Document No. must be entered when Bank Payment Type is %1.';
+      CheckAlreadyExistsErr@1006 : TextConst 'ENU=Check %1 already exists for this Bank Account.;ESM=Ya existe el cheque %1 en este banco.;FRC=Le chŠque %1 existe d‚j… pour ce compte bancaire.;ENC=Cheque %1 already exists for this Bank Account.';
+      IncorrectDocTypeErr@1024 : TextConst 'ENU=%1 is incorrect document type for Dynamics Online payment.;ESM=%1 es de un tipo de documento incorrecto para el pago de Dynamics Online.;FRC=%1 est un type document incorrect pour le paiement de Dynamics Online.;ENC=%1 is incorrect document type for Dynamics Online payment.';
+      GLSetup@1009 : Record 98;
+      GlobalCommLedgEntry@1014 : Record 51709;
+      TempCommLedgEntryBuf@1000000000 : TEMPORARY Record 51709;
+      CommReg@1029 : Record 51702;
+      UnrealizedVendLedgEntry@1085 : Record 51707;
+      CommJnlCheckLine@1001 : Codeunit 51700;
+      LastDocType@1025 : ' ,Payment,Invoice,Credit Memo,Finance Charge Memo,Reminder';
+      LastDocNo@1023 : Code[20];
+      FiscalYearStartDate@1011 : Date;
+      CurrencyDate@1020 : Date;
+      LastDate@1021 : Date;
+      BalanceCheckAmount@1056 : Decimal;
+      BalanceCheckAmount2@1057 : Decimal;
+      BalanceCheckAddCurrAmount@1058 : Decimal;
+      BalanceCheckAddCurrAmount2@1059 : Decimal;
+      CurrentBalance@1060 : Decimal;
+      TotalAmount@1063 : Decimal;
+      UnrealizedRemainingAmountCust@1086 : Decimal;
+      UnrealizedRemainingAmountVend@1074 : Decimal;
+      AmountRoundingPrecision@1012 : Decimal;
+      AddCurrGLEntryVATAmt@1017 : Decimal;
+      ExpenseAmount@1500000 : Decimal;
+      NextEntryNo@1022 : Integer;
+      NextTransactionNo@1066 : Integer;
+      NextConnectionNo@1067 : Integer;
+      NextCheckEntryNo@1028 : Integer;
+      CommEntryNo@1026 : Integer;
+      CrCardTransactionEntryNo@1013 : Integer;
+      UseCurrFactorOnly@1078 : Boolean;
+      NonAddCurrCodeOccured@1079 : Boolean;
+      FADimAlreadyChecked@1080 : Boolean;
+      ResidualRoundingErr@1008 : TextConst 'ENU=Residual caused by rounding of %1;ESM=Ajuste residual generado por el redondeo de %1;FRC=Valeur r‚siduelle obtenue par l''arrondissement de %1;ENC=Residual caused by rounding of %1';
+      DimensionUsedErr@1007 : TextConst '@@@=Comment;ENU=A dimension used in %1 %2, %3, %4 has caused an error. %5.;ESM=Una dimensi¢n usada en %1 %2, %3 y %4 ha producido un error. %5.;FRC=Une dimension utilis‚e dans %1 %2, %3, %4 a provoqu‚ une erreur. %5.;ENC=A dimension used in %1 %2, %3, %4 has caused an error. %5.';
+      OverrideDimErr@1018 : Boolean;
+      JobLine@1036 : Boolean;
+      CheckUnrealizedCust@1082 : Boolean;
+      CheckUnrealizedVend@1083 : Boolean;
+      GLSetupRead@1015 : Boolean;
+
+    PROCEDURE GetCommReg@10(VAR NewCommReg@1000 : Record 51702);
+    BEGIN
+      NewCommReg := CommReg;
+    END;
+
+    PROCEDURE RunWithCheck@45(VAR CommJnlLine2@1000 : Record 51705) : Integer;
+    VAR
+      CommJnlLine@1001 : Record 51705;
+    BEGIN
+      CommJnlLine.COPY(CommJnlLine2);
+      Code(CommJnlLine,TRUE);
+      CommJnlLine2 := CommJnlLine;
+      EXIT(CommEntryNo);
+    END;
+
+    PROCEDURE RunWithoutCheck@21(VAR CommJnlLine2@1000 : Record 51705) : Integer;
+    VAR
+      CommJnlLine@1001 : Record 51705;
+    BEGIN
+      CommJnlLine.COPY(CommJnlLine2);
+      Code(CommJnlLine,FALSE);
+      CommJnlLine2 := CommJnlLine;
+      EXIT(CommEntryNo);
+    END;
+
+    LOCAL PROCEDURE Code@9(VAR CommJnlLine@1003 : Record 51705;CheckLine@1000 : Boolean);
+    BEGIN
+      WITH CommJnlLine DO BEGIN
+        IF EmptyLine THEN BEGIN
+          InitLastDocDate(CommJnlLine);
+          EXIT;
+        END;
+
+        IF CheckLine THEN
+          CommJnlCheckLine.RunCheck(CommJnlLine);
+
+        AmountRoundingPrecision := InitAmounts(CommJnlLine);
+
+        IF "Document Date" = 0D THEN
+          "Document Date" := "Posting Date";
+
+        IF NextEntryNo = 0 THEN
+          StartPosting(CommJnlLine)
+        ELSE
+          ContinuePosting(CommJnlLine);
+
+        IF ("Account No." <> '') THEN
+          PostComm(CommJnlLine);
+
+        FinishPosting;
+      END;
+    END;
+
+    LOCAL PROCEDURE InitAmounts@186(VAR CommJnlLine@1000 : Record 51705) : Decimal;
+    VAR
+      Currency@1001 : Record 4;
+    BEGIN
+      WITH CommJnlLine DO BEGIN
+        Currency.InitRoundingPrecision;
+        EXIT(Currency."Amount Rounding Precision");
+      END;
+    END;
+
+    LOCAL PROCEDURE InitLastDocDate@23(CommJnlLine@1000 : Record 51705);
+    BEGIN
+      WITH CommJnlLine DO BEGIN
+        LastDocType := "Document Type";
+        LastDocNo := "Document No.";
+        LastDate := "Posting Date";
+      END;
+    END;
+
+    LOCAL PROCEDURE PostComm@13(CommJnlLine@1007 : Record 51705);
+    VAR
+      CommLedgEntry@1000 : Record 51709;
+      CommLedgEntryBuf@1002 : Record 51707;
+      TempDtldCommLedgEntryBuf@1003 : TEMPORARY Record 51708;
+      DtldCommLedgEntry@1004 : Record 51710;
+      DtldLedgEntryInserted@1001 : Boolean;
+    BEGIN
+      WITH CommJnlLine DO BEGIN
+
+        DtldCommLedgEntry.LOCKTABLE;
+        CommLedgEntry.LOCKTABLE;
+
+        InitCommLedgEntry(CommJnlLine,CommLedgEntry);
+
+        TempDtldCommLedgEntryBuf.DELETEALL;
+        TempDtldCommLedgEntryBuf.INIT;
+        TempDtldCommLedgEntryBuf.CopyFromCommJnlLine(CommJnlLine);
+        TempDtldCommLedgEntryBuf."Comm. Ledger Entry No." := CommLedgEntry."Entry No.";
+        CommLedgEntryBuf.CopyFromCommLedgEntry(CommLedgEntry);
+        TempDtldCommLedgEntryBuf.InsertDtldCommLedgEntry(TempDtldCommLedgEntryBuf,CommLedgEntryBuf,TRUE);
+        CommLedgEntryBuf.Open := CommLedgEntryBuf."Base Amount" <> 0;
+        CommLedgEntryBuf.Positive := CommLedgEntryBuf."Base Amount" > 0;
+
+        // Post entry
+        CommLedgEntryBuf.CopyToCommLedgEntry(CommLedgEntry);
+        CommLedgEntry.INSERT;
+        InsertCommEntry(CommLedgEntry);
+
+        // Post detailed entries
+        DtldLedgEntryInserted := PostDtldCommLedgEntries(CommJnlLine,TempDtldCommLedgEntryBuf,TRUE);
+      END;
+    END;
+
+    PROCEDURE StartPosting@24(CommJnlLine@1001 : Record 51705);
+    VAR
+      CommJnlTemplate@1000 : Record 51703;
+    BEGIN
+      WITH CommJnlLine DO BEGIN
+        GlobalCommLedgEntry.LOCKTABLE;
+        IF GlobalCommLedgEntry.FINDLAST THEN BEGIN
+          NextEntryNo := GlobalCommLedgEntry."Entry No." + 1;
+          NextTransactionNo := GlobalCommLedgEntry."Transaction No." + 1;
+        END ELSE BEGIN
+          NextEntryNo := 1;
+          NextTransactionNo := 1;
+        END;
+
+        InitLastDocDate(CommJnlLine);
+        CurrentBalance := 0;
+
+        IF NOT CommJnlTemplate.GET("Journal Template Name") THEN
+          CommJnlTemplate.INIT;
+
+        CommReg.LOCKTABLE;
+        IF CommReg.FINDLAST THEN
+          CommReg."No." := CommReg."No." + 1
+        ELSE
+          CommReg."No." := 1;
+        CommReg.INIT;
+        CommReg."From Entry No." := NextEntryNo;
+        CommReg."Creation Date" := TODAY;
+        CommReg."Journal Batch Name" := "Journal Batch Name";
+        CommReg."User ID" := USERID;
+      END;
+    END;
+
+    PROCEDURE ContinuePosting@155(CommJnlLine@1000 : Record 51705);
+    BEGIN
+      WITH CommJnlLine DO BEGIN
+        IF (LastDocType <> "Document Type") OR (LastDocNo <> "Document No.") OR
+           (LastDate <> "Posting Date") OR (CurrentBalance = 0)
+        THEN BEGIN
+          NextTransactionNo := NextTransactionNo + 1;
+          InitLastDocDate(CommJnlLine);
+        END;
+      END;
+    END;
+
+    PROCEDURE FinishPosting@25();
+    VAR
+      CostAccSetup@1003 : Record 1108;
+      TransferGlEntriesToCA@1004 : Codeunit 1105;
+    BEGIN
+      IF TempCommLedgEntryBuf.FINDSET THEN
+        REPEAT
+          GlobalCommLedgEntry := TempCommLedgEntryBuf;
+        UNTIL TempCommLedgEntryBuf.NEXT = 0;
+
+      IF CommReg."To Entry No." = 0 THEN BEGIN
+        CommReg."To Entry No." := GlobalCommLedgEntry."Entry No.";
+        CommReg.INSERT;
+      END ELSE BEGIN
+        CommReg."To Entry No." := GlobalCommLedgEntry."Entry No.";
+        CommReg.MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE InitCommLedgEntry@3(CommJnlLine@1008 : Record 51705;VAR CommLedgEntry@1009 : Record 51709);
+    BEGIN
+      CommLedgEntry.INIT;
+      CommLedgEntry.CopyFromCommJnlLine(CommJnlLine);
+      CommLedgEntry."Entry No." := NextEntryNo;
+      CommLedgEntry."Transaction No." := NextTransactionNo;
+    END;
+
+    LOCAL PROCEDURE InsertDtldCommLedgEntry@103(CommJnlLine@1000 : Record 51705;DtldCommLedgEntryBuf@1001 : Record 51708;VAR DtldCommLedgEntry@1004 : Record 51710;Offset@1002 : Integer);
+    BEGIN
+      WITH DtldCommLedgEntry DO BEGIN
+        INIT;
+        TRANSFERFIELDS(DtldCommLedgEntryBuf);
+        "Entry No." := Offset + DtldCommLedgEntryBuf."Entry No.";
+        "Journal Batch Name" := CommJnlLine."Journal Batch Name";
+        "Transaction No." := NextTransactionNo;
+        INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE PostDtldCommLedgEntries@32(CommJnlLine@1000 : Record 51705;VAR DtldCommLedgEntryBuf@1001 : Record 51708;LedgEntryInserted@1011 : Boolean) DtldLedgEntryInserted : Boolean;
+    VAR
+      CommLedgEntry@1006 : Record 51709;
+      DtldCommLedgEntry@1004 : Record 51710;
+      AdjAmount@1012 : ARRAY [8] OF Decimal;
+      DtldCommLedgEntryNoOffset@1005 : Integer;
+      SaveEntryNo@1013 : Integer;
+      OriginalPostingDate@1022 : Date;
+      OriginalDateSet@1023 : Boolean;
+      TotalAmountApplDate@1024 : Decimal;
+      ApplicationDate@1026 : Date;
+      SavedEntryUsed@1031 : Boolean;
+    BEGIN
+      TotalAmount := 0;
+
+      IF DtldCommLedgEntry.FINDLAST THEN
+        DtldCommLedgEntryNoOffset := DtldCommLedgEntry."Entry No."
+      ELSE
+        DtldCommLedgEntryNoOffset := 0;
+
+      DtldCommLedgEntryBuf.RESET;
+      IF DtldCommLedgEntryBuf.FINDSET THEN BEGIN
+        IF LedgEntryInserted THEN BEGIN
+          SaveEntryNo := NextEntryNo;
+          NextEntryNo := NextEntryNo + 1;
+        END;
+        REPEAT
+          IF DtldCommLedgEntryBuf."Posting Date" <> CommJnlLine."Posting Date" THEN BEGIN
+            OriginalPostingDate := CommJnlLine."Posting Date";
+            CommJnlLine."Posting Date" := DtldCommLedgEntryBuf."Posting Date";
+            OriginalDateSet := TRUE;
+            ApplicationDate := DtldCommLedgEntryBuf."Posting Date";
+          END;
+
+          InsertDtldCommLedgEntry(CommJnlLine,DtldCommLedgEntryBuf,DtldCommLedgEntry,DtldCommLedgEntryNoOffset);
+
+          IF OriginalDateSet THEN
+            TotalAmountApplDate := TotalAmountApplDate + DtldCommLedgEntryBuf.Amount
+          ELSE
+            TotalAmount := TotalAmount + DtldCommLedgEntryBuf.Amount;
+
+          IF OriginalDateSet THEN BEGIN
+            CommJnlLine."Posting Date" := OriginalPostingDate;
+            OriginalDateSet := FALSE;
+          END;
+        UNTIL DtldCommLedgEntryBuf.NEXT = 0;
+      END;
+
+      DtldLedgEntryInserted := NOT DtldCommLedgEntryBuf.ISEMPTY;
+      DtldCommLedgEntryBuf.DELETEALL;
+    END;
+
+    PROCEDURE GetNextEntryNo@53() : Integer;
+    BEGIN
+      EXIT(NextEntryNo);
+    END;
+
+    PROCEDURE GetNextTransactionNo@67() : Integer;
+    BEGIN
+      EXIT(NextTransactionNo);
+    END;
+
+    PROCEDURE InsertCommEntry@1000000000(CommLedgEntry@1000000001 : Record 51709);
+    BEGIN
+      TempCommLedgEntryBuf := CommLedgEntry;
+      TempCommLedgEntryBuf.INSERT;
+    END;
+
+    BEGIN
+    {
+      2015-05-11 TPZ92 TAKHMETO
+        Codeunit has been created
+    }
+    END.
+  }
+}
+

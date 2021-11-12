@@ -1,0 +1,1953 @@
+OBJECT Codeunit 14123803 ES Update Source Code
+{
+  OBJECT-PROPERTIES
+  {
+    Date=04/30/18;
+    Time=12:00:00 PM;
+    Version List=ES1.41.51;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1240520019 : TextConst 'ENU=Implementing Code Changes\';
+      Text002@1240520018 : TextConst 'ENU=Process #1################################################\';
+      Text003@1240520017 : TextConst 'ENU=Object  #2################################################\';
+      Text004@1240520016 : TextConst 'ENU=Reading Source Code';
+      Text005@1240520015 : TextConst 'ENU=%1 lines of Source Code have been processed in %2 seconds.';
+      Text006@1240520009 : TextConst 'ENU=Deleting Code Changes\';
+      Text009@1240520011 : TextConst 'ENU=File Name must be entered.';
+      ESReadSourceCode@1240520008 : Codeunit 14123601;
+      ObjectStatus@1240520010 : ARRAY [10,10] OF Integer;
+      Text007@1001 : TextConst 'ENU=File %1 already exists.';
+      Text008@1002 : TextConst 'ENU=%1: %2 of %3 modified %4 equal.\';
+      Text010@1003 : TextConst 'ENU="(Line not complete %1, no source table %2 no Source Table Setup %3, "';
+      Text011@1004 : TextConst 'ENU=no controls to modify %4)\';
+      Text012@1005 : TextConst 'ENU=Long Line in %1 %2 cannot be handled.';
+      Text013@1006 : TextConst 'ENU=%1 %2 %3 must be included in text file when implementing %4 %5 %6.';
+
+    PROCEDURE UpdateFromSourceCode@1240520008(SourceCodeFileName@1240520008 : Text[1000];SourceCodeOutFileName@1240520017 : Text[1000];TestMode@1240520032 : Boolean;CreateOutObject@1240520018 : Boolean;ProcessingType@1240520020 : 'Implement,Delete';ObjectDate@1240520024 : Date;ObjectTime@1240520023 : Time;CaptionLanguage@1240520034 : Code[10];EnableForConflictingCode@1240520005 : Boolean;DateText@1240520003 : Text[30];TimeText@1240520002 : Text[30];VersionListText@1240520001 : Text[30];ShowStatus@1240520027 : Boolean);
+    VAR
+      ESSourceCodeLineTmp@1240520019 : TEMPORARY Record 14123815;
+      ESSourceCodeLineOutTmp@1240520015 : TEMPORARY Record 14123815;
+      AllObjWithCaption@1240520014 : Record 2000000058;
+      AllObjWithCaptionTmp@1240520004 : TEMPORARY Record 2000000058;
+      ESSourceTableSetup@1240520006 : Record 14123802;
+      ESFLADSSetup@1240520007 : Record 14123801;
+      ESCreateDataStoreObjects@1240520033 : Codeunit 14123802;
+      Window@1240520021 : Dialog;
+      SourceCodeFile@1240520009 : File;
+      SourceCodeFileOut@1240520016 : File;
+      TempText@1240520010 : Text[1000];
+      MessageText@1240520030 : Text[1000];
+      ReadChar@1240520011 : Char;
+      CurrentPos@1240520012 : Integer;
+      NextUpdatePos@1240520025 : Integer;
+      SourceCodeFileLen@1240520026 : Integer;
+      LineNo@1240520022 : Integer;
+      TotalLines@1240520013 : Integer;
+      CharPos@1240520029 : Integer;
+      i@1240520031 : Integer;
+      LineNotComplete@1240520035 : Boolean;
+      StartTime@1240520028 : Time;
+    BEGIN
+      IF SourceCodeFileName = '' THEN
+        ERROR(Text009);
+
+      IF GUIALLOWED THEN
+        CASE ProcessingType OF
+          ProcessingType::Implement:
+            Window.OPEN(
+              ESFLADSSetup.ExtendProgressText(Text001) +
+              Text002 + Text003 + '        @3@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
+          ProcessingType::Delete:
+            Window.OPEN(
+              ESFLADSSetup.ExtendProgressText(Text006) +
+              Text002 + Text003 + '        @3@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
+        END;
+
+      StartTime := TIME;
+
+      IF GUIALLOWED THEN
+        Window.UPDATE(1,Text004);
+      SourceCodeFile.WRITEMODE(FALSE);
+      SourceCodeFile.TEXTMODE(FALSE);
+      SourceCodeFile.OPEN(SourceCodeFileName);
+
+      SourceCodeFileOut.WRITEMODE(TRUE);
+      SourceCodeFileOut.TEXTMODE(TRUE);
+      IF EXISTS(SourceCodeOutFileName) THEN
+        ERROR(Text007,SourceCodeOutFileName);
+      SourceCodeFileOut.CREATE(SourceCodeOutFileName);
+
+      SourceCodeFileLen := SourceCodeFile.LEN;
+      WHILE CurrentPos < SourceCodeFileLen DO BEGIN
+        CurrentPos := CurrentPos + 1;
+
+        SourceCodeFile.READ(ReadChar);
+        CASE ReadChar OF
+          13:
+            BEGIN
+              IF CurrentPos > NextUpdatePos THEN BEGIN
+                IF GUIALLOWED THEN
+                  Window.UPDATE(3,ROUND(10000 * (CurrentPos / SourceCodeFileLen),1));
+                NextUpdatePos := CurrentPos + ROUND(SourceCodeFileLen / 500,1);
+              END;
+
+              IF TempText <> '' THEN BEGIN
+                IF COPYSTR(TempText,1,7) = 'OBJECT ' THEN BEGIN
+                  IF ESSourceCodeLineTmp.FIND('-') THEN
+                    CASE ProcessingType OF
+                      ProcessingType::Implement:
+                        IF ImplementChangesInObject(
+                             ESSourceCodeLineTmp,ESSourceCodeLineOutTmp,AllObjWithCaption,
+                             AllObjWithCaptionTmp,TestMode,CreateOutObject,TotalLines - LineNo,
+                             CaptionLanguage,EnableForConflictingCode)
+                        THEN
+                          WriteOutLines(
+                            ESSourceCodeLineTmp,ESSourceCodeLineOutTmp,AllObjWithCaption,
+                            SourceCodeFileOut,ObjectDate,ObjectTime,DateText,TimeText,VersionListText);
+                      ProcessingType::Delete:
+                        IF DeleteChangesInObject(
+                             ESSourceCodeLineTmp,ESSourceCodeLineOutTmp,AllObjWithCaption,
+                             TestMode,CreateOutObject,TRUE,TotalLines - LineNo,CaptionLanguage)
+                        THEN
+                          WriteOutLines(
+                            ESSourceCodeLineTmp,ESSourceCodeLineOutTmp,AllObjWithCaption,
+                            SourceCodeFileOut,ObjectDate,ObjectTime,DateText,TimeText,VersionListText);
+                    END;
+
+                  ESSourceCodeLineTmp.RESET;
+                  ESSourceCodeLineTmp.DELETEALL;
+                  LineNo := 0;
+
+                  IF GUIALLOWED THEN
+                    Window.UPDATE(
+                      2,
+                      STRSUBSTNO(
+                        '%1 %2 %3',
+                        AllObjWithCaption."Object Type",AllObjWithCaption."Object ID",
+                        AllObjWithCaption."Object Name"));
+                END;
+              END;
+
+              TotalLines := TotalLines + 1;
+              LineNo := LineNo + 1;
+              ESSourceCodeLineTmp.INIT;
+              ESSourceCodeLineTmp."Line No." := LineNo;
+              IF CharPos > 0 THEN
+                ESSourceCodeLineTmp."Text 1-250" := COPYSTR(TempText,1,250);
+              IF CharPos > 250 THEN
+                ESSourceCodeLineTmp."Text 251-500" := COPYSTR(TempText,251,250);
+              IF CharPos > 500 THEN
+                ESSourceCodeLineTmp."Text 501-750" := COPYSTR(TempText,501,250);
+              IF CharPos > 750 THEN
+                ESSourceCodeLineTmp."Text 751-1000" := COPYSTR(TempText,751,250);
+              ESSourceCodeLineTmp."Follow Line No." := ESSourceCodeLineTmp."Line No.";
+              ESSourceCodeLineTmp."Line Not Complete" := LineNotComplete;
+              ESSourceCodeLineTmp."Line Length" := CharPos;
+              ESSourceCodeLineTmp.INSERT;
+
+              LineNotComplete := FALSE;
+              CharPos := 0;
+              TempText := '';
+            END;
+          10:
+            ;
+          ELSE BEGIN
+            CharPos := CharPos + 1;
+            IF CharPos <= 1000 THEN
+              TempText[CharPos] := ReadChar
+            ELSE
+              LineNotComplete := TRUE;
+          END;
+        END;
+      END;
+
+      IF ESSourceCodeLineTmp.FIND('-') THEN
+        CASE ProcessingType OF
+          ProcessingType::Implement:
+            IF ImplementChangesInObject(
+                 ESSourceCodeLineTmp,ESSourceCodeLineOutTmp,AllObjWithCaption,AllObjWithCaptionTmp,
+                 TestMode,CreateOutObject,TotalLines - LineNo,CaptionLanguage,EnableForConflictingCode)
+            THEN
+              WriteOutLines(
+                ESSourceCodeLineTmp,ESSourceCodeLineOutTmp,AllObjWithCaption,
+                SourceCodeFileOut,ObjectDate,ObjectTime,DateText,TimeText,VersionListText);
+          ProcessingType::Delete:
+            IF DeleteChangesInObject(
+                 ESSourceCodeLineTmp,ESSourceCodeLineOutTmp,AllObjWithCaption,
+                 TestMode,CreateOutObject,TRUE,TotalLines - LineNo,CaptionLanguage)
+            THEN
+              WriteOutLines(
+                ESSourceCodeLineTmp,ESSourceCodeLineOutTmp,AllObjWithCaption,
+                SourceCodeFileOut,ObjectDate,ObjectTime,DateText,TimeText,VersionListText);
+        END;
+
+      SourceCodeFile.CLOSE;
+      SourceCodeFileOut.CLOSE;
+
+      IF CreateOutObject THEN BEGIN
+        AllObjWithCaption."Object Type" := AllObjWithCaption."Object Type"::Codeunit;
+
+        CLEAR(ESCreateDataStoreObjects);
+        ESCreateDataStoreObjects.CreateEditableObject(
+          SourceCodeOutFileName,TRUE,ObjectDate,ObjectTime,DateText,TimeText,VersionListText,FALSE);
+        AllObjWithCaption."Object ID" := CODEUNIT::"ES FLADS Get Editable";
+        UpdateObjectStatus(AllObjWithCaption,1);
+        UpdateObjectStatus(AllObjWithCaption,2);
+
+        ESSourceTableSetup.RESET;
+        ESSourceTableSetup.SETCURRENTKEY("Filter Codeunit Number");
+        ESSourceTableSetup."Filter Codeunit Number" := 0;
+        REPEAT
+          CLEAR(ESCreateDataStoreObjects);
+          ESCreateDataStoreObjects.CreateFilterObject(
+            SourceCodeOutFileName,TRUE,ObjectDate,ObjectTime,DateText,TimeText,VersionListText,
+            ESSourceTableSetup."Filter Codeunit Number",FALSE);
+          AllObjWithCaption."Object ID" := CODEUNIT::"ES FLADS Set Filters";
+          UpdateObjectStatus(AllObjWithCaption,1);
+          UpdateObjectStatus(AllObjWithCaption,2);
+
+          ESSourceTableSetup.SETFILTER(
+            "Filter Codeunit Number",'>%1',ESSourceTableSetup."Filter Codeunit Number");
+        UNTIL ESSourceTableSetup.NEXT = 0;
+
+        ESSourceTableSetup.RESET;
+        ESSourceTableSetup.SETCURRENTKEY("Lookup Codeunit Number");
+        ESSourceTableSetup."Lookup Codeunit Number" := 0;
+        REPEAT
+          CLEAR(ESCreateDataStoreObjects);
+          ESCreateDataStoreObjects.CreateLookupDataObject(
+            SourceCodeOutFileName,TRUE,ObjectDate,ObjectTime,DateText,TimeText,VersionListText,
+            ESSourceTableSetup."Lookup Codeunit Number",FALSE);
+          AllObjWithCaption."Object ID" := CODEUNIT::"ES FLADS Lookup Data";
+          UpdateObjectStatus(AllObjWithCaption,1);
+          UpdateObjectStatus(AllObjWithCaption,2);
+
+          ESSourceTableSetup.SETFILTER(
+            "Lookup Codeunit Number",'>%1',ESSourceTableSetup."Lookup Codeunit Number");
+        UNTIL ESSourceTableSetup.NEXT = 0;
+      END;
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+
+      MessageText := '';
+      IF CreateOutObject THEN BEGIN
+        FOR i := 1 TO ARRAYLEN(ObjectStatus,1) DO
+          IF ObjectStatus[i,1] <> 0 THEN BEGIN
+            AllObjWithCaption."Object Type" := i;
+            MessageText :=
+              MessageText +
+              STRSUBSTNO(
+                Text008,
+                AllObjWithCaption."Object Type",ObjectStatus[i,2] - ObjectStatus[i,3],
+                ObjectStatus[i,1],ObjectStatus[i,3]);
+
+            IF (AllObjWithCaption."Object Type" IN
+                [AllObjWithCaption."Object Type"::"2",AllObjWithCaption."Object Type"::Page]) AND
+               TestMode
+            THEN
+              MessageText :=
+                MessageText +
+                STRSUBSTNO(
+                  Text010 +
+                  Text011,
+                  ObjectStatus[i,4],ObjectStatus[i,5],ObjectStatus[i,6],ObjectStatus[i,7]);
+          END;
+      END;
+
+      IF ShowStatus THEN
+        MESSAGE(
+          MessageText +
+          Text005,
+          TotalLines,ROUND((TIME - StartTime) / 1000,1));
+    END;
+
+    PROCEDURE ImplementChangesInObject@1240520009(VAR ESSourceCodeLineTmp@1240520012 : Record 14123815;VAR ESSourceCodeLineOutTmp@1240520018 : Record 14123815;VAR AllObjWithCaption@1240520013 : Record 2000000058;VAR AllObjWithCaptionTmp@1240520002 : Record 2000000058;TestMode@1240520011 : Boolean;CreateOutObject@1240520032 : Boolean;ObjectStartLine@1240520014 : Integer;CaptionLanguage@1240520048 : Code[10];EnableForConflictingCode@1240520007 : Boolean) : Boolean;
+    VAR
+      ESFLADSRelation@1240520015 : Record 14123810;
+      ESSourceTableSetup@1240520016 : Record 14123802;
+      ESFLADSControl@1240520017 : Record 14123814;
+      ESFLADSControl2@1240520049 : Record 14123814;
+      ESFLADSControl3@1240520029 : Record 14123814;
+      AllObjWithCaption2@1240520003 : Record 2000000058;
+      NewLineNo@1240520022 : Integer;
+      LastControlID@1240520030 : Integer;
+      LastFieldID@1240520033 : Integer;
+      OnOpenStartLineNo@1240520004 : Integer;
+      CodeIndent@1240520050 : Integer;
+      InCode@1240520019 : Boolean;
+      CodeStarted@1240520020 : Boolean;
+      VARFound@1240520021 : Boolean;
+      VariablesAdded@1240520023 : Boolean;
+      CodeAdded@1240520024 : Boolean;
+      LineInserted@1240520031 : Boolean;
+      InsertNow@1240520037 : Boolean;
+      EasySecurityProcFound@1240520008 : Boolean;
+      EasySecurityManualProcFound@1240520009 : Boolean;
+      LastNotSemiColon@1240520010 : Boolean;
+      InEasySecurityProcedure@1240520038 : Boolean;
+      DeleteNextLine@1240520039 : Boolean;
+      OnInitExists@1240520042 : Boolean;
+      OnOpenExists@1240520040 : Boolean;
+      OnOpenEXITExists@1240520005 : Boolean;
+      OnAfterGetRecordExists@1240520041 : Boolean;
+      TableBoxExists@1240520047 : Boolean;
+      InProperties@1240520043 : Boolean;
+      InOnInit@1240520044 : Boolean;
+      InOnOpen@1240520045 : Boolean;
+      AfterOnOpenBegin@1240520006 : Boolean;
+      InOnAfterGetRecord@1240520046 : Boolean;
+      ImplementHideValue@1240520001 : Boolean;
+      SourceTableIDText@1240520025 : Text[30];
+      ObjectIDText@1240520026 : Text[30];
+      FieldIDText@1240520027 : Text[30];
+      ControlNameText@1240520028 : Text[50];
+      IndentText@1240520034 : Text[30];
+      ControlIDText@1240520035 : Text[30];
+      TempText@1240520036 : Text[1000];
+    BEGIN
+      ESReadSourceCode.UpdateFromSourceCodeLines(
+        ESSourceCodeLineTmp,AllObjWithCaption,TestMode,2,FALSE,TRUE,ObjectStartLine);
+
+      IF AllObjWithCaption."Object Type" = AllObjWithCaption."Object Type"::Table THEN BEGIN
+        AllObjWithCaptionTmp := AllObjWithCaption;
+        AllObjWithCaptionTmp.INSERT;
+      END;
+
+      IF NOT CreateOutObject THEN
+        EXIT(FALSE);
+
+      UpdateObjectStatus(AllObjWithCaption,1);
+
+      IF NOT (AllObjWithCaption."Object Type" IN
+              [AllObjWithCaption."Object Type"::"2",
+               AllObjWithCaption."Object Type"::Page])
+      THEN
+        EXIT(FALSE);
+
+      ESSourceCodeLineTmp.SETRANGE("Line Not Complete",TRUE);
+      IF ESSourceCodeLineTmp.FIND('-') THEN BEGIN
+        ESSourceCodeLineTmp.SETRANGE("Line Not Complete");
+
+        UpdateObjectStatus(AllObjWithCaption,2);
+        UpdateObjectStatus(AllObjWithCaption,3);
+        UpdateObjectStatus(AllObjWithCaption,4);
+        EXIT(FALSE);
+      END;
+      ESSourceCodeLineTmp.SETRANGE("Line Not Complete");
+
+      ESFLADSRelation.RESET;
+      ESFLADSRelation.SETRANGE("Object Type",AllObjWithCaption."Object Type");
+      ESFLADSRelation.SETRANGE("Object ID",AllObjWithCaption."Object ID");
+      ESFLADSRelation.SETRANGE(Type,ESFLADSRelation.Type::"Source Table");
+      IF NOT ESFLADSRelation.FIND('-') THEN BEGIN
+        UpdateObjectStatus(AllObjWithCaption,2);
+        UpdateObjectStatus(AllObjWithCaption,3);
+        UpdateObjectStatus(AllObjWithCaption,5);
+        EXIT(FALSE);
+      END;
+
+      IF NOT ESSourceTableSetup.GET(ESFLADSRelation."Relation Object ID") THEN BEGIN
+        UpdateObjectStatus(AllObjWithCaption,2);
+        UpdateObjectStatus(AllObjWithCaption,3);
+        UpdateObjectStatus(AllObjWithCaption,6);
+        EXIT(FALSE);
+      END;
+
+      ESFLADSControl.RESET;
+      ESFLADSControl.SETRANGE("Object Type",AllObjWithCaption."Object Type");
+      ESFLADSControl.SETRANGE("Object ID",AllObjWithCaption."Object ID");
+      ESFLADSControl.MODIFYALL("Control Used",FALSE);
+
+      IF NOT AllObjWithCaptionTmp.GET(
+               AllObjWithCaptionTmp."Object Type"::Table,ESFLADSRelation."Relation Object ID")
+      THEN BEGIN
+        AllObjWithCaption.GET(AllObjWithCaption."Object Type",AllObjWithCaption."Object ID");
+        AllObjWithCaption2.GET(
+          AllObjWithCaptionTmp."Object Type"::Table,ESFLADSRelation."Relation Object ID");
+
+        ERROR(
+          Text013,
+          AllObjWithCaption2."Object Type",AllObjWithCaption2."Object ID",
+          AllObjWithCaption2."Object Caption",AllObjWithCaption."Object Type",
+          AllObjWithCaption."Object ID",AllObjWithCaption."Object Caption");
+      END;
+
+      UpdateObjectStatus(AllObjWithCaption,2);
+
+      ESSourceCodeLineTmp.RESET;
+      ESSourceCodeLineTmp.SETRANGE(
+        "Text 1-250",
+        '    LOCAL PROCEDURE ESACC_EasySecurity@14123801(OpenObject@14123801 : Boolean);');
+      EasySecurityProcFound := ESSourceCodeLineTmp.FIND('-');
+
+      ESSourceCodeLineTmp.SETRANGE(
+        "Text 1-250",
+        '    LOCAL PROCEDURE ESACC_EasySecurityManual@14123811(OpenObject@14123811 : Boolean);');
+      EasySecurityManualProcFound := ESSourceCodeLineTmp.FIND('-');
+
+      ESFLADSControl.RESET;
+      ESFLADSControl.SETRANGE("Object Type",AllObjWithCaption."Object Type");
+      ESFLADSControl.SETRANGE("Object ID",AllObjWithCaption."Object ID");
+      ESFLADSControl.SETRANGE("Control Type",ESFLADSControl."Control Type"::TableBox);
+      TableBoxExists := ESFLADSControl.FIND('-');
+
+      IF NOT EasySecurityProcFound THEN BEGIN
+        IF AllObjWithCaption."Object Type" = AllObjWithCaption."Object Type"::"2" THEN BEGIN
+          ESSourceCodeLineTmp.RESET;
+          ESSourceCodeLineTmp.SETRANGE("Text 1-250",'    OnOpenForm=VAR');
+          OnOpenExists := ESSourceCodeLineTmp.FIND('-');
+          IF NOT OnOpenExists THEN BEGIN
+            ESSourceCodeLineTmp.SETRANGE("Text 1-250",'    OnOpenForm=BEGIN');
+            OnOpenExists := ESSourceCodeLineTmp.FIND('-');
+          END;
+
+          IF OnOpenExists THEN BEGIN
+            OnOpenStartLineNo := ESSourceCodeLineTmp."Line No.";
+            ESSourceCodeLineTmp.SETRANGE("Text 1-250",'               END;');
+            ESSourceCodeLineTmp.NEXT;
+            ESSourceCodeLineTmp.SETRANGE("Line No.",OnOpenStartLineNo,ESSourceCodeLineTmp."Line No.");
+            ESSourceCodeLineTmp.SETFILTER("Text 1-250",'*EXIT*');
+            OnOpenEXITExists := ESSourceCodeLineTmp.FIND('-');
+            ESSourceCodeLineTmp.SETRANGE("Line No.");
+          END;
+
+          ESSourceCodeLineTmp.RESET;
+          ESSourceCodeLineTmp.SETRANGE("Text 1-250",'    OnAfterGetRecord=VAR');
+          OnAfterGetRecordExists := ESSourceCodeLineTmp.FIND('-');
+          IF NOT OnAfterGetRecordExists THEN BEGIN
+            ESSourceCodeLineTmp.SETRANGE("Text 1-250",'    OnAfterGetRecord=BEGIN');
+            OnAfterGetRecordExists := ESSourceCodeLineTmp.FIND('-');
+          END;
+
+          ESSourceCodeLineTmp.SETRANGE("Text 1-250");
+        END;
+
+        IF AllObjWithCaption."Object Type" = AllObjWithCaption."Object Type"::Page THEN BEGIN
+          ESSourceCodeLineTmp.RESET;
+          ESSourceCodeLineTmp.SETRANGE("Text 1-250",'    OnInit=VAR');
+          OnInitExists := ESSourceCodeLineTmp.FIND('-');
+          IF NOT OnInitExists THEN BEGIN
+            ESSourceCodeLineTmp.SETRANGE("Text 1-250",'    OnInit=BEGIN');
+            OnInitExists := ESSourceCodeLineTmp.FIND('-');
+          END;
+
+          ESSourceCodeLineTmp.RESET;
+          ESSourceCodeLineTmp.SETRANGE("Text 1-250",'    OnOpenPage=VAR');
+          OnOpenExists := ESSourceCodeLineTmp.FIND('-');
+          IF NOT OnOpenExists THEN BEGIN
+            ESSourceCodeLineTmp.SETRANGE("Text 1-250",'    OnOpenPage=BEGIN');
+            OnOpenExists := ESSourceCodeLineTmp.FIND('-');
+          END;
+
+          IF OnOpenExists THEN BEGIN
+            OnOpenStartLineNo := ESSourceCodeLineTmp."Line No.";
+            ESSourceCodeLineTmp.SETRANGE("Text 1-250",'               END;');
+            ESSourceCodeLineTmp.NEXT;
+            ESSourceCodeLineTmp.SETRANGE("Line No.",OnOpenStartLineNo,ESSourceCodeLineTmp."Line No.");
+            ESSourceCodeLineTmp.SETFILTER("Text 1-250",'*EXIT*');
+            OnOpenEXITExists := ESSourceCodeLineTmp.FIND('-');
+            ESSourceCodeLineTmp.SETRANGE("Line No.");
+          END;
+
+          ESSourceCodeLineTmp.SETRANGE("Text 1-250");
+        END;
+      END;
+
+      ImplementHideValue := TRUE;
+      IF ESSourceTableSetup."No HideValue in Page Parts" THEN
+        IF AllObjWithCaption."Object Type" = AllObjWithCaption."Object Type"::Page THEN BEGIN
+          ESSourceCodeLineTmp.RESET;
+          ESSourceCodeLineTmp.SETFILTER("Text 1-250",'????PageType*;');
+          IF ESSourceCodeLineTmp.FIND('-') THEN
+            IF (ESSourceCodeLineTmp."Text 1-250" = '    PageType=ListPart;') OR
+               (ESSourceCodeLineTmp."Text 1-250" = '    PageType=CardPart;')
+            THEN
+              ImplementHideValue := FALSE;
+          ESSourceCodeLineTmp.SETRANGE("Text 1-250");
+        END;
+
+      UpdateControlCaptions(ESSourceCodeLineTmp,AllObjWithCaption,CaptionLanguage);
+
+      ESFLADSControl.RESET;
+      ESFLADSControl.SETCURRENTKEY("Object Type","Object ID","Field ID","Control ID");
+      ESFLADSControl.SETRANGE("Object Type",AllObjWithCaption."Object Type");
+      ESFLADSControl.SETRANGE("Object ID",AllObjWithCaption."Object ID");
+      IF ESFLADSControl.FIND('-') THEN
+        ;
+
+      ESFLADSControl2.RESET;
+      ESFLADSControl2.SETCURRENTKEY("Object Type","Object ID","Field ID","Control ID");
+      ESFLADSControl2.SETRANGE("Object Type",AllObjWithCaption."Object Type");
+      ESFLADSControl2.SETRANGE("Object ID",AllObjWithCaption."Object ID");
+      ESFLADSControl2.SETFILTER("Visible Variable Name",'<>%1','');
+
+      ESSourceCodeLineOutTmp.RESET;
+      ESSourceCodeLineOutTmp.DELETEALL;
+
+      ESSourceCodeLineTmp.RESET;
+      ESSourceCodeLineTmp.FIND('-');
+      REPEAT
+        IF InProperties THEN BEGIN
+          CASE TRUE OF
+            ((ESSourceCodeLineTmp."Text 1-250" = '    ActionList=ACTIONS') OR
+             (ESSourceCodeLineTmp."Text 1-250" = '  }')):
+              BEGIN
+                IF (AllObjWithCaption."Object Type" = AllObjWithCaption."Object Type"::Page) AND
+                   NOT OnInitExists
+                THEN BEGIN
+                  IF NOT ESSourceTableSetup."No OnInitPage Changes" THEN BEGIN
+                    InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'    OnInit=BEGIN');
+                    InsertOutLine(
+                      ESSourceCodeLineOutTmp,NewLineNo,'             ;ESACC_EasySecurity(TRUE);');
+                    InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'           END;');
+                    InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'');
+                  END;
+                END;
+
+                IF NOT OnOpenExists THEN BEGIN
+                  IF AllObjWithCaption."Object Type" = AllObjWithCaption."Object Type"::"2" THEN
+                    InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'    OnOpenForm=BEGIN');
+                  IF AllObjWithCaption."Object Type" = AllObjWithCaption."Object Type"::Page THEN
+                    InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'    OnOpenPage=BEGIN');
+                  InsertOutLine(
+                    ESSourceCodeLineOutTmp,NewLineNo,'                 ;ESACC_EasySecurity(TRUE);');
+                  InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'               END;');
+                  InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'');
+                END;
+
+                IF (AllObjWithCaption."Object Type" = AllObjWithCaption."Object Type"::"2") AND
+                   TableBoxExists AND NOT OnAfterGetRecordExists
+                THEN BEGIN
+                  InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'    OnAfterGetRecord=BEGIN');
+                  InsertOutLine(
+                    ESSourceCodeLineOutTmp,NewLineNo,
+                    '                       ;ESACC_EasySecurity(FALSE);');
+                  InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'                     END;');
+                  InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'');
+                END;
+
+                InProperties := FALSE;
+              END;
+            (ESSourceCodeLineTmp."Text 1-250" = '    OnInit=VAR') OR
+            (ESSourceCodeLineTmp."Text 1-250" = '    OnInit=BEGIN'):
+              InOnInit := TRUE;
+            InOnInit AND (ESSourceCodeLineTmp."Text 1-250" = '           END;'):
+              BEGIN
+                IF AllObjWithCaption."Object Type" =AllObjWithCaption."Object Type"::Page THEN
+                  IF NOT ESSourceTableSetup."No OnInitPage Changes" THEN
+                    InsertOutLine(
+                      ESSourceCodeLineOutTmp,NewLineNo,'             ;ESACC_EasySecurity(TRUE);');
+
+                InOnInit := FALSE;
+              END;
+            (ESSourceCodeLineTmp."Text 1-250" = '    OnOpenForm=VAR') OR
+            (ESSourceCodeLineTmp."Text 1-250" = '    OnOpenPage=VAR'):
+              InOnOpen := TRUE;
+            (ESSourceCodeLineTmp."Text 1-250" = '    OnOpenForm=BEGIN') OR
+            (ESSourceCodeLineTmp."Text 1-250" = '    OnOpenPage=BEGIN'):
+              BEGIN
+                InOnOpen := TRUE;
+                AfterOnOpenBegin := TRUE;
+              END;
+            InOnOpen AND (ESSourceCodeLineTmp."Text 1-250" = '               BEGIN'):
+              AfterOnOpenBegin := TRUE;
+            InOnOpen AND AfterOnOpenBegin:
+              BEGIN
+                IF OnOpenEXITExists THEN
+                  InsertOutLine(
+                    ESSourceCodeLineOutTmp,NewLineNo,'                 ;ESACC_EasySecurity(TRUE);');
+
+                AfterOnOpenBegin := FALSE;
+
+                IF ESSourceCodeLineTmp."Text 1-250" = '               END;' THEN BEGIN
+                  InsertOutLine(
+                    ESSourceCodeLineOutTmp,NewLineNo,'                 ;ESACC_EasySecurity(TRUE);');
+
+                  InOnOpen := FALSE;
+                END;
+              END;
+            InOnOpen AND (ESSourceCodeLineTmp."Text 1-250" = '               END;'):
+              BEGIN
+                InsertOutLine(
+                  ESSourceCodeLineOutTmp,NewLineNo,'                 ;ESACC_EasySecurity(TRUE);');
+
+                InOnOpen := FALSE;
+              END;
+            (ESSourceCodeLineTmp."Text 1-250" = '    OnAfterGetRecord=VAR') OR
+            (ESSourceCodeLineTmp."Text 1-250" = '    OnAfterGetRecord=BEGIN'):
+              InOnAfterGetRecord := TRUE;
+            InOnAfterGetRecord AND (ESSourceCodeLineTmp."Text 1-250" = '                     END;'):
+              BEGIN
+                IF (AllObjWithCaption."Object Type" = AllObjWithCaption."Object Type"::"2") AND
+                   TableBoxExists
+                THEN
+                  InsertOutLine(
+                    ESSourceCodeLineOutTmp,NewLineNo,
+                    '                       ;ESACC_EasySecurity(FALSE);');
+
+                InOnAfterGetRecord := FALSE;
+              END;
+          END;
+        END ELSE
+          IF NOT EasySecurityProcFound AND (ESSourceCodeLineTmp."Text 1-250" = '  PROPERTIES') THEN
+            InProperties := TRUE;
+
+        IF InCode THEN BEGIN
+          CASE TRUE OF
+            NOT CodeStarted AND (ESSourceCodeLineTmp."Text 1-250" = '  {'):
+              CodeStarted := TRUE;
+            CodeStarted AND (ESSourceCodeLineTmp."Text 1-250" = '    VAR'):
+              VARFound := TRUE;
+            CodeStarted AND NOT VariablesAdded:
+              BEGIN
+                // Write Variables
+                IF NOT VARFound THEN
+                  InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'    VAR');
+                InsertOutLine(
+                  ESSourceCodeLineOutTmp,NewLineNo,
+                  '      ESACC_ESFLADSMgt@14123801 : Codeunit 14123801;');
+
+                IF AllObjWithCaption."Object Type" = AllObjWithCaption."Object Type"::Page THEN BEGIN
+                  IF ESFLADSControl2.FIND('-') THEN BEGIN
+                    REPEAT
+                      IF ((ESFLADSControl2."Field ID" = 0) AND
+                          NOT ESSourceTableSetup."No Page Action Changes") OR
+                         (ESFLADSControl2."Field ID" <> LastFieldID)
+                      THEN BEGIN
+                        InsertOutLine(
+                          ESSourceCodeLineOutTmp,NewLineNo,
+                          STRSUBSTNO(
+                            '      %1@%2 : Boolean INDATASET;',
+                            ESFLADSControl2."Visible Variable Name",
+                            DELCHR(FORMAT(ESFLADSControl2."First Variable ID"),'=',',.')));
+
+                        IF ESFLADSControl2."Editable Variable Name" <> '' THEN
+                          InsertOutLine(
+                            ESSourceCodeLineOutTmp,NewLineNo,
+                            STRSUBSTNO(
+                              '      %1@%2 : Boolean INDATASET;',
+                              ESFLADSControl2."Editable Variable Name",
+                            DELCHR(FORMAT(ESFLADSControl2."First Variable ID" + 1),'=',',.')));
+
+                        IF ESFLADSControl2."HideValue Variable Name" <> '' THEN
+                          InsertOutLine(
+                            ESSourceCodeLineOutTmp,NewLineNo,
+                            STRSUBSTNO(
+                              '      %1@%2 : Boolean INDATASET;',
+                              ESFLADSControl2."HideValue Variable Name",
+                            DELCHR(FORMAT(ESFLADSControl2."First Variable ID" + 2),'=',',.')));
+
+                        IF (ESFLADSControl2."Enabled Variable Name" <> '') AND
+                           (ESFLADSControl2."Enabled Variable Name" <>
+                            ESFLADSControl2."Editable Variable Name")
+                        THEN
+                          InsertOutLine(
+                            ESSourceCodeLineOutTmp,NewLineNo,
+                            STRSUBSTNO(
+                              '      %1@%2 : Boolean INDATASET;',
+                              ESFLADSControl2."Enabled Variable Name",
+                            DELCHR(FORMAT(ESFLADSControl2."First Variable ID" + 3),'=',',.')));
+
+                        LastFieldID := ESFLADSControl2."Field ID";
+                      END;
+                    UNTIL ESFLADSControl2.NEXT = 0;
+                  END;
+                END;
+
+                VariablesAdded := TRUE;
+              END;
+            CodeStarted AND VariablesAdded AND NOT CodeAdded AND
+            ((COPYSTR(ESSourceCodeLineTmp."Text 1-250" + '         ',1,9) IN
+              ['    LOCAL','    PROCE','    EVENT','    BEGIN','    [Busi','    [Inte','    [Exte'])
+             OR NOT VARFound):
+              BEGIN
+                // Write Procedures
+                SourceTableIDText := DELCHR(FORMAT(ESSourceTableSetup."Source Table ID"),'=',',.');
+                ObjectIDText := DELCHR(FORMAT(AllObjWithCaption."Object ID"),'=',',.');
+
+                InsertOutLine(
+                  ESSourceCodeLineOutTmp,NewLineNo,
+                  '    LOCAL PROCEDURE ESACC_EasySecurity@14123801(OpenObject@14123801 : Boolean);');
+                InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'    VAR');
+                InsertOutLine(
+                  ESSourceCodeLineOutTmp,NewLineNo,'      SetFilters@14123802 : Codeunit 14123812;');
+                InsertOutLine(
+                  ESSourceCodeLineOutTmp,NewLineNo,'      TempBoolean@14123803 : Boolean;');
+                InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'    BEGIN');
+
+                CASE AllObjWithCaption."Object Type" OF
+                  AllObjWithCaption."Object Type"::"2":
+                    BEGIN
+                      InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'      IF OpenObject THEN BEGIN');
+                      InsertOutLine(
+                        ESSourceCodeLineOutTmp,NewLineNo,
+                        STRSUBSTNO(
+                          '        SetFilters.Filter%1(Rec,2,%2);',SourceTableIDText,ObjectIDText));
+                      InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'');
+                      InsertOutLine(
+                        ESSourceCodeLineOutTmp,NewLineNo,'        TempBoolean := CurrForm.EDITABLE;');
+                      InsertOutLine(
+                        ESSourceCodeLineOutTmp,NewLineNo,
+                        STRSUBSTNO(
+                          '        IF NOT ESACC_ESFLADSMgt.FormGeneral(%1,%2,TempBoolean) THEN',
+                          SourceTableIDText,ObjectIDText));
+                      InsertOutLine(
+                        ESSourceCodeLineOutTmp,NewLineNo,'          CurrForm.EDITABLE := FALSE;');
+                      InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'      END;');
+                      InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'');
+
+                      IF ESFLADSControl2.FIND('-') THEN BEGIN
+                        REPEAT
+                          IF NOT ESFLADSControl2."Control Name Blank" THEN
+                            IF ESFLADSControl2."Field ID" <> 0 THEN BEGIN
+                              FieldIDText := DELCHR(FORMAT(ESFLADSControl2."Field ID"),'=',',.');
+                              ESFLADSControl2.CALCFIELDS("Field Name");
+
+                              IF ESFLADSControl2."Control Name" = '' THEN
+                                ControlNameText := ESFLADSControl2."Field Name"
+                              ELSE
+                                ControlNameText := ESFLADSControl2."Control Name";
+                              UpdateFormControlName(ControlNameText);
+
+                              InsertOutLine(
+                                ESSourceCodeLineOutTmp,NewLineNo,
+                                STRSUBSTNO(
+                                  '      TempBoolean := CurrForm.%1.VISIBLE;',
+                                  ControlNameText));
+                              IF TableBoxExists THEN
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  '      IF NOT ESACC_ESFLADSMgt.FormControlTableBox(')
+                              ELSE
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  '      IF NOT ESACC_ESFLADSMgt.FormControl(');
+                              InsertOutLine(
+                                ESSourceCodeLineOutTmp,NewLineNo,
+                                STRSUBSTNO(
+                                  '               %1,%2,0,%3,',
+                                  SourceTableIDText,ObjectIDText,FieldIDText));
+                              InsertOutLine(
+                                ESSourceCodeLineOutTmp,NewLineNo,
+                                STRSUBSTNO(
+                                  '               TempBoolean,CurrForm.%1.EDITABLE)',ControlNameText));
+                              IF ESFLADSControl2."Enabled Variable Name" <> '' THEN BEGIN
+                                InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'      THEN BEGIN');
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  STRSUBSTNO(
+                                    '        CurrForm.%1.EDITABLE := FALSE;',ControlNameText));
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  STRSUBSTNO(
+                                    '        CurrForm.%1.ENABLED := FALSE;',ControlNameText));
+                                InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'      END;');
+                              END ELSE BEGIN
+                                InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'      THEN');
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  STRSUBSTNO(
+                                    '        CurrForm.%1.EDITABLE := FALSE;',ControlNameText));
+                              END;
+                              IF TableBoxExists THEN
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  STRSUBSTNO(
+                                    '      IF NOT TempBoolean THEN',ControlNameText))
+                              ELSE
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  STRSUBSTNO(
+                                    '      IF CurrForm.%1.VISIBLE <> TempBoolean THEN',ControlNameText));
+                              InsertOutLine(
+                                ESSourceCodeLineOutTmp,NewLineNo,
+                                STRSUBSTNO(
+                                  '        CurrForm.%1.VISIBLE := TempBoolean;',ControlNameText));
+                              InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'');
+                            END ELSE BEGIN
+                              IF ESFLADSControl2."Control Name" <> '' THEN BEGIN
+                                ControlIDText := DELCHR(FORMAT(ESFLADSControl2."Control ID"),'=',',.');
+                                ControlNameText := ESFLADSControl2."Control Name";
+                                UpdateFormControlName(ControlNameText);
+
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  STRSUBSTNO(
+                                    '      TempBoolean := CurrForm.%1.VISIBLE;',ControlNameText));
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  '      IF NOT ESACC_ESFLADSMgt.FormControl(');
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  STRSUBSTNO(
+                                    '               %1,%2,1,%3,',
+                                    SourceTableIDText,ObjectIDText,ControlIDText));
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  STRSUBSTNO(
+                                    '               TempBoolean,CurrForm.%1.ENABLED)',ControlNameText));
+                                InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'      THEN');
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  STRSUBSTNO(
+                                    '        CurrForm.%1.ENABLED := FALSE;',ControlNameText));
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  STRSUBSTNO(
+                                    '      IF CurrForm.%1.VISIBLE <> TempBoolean THEN',ControlNameText));
+                                InsertOutLine(
+                                  ESSourceCodeLineOutTmp,NewLineNo,
+                                  STRSUBSTNO(
+                                    '        CurrForm.%1.VISIBLE := TempBoolean;',ControlNameText));
+                                InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'');
+                              END;
+                            END;
+                        UNTIL ESFLADSControl2.NEXT = 0;
+                      END;
+                    END;
+                  AllObjWithCaption."Object Type"::Page:
+                    BEGIN
+                      InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'      IF OpenObject THEN BEGIN');
+                      InsertOutLine(
+                        ESSourceCodeLineOutTmp,NewLineNo,
+                        STRSUBSTNO(
+                          '        SetFilters.Filter%1(Rec,8,%2);',SourceTableIDText,ObjectIDText));
+                      InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'');
+                      InsertOutLine(
+                        ESSourceCodeLineOutTmp,NewLineNo,
+                        '        TempBoolean := CurrPage.EDITABLE;');
+                      InsertOutLine(
+                        ESSourceCodeLineOutTmp,NewLineNo,
+                        STRSUBSTNO(
+                          '        IF ESACC_ESFLADSMgt.PageGeneral(%1,%2,TempBoolean) THEN',
+                          SourceTableIDText,ObjectIDText));
+                      InsertOutLine(
+                        ESSourceCodeLineOutTmp,NewLineNo,
+                        '          CurrPage.EDITABLE := TempBoolean;');
+                      InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'      END;');
+                      InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'');
+
+                      IF ESFLADSControl2.FIND('-') THEN BEGIN
+                        REPEAT
+                          IF ESFLADSControl2."Field ID" <> 0 THEN BEGIN
+                            FieldIDText := DELCHR(FORMAT(ESFLADSControl2."Field ID"),'=',',.');
+
+                            InsertOutLine(
+                              ESSourceCodeLineOutTmp,NewLineNo,'      ESACC_ESFLADSMgt.PageControl(');
+                            InsertOutLine(
+                              ESSourceCodeLineOutTmp,NewLineNo,
+                              STRSUBSTNO(
+                                '        %1,%2,0,%3,',SourceTableIDText,ObjectIDText,FieldIDText));
+                            IF ESFLADSControl2."Editable Variable Name" = '' THEN
+                              InsertOutLine(
+                                ESSourceCodeLineOutTmp,NewLineNo,
+                                STRSUBSTNO(
+                                  '        %1,TempBoolean,%2);',
+                                  ESFLADSControl2."Visible Variable Name",
+                                  ESFLADSControl2."HideValue Variable Name"))
+                            ELSE
+                              InsertOutLine(
+                                ESSourceCodeLineOutTmp,NewLineNo,
+                                STRSUBSTNO(
+                                  '        %1,%2,%3);',
+                                  ESFLADSControl2."Visible Variable Name",
+                                  ESFLADSControl2."Editable Variable Name",
+                                  ESFLADSControl2."HideValue Variable Name"));
+                            InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'');
+                          END ELSE BEGIN
+                            IF NOT ESSourceTableSetup."No Page Action Changes" THEN BEGIN
+                              ControlIDText := DELCHR(FORMAT(ESFLADSControl2."Control ID"),'=',',.');
+
+                              InsertOutLine(
+                                ESSourceCodeLineOutTmp,NewLineNo,'      ESACC_ESFLADSMgt.PageControl(');
+                              InsertOutLine(
+                                ESSourceCodeLineOutTmp,NewLineNo,
+                                STRSUBSTNO(
+                                  '        %1,%2,1,%3,',
+                                  SourceTableIDText,ObjectIDText,ControlIDText));
+                              InsertOutLine(
+                                ESSourceCodeLineOutTmp,NewLineNo,
+                                STRSUBSTNO(
+                                  '        %1,%2,TempBoolean);',
+                                  ESFLADSControl2."Visible Variable Name",
+                                  ESFLADSControl2."Enabled Variable Name"));
+                              InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'');
+                            END;
+                          END;
+                        UNTIL ESFLADSControl2.NEXT = 0;
+                      END;
+                    END;
+                END;
+
+                InsertOutLine(
+                  ESSourceCodeLineOutTmp,NewLineNo,'      ESACC_EasySecurityManual(OpenObject);');
+                InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'    END;');
+
+                IF NOT EasySecurityManualProcFound THEN BEGIN
+                  InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'');
+                  InsertOutLine(
+                    ESSourceCodeLineOutTmp,NewLineNo,
+                    '    LOCAL PROCEDURE ESACC_EasySecurityManual@14123811(' +
+                    'OpenObject@14123811 : Boolean);');
+                  InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'    BEGIN');
+                  InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'    END;');
+                END;
+
+                InsertOutLine(ESSourceCodeLineOutTmp,NewLineNo,'');
+
+                CodeAdded := TRUE;
+              END;
+          END;
+        END ELSE
+          IF ESSourceCodeLineTmp."Text 1-250" = '  CODE' THEN
+            InCode := TRUE;
+
+        LineInserted := DeleteNextLine;
+        DeleteNextLine := FALSE;
+
+        IF (AllObjWithCaption."Object Type" = AllObjWithCaption."Object Type"::"2") AND
+           (ESSourceCodeLineTmp."Control ID" <> 0) AND
+           (ESSourceCodeLineTmp."Control ID" <> LastControlID) AND
+           (ESSourceCodeLineTmp."Line Length" > 49) AND
+           (ESSourceCodeLineTmp."Line Length" < 250)
+        THEN BEGIN
+          ESFLADSControl.GET(
+            AllObjWithCaption."Object Type",AllObjWithCaption."Object ID",
+            ESSourceCodeLineTmp."Control ID",1);
+
+          IF (ESFLADSControl."Control Type" IN
+              [ESFLADSControl."Control Type"::CommandButton,
+               ESFLADSControl."Control Type"::MenuButton]) AND
+             (ESFLADSControl."ENU Control Caption" <> '')
+          THEN
+            IF STRPOS(ESSourceCodeLineTmp."Text 1-250",'Name=') = 0 THEN
+              IF COPYSTR(ESSourceCodeLineTmp."Text 1-250",49,1) = ';' THEN BEGIN
+                ESFLADSControl."Control Name" :=
+                  COPYSTR(
+                    STRSUBSTNO(
+                      'ESACC_C%1_%2',DELCHR(FORMAT(ESFLADSControl."Control ID"),'=',',.'),
+                      OnlySimpleCharacters(ESFLADSControl."ENU Control Caption")),1,30);
+                ESFLADSControl."Control Name Blank" := FALSE;
+                ESFLADSControl.UpdateValues;
+                ESFLADSControl.MODIFY;
+
+                InsertOutLine(
+                  ESSourceCodeLineOutTmp,NewLineNo,
+                  COPYSTR(ESSourceCodeLineTmp."Text 1-250",1,49) +
+                  'Name=' + ESFLADSControl."Control Name" + ';');
+                InsertOutLine(
+                  ESSourceCodeLineOutTmp,NewLineNo,
+                  PADSTR(' ',49,' ') + COPYSTR(ESSourceCodeLineTmp."Text 1-250",50));
+
+                LineInserted := TRUE;
+              END;
+        END;
+
+        IF (AllObjWithCaption."Object Type" = AllObjWithCaption."Object Type"::Page) AND
+           (ESSourceCodeLineTmp."Control ID" <> 0) AND
+           (ESSourceCodeLineTmp."Control ID" <> LastControlID) AND
+           (ESSourceCodeLineTmp."Line Length" > 0) AND
+           (ESSourceCodeLineTmp."Line Length" < 250)
+        THEN BEGIN
+          TempText := DELCHR(ESSourceCodeLineTmp."Text 1-250",'<');
+          IF ESSourceCodeLineTmp."Text 1-250" <> '' THEN BEGIN
+            TempText := DELCHR(ESSourceCodeLineTmp."Text 1-250",'<');
+            InsertNow :=
+              (COPYSTR(TempText,1,6) = 'Image=') OR
+              (COPYSTR(TempText,1,17) = 'PromotedCategory=') OR
+              (COPYSTR(TempText,1,14) = 'PromotedIsBig=') OR
+              (COPYSTR(TempText,1,9) = 'OnAction=') OR
+              (COPYSTR(TempText,1,11) = 'OnValidate=') OR
+              (COPYSTR(TempText,1,9) = 'OnLookup=') OR
+              (COPYSTR(TempText,1,12) = 'OnDrillDown=') OR
+              (COPYSTR(TempText,1,13) = 'OnAssistEdit=') OR
+              (COPYSTR(TempText,1,10) = 'MultiLine=') OR
+              (COPYSTR(TempText,1,16) = 'DrillDownFormID=') OR
+              (COPYSTR(TempText,1,16) = 'DrillDownPageID=') OR
+              (COPYSTR(TempText,1,8) = 'Enabled=') OR
+              (COPYSTR(TempText,1,9) = 'Editable=') OR
+              (COPYSTR(TempText,1,10) = 'HideValue=')
+          END ELSE
+            InsertNow := FALSE;
+
+          IF ((COPYSTR(ESSourceCodeLineTmp."Text 1-250",ESSourceCodeLineTmp."Line Length") = '}') AND
+              NOT ESSourceCodeLineTmp."In Code") OR InsertNow
+          THEN BEGIN
+            ESFLADSControl3.RESET;
+            ESFLADSControl3.SETRANGE("Object Type",AllObjWithCaption."Object Type");
+            ESFLADSControl3.SETRANGE("Object ID",AllObjWithCaption."Object ID");
+            ESFLADSControl3.SETRANGE("Control ID",ESSourceCodeLineTmp."Control ID");
+            ESFLADSControl3.SETRANGE("Control Used",FALSE);
+            ESFLADSControl3.FIND('-');
+            ESFLADSControl := ESFLADSControl3;
+
+            IF (ESFLADSControl."Visible Variable Name" <> '') AND
+               ((ESFLADSControl."Field ID" <> 0) OR NOT ESSourceTableSetup."No Page Action Changes")
+            THEN
+              IF ((ESFLADSControl."Visible Variable Name" <> '') AND
+                  (ESFLADSControl."Visible Code" ='')) OR
+                 ((ESFLADSControl."Editable Variable Name" <> '') AND
+                   (ESFLADSControl."Editable Code" = '')) OR
+                 ((ESFLADSControl."HideValue Variable Name" <> '') AND
+                  (ESFLADSControl."HideValue Code" = '')) OR
+                 ((ESFLADSControl."Enabled Variable Name" <> '') AND
+                  (ESFLADSControl."Enabled Code" = ''))
+              THEN BEGIN
+                IF NOT InsertNow THEN BEGIN
+                  ESSourceCodeLineOutTmp := ESSourceCodeLineTmp;
+                  ESSourceCodeLineOutTmp."Text 1-250" :=
+                    DELCHR(
+                      COPYSTR(
+                        ESSourceCodeLineOutTmp."Text 1-250",1,ESSourceCodeLineTmp."Line Length" - 1),
+                      '>') + ';';
+                  NewLineNo := NewLineNo + 1;
+                  ESSourceCodeLineOutTmp."Line No." := NewLineNo;
+                  ESSourceCodeLineOutTmp.INSERT;
+                END;
+
+                IF ESFLADSControl."Control Type" = ESFLADSControl."Control Type"::Action THEN
+                  IndentText := '      '
+                ELSE
+                  IndentText := '';
+
+                IF (ESFLADSControl."Visible Variable Name" <> '') AND
+                   (ESFLADSControl."Visible Code" ='')
+                THEN
+                  InsertOutLine(
+                    ESSourceCodeLineOutTmp,NewLineNo,
+                    STRSUBSTNO(
+                      '                %1Visible=%2;',
+                      IndentText,ESFLADSControl."Visible Variable Name"));
+
+                LastNotSemiColon := FALSE;
+                IF COPYSTR(TempText,1,8) = 'Enabled=' THEN BEGIN
+                  InsertModifiedLine(
+                    ESSourceCodeLineTmp,ESSourceCodeLineOutTmp,
+                    LastNotSemiColon,NewLineNo,LineInserted,
+                    ((ESFLADSControl."Editable Variable Name" <> '') AND
+                     (ESFLADSControl."Editable Code" = '')) OR
+                    ((ESFLADSControl."HideValue Variable Name" <> '') AND
+                     (ESFLADSControl."HideValue Code" = '') AND ImplementHideValue));
+                END ELSE
+                  IF (ESFLADSControl."Enabled Variable Name" <> '') AND
+                     (ESFLADSControl."Enabled Code" = '')
+                  THEN
+                    InsertOutLine(
+                      ESSourceCodeLineOutTmp,NewLineNo,
+                      STRSUBSTNO(
+                        '                %1Enabled=%2;',
+                        IndentText,ESFLADSControl."Enabled Variable Name"));
+
+                IF COPYSTR(TempText,1,9) = 'Editable=' THEN BEGIN
+                  InsertModifiedLine(
+                    ESSourceCodeLineTmp,ESSourceCodeLineOutTmp,
+                    LastNotSemiColon,NewLineNo,LineInserted,
+                    (ESFLADSControl."HideValue Variable Name" <> '') AND
+                    (ESFLADSControl."HideValue Code" = '') AND ImplementHideValue);
+                END ELSE
+                  IF (ESFLADSControl."Editable Variable Name" <> '') AND
+                     (ESFLADSControl."Editable Code" = '')
+                  THEN
+                    IF LastNotSemiColon AND
+                       ((ESFLADSControl."HideValue Variable Name" = '') OR
+                        (ESFLADSControl."HideValue Code" <> '') AND ImplementHideValue)
+                    THEN
+                      InsertOutLine(
+                        ESSourceCodeLineOutTmp,NewLineNo,
+                        STRSUBSTNO(
+                          '                %1Editable=%2 }',
+                          IndentText,ESFLADSControl."Editable Variable Name"))
+                    ELSE
+                      InsertOutLine(
+                        ESSourceCodeLineOutTmp,NewLineNo,
+                        STRSUBSTNO(
+                          '                %1Editable=%2;',
+                          IndentText,ESFLADSControl."Editable Variable Name"));
+
+                IF (COPYSTR(TempText,1,16) = 'DrillDownFormID=') OR
+                   (COPYSTR(TempText,1,16) = 'DrillDownPageID=') OR
+                   (COPYSTR(TempText,1,10) = 'MultiLine=')
+                THEN BEGIN
+                  InsertModifiedLine(
+                    ESSourceCodeLineTmp,ESSourceCodeLineOutTmp,
+                    LastNotSemiColon,NewLineNo,LineInserted,
+                    (ESFLADSControl."HideValue Variable Name" <> '') AND
+                    (ESFLADSControl."HideValue Code" = '') AND ImplementHideValue);
+                END;
+
+                IF COPYSTR(TempText,1,10) = 'HideValue=' THEN BEGIN
+                  ESSourceCodeLineOutTmp := ESSourceCodeLineTmp;
+                  NewLineNo := NewLineNo + 1;
+                  ESSourceCodeLineOutTmp."Line No." := NewLineNo;
+                  ESSourceCodeLineOutTmp.INSERT;
+
+                  LineInserted := TRUE;
+                END ELSE
+                  IF (ESFLADSControl."HideValue Variable Name" <> '') AND
+                     (ESFLADSControl."HideValue Code" = '') AND ImplementHideValue
+                  THEN
+                    IF LastNotSemiColon THEN
+                      InsertOutLine(
+                        ESSourceCodeLineOutTmp,NewLineNo,
+                        STRSUBSTNO(
+                          '                %1HideValue=%2 }',
+                          IndentText,ESFLADSControl."HideValue Variable Name"))
+                    ELSE
+                      InsertOutLine(
+                        ESSourceCodeLineOutTmp,NewLineNo,
+                        STRSUBSTNO(
+                          '                %1HideValue=%2;',
+                          IndentText,ESFLADSControl."HideValue Variable Name"));
+
+                IF NOT InsertNow THEN BEGIN
+                  ESSourceCodeLineOutTmp."Text 1-250" :=
+                    COPYSTR(
+                      ESSourceCodeLineOutTmp."Text 1-250",1,
+                      STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 1) + ' }';
+                  ESSourceCodeLineOutTmp.MODIFY;
+                  LineInserted := TRUE;
+                END;
+
+                LastControlID := ESSourceCodeLineTmp."Control ID";
+              END;
+          END;
+        END;
+
+        IF ESSourceCodeLineTmp."Last Line in Control" THEN BEGIN
+          ESFLADSControl3.RESET;
+          ESFLADSControl3.SETRANGE("Object Type",AllObjWithCaption."Object Type");
+          ESFLADSControl3.SETRANGE("Object ID",AllObjWithCaption."Object ID");
+          ESFLADSControl3.SETRANGE("Control ID",ESSourceCodeLineTmp."Control ID");
+          ESFLADSControl3.SETRANGE("Control Used",FALSE);
+          ESFLADSControl3.FIND('-');
+          ESFLADSControl3."Control Used" := TRUE;
+          ESFLADSControl3.MODIFY;
+        END;
+
+        IF EasySecurityProcFound AND NOT LineInserted THEN BEGIN
+          IF InEasySecurityProcedure THEN BEGIN
+            LineInserted := TRUE;
+
+            IF ESSourceCodeLineTmp."Text 1-250" = '    END;' THEN BEGIN
+              InEasySecurityProcedure := FALSE;
+              DeleteNextLine := TRUE;
+            END;
+          END ELSE
+            IF ESSourceCodeLineTmp."Text 1-250" =
+               '    LOCAL PROCEDURE ESACC_EasySecurity@14123801(OpenObject@14123801 : Boolean);'
+            THEN BEGIN
+              InEasySecurityProcedure := TRUE;
+              LineInserted := TRUE;
+            END;
+        END;
+
+        IF VARFound AND NOT LineInserted THEN BEGIN
+          IF COPYSTR(ESSourceCodeLineTmp."Text 1-250",1,12) = '      ESACC_' THEN
+            LineInserted := TRUE;
+        END;
+
+        IF NOT LineInserted THEN BEGIN
+          ESSourceCodeLineOutTmp := ESSourceCodeLineTmp;
+          NewLineNo := NewLineNo + 1;
+          ESSourceCodeLineOutTmp."Line No." := NewLineNo;
+          ESSourceCodeLineOutTmp.INSERT;
+        END;
+      UNTIL ESSourceCodeLineTmp.NEXT = 0;
+
+      IF (AllObjWithCaption."Object Type" = AllObjWithCaption."Object Type"::Page) AND
+         EnableForConflictingCode
+      THEN BEGIN
+        ESSourceCodeLineOutTmp.RESET;
+        ESSourceCodeLineOutTmp.SETFILTER("Text 1-250",'*Visible*');
+        IF ESSourceCodeLineOutTmp.FIND('-') THEN
+          REPEAT
+            CodeIndent := 0;
+            IF COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,24) = '                Visible=' THEN
+              CodeIndent := 16
+            ELSE
+              IF COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,30) = '                      Visible='
+              THEN
+                CodeIndent := 22;
+            IF CodeIndent > 0 THEN BEGIN
+              IF UPPERCASE(COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",CodeIndent + 1,13)) <>
+                 UPPERCASE('Visible=FALSE')
+              THEN BEGIN
+                IF COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",CodeIndent + 1,14) <>
+                   'Visible=ESACC_'
+                THEN BEGIN
+                  ESFLADSControl.RESET;
+                  ESFLADSControl.SETRANGE("Object Type",AllObjWithCaption."Object Type");
+                  ESFLADSControl.SETRANGE("Object ID",AllObjWithCaption."Object ID");
+                  ESFLADSControl.SETRANGE("Control ID",ESSourceCodeLineOutTmp."Control ID");
+                  IF ESFLADSControl.FIND('-') THEN BEGIN
+                    IF (ESFLADSControl."Visible Variable Name" <> '') AND
+                       (ESSourceCodeLineOutTmp."Line Length" < 200)
+                    THEN BEGIN
+                      IF COPYSTR(
+                           ESSourceCodeLineOutTmp."Text 1-250",
+                           STRLEN(ESSourceCodeLineOutTmp."Text 1-250")) = ';'
+                      THEN
+                        ESSourceCodeLineOutTmp."Text 1-250" :=
+                          COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,CodeIndent + 8) +
+                          ESFLADSControl."Visible Variable Name" + ' AND (' +
+                          CheckBooleanText(
+                            COPYSTR(
+                              ESSourceCodeLineOutTmp."Text 1-250",CodeIndent + 9,
+                              STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - (CodeIndent + 9))) +
+                          ')' +
+                          COPYSTR(
+                            ESSourceCodeLineOutTmp."Text 1-250",
+                            STRLEN(ESSourceCodeLineOutTmp."Text 1-250"))
+                      ELSE
+                        ESSourceCodeLineOutTmp."Text 1-250" :=
+                          COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,CodeIndent + 8) +
+                          ESFLADSControl."Visible Variable Name" + ' AND (' +
+                          CheckBooleanText(
+                            COPYSTR(
+                              ESSourceCodeLineOutTmp."Text 1-250",CodeIndent + 9,
+                              STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - (CodeIndent + 10))) +
+                          ')' +
+                          COPYSTR(
+                            ESSourceCodeLineOutTmp."Text 1-250",
+                            STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 1);
+                      ESSourceCodeLineOutTmp.MODIFY;
+                    END;
+                  END;
+                END;
+              END;
+            END;
+          UNTIL ESSourceCodeLineOutTmp.NEXT = 0;
+        ESSourceCodeLineOutTmp.SETRANGE("Text 1-250");
+
+        ESSourceCodeLineOutTmp.RESET;
+        ESSourceCodeLineOutTmp.SETFILTER("Text 1-250",'*Editable*');
+        IF ESSourceCodeLineOutTmp.FIND('-') THEN
+          REPEAT
+            IF COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,25) = '                Editable='
+            THEN BEGIN
+              IF UPPERCASE(COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,30)) <>
+                 UPPERCASE('                Editable=FALSE')
+              THEN BEGIN
+                IF COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,31) <>
+                   '                Editable=ESACC_'
+                THEN BEGIN
+                  ESFLADSControl.RESET;
+                  ESFLADSControl.SETRANGE("Object Type",AllObjWithCaption."Object Type");
+                  ESFLADSControl.SETRANGE("Object ID",AllObjWithCaption."Object ID");
+                  ESFLADSControl.SETRANGE("Control ID",ESSourceCodeLineOutTmp."Control ID");
+                  IF ESFLADSControl.FIND('-') THEN BEGIN
+                    IF (ESFLADSControl."Editable Variable Name" <> '') AND
+                       (ESSourceCodeLineOutTmp."Line Length" < 200)
+                    THEN BEGIN
+                      IF COPYSTR(
+                           ESSourceCodeLineOutTmp."Text 1-250",
+                           STRLEN(ESSourceCodeLineOutTmp."Text 1-250")) = ';'
+                      THEN
+                        ESSourceCodeLineOutTmp."Text 1-250" :=
+                          COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,25) +
+                          ESFLADSControl."Editable Variable Name" + ' AND (' +
+                          CheckBooleanText(
+                            COPYSTR(
+                              ESSourceCodeLineOutTmp."Text 1-250",26,
+                              STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 26)) +
+                          ')' +
+                          COPYSTR(
+                            ESSourceCodeLineOutTmp."Text 1-250",
+                            STRLEN(ESSourceCodeLineOutTmp."Text 1-250"))
+                      ELSE
+                        ESSourceCodeLineOutTmp."Text 1-250" :=
+                          COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,25) +
+                          ESFLADSControl."Editable Variable Name" + ' AND (' +
+                          CheckBooleanText(
+                            COPYSTR(
+                              ESSourceCodeLineOutTmp."Text 1-250",26,
+                              STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 27)) +
+                          ')' +
+                          COPYSTR(
+                            ESSourceCodeLineOutTmp."Text 1-250",
+                            STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 1);
+                      ESSourceCodeLineOutTmp.MODIFY;
+                    END;
+                  END;
+                END;
+              END;
+            END;
+          UNTIL ESSourceCodeLineOutTmp.NEXT = 0;
+        ESSourceCodeLineOutTmp.SETRANGE("Text 1-250");
+
+        ESSourceCodeLineOutTmp.RESET;
+        ESSourceCodeLineOutTmp.SETFILTER("Text 1-250",'*HideValue*');
+        IF ESSourceCodeLineOutTmp.FIND('-') THEN
+          REPEAT
+            IF COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,26) = '                HideValue='
+            THEN BEGIN
+              IF UPPERCASE(COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,30)) <>
+                 UPPERCASE('                HideValue=TRUE')
+              THEN BEGIN
+                IF COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,32) <>
+                   '                HideValue=ESACC_'
+                THEN BEGIN
+                  ESFLADSControl.RESET;
+                  ESFLADSControl.SETRANGE("Object Type",AllObjWithCaption."Object Type");
+                  ESFLADSControl.SETRANGE("Object ID",AllObjWithCaption."Object ID");
+                  ESFLADSControl.SETRANGE("Control ID",ESSourceCodeLineOutTmp."Control ID");
+                  IF ESFLADSControl.FIND('-') THEN BEGIN
+                    IF (ESFLADSControl."HideValue Variable Name" <> '') AND
+                       (ESSourceCodeLineOutTmp."Line Length" < 200)
+                    THEN BEGIN
+                      IF COPYSTR(
+                           ESSourceCodeLineOutTmp."Text 1-250",
+                           STRLEN(ESSourceCodeLineOutTmp."Text 1-250")) = ';'
+                      THEN
+                        ESSourceCodeLineOutTmp."Text 1-250" :=
+                          COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,26) +
+                          ESFLADSControl."HideValue Variable Name" + ' OR (' +
+                          CheckBooleanText(
+                            COPYSTR(
+                              ESSourceCodeLineOutTmp."Text 1-250",27,
+                              STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 27)) +
+                          ')' +
+                          COPYSTR(
+                            ESSourceCodeLineOutTmp."Text 1-250",
+                            STRLEN(ESSourceCodeLineOutTmp."Text 1-250"))
+                      ELSE
+                        ESSourceCodeLineOutTmp."Text 1-250" :=
+                          COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,26) +
+                          ESFLADSControl."HideValue Variable Name" + ' OR (' +
+                          CheckBooleanText(
+                            COPYSTR(
+                              ESSourceCodeLineOutTmp."Text 1-250",27,
+                              STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 28)) +
+                          ')' +
+                          COPYSTR(
+                            ESSourceCodeLineOutTmp."Text 1-250",
+                            STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 1);
+                      ESSourceCodeLineOutTmp.MODIFY;
+                    END;
+                  END;
+                END;
+              END;
+            END;
+          UNTIL ESSourceCodeLineOutTmp.NEXT = 0;
+        ESSourceCodeLineOutTmp.SETRANGE("Text 1-250");
+
+        ESSourceCodeLineOutTmp.RESET;
+        ESSourceCodeLineOutTmp.SETFILTER("Text 1-250",'*Enabled*');
+        IF ESSourceCodeLineOutTmp.FIND('-') THEN
+          REPEAT
+            CodeIndent := 0;
+            IF COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,24) = '                Enabled=' THEN
+              CodeIndent := 16
+            ELSE
+              IF COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,30) = '                      Enabled='
+              THEN
+                CodeIndent := 22;
+            IF CodeIndent > 0 THEN BEGIN
+              IF UPPERCASE(COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",CodeIndent + 1,13)) <>
+                 UPPERCASE('Enabled=FALSE')
+              THEN BEGIN
+                IF COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",CodeIndent + 1,14) <>
+                   'Enabled=ESACC_'
+                THEN BEGIN
+                  ESFLADSControl.RESET;
+                  ESFLADSControl.SETRANGE("Object Type",AllObjWithCaption."Object Type");
+                  ESFLADSControl.SETRANGE("Object ID",AllObjWithCaption."Object ID");
+                  ESFLADSControl.SETRANGE("Control ID",ESSourceCodeLineOutTmp."Control ID");
+                  IF ESFLADSControl.FIND('-') THEN BEGIN
+                    IF (ESFLADSControl."Enabled Variable Name" <> '') AND
+                       (ESSourceCodeLineOutTmp."Line Length" < 200)
+                    THEN BEGIN
+                      IF COPYSTR(
+                           ESSourceCodeLineOutTmp."Text 1-250",
+                           STRLEN(ESSourceCodeLineOutTmp."Text 1-250")) = ';'
+                      THEN
+                        ESSourceCodeLineOutTmp."Text 1-250" :=
+                          COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,CodeIndent + 8) +
+                          ESFLADSControl."Enabled Variable Name" + ' AND (' +
+                          CheckBooleanText(
+                            COPYSTR(
+                              ESSourceCodeLineOutTmp."Text 1-250",CodeIndent + 9,
+                              STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - (CodeIndent + 9))) +
+                          ')' +
+                          COPYSTR(
+                            ESSourceCodeLineOutTmp."Text 1-250",
+                            STRLEN(ESSourceCodeLineOutTmp."Text 1-250"))
+                      ELSE
+                        ESSourceCodeLineOutTmp."Text 1-250" :=
+                          COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,CodeIndent + 8) +
+                          ESFLADSControl."Enabled Variable Name" + ' AND (' +
+                          CheckBooleanText(
+                            COPYSTR(
+                              ESSourceCodeLineOutTmp."Text 1-250",CodeIndent + 9,
+                              STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - (CodeIndent + 10))) +
+                          ')' +
+                          COPYSTR(
+                            ESSourceCodeLineOutTmp."Text 1-250",
+                            STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 1);
+                      ESSourceCodeLineOutTmp.MODIFY;
+                    END;
+                  END;
+                END;
+              END;
+            END;
+          UNTIL ESSourceCodeLineOutTmp.NEXT = 0;
+        ESSourceCodeLineOutTmp.SETRANGE("Text 1-250");
+      END;
+
+      ESFLADSRelation.RESET;
+      ESFLADSRelation.SETRANGE("Object Type",AllObjWithCaption."Object Type");
+      ESFLADSRelation.SETRANGE("Object ID",AllObjWithCaption."Object ID");
+      ESFLADSRelation.SETRANGE(Type,ESFLADSRelation.Type::"Source Table");
+      ESFLADSRelation.FIND('-');
+      ESFLADSRelation."Code Implemented" := TRUE;
+      ESFLADSRelation.MODIFY;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE DeleteChangesInObject@1240520013(VAR ESSourceCodeLineTmp@1240520012 : Record 14123815;VAR ESSourceCodeLineOutTmp@1240520018 : Record 14123815;VAR AllObjWithCaption@1240520013 : Record 2000000058;TestMode@1240520011 : Boolean;CreateOutObject@1240520032 : Boolean;DeleteManualProcedure@1240520017 : Boolean;ObjectStartLine@1240520015 : Integer;CaptionLanguage@1240520019 : Code[10]) : Boolean;
+    VAR
+      ESSourceCodeLine@1240520016 : Record 14123815;
+      NewLineNo@1240520010 : Integer;
+      i@1240520001 : Integer;
+      Pos@1240520020 : Integer;
+      InsertLine@1240520009 : Boolean;
+      InProcedure@1240520008 : Boolean;
+      DeleteNextLine@1240520014 : Boolean;
+      SecondLineText@1240520002 : Text[250];
+    BEGIN
+      ESReadSourceCode.UpdateFromSourceCodeLines(
+        ESSourceCodeLineTmp,AllObjWithCaption,TestMode,2,FALSE,TRUE,ObjectStartLine);
+
+      IF NOT CreateOutObject THEN
+        EXIT(FALSE);
+
+      UpdateObjectStatus(AllObjWithCaption,1);
+
+      IF NOT (AllObjWithCaption."Object Type" IN
+              [AllObjWithCaption."Object Type"::"2",
+               AllObjWithCaption."Object Type"::Page])
+      THEN
+        EXIT(FALSE);
+
+      ESSourceCodeLineTmp.SETRANGE("Line Not Complete",TRUE);
+      IF ESSourceCodeLineTmp.FIND('-') THEN BEGIN
+        ESSourceCodeLineTmp.SETRANGE("Line Not Complete");
+
+        UpdateObjectStatus(AllObjWithCaption,4);
+        EXIT(FALSE);
+      END;
+      ESSourceCodeLineTmp.SETRANGE("Line Not Complete");
+
+      UpdateObjectStatus(AllObjWithCaption,2);
+
+      UpdateControlCaptions(ESSourceCodeLineTmp,AllObjWithCaption,CaptionLanguage);
+
+      ESSourceCodeLineOutTmp.RESET;
+      ESSourceCodeLineOutTmp.DELETEALL;
+
+      ESSourceCodeLineTmp.FIND('-');
+      REPEAT
+        InsertLine := NOT InProcedure AND NOT DeleteNextLine;
+        DeleteNextLine := FALSE;
+
+        IF ESSourceCodeLineTmp."Text 1-250" <> '' THEN BEGIN
+          IF STRPOS(ESSourceCodeLineTmp."Text 1-250",'ESACC_') > 0 THEN BEGIN
+            IF (COPYSTR(ESSourceCodeLineTmp."Text 1-250",1,39) =
+                '    LOCAL PROCEDURE ESACC_EasySecurity@') OR
+               (DeleteManualProcedure AND
+                (COPYSTR(ESSourceCodeLineTmp."Text 1-250",1,45) =
+                 '    LOCAL PROCEDURE ESACC_EasySecurityManual@'))
+            THEN BEGIN
+              InProcedure := TRUE;
+              InsertLine := FALSE;
+            END;
+
+            IF NOT InProcedure THEN BEGIN
+              InsertLine := FALSE;
+
+              IF STRPOS(ESSourceCodeLineTmp."Text 1-250",'Name=ESACC_C') > 0 THEN BEGIN
+                ESSourceCodeLine := ESSourceCodeLineTmp;
+                ESSourceCodeLineTmp.NEXT;
+
+                IF (ESSourceCodeLine."Line Length" > 249) OR
+                   ((ESSourceCodeLineTmp."Line Length" < 50) OR
+                    (ESSourceCodeLineTmp."Line Length" > 249))
+                THEN
+                  ERROR(
+                    Text012,
+                    AllObjWithCaption."Object Type",AllObjWithCaption."Object ID");
+
+                ESSourceCodeLineOutTmp := ESSourceCodeLineTmp;
+                NewLineNo := NewLineNo + 1;
+                ESSourceCodeLineOutTmp."Line No." := NewLineNo;
+                ESSourceCodeLineOutTmp."Text 1-250" :=
+                  COPYSTR(ESSourceCodeLine."Text 1-250",1,49) +
+                  COPYSTR(ESSourceCodeLineTmp."Text 1-250",50);
+                ESSourceCodeLineOutTmp.INSERT;
+              END ELSE BEGIN
+                IF (STRPOS(ESSourceCodeLineTmp."Text 1-250",'=') > 0) AND
+                   (STRPOS(ESSourceCodeLineTmp."Text 1-250",' AND (') > 0) AND
+                   ((COPYSTR(
+                       ESSourceCodeLineTmp."Text 1-250",
+                       STRLEN(ESSourceCodeLineTmp."Text 1-250") - 1) = ');') OR
+                    (COPYSTR(
+                       ESSourceCodeLineTmp."Text 1-250",
+                       STRLEN(ESSourceCodeLineTmp."Text 1-250") - 2) = ') }'))
+                THEN BEGIN
+                  ESSourceCodeLineOutTmp := ESSourceCodeLineTmp;
+                  NewLineNo := NewLineNo + 1;
+                  ESSourceCodeLineOutTmp."Line No." := NewLineNo;
+                  Pos := STRPOS(ESSourceCodeLineTmp."Text 1-250",'=');
+                  ESSourceCodeLineOutTmp."Text 1-250" :=
+                    COPYSTR(ESSourceCodeLineTmp."Text 1-250",1,Pos);
+                  Pos := STRPOS(ESSourceCodeLineTmp."Text 1-250",' AND (');
+                  ESSourceCodeLineOutTmp."Text 1-250" :=
+                    ESSourceCodeLineOutTmp."Text 1-250" +
+                    COPYSTR(ESSourceCodeLineTmp."Text 1-250",Pos + 6);
+                  IF COPYSTR(
+                       ESSourceCodeLineOutTmp."Text 1-250",
+                       STRLEN(ESSourceCodeLineOutTmp."Text 1-250")) = ';'
+                  THEN
+                    ESSourceCodeLineOutTmp."Text 1-250" :=
+                    COPYSTR(
+                      ESSourceCodeLineOutTmp."Text 1-250",1,
+                      STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 2) + ';'
+                  ELSE
+                    ESSourceCodeLineOutTmp."Text 1-250" :=
+                    COPYSTR(
+                      ESSourceCodeLineOutTmp."Text 1-250",1,
+                      STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 3) + ' }';
+                  ESSourceCodeLineOutTmp.INSERT;
+                END ELSE BEGIN
+                  IF (STRPOS(ESSourceCodeLineTmp."Text 1-250",'=') > 0) AND
+                     (STRPOS(ESSourceCodeLineTmp."Text 1-250",' OR (') > 0) AND
+                     ((COPYSTR(
+                         ESSourceCodeLineTmp."Text 1-250",
+                         STRLEN(ESSourceCodeLineTmp."Text 1-250") - 1) = ');') OR
+                      (COPYSTR(
+                         ESSourceCodeLineTmp."Text 1-250",
+                         STRLEN(ESSourceCodeLineTmp."Text 1-250") - 2) = ') }'))
+                  THEN BEGIN
+                    ESSourceCodeLineOutTmp := ESSourceCodeLineTmp;
+                    NewLineNo := NewLineNo + 1;
+                    ESSourceCodeLineOutTmp."Line No." := NewLineNo;
+                    Pos := STRPOS(ESSourceCodeLineTmp."Text 1-250",'=');
+                    ESSourceCodeLineOutTmp."Text 1-250" :=
+                      COPYSTR(ESSourceCodeLineTmp."Text 1-250",1,Pos);
+                    Pos := STRPOS(ESSourceCodeLineTmp."Text 1-250",' OR (');
+                    ESSourceCodeLineOutTmp."Text 1-250" :=
+                      ESSourceCodeLineOutTmp."Text 1-250" +
+                      COPYSTR(ESSourceCodeLineTmp."Text 1-250",Pos + 5);
+                    IF COPYSTR(
+                         ESSourceCodeLineOutTmp."Text 1-250",
+                         STRLEN(ESSourceCodeLineOutTmp."Text 1-250")) = ';'
+                    THEN
+                      ESSourceCodeLineOutTmp."Text 1-250" :=
+                      COPYSTR(
+                        ESSourceCodeLineOutTmp."Text 1-250",1,
+                        STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 2) + ';'
+                    ELSE
+                      ESSourceCodeLineOutTmp."Text 1-250" :=
+                      COPYSTR(
+                        ESSourceCodeLineOutTmp."Text 1-250",1,
+                        STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 3) + ' }';
+                    ESSourceCodeLineOutTmp.INSERT;
+                  END ELSE BEGIN
+                    IF COPYSTR(ESSourceCodeLineTmp."Text 1-250",STRLEN(ESSourceCodeLineTmp."Text 1-250")) =
+                       '}'
+                    THEN BEGIN
+                      ESSourceCodeLineOutTmp.FIND('+');
+                      IF (ESSourceCodeLineOutTmp."Line Length" > 249) OR
+                         (ESSourceCodeLineOutTmp."Text 1-250" = '')
+                      THEN BEGIN
+                        ESSourceCodeLineOutTmp := ESSourceCodeLineTmp;
+                        NewLineNo := NewLineNo + 1;
+                        ESSourceCodeLineOutTmp."Line No." := NewLineNo;
+                        ESSourceCodeLineOutTmp."Text 1-250" := '';
+                        FOR i := 1 TO ESSourceCodeLineTmp."Line Length" DO
+                          IF ESSourceCodeLineTmp."Text 1-250"[i] IN [' ','}'] THEN
+                            ESSourceCodeLineOutTmp."Text 1-250"[
+                              STRLEN(ESSourceCodeLineOutTmp."Text 1-250") + 1] :=
+                              ESSourceCodeLineTmp."Text 1-250"[i];
+                        ESSourceCodeLineOutTmp."Line Length" :=
+                          STRLEN(ESSourceCodeLineOutTmp."Text 1-250");
+                        ESSourceCodeLineOutTmp.INSERT;
+                      END ELSE BEGIN
+                        ESSourceCodeLineOutTmp."Text 1-250" :=
+                          COPYSTR(
+                            ESSourceCodeLineOutTmp."Text 1-250",1,
+                            STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 1) + ' }';
+                        ESSourceCodeLineOutTmp.MODIFY;
+                      END;
+                    END;
+                  END;
+                END;
+              END;
+            END;
+          END;
+
+          IF InProcedure AND (ESSourceCodeLineTmp."Text 1-250" = '    END;') THEN BEGIN
+            InProcedure := FALSE;
+            DeleteNextLine := TRUE;
+          END;
+        END;
+
+        IF InsertLine THEN BEGIN
+          ESSourceCodeLineOutTmp := ESSourceCodeLineTmp;
+          NewLineNo := NewLineNo + 1;
+          ESSourceCodeLineOutTmp."Line No." := NewLineNo;
+          ESSourceCodeLineOutTmp.INSERT;
+        END;
+      UNTIL ESSourceCodeLineTmp.NEXT = 0;
+
+      ESSourceCodeLineOutTmp.SETRANGE("Text 1-250",'  CODE');
+      ESSourceCodeLineOutTmp.FIND('-');
+      ESSourceCodeLineOutTmp.SETRANGE("Text 1-250");
+      ESSourceCodeLineOutTmp.NEXT;
+      ESSourceCodeLineOutTmp.NEXT;
+      IF ESSourceCodeLineOutTmp."Text 1-250" = '    VAR' THEN BEGIN
+        ESSourceCodeLine := ESSourceCodeLineOutTmp;
+        ESSourceCodeLineOutTmp.NEXT;
+        IF ESSourceCodeLineOutTmp."Text 1-250" = '' THEN BEGIN
+          ESSourceCodeLineOutTmp.NEXT;
+          IF COPYSTR(ESSourceCodeLineOutTmp."Text 1-250" + '         ',1,9) IN
+             ['    LOCAL','    PROCE','    EVENT','    BEGIN','    [Busi','    [Inte','    [Exte']
+          THEN BEGIN
+            ESSourceCodeLineOutTmp := ESSourceCodeLine;
+            ESSourceCodeLineOutTmp.DELETE;
+          END;
+        END;
+      END;
+
+      FOR i := 1 TO 2 DO BEGIN
+        CASE AllObjWithCaption."Object Type" OF
+          AllObjWithCaption."Object Type"::"2":
+            CASE i OF
+              1:
+                BEGIN
+                  ESSourceCodeLineOutTmp.SETRANGE("Text 1-250",'    OnOpenForm=BEGIN');
+                  SecondLineText := '               END;';
+                END;
+              2:
+                BEGIN
+                  ESSourceCodeLineOutTmp.SETRANGE("Text 1-250",'    OnAfterGetRecord=BEGIN');
+                  SecondLineText := '                     END;';
+                END;
+            END;
+          AllObjWithCaption."Object Type"::Page:
+            CASE i OF
+              1:
+                BEGIN
+                  ESSourceCodeLineOutTmp.SETRANGE("Text 1-250",'    OnInit=BEGIN');
+                  SecondLineText := '           END;';
+                END;
+              2:
+                BEGIN
+                  ESSourceCodeLineOutTmp.SETRANGE("Text 1-250",'    OnOpenPage=BEGIN');
+                  SecondLineText := '               END;';
+                END;
+            END;
+          ELSE
+            AllObjWithCaption.TESTFIELD("Object Type",AllObjWithCaption."Object Type"::Page);
+        END;
+
+        IF ESSourceCodeLineOutTmp.FIND('-') THEN BEGIN
+          ESSourceCodeLineOutTmp.SETRANGE("Text 1-250");
+          ESSourceCodeLineOutTmp.NEXT;
+          IF ESSourceCodeLineOutTmp."Text 1-250" = SecondLineText THEN BEGIN
+            ESSourceCodeLineOutTmp.NEXT;
+            IF ESSourceCodeLineOutTmp."Text 1-250" = '' THEN BEGIN
+              ESSourceCodeLineOutTmp.NEXT(-2);
+              ESSourceCodeLineOutTmp.DELETE;
+              ESSourceCodeLineOutTmp.NEXT;
+              ESSourceCodeLineOutTmp.DELETE;
+              ESSourceCodeLineOutTmp.NEXT;
+              ESSourceCodeLineOutTmp.DELETE;
+            END;
+          END;
+        END;
+      END;
+      ESSourceCodeLineOutTmp.SETRANGE("Text 1-250");
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE InsertOutLine@1240520010(VAR ESSourceCodeLineOutTmp@1240520008 : Record 14123815;VAR NewLineNo@1240520009 : Integer;TextLine@1240520010 : Text[250]);
+    BEGIN
+      NewLineNo := NewLineNo + 1;
+      ESSourceCodeLineOutTmp.INIT;
+      ESSourceCodeLineOutTmp."Line No." := NewLineNo;
+      ESSourceCodeLineOutTmp."Text 1-250" := TextLine;
+      ESSourceCodeLineOutTmp.INSERT;
+    END;
+
+    PROCEDURE InsertModifiedLine@1240520014(VAR ESSourceCodeLineTmp@1240520009 : Record 14123815;VAR ESSourceCodeLineOutTmp@1240520008 : Record 14123815;VAR LastNotSemiColon@1240520010 : Boolean;VAR NewLineNo@1240520011 : Integer;VAR LineInserted@1240520012 : Boolean;MoreAdditions@1240520013 : Boolean);
+    BEGIN
+      ESSourceCodeLineOutTmp := ESSourceCodeLineTmp;
+
+      IF (COPYSTR(
+           ESSourceCodeLineOutTmp."Text 1-250",
+           STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 1) = ' }') AND
+         MoreAdditions
+      THEN BEGIN
+        ESSourceCodeLineOutTmp."Text 1-250" :=
+          COPYSTR(
+            ESSourceCodeLineOutTmp."Text 1-250",1,
+            STRLEN(ESSourceCodeLineOutTmp."Text 1-250") - 2) + ';';
+        LastNotSemiColon := TRUE;
+      END;
+
+      NewLineNo := NewLineNo + 1;
+      ESSourceCodeLineOutTmp."Line No." := NewLineNo;
+      ESSourceCodeLineOutTmp.INSERT;
+
+      LineInserted := TRUE;
+    END;
+
+    PROCEDURE WriteOutLines@1240520011(VAR ESSourceCodeLineTmp@1240520014 : Record 14123815;VAR ESSourceCodeLineOutTmp@1240520012 : Record 14123815;AllObjWithCaption@1240520017 : Record 2000000058;VAR SourceCodeFileOut@1240520008 : File;ObjectDate@1240520009 : Date;ObjectTime@1240520010 : Time;DateText@1240520003 : Text[30];TimeText@1240520002 : Text[30];VersionListText@1240520001 : Text[30]);
+    VAR
+      DateValueText@1240520011 : Text[30];
+      TimeValueText@1240520013 : Text[30];
+      Finished@1240520015 : Boolean;
+      EqualCode@1240520016 : Boolean;
+    BEGIN
+      EqualCode := TRUE;
+      IF ESSourceCodeLineTmp.FIND('-') AND ESSourceCodeLineOutTmp.FIND('-') THEN BEGIN
+        REPEAT
+          IF ESSourceCodeLineTmp."Text 1-250" <> ESSourceCodeLineOutTmp."Text 1-250" THEN
+            EqualCode := FALSE;
+          IF ESSourceCodeLineTmp."Text 251-500" <> ESSourceCodeLineOutTmp."Text 251-500" THEN
+            EqualCode := FALSE;
+          IF ESSourceCodeLineTmp."Text 501-750" <> ESSourceCodeLineOutTmp."Text 501-750" THEN
+            EqualCode := FALSE;
+          IF ESSourceCodeLineTmp."Text 751-1000" <> ESSourceCodeLineOutTmp."Text 751-1000" THEN
+            EqualCode := FALSE;
+
+          IF EqualCode AND NOT Finished THEN BEGIN
+            Finished := ESSourceCodeLineTmp.NEXT = 0;
+            IF Finished THEN BEGIN
+              Finished := ESSourceCodeLineOutTmp.NEXT = 0;
+              IF NOT Finished THEN
+                EqualCode := FALSE;
+            END ELSE BEGIN
+              Finished := ESSourceCodeLineOutTmp.NEXT = 0;
+              IF Finished THEN
+                EqualCode := FALSE;
+            END;
+          END;
+        UNTIL NOT EqualCode OR Finished;
+
+        IF EqualCode THEN BEGIN
+          UpdateObjectStatus(AllObjWithCaption,3);
+          EXIT;
+        END;
+      END;
+
+      DateValueText := FORMAT(ObjectDate,0,0);
+      TimeValueText := FORMAT(ObjectTime,0,0);
+      IF COPYSTR(TimeText,1,1) = ' ' THEN
+        TimeText := '[' + TimeText + ']';
+
+      IF ESSourceCodeLineOutTmp.FIND('-') THEN
+        REPEAT
+          ESSourceCodeLineOutTmp.TESTFIELD("Line Not Complete",FALSE);
+
+          IF COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,5 + STRLEN(DateText)) =
+             STRSUBSTNO('    %1=',DateText)
+          THEN
+            ESSourceCodeLineOutTmp."Text 1-250" :=
+              COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,4) + DateText + '=' + DateValueText + ';';
+
+          IF COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,5 + STRLEN(TimeText)) =
+             STRSUBSTNO('    %1=',TimeText)
+          THEN
+            ESSourceCodeLineOutTmp."Text 1-250" :=
+              COPYSTR(ESSourceCodeLineOutTmp."Text 1-250",1,4) + TimeText + '=' + TimeValueText + ';';
+
+          SourceCodeFileOut.WRITE(
+            ESSourceCodeLineOutTmp."Text 1-250" + ESSourceCodeLineOutTmp."Text 251-500"+
+            ESSourceCodeLineOutTmp."Text 501-750" + ESSourceCodeLineOutTmp."Text 751-1000");
+        UNTIL ESSourceCodeLineOutTmp.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateFormControlName@1240520012(VAR ControlNameText@1240520009 : Text[50]);
+    VAR
+      Pos@1240520008 : Integer;
+    BEGIN
+      Pos := 0;
+      REPEAT
+        Pos := Pos + 1;
+        IF STRPOS(
+             'ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789',
+             UPPERCASE(COPYSTR(ControlNameText,Pos,1))) = 0
+        THEN BEGIN
+          ControlNameText := '"' + ControlNameText + '"';
+          Pos := STRLEN(ControlNameText);
+        END;
+      UNTIL Pos >= STRLEN(ControlNameText);
+    END;
+
+    PROCEDURE UpdateObjectStatus@1240520015(AllObjWithCaption@1240520008 : Record 2000000058;Value@1240520009 : Integer);
+    BEGIN
+      ObjectStatus[AllObjWithCaption."Object Type",Value] :=
+        ObjectStatus[AllObjWithCaption."Object Type",Value] + 1;
+    END;
+
+    PROCEDURE UpdateControlCaptions@1240520016(VAR ESSourceCodeLineTmp@1240520012 : Record 14123815;AllObjWithCaption@1240520010 : Record 2000000058;CaptionLanguage@1240520020 : Code[10]);
+    VAR
+      ESFLADSControl@1240520008 : Record 14123814;
+      ESFLADSControl2@1240520009 : Record 14123814;
+      TempText@1240520013 : Text[1000];
+      ENUTempText@1240520016 : Text[1000];
+      LocalTempText@1240520017 : Text[1000];
+      Pos@1240520014 : Integer;
+      Leadingcharacters@1240520015 : Integer;
+      EndingWithBracket@1240520018 : Boolean;
+      Finished@1240520019 : Boolean;
+    BEGIN
+      ESFLADSControl.RESET;
+      ESFLADSControl.SETRANGE("Object Type",AllObjWithCaption."Object Type");
+      ESFLADSControl.SETRANGE("Object ID",AllObjWithCaption."Object ID");
+      ESFLADSControl.SETFILTER("Control ID",'<>0');
+      ESFLADSControl.SETFILTER(
+        "Control Type",'%1|%2|%3',
+        ESFLADSControl."Control Type"::MenuButton,
+        ESFLADSControl."Control Type"::CommandButton,
+        ESFLADSControl."Control Type"::Action);
+      IF ESFLADSControl.FIND('-') THEN
+        REPEAT
+          ENUTempText := '';
+          LocalTempText := '';
+          Pos := 0;
+
+          ESSourceCodeLineTmp.RESET;
+          ESSourceCodeLineTmp.SETRANGE("Control ID",ESFLADSControl."Control ID");
+          ESSourceCodeLineTmp.SETFILTER("Text 1-250",'*CaptionML*');
+          IF ESSourceCodeLineTmp.FIND('-') THEN BEGIN
+            TempText :=
+              ESSourceCodeLineTmp."Text 1-250" + ESSourceCodeLineTmp."Text 251-500" +
+              ESSourceCodeLineTmp."Text 501-750" + ESSourceCodeLineTmp."Text 751-1000";
+            Pos := STRPOS(TempText,'CaptionML=');
+          END ELSE BEGIN
+            ESSourceCodeLineTmp.SETFILTER("Text 1-250",'*ToolTipML*');
+            IF ESSourceCodeLineTmp.FIND('-') THEN BEGIN
+              TempText :=
+                ESSourceCodeLineTmp."Text 1-250" + ESSourceCodeLineTmp."Text 251-500" +
+                ESSourceCodeLineTmp."Text 501-750" + ESSourceCodeLineTmp."Text 751-1000";
+              Pos := STRPOS(TempText,'ToolTipML=');
+            END;
+          END;
+
+          IF Pos <> 0 THEN BEGIN
+            IF Pos > 0 THEN BEGIN
+              Leadingcharacters := Pos + 10;
+              TempText := COPYSTR(TempText,Leadingcharacters);
+              IF COPYSTR(TempText,1,1) = '[' THEN BEGIN
+                TempText := COPYSTR(TempText,2);
+                Leadingcharacters := Leadingcharacters + 1;
+                EndingWithBracket := TRUE;
+              END ELSE
+                EndingWithBracket := FALSE;
+            END;
+
+            ESSourceCodeLineTmp.SETRANGE("Text 1-250");
+
+            REPEAT
+              TempText :=
+                COPYSTR(
+                  ESSourceCodeLineTmp."Text 1-250" + ESSourceCodeLineTmp."Text 251-500" +
+                  ESSourceCodeLineTmp."Text 501-750" + ESSourceCodeLineTmp."Text 751-1000",
+                  Leadingcharacters);
+
+              IF COPYSTR(TempText,1,4) = 'ENU=' THEN
+                ENUTempText := COPYSTR(TempText,5);
+              IF COPYSTR(TempText,1,4) = CaptionLanguage + '=' THEN
+                LocalTempText := COPYSTR(TempText,5);
+
+              IF EndingWithBracket THEN
+                Finished :=
+                  (COPYSTR(TempText,STRLEN(TempText) - 1,2) = '];') OR
+                  (COPYSTR(TempText,STRLEN(TempText) - 2,3) = '] }')
+              ELSE
+                Finished := TRUE;
+              IF NOT Finished THEN
+                Finished := ESSourceCodeLineTmp.NEXT = 0;
+            UNTIL Finished;
+
+            IF ENUTempText = '' THEN
+              ENUTempText := LocalTempText;
+            ENUTempText := CleanCaptionText(ENUTempText);
+
+            IF LocalTempText = '' THEN
+              LocalTempText := ENUTempText
+            ELSE
+              LocalTempText := CleanCaptionText(LocalTempText);
+
+            IF (ENUTempText <> '') OR (LocalTempText <> '') THEN BEGIN
+              ESFLADSControl2 := ESFLADSControl;
+              ESFLADSControl2."Control Caption" :=
+                COPYSTR(LocalTempText,1,MAXSTRLEN(ESFLADSControl2."Control Caption"));
+              ESFLADSControl2."ENU Control Caption" :=
+                COPYSTR(ENUTempText,1,MAXSTRLEN(ESFLADSControl2."ENU Control Caption"));
+              ESFLADSControl2.MODIFY;
+            END;
+          END;
+        UNTIL ESFLADSControl.NEXT = 0;
+
+      ESSourceCodeLineTmp.SETRANGE("Control ID");
+      ESSourceCodeLineTmp.SETRANGE("Text 1-250");
+    END;
+
+    PROCEDURE CleanCaptionText@1240520017(TempText@1240520008 : Text[1000]) : Text[1000];
+    BEGIN
+      IF STRLEN(TempText) > 3 THEN BEGIN
+        IF COPYSTR(TempText,STRLEN(TempText),1) = ';' THEN
+          TempText := DELCHR(COPYSTR(TempText,1,STRLEN(TempText) - 1),'>');
+        IF COPYSTR(TempText,STRLEN(TempText),1) = '}' THEN
+          TempText := DELCHR(COPYSTR(TempText,1,STRLEN(TempText) - 1),'>');
+        IF COPYSTR(TempText,STRLEN(TempText),1) = ']' THEN
+          TempText := DELCHR(COPYSTR(TempText,1,STRLEN(TempText) - 1),'>');
+      END;
+      TempText := DELCHR(TempText,'=','&');
+
+      EXIT(TempText);
+    END;
+
+    PROCEDURE OnlySimpleCharacters@1240520018(TempText@1240520008 : Text[1000]) : Text[1000];
+    VAR
+      TempText2@1240520009 : Text[1000];
+      i@1240520010 : Integer;
+    BEGIN
+      FOR i := 1 TO STRLEN(TempText) DO
+        IF STRPOS('ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890',UPPERCASE(COPYSTR(TempText,i,1))) > 0 THEN
+          TempText2 := TempText2 + COPYSTR(TempText,i,1);
+
+      EXIT(TempText2);
+    END;
+
+    PROCEDURE FirstCharacters@1240520019();
+    BEGIN
+    END;
+
+    PROCEDURE CheckBooleanText@1240520001(TempText@1240520001 : Text[1000]) : Text[1000];
+    BEGIN
+      IF (UPPERCASE(TempText) = 'FALSE') OR (UPPERCASE(TempText) = 'TRUE') THEN
+        TempText := UPPERCASE(TempText);
+      EXIT(TempText);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,183 @@
+OBJECT Codeunit 98 Purchase Post via Job Queue
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/03/20;
+    Time=12:00:00 PM;
+    Version List=NAVW111.00.00.39505;
+  }
+  PROPERTIES
+  {
+    TableNo=472;
+    OnRun=VAR
+            PurchHeader@1000 : Record 38;
+            BatchProcessingMgt@1003 : Codeunit 1380;
+            PurchPostPrint@1002 : Codeunit 92;
+            RecRef@1001 : RecordRef;
+          BEGIN
+            TESTFIELD("Record ID to Process");
+            RecRef.GET("Record ID to Process");
+            RecRef.SETTABLE(PurchHeader);
+            PurchHeader.FIND;
+
+            BatchProcessingMgt.GetBatchFromSession("Record ID to Process","User Session ID");
+
+            SetJobQueueStatus(PurchHeader,PurchHeader."Job Queue Status"::Posting);
+            IF NOT CODEUNIT.RUN(CODEUNIT::"Purch.-Post",PurchHeader) THEN BEGIN
+              SetJobQueueStatus(PurchHeader,PurchHeader."Job Queue Status"::Error);
+              BatchProcessingMgt.ResetBatchID;
+              ERROR(GETLASTERRORTEXT);
+            END;
+            IF NOT AreOtherJobQueueEntriesScheduled(Rec) THEN
+              BatchProcessingMgt.ResetBatchID;
+            BatchProcessingMgt.DeleteProcessingSessionMapForRecordId(PurchHeader.RECORDID);
+            IF PurchHeader."Print Posted Documents" THEN
+              PurchPostPrint.GetReport(PurchHeader);
+
+            SetJobQueueStatus(PurchHeader,PurchHeader."Job Queue Status"::" ");
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PostDescription@1000 : TextConst '@@@="%1 = document type, %2 = document number. Example: Post Purchase Order 1234.";ENU=Post Purchase %1 %2.;ESM=Registrar compra %1 %2.;FRC=Reportez les achats %1 %2.;ENC=Post Purchase %1 %2.';
+      PostAndPrintDescription@1002 : TextConst '@@@="%1 = document type, %2 = document number. Example: Post Purchase Order 1234.";ENU=Post and Print Purchase %1 %2.;ESM=Registrar e imprimir %1 compra %2.;FRC=Reporter et imprimer les achats %1 %2.;ENC=Post and Print Purchase %1 %2.';
+      Confirmation@1001 : TextConst '@@@="%1=document type, %2=number, e.g. Order 123  or Invoice 234.";ENU=%1 %2 has been scheduled for posting.;ESM=%1 %2 se ha programado para el registro.;FRC=%1 %2 a ‚t‚ planifi‚ pour report.;ENC=%1 %2 has been scheduled for posting.';
+      WrongJobQueueStatus@1003 : TextConst '@@@="%1 = document type, %2 = document number. Example: Purchase Order 1234 or Invoice 1234.";ENU=%1 %2 cannot be posted because it has already been scheduled for posting. Choose the Remove from Job Queue action to reset the job queue status and then post again.;ESM=%1 %2 no se puede registrar porque ya se ha programado para el registro. Elija la acci¢n Quitar de cola de proyecto para restablecer el estado de la cola de proyecto y vuelva a registrarlo.;FRC=Impossible de reporter %1 %2, car ce document a d‚j… ‚t‚ programm‚ pour report. Choisissez l''action Supprimer de la file d''attente des travaux pour r‚initialiser l''‚tat de la file des travaux, puis recommencez le report.;ENC=%1 %2 cannot be posted because it has already been scheduled for posting. Choose the Remove from Job Queue action to reset the job queue status and then post again.';
+
+    LOCAL PROCEDURE SetJobQueueStatus@5(VAR PurchHeader@1001 : Record 38;NewStatus@1000 : Option);
+    BEGIN
+      PurchHeader.LOCKTABLE;
+      IF PurchHeader.FIND THEN BEGIN
+        PurchHeader."Job Queue Status" := NewStatus;
+        PurchHeader.MODIFY;
+        COMMIT;
+      END;
+    END;
+
+    [External]
+    PROCEDURE EnqueuePurchDoc@1(VAR PurchHeader@1000 : Record 38);
+    BEGIN
+      EnqueuePurchDocWithUI(PurchHeader,TRUE);
+    END;
+
+    [External]
+    PROCEDURE EnqueuePurchDocWithUI@8(VAR PurchHeader@1000 : Record 38;WithUI@1002 : Boolean);
+    VAR
+      TempInvoice@1004 : Boolean;
+      TempRcpt@1005 : Boolean;
+      TempShip@1006 : Boolean;
+    BEGIN
+      WITH PurchHeader DO BEGIN
+        IF NOT ("Job Queue Status" IN ["Job Queue Status"::" ","Job Queue Status"::Error]) THEN
+          ERROR(WrongJobQueueStatus,"Document Type","No.");
+        TempInvoice := Invoice;
+        TempRcpt := Receive;
+        TempShip := Ship;
+        IF Status = Status::Open THEN
+          CODEUNIT.RUN(CODEUNIT::"Release Purchase Document",PurchHeader);
+        Invoice := TempInvoice;
+        Receive := TempRcpt;
+        Ship := TempShip;
+        "Job Queue Status" := "Job Queue Status"::"Scheduled for Posting";
+        "Job Queue Entry ID" := EnqueueJobEntry(PurchHeader);
+        MODIFY;
+
+        IF GUIALLOWED THEN
+          IF WithUI THEN
+            MESSAGE(Confirmation,"Document Type","No.");
+      END;
+    END;
+
+    LOCAL PROCEDURE EnqueueJobEntry@3(PurchHeader@1000 : Record 38) : GUID;
+    VAR
+      JobQueueEntry@1001 : Record 472;
+    BEGIN
+      WITH JobQueueEntry DO BEGIN
+        CLEAR(ID);
+        "Object Type to Run" := "Object Type to Run"::Codeunit;
+        "Object ID to Run" := CODEUNIT::"Purchase Post via Job Queue";
+        "Record ID to Process" := PurchHeader.RECORDID;
+        FillJobEntryFromPurchSetup(JobQueueEntry,PurchHeader."Print Posted Documents");
+        FillJobEntryPurchDescription(JobQueueEntry,PurchHeader);
+        "User Session ID" := SESSIONID;
+        CODEUNIT.RUN(CODEUNIT::"Job Queue - Enqueue",JobQueueEntry);
+        EXIT(ID);
+      END;
+    END;
+
+    LOCAL PROCEDURE FillJobEntryFromPurchSetup@4(VAR JobQueueEntry@1001 : Record 472;PostAndPrint@1000 : Boolean);
+    VAR
+      PurchSetup@1002 : Record 312;
+    BEGIN
+      PurchSetup.GET;
+      WITH JobQueueEntry DO BEGIN
+        "Notify On Success" := PurchSetup."Notify On Success";
+        "Job Queue Category Code" := PurchSetup."Job Queue Category Code";
+        IF PostAndPrint THEN
+          Priority := PurchSetup."Job Q. Prio. for Post & Print"
+        ELSE
+          Priority := PurchSetup."Job Queue Priority for Post";
+      END;
+    END;
+
+    LOCAL PROCEDURE FillJobEntryPurchDescription@6(VAR JobQueueEntry@1001 : Record 472;PurchHeader@1000 : Record 38);
+    BEGIN
+      WITH JobQueueEntry DO BEGIN
+        IF PurchHeader."Print Posted Documents" THEN
+          Description := PostAndPrintDescription
+        ELSE
+          Description := PostDescription;
+        Description :=
+          COPYSTR(STRSUBSTNO(Description,PurchHeader."Document Type",PurchHeader."No."),1,MAXSTRLEN(Description));
+      END;
+    END;
+
+    [External]
+    PROCEDURE CancelQueueEntry@2(VAR PurchHeader@1000 : Record 38);
+    BEGIN
+      WITH PurchHeader DO
+        IF "Job Queue Status" <> "Job Queue Status"::" " THEN BEGIN
+          DeleteJobs(PurchHeader);
+          "Job Queue Status" := "Job Queue Status"::" ";
+          MODIFY;
+        END;
+    END;
+
+    LOCAL PROCEDURE DeleteJobs@9(PurchHeader@1001 : Record 38);
+    VAR
+      JobQueueEntry@1000 : Record 472;
+    BEGIN
+      WITH PurchHeader DO BEGIN
+        IF NOT ISNULLGUID("Job Queue Entry ID") THEN
+          JobQueueEntry.SETRANGE(ID,"Job Queue Entry ID");
+        JobQueueEntry.SETRANGE("Record ID to Process",RECORDID);
+        IF NOT JobQueueEntry.ISEMPTY THEN
+          JobQueueEntry.DELETEALL(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE AreOtherJobQueueEntriesScheduled@11(JobQueueEntry@1002 : Record 472) : Boolean;
+    VAR
+      PurchasesPayablesSetup@1000 : Record 312;
+      JobQueueEntryFilter@1001 : Record 472;
+    BEGIN
+      PurchasesPayablesSetup.GET;
+      JobQueueEntryFilter.SETFILTER("Job Queue Category Code",PurchasesPayablesSetup."Job Queue Category Code");
+      JobQueueEntryFilter.SETFILTER(ID,'<>%1',JobQueueEntry.ID);
+      JobQueueEntryFilter.SETRANGE("Object ID to Run",JobQueueEntry."Object ID to Run");
+      JobQueueEntryFilter.SETRANGE("Object Type to Run",JobQueueEntry."Object Type to Run");
+      JobQueueEntryFilter.SETRANGE("User Session ID",JobQueueEntry."User Session ID");
+      JobQueueEntryFilter.SETFILTER(
+        Status,'%1|%2|%3|%4',
+        JobQueueEntry.Status::"In Process",JobQueueEntry.Status::"On Hold",
+        JobQueueEntry.Status::"On Hold with Inactivity Timeout",JobQueueEntry.Status::Ready);
+      EXIT(NOT JobQueueEntryFilter.ISEMPTY);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

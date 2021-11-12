@@ -1,0 +1,718 @@
+OBJECT Report 14000908 Bill of Lading E-Mail
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/15/21;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=SE0.60.05,001;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Bill of Lading E-Mail;
+    ProcessingOnly=Yes;
+  }
+  DATASET
+  {
+    { 5444;    ;DataItem;                    ;
+               DataItemTable=Table2000000026;
+               DataItemTableView=SORTING(Number);
+               MaxIteration=1;
+               OnPreDataItem=BEGIN
+                               ShowStatus := FALSE;
+
+                               IF ShowStatus THEN
+                                 Window.OPEN(
+                                   //<TPZ2430>
+                                   Text001,
+                                   //Text001 +
+                                   //</TPZ2430>
+                                   Text002);
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  LocalDocType@1000000000 : 'SalesInvoice,SalesCM,CustStatement,SOConf,SPSASN,BOL';
+                                BEGIN
+                                  CLEAR(FieldValue);
+
+                                  //<TPZ2430>
+                                  //EMailSetup.TESTFIELD("Bill of Lading E-Mail");
+                                  IF SMTPOff365 THEN
+                                    EMailSetup.TESTFIELD("BOL Off. 365 E-Mail");
+                                  //</TPZ2430>
+                                  IF NOT GetInitialRecords THEN BEGIN
+                                    EmailSent := FALSE;   //<TPZ2430>
+                                    ModifyRecords;
+                                    EXIT;
+                                  END;
+
+                                  //<TPZ2430>
+                                  {IF BatchProcessing THEN
+                                    REPEAT
+                                      IF EMailListEntryTmp."Created at Date" >= BillOfLading."Packing Date" THEN
+                                        CurrReport.SKIP;
+                                    UNTIL EMailListEntryTmp.NEXT = 0;}
+                                  //</TPZ2430>
+
+                                  IF EMailHeader."Line Break Character" <> '' THEN
+                                    MailInt.LineFeedChar := EMailHeader."Line Break Character";
+
+                                  // Create Subject Line
+                                  IF ShowStatus THEN
+                                    Window.UPDATE(1,Text003);
+                                  //<TPZ2430>
+                                  IF SMTPOff365 THEN BEGIN
+                                    MailInt.SetSendViaOff365(SMTPOff365);
+                                    MailInt.InitializeMailOff365(FieldValue.SubstituteHeader(EMailHeader),LocalDocType::BOL);
+                                  END ELSE
+                                    MailInt.InitializeMail(FieldValue.SubstituteHeader(EMailHeader));
+                                  //</TPZ2430>
+
+                                  // Address the mail
+                                  IF ShowStatus THEN
+                                    Window.UPDATE(1,Text004);
+
+                                  ReceiverTo := '';
+                                  ReceiverCC := '';
+                                  ReceiverBCC := '';
+                                  EMailListEntryTmp.RemoveEntriesWithSameEMail(EMailListEntryTmp);
+                                  REPEAT
+                                    CASE EMailListEntryTmp."Bill of Lading E-Mail" OF
+                                      EMailListEntryTmp."Bill of Lading E-Mail"::"To":
+                                        BEGIN
+                                           CreateEmailAddressStr(EMailListEntryTmp."E-Mail",'TO');
+                                          //<TPZ2430>
+                                          IF SMTPOff365 THEN
+                                            CreateEmailAddressStr(EMailSetup."SMTP User ID Off. 365",'TO');
+                                          //</TPZ2430>
+                                        END;
+                                      EMailListEntryTmp."Bill of Lading E-Mail"::CC:
+                                        BEGIN
+                                           CreateEmailAddressStr(EMailListEntryTmp."E-Mail",'CC');
+                                          //<TPZ2430>
+                                          IF SMTPOff365 THEN
+                                            CreateEmailAddressStr(EMailSetup."SMTP User ID Off. 365",'CC');
+                                          //</TPZ2430>
+                                        END;
+                                      EMailListEntryTmp."Bill of Lading E-Mail"::BCC:
+                                        BEGIN
+                                           CreateEmailAddressStr(EMailListEntryTmp."E-Mail",'BCC');
+                                          //<TPZ2430>
+                                          IF SMTPOff365 THEN
+                                            CreateEmailAddressStr(EMailSetup."SMTP User ID Off. 365",'BCC');
+                                          //</TPZ2430>
+                                        END;
+                                    END;
+                                  UNTIL EMailListEntryTmp.NEXT = 0;
+
+                                  IF ReceiverTo <> '' THEN
+                                    MailInt.AddReceiverTo(ReceiverTo);
+
+                                  IF ReceiverCC <> '' THEN
+                                    MailInt.AddReceiverCC(ReceiverCC);
+
+                                  IF ReceiverBCC <> '' THEN
+                                    MailInt.AddReceiverBCC(ReceiverBCC);
+
+                                  // Create the body of the E-Mail
+                                  RecordFound[1] := TRUE;
+                                  LastLevel := 1;
+                                  LastType := 0;
+                                  EMailLine.RESET;
+                                  EMailLine.SETRANGE("E-Mail Code",EMailHeader.Code);
+                                  IF EMailLine.FIND('-') THEN
+                                    REPEAT
+                                      IF ShowStatus THEN
+                                        Window.UPDATE(1,EMailLine.Text);
+                                      EMailLine.TESTFIELD(Level);
+
+                                      // Handle Higher Level
+                                      IF LastLevel < EMailLine.Level THEN BEGIN
+                                        GetFirstRecordInLoop(EMailLine.Level);
+                                        FirstOnLevel[EMailLine.Level] := TRUE;
+                                        EMailLineFirstOnLevel[EMailLine.Level] := EMailLine;
+                                      END;
+
+                                      // Handle Skip Level if no records
+                                      IF FirstOnLevel[EMailLine.Level] AND
+                                         NOT RecordFound[EMailLine.Level] AND
+                                         EMailLine."Include only level if details"
+                                      THEN BEGIN
+                                        EMailLine.SETFILTER(Level,'<%1',EMailLine.Level);
+                                        Finished := EMailLine.NEXT = 0;
+                                        EMailLine.SETRANGE(Level);
+                                      END ELSE BEGIN
+                                        // Substitute Values in Line and add to E-Mail
+                                        IF (EMailLine.Type <> EMailLine.Type::Loop) OR
+                                           RecordFound[EMailLine.Level]
+                                        THEN
+                                          MailInt.AddtoBody(FieldValue.SubstituteLine(EMailLine));
+
+                                        // Get Next E-Mail Line
+                                        LastType := EMailLine.Type;
+                                        LastLevel := EMailLine.Level;
+                                        Finished := EMailLine.NEXT = 0;
+
+                                        // Handle Loop End or Return to Lower Level
+                                        IF (LastType = EMailLine.Type::Loop) AND
+                                           (((EMailLine.Type <> EMailLine.Type::Loop) AND
+                                             (LastLevel = EMailLine.Level)) OR
+                                            (LastLevel > EMailLine.Level)) AND
+                                           RecordFound[LastLevel]
+                                        THEN BEGIN
+                                          GetNextRecordInLoop(LastLevel);
+
+                                          // Repeat Loop if Record found
+                                          IF RecordFound[LastLevel] THEN BEGIN
+                                            EMailLine := EMailLineFirstOnLevel[LastLevel];
+                                            EMailLine.SETRANGE(Type,EMailLine.Type::Loop);
+                                            EMailLine.NEXT;
+                                            EMailLine.SETRANGE(Type);
+                                          END;
+                                        END;
+                                      END;
+
+                                      FirstOnLevel[EMailLine.Level] := FALSE;
+                                    UNTIL Finished;
+
+                                  // Create and add attachment
+                                  IF ShowStatus THEN
+                                    Window.UPDATE(1,Text005);
+                                  EMailAttachmentTmp.DELETEALL;
+                                  EMailAttachment.RESET;
+                                  EMailAttachment.SETRANGE("E-Mail Code",EMailHeader.Code);
+                                  IF EMailAttachment.FIND('-') THEN BEGIN
+                                    EMailSetup.TESTFIELD("E-Mail Buffer Directory");
+
+                                    REPEAT
+                                      CASE EMailAttachment.Type OF
+                                        EMailAttachment.Type::Report:
+                                          BEGIN
+                                            EMailAttachment.TESTFIELD("Attachment Name");
+                                            EMailAttachment.TESTFIELD("Attachment Report ID");
+
+                                            TempFilename := EMailSetup."E-Mail Buffer Directory";
+                                            //<TPZ2430>
+                                            //IF COPYSTR(TempFilename,STRLEN(TempFilename),1) <> '\' THEN
+                                              //TempFilename := TempFilename + '\';
+                                            TempFilename := TempFilename + '\' + FieldValue.SubstituteAttachment(EMailAttachment);
+
+                                            SaveReport(EMailAttachment."Attachment Report ID",TempFilename);
+                                            IF NOT EXISTS(TempFilename) THEN
+                                              CurrReport.SKIP
+                                            ELSE
+                                              MailInt.AddAttachment(TempFilename);
+                                            //</TPZ2430>
+
+                                            EMailAttachmentTmp := EMailAttachment;
+                                            EMailAttachmentTmp."Use Attachment File Name" := TempFilename;
+                                            EMailAttachmentTmp.INSERT;
+                                          END;
+                                        EMailAttachment.Type::"Fixed File":
+                                          BEGIN
+                                            IF NOT EXISTS(EMailAttachment."Fixed File Name") THEN
+                                              ERROR(Text006,EMailAttachment."Fixed File Name");
+
+                                            MailInt.AddAttachment(EMailAttachment."Fixed File Name");
+                                          END;
+                                      END;
+                                    UNTIL EMailAttachment.NEXT = 0;
+                                  END;
+
+                                  // Send e-mail
+                                  IF ShowStatus THEN
+                                    Window.UPDATE(1,Text007);
+
+                                  //>>001 TPZ3222
+                                  //<TPZ2430>
+                                  //IF NOT SMTPOff365 THEN BEGIN
+                                  IF MailInt.Send(EMailHeader."Confirm E-Mail manually") THEN
+                                    EmailSent := TRUE;
+                                  //END ELSE BEGIN
+                                  //  IF MailInt.SendViaOff365(EMailHeader."Confirm E-Mail manually") THEN
+                                  //    EmailSent := TRUE;
+                                  //END;
+                                  //</TPZ2430>
+                                  //<<001 TPZ3222
+                                  CLEAR(MailInt);
+
+                                  IF EMailAttachmentTmp.FIND('-') THEN
+                                    REPEAT
+                                      MailInt.DeleteAttachment(EMailAttachmentTmp."Use Attachment File Name");
+                                    UNTIL EMailAttachmentTmp.NEXT = 0;
+
+                                  // Update the Records
+                                  ModifyRecords;
+                                END;
+
+               OnPostDataItem=BEGIN
+                                IF ShowStatus THEN
+                                  Window.CLOSE;
+                              END;
+                               }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      BillOfLading@1000000000 : Record 14000822;
+      BillOfLadingLine@1000000001 : Record 14000823;
+      ShippingCommentLine@1000000002 : Record 14000706;
+      BillOfLadingSummaryLine@1000000003 : Record 14000825;
+      BillOfLadingSummaryLineASN@1000000004 : Record 14000825;
+      CompanyInformation@1000000005 : Record 79;
+      Customer@1000000006 : Record 18;
+      ShipToAddress@1000000007 : Record 222;
+      Vendor@1000000030 : Record 23;
+      OrderAddress@1000000031 : Record 224;
+      Location@1000000024 : Record 14;
+      ShippingAgent@1000000025 : Record 291;
+      EShipAgentService@1000000026 : Record 14000708;
+      EMailSetup@1000000008 : Record 14000905;
+      EMailRule@1000000009 : Record 14000907;
+      EMailHeader@1000000010 : Record 14000901;
+      EMailLine@1000000011 : Record 14000902;
+      EMailLineFirstOnLevel@1000000012 : ARRAY [10] OF Record 14000902;
+      EMailListEntryTmp@1000000013 : TEMPORARY Record 14000908;
+      EMailAttachment@1000000027 : Record 14000909;
+      EMailAttachmentTmp@1000000028 : TEMPORARY Record 14000909;
+      FieldValue@1000000014 : Codeunit 14000901;
+      MailInt@1000000015 : Codeunit 14000905;
+      Window@1000000016 : Dialog;
+      RecordFound@1000000017 : ARRAY [10] OF Boolean;
+      FirstOnLevel@1000000018 : ARRAY [10] OF Boolean;
+      Finished@1000000019 : Boolean;
+      ShowStatus@1000000020 : Boolean;
+      LastLevel@1000000021 : Integer;
+      LastType@1000000022 : Integer;
+      BillOfLadingNo@1000000023 : Code[20];
+      TempFilename@1000000029 : Text[250];
+      Text001@1001 : TextConst 'ENU=Creating E-Mail\';
+      Text002@1002 : TextConst 'ENU=Current Line #1##################';
+      Text003@1003 : TextConst 'ENU=Subject';
+      Text004@1004 : TextConst 'ENU=Addressing';
+      Text005@1005 : TextConst 'ENU=Attachments';
+      Text006@1006 : TextConst 'ENU=Attachment file %1 do not exists.';
+      Text007@1007 : TextConst 'ENU=Sending';
+      Text008@1008 : TextConst 'ENU=Level   Table\';
+      Text009@1009 : TextConst 'ENU="  1     Bill of Lading (14000822)\"';
+      Text010@1010 : TextConst 'ENU="  2       Bill of Lading Line (14000823)\"';
+      Text011@1011 : TextConst 'ENU="  3       Shipping Comment Line (14000706)\"';
+      Text012@1012 : TextConst 'ENU="  4       Bill of Lading Summary Line (Standard) (14000825)\"';
+      Text013@1013 : TextConst 'ENU="  5       Bill of Lading Summary Line (ASN) (14000825)\\"';
+      Text014@1014 : TextConst 'ENU=Other tables\';
+      Text015@1015 : TextConst 'ENU=Location (14), Customer (18), Company Information (79), Ship-to Address (222),\';
+      Text016@1016 : TextConst 'ENU=Shipping Agent (291), E-Ship Agent Service (14000708)';
+      Text017@1017 : TextConst 'ENU=Bill of Lading Sum. Line (Std)';
+      Text018@1018 : TextConst 'ENU=Bill of Lading Sum. Line (ASN)';
+      Text019@1019 : TextConst 'ENU=%1 is not a supported level.';
+      Text020@1020 : TextConst 'ENU=Get E-Mail List must be empty.';
+      ReceiverTo@1240020003 : Text[250];
+      ReceiverCC@1240020002 : Text[250];
+      ReceiverBCC@1240020001 : Text[250];
+      SMTPOff365@1000000032 : Boolean;
+      EmailSent@1000000033 : Boolean;
+      BatchProcessing@1000000034 : Boolean;
+
+    PROCEDURE CreateEmailAddressStr@1240020000(EmailAddressStr@1240020000 : Text[250];Type@1240020001 : Text[10]);
+    BEGIN
+      CASE Type OF
+        'TO':
+          IF ReceiverTo = '' THEN
+            ReceiverTo := EmailAddressStr
+          ELSE
+            ReceiverTo := ReceiverTo + ';' + EmailAddressStr;
+        'CC':
+          IF ReceiverCC = '' THEN
+            ReceiverCC := EmailAddressStr
+          ELSE
+            ReceiverCC := ReceiverCC + ';' + EmailAddressStr;
+        'BCC':
+          IF ReceiverBCC = '' THEN
+            ReceiverBCC := EmailAddressStr
+          ELSE
+            ReceiverBCC := ReceiverBCC + ';' + EmailAddressStr;
+      END;
+    END;
+
+    PROCEDURE InitializeRequest@1(NewBillOfLadingNo@1000000000 : Code[20];BatchSending@1000000001 : Boolean);
+    BEGIN
+      BillOfLadingNo := NewBillOfLadingNo;
+      BatchProcessing := BatchSending;
+      IF NewBillOfLadingNo = 'SHOWHELP' THEN
+        MESSAGE(
+          Text008 +
+          Text009 +
+          Text010 +
+          Text011 +
+          Text012 +
+          Text013 +
+          Text014 +
+          Text015 +
+          Text016);
+    END;
+
+    PROCEDURE GetLevelName@5(LevelNo@1000000000 : Integer) : Text[30];
+    BEGIN
+      CASE LevelNo OF
+        1:
+          EXIT(BillOfLading.TABLENAME);
+        2:
+          EXIT(BillOfLadingLine.TABLENAME);
+        3:
+          EXIT(ShippingCommentLine.TABLENAME);
+        4:
+          EXIT(Text017);
+        5:
+          EXIT(Text018);
+        ELSE
+          EXIT('');
+      END;
+    END;
+
+    PROCEDURE GetTableFilter@6() : Text[250];
+    BEGIN
+      EXIT('14|18|23|79|222|224|291|14000706|14000708|14000822|14000823|14000825|14000901|14000907');
+    END;
+
+    PROCEDURE GetRecordNoStrMenu@9(CurrentTableNo@1000000000 : Integer) : Text[250];
+    BEGIN
+      CASE CurrentTableNo OF
+        ELSE
+          EXIT('');
+      END;
+    END;
+
+    LOCAL PROCEDURE GetInitialRecords@2() : Boolean;
+    VAR
+      EMailListEntry@1240030000 : Record 14000908;
+      BillOfLadingLine2@1240030001 : Record 14000823;
+      SendMail@1000000000 : Boolean;
+    BEGIN
+      // Get and Load Header values
+      BillOfLading.GET(BillOfLadingNo);
+      FieldValue.BillofLading_14000822(BillOfLading,0);
+      CompanyInformation.GET;
+      FieldValue.CompanyInformation_79(CompanyInformation,0);
+      CASE BillOfLading."Ship-to Type" OF
+        BillOfLading."Ship-to Type"::Customer:
+          BEGIN
+            Customer.GET(BillOfLading."Ship-to No.");
+            FieldValue.Customer_18(Customer,0);
+            IF BillOfLading."Ship-to Code" <> '' THEN BEGIN
+              ShipToAddress.GET(Customer."No.",BillOfLading."Ship-to Code");
+              FieldValue.ShiptoAddress_222(ShipToAddress,0);
+            END;
+          END;
+        BillOfLading."Ship-to Type"::Vendor:
+          BEGIN
+            Vendor.GET(BillOfLading."Ship-to No.");
+            FieldValue.Vendor_23(Vendor,0);
+            IF BillOfLading."Ship-to Code" <> '' THEN BEGIN
+              OrderAddress.GET(Vendor."No.",BillOfLading."Ship-to Code");
+              FieldValue.OrderAddress_224(OrderAddress,0);
+            END;
+          END;
+        ELSE
+          EXIT(FALSE);
+      END;
+      IF NOT Location.GET(BillOfLading."Location Code") THEN
+        CLEAR(Location);
+      FieldValue.Location_14(Location,0);
+      IF NOT ShippingAgent.GET(BillOfLading."Shipping Agent Code") THEN
+        CLEAR(ShippingAgent);
+      FieldValue.ShippingAgent_291(ShippingAgent,0);
+      IF NOT EShipAgentService.GET(
+               BillOfLading."Shipping Agent Code",BillOfLading."Shipping Agent Service",
+               BillOfLading."World Wide Service")
+      THEN
+        CLEAR(EShipAgentService);
+      FieldValue.EShipAgentService_14000708(EShipAgentService,0);
+
+      // Find E-Mail receivers
+      EMailListEntryTmp.RESET;
+      EMailListEntryTmp.DELETEALL;
+
+      EMailListEntry.RESET;
+      CASE BillOfLading."Ship-to Type" OF
+        BillOfLading."Ship-to Type"::Customer:
+          BEGIN
+            EMailListEntry.SETRANGE("Table ID",DATABASE::Customer);
+            EMailListEntry.SETRANGE(Code,BillOfLading."Ship-to No.");
+            IF BillOfLading."Ship-to Code" <> '' THEN
+              EMailListEntry.SETRANGE("Use for Ship-to/Order Address",TRUE);
+            IF EMailListEntry.FIND('-') THEN
+              REPEAT
+                EMailListEntryTmp := EMailListEntry;
+                EMailListEntryTmp.INSERT;
+              UNTIL EMailListEntry.NEXT = 0;
+
+            IF BillOfLading."Ship-to Code" <> '' THEN BEGIN
+              EMailListEntry.RESET;
+              EMailListEntry.SETRANGE("Table ID",DATABASE::"Ship-to Address");
+              EMailListEntry.SETRANGE(Code,BillOfLading."Ship-to No.");
+              EMailListEntry.SETRANGE("Code 2",BillOfLading."Ship-to Code");
+              IF EMailListEntry.FIND('-') THEN
+                REPEAT
+                  EMailListEntryTmp := EMailListEntry;
+                  EMailListEntryTmp.INSERT;
+                UNTIL EMailListEntry.NEXT = 0;
+            END;
+          END;
+        BillOfLading."Ship-to Type"::Vendor:
+          BEGIN
+            EMailListEntry.SETRANGE("Table ID",DATABASE::Vendor);
+            EMailListEntry.SETRANGE(Code,BillOfLading."Ship-to No.");
+            IF BillOfLading."Ship-to Code" <> '' THEN
+              EMailListEntry.SETRANGE("Use for Ship-to/Order Address",TRUE);
+            IF EMailListEntry.FIND('-') THEN
+              REPEAT
+                EMailListEntryTmp := EMailListEntry;
+                EMailListEntryTmp.INSERT;
+              UNTIL EMailListEntry.NEXT = 0;
+
+            IF BillOfLading."Ship-to Code" <> '' THEN BEGIN
+              EMailListEntry.RESET;
+              EMailListEntry.SETRANGE("Table ID",DATABASE::"Order Address");
+              EMailListEntry.SETRANGE(Code,BillOfLading."Ship-to No.");
+              EMailListEntry.SETRANGE("Code 2",BillOfLading."Ship-to Code");
+              IF EMailListEntry.FIND('-') THEN
+                REPEAT
+                  EMailListEntryTmp := EMailListEntry;
+                  EMailListEntryTmp.INSERT;
+                UNTIL EMailListEntry.NEXT = 0;
+            END;
+          END;
+      END;
+
+      EMailListEntry.RESET;
+      EMailListEntry.SETRANGE("Table ID",DATABASE::"Bill of Lading");
+      EMailListEntry.SETRANGE(Code,BillOfLading."No.");
+      IF EMailListEntry.FIND('-') THEN
+        REPEAT
+          EMailListEntryTmp := EMailListEntry;
+          EMailListEntryTmp.INSERT;
+        UNTIL EMailListEntry.NEXT = 0;
+
+      BillOfLadingLine2.RESET;
+      BillOfLadingLine2.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+      IF BillOfLadingLine2.FIND('-') THEN
+        REPEAT
+          CASE BillOfLadingLine2.Type OF
+            BillOfLadingLine2.Type::"Sales Shipment (Posted)":
+              BEGIN
+                EMailListEntry.RESET;
+                EMailListEntry.SETRANGE("Table ID",DATABASE::"Sales Shipment Header");
+                EMailListEntry.SETRANGE(Code,BillOfLadingLine2."Posted Source ID");
+                IF EMailListEntry.FIND('-') THEN
+                  REPEAT
+                    EMailListEntryTmp := EMailListEntry;
+                    IF NOT EMailListEntryTmp.INSERT THEN
+                      ;
+                  UNTIL EMailListEntry.NEXT = 0;
+
+                EMailListEntry.RESET;
+                EMailListEntry.SETRANGE("Table ID",DATABASE::"Sales Header");
+                EMailListEntry.SETRANGE(Type,1);
+                EMailListEntry.SETRANGE(Code,BillOfLadingLine2."Source ID");
+                IF EMailListEntry.FIND('-') THEN
+                  REPEAT
+                    EMailListEntryTmp := EMailListEntry;
+                    IF NOT EMailListEntryTmp.INSERT THEN
+                      ;
+                  UNTIL EMailListEntry.NEXT = 0;
+              END;
+            BillOfLadingLine2.Type::Package:
+              BEGIN
+                EMailListEntry.RESET;
+                EMailListEntry.SETRANGE("Table ID",BillOfLadingLine2."Source Type");
+                EMailListEntry.SETRANGE(Type,BillOfLadingLine2."Source Subtype");
+                EMailListEntry.SETRANGE(Code,BillOfLadingLine2."Source ID");
+                IF EMailListEntry.FIND('-') THEN
+                  REPEAT
+                    EMailListEntryTmp := EMailListEntry;
+                    IF NOT EMailListEntryTmp.INSERT THEN
+                      ;
+                  UNTIL EMailListEntry.NEXT = 0;
+              END;
+          END;
+        UNTIL BillOfLadingLine2.NEXT = 0;
+
+      EMailListEntryTmp.SETRANGE("Bill of Lading E-Mail",1,3);
+      EMailListEntryTmp.SETFILTER("E-Mail",'<>%1','');
+
+      SendMail :=
+        EMailRule.GetEMailRule(
+          BillOfLading."Ship-to Type",BillOfLading."Ship-to No.",BillOfLading."Ship-to Code");
+
+      IF NOT SendMail THEN
+        EXIT(FALSE);
+
+      SendMail := EMailHeader.GET(EMailRule."Bill of Lading E-Mail Code");
+
+      IF NOT SendMail THEN
+        EXIT(FALSE);
+
+      FieldValue.EMailHeader_14000901(EMailHeader,0);
+      FieldValue.EMailRule_14000907(EMailRule,0);
+
+      EXIT(EMailListEntryTmp.FIND('-'));
+    END;
+
+    LOCAL PROCEDURE ModifyRecords@7();
+    BEGIN
+      BillOfLading.GET(BillOfLadingNo);
+      BillOfLading."E-Mail Notification Handled" := TRUE;
+      BillOfLading.MODIFY;
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE GetFirstRecordInLoop@3(CurrentLevel@1000000000 : Integer);
+    BEGIN
+      CASE CurrentLevel OF
+        2:
+          BEGIN
+            BillOfLadingLine.RESET;
+            BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+            IF EMailHeader."Only Lines with Content" THEN
+              BillOfLadingLine.SETFILTER("No.",'<>%1','');
+            RecordFound[CurrentLevel] := BillOfLadingLine.FIND('-');
+            FieldValue.BillofLadingLine_14000823(BillOfLadingLine,0);
+          END;
+        3:
+          BEGIN
+            ShippingCommentLine.RESET;
+            ShippingCommentLine.SETRANGE("Table ID",DATABASE::"Bill of Lading");
+            ShippingCommentLine.SETRANGE(Code,BillOfLading."No.");
+            ShippingCommentLine.SETRANGE("Include in E-Mail",TRUE);
+            RecordFound[CurrentLevel] := ShippingCommentLine.FIND('-');
+            FieldValue.ShippingCommentLine_14000706(ShippingCommentLine,0);
+          END;
+        4:
+          BEGIN
+            BillOfLadingSummaryLine.RESET;
+            BillOfLadingSummaryLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+            BillOfLadingSummaryLine.SETRANGE("Bill of Lading Type",BillOfLadingSummaryLine."Bill of Lading Type"::Standard);
+            RecordFound[CurrentLevel] := BillOfLadingSummaryLine.FIND('-');
+            FieldValue.BillofLadingSummaryLi_14000825(BillOfLadingSummaryLine,0);
+          END;
+        5:
+          BEGIN
+            BillOfLadingSummaryLine.RESET;
+            BillOfLadingSummaryLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+            BillOfLadingSummaryLine.SETRANGE("Bill of Lading Type",BillOfLadingSummaryLine."Bill of Lading Type"::"ASN (EDI)");
+            RecordFound[CurrentLevel] := BillOfLadingSummaryLine.FIND('-');
+            FieldValue.BillofLadingSummaryLi_14000825(BillOfLadingSummaryLine,0);
+          END;
+        ELSE
+          ERROR(Text019,CurrentLevel);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetNextRecordInLoop@4(CurrentLevel@1000000000 : Integer);
+    BEGIN
+      CASE CurrentLevel OF
+        2:
+          BEGIN
+            RecordFound[CurrentLevel] := BillOfLadingLine.NEXT <> 0;
+            FieldValue.BillofLadingLine_14000823(BillOfLadingLine,0);
+          END;
+        3:
+          BEGIN
+            RecordFound[CurrentLevel] := ShippingCommentLine.NEXT <> 0;
+            FieldValue.ShippingCommentLine_14000706(ShippingCommentLine,0);
+          END;
+        4:
+          BEGIN
+            RecordFound[CurrentLevel] := BillOfLadingSummaryLine.NEXT <> 0;
+            FieldValue.BillofLadingSummaryLi_14000825(BillOfLadingSummaryLine,0);
+          END;
+        5:
+          BEGIN
+            RecordFound[CurrentLevel] := BillOfLadingSummaryLine.NEXT <> 0;
+            FieldValue.BillofLadingSummaryLi_14000825(BillOfLadingSummaryLine,0);
+          END;
+        ELSE
+          ERROR(Text019,CurrentLevel);
+      END;
+    END;
+
+    PROCEDURE SaveReport@8(ReportNo@1000000000 : Integer;VAR SaveFileName@1000000001 : Text[250]);
+    BEGIN
+      BillOfLading.SETRECFILTER;
+      IF ISSERVICETIER THEN BEGIN
+        EMailSetup.ChangeFilenameToPDF(SaveFileName);
+        REPORT.SAVEASPDF(ReportNo,SaveFileName,BillOfLading);
+      END ELSE
+        //<TPZ2430>
+        //REPORT.SAVEASHTML(ReportNo,SaveFileName,BillOfLading);
+        REPORT.SAVEASPDF(ReportNo,SaveFileName,BillOfLading);
+        //</TPZ2430>
+    END;
+
+    PROCEDURE GetReceiverList@10(VAR GetEMailListEntryTmp@1240030000 : Record 14000908);
+    BEGIN
+      GetInitialRecords;
+
+      GetEMailListEntryTmp.RESET;
+      IF GetEMailListEntryTmp.FIND('-') THEN
+        ERROR(Text020);
+
+      EMailListEntryTmp.RESET;
+      IF EMailListEntryTmp.FIND('-') THEN
+        REPEAT
+          GetEMailListEntryTmp := EMailListEntryTmp;
+          GetEMailListEntryTmp.INSERT;
+        UNTIL EMailListEntryTmp.NEXT = 0;
+    END;
+
+    PROCEDURE SetSMTP365@1000000000(pSMTPOff365@1000000000 : Boolean);
+    BEGIN
+      //<TPZ2430>
+      SMTPOff365 := pSMTPOff365;
+      //</TPZ2430>
+    END;
+
+    BEGIN
+    {
+      The Code that customize the running of the report should be done in the 4 triggers
+      GetInitialRecords
+        This is where all the values needed for the general information in the E-Mail are retrived.
+        Additional tables could be added in the information was needed.
+
+      ModifyRecords
+        This is the final step, where the status of some records are modified. This could be used to
+        change a field telling that the E-Mail has been sent.
+
+      GetFirstRecordInLoop
+        This will get the first record in each level. This also adjust some variables and contol that the
+        flow of multilevel tables are correct. Like the printing of Posted Container/Posted Container Line.
+
+      GetNextRecordInLoop
+        This will retrieve the next record for each level.
+
+      SaveReport
+        This will run and save a specific report in HTML or PDF(only for NAV 2009 RTC and higher).
+      2019-01-07 TPZ2430 SNAGPAL
+       Move outbound emails to O365 smtp server.
+      001 TPZ3222 RPS 07152021 - Change 365 to SMTP  task for NAV
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

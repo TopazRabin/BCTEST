@@ -1,0 +1,342 @@
+OBJECT Table 14002861 Whse. Activity Group Header
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/04/14;
+    Time=12:00:00 PM;
+    Version List=RF1.50.01;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               IF "No." = '' THEN BEGIN
+                 RFSetup.GET;
+                 RFSetup.TESTFIELD("Whse. Activity Group Nos.");
+                 "No." := NoSeriesMgt.GetNextNo(RFSetup."Whse. Activity Group Nos.",WORKDATE,TRUE);
+               END;
+             END;
+
+    OnDelete=BEGIN
+               WhseActivityGroupLine.RESET;
+               WhseActivityGroupLine.SETRANGE("Warehouse Activity Group No.","No.");
+               WhseActivityGroupLine.DELETEALL;
+             END;
+
+    CaptionML=ENU=Whse. Activity Group Header;
+    LookupPageID=Page14002865;
+  }
+  FIELDS
+  {
+    { 1   ;   ;No.                 ;Code20        ;CaptionML=ENU=No.;
+                                                   NotBlank=Yes }
+    { 11  ;   ;Location Code       ;Code10        ;TableRelation=Location;
+                                                   CaptionML=ENU=Location Code }
+    { 12  ;   ;Description         ;Text30        ;CaptionML=ENU=Description }
+    { 13  ;   ;Created By          ;Code50        ;TableRelation=User;
+                                                   OnValidate=BEGIN
+                                                                LoginMgt.ValidateUserID("Created By");
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              LoginMgt.LookupUserID("Created By");
+                                                            END;
+
+                                                   ValidateTableRelation=No;
+                                                   TestTableRelation=No;
+                                                   CaptionML=ENU=Created By;
+                                                   Editable=No }
+    { 14  ;   ;Created Date        ;Date          ;CaptionML=ENU=Created Date;
+                                                   Editable=No }
+    { 15  ;   ;Created Time        ;Time          ;CaptionML=ENU=Created Time;
+                                                   Editable=No }
+    { 16  ;   ;Assigned User ID    ;Code50        ;TableRelation="Warehouse Employee" WHERE (Location Code=FIELD(Location Code));
+                                                   CaptionML=ENU=Assigned User ID }
+    { 17  ;   ;Outbound Whse. Request Filter;Code10;
+                                                   TableRelation="Outbound Whse. Request Filter".Code;
+                                                   CaptionML=ENU=Outbound Whse. Request Filter;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;No.                                     ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      WhseActivityGroupLine@1240030002 : Record 14002862;
+      RFSetup@1240030000 : Record 14002801;
+      NoSeriesMgt@1240030001 : Codeunit 396;
+      Text001@1240030003 : TextConst 'ENU=Cannot be the same Shipment.';
+      LoginMgt@1240040000 : Codeunit 418;
+
+    PROCEDURE MergeWarehouseShipments@1240030000();
+    VAR
+      WhseActivityGroupLine2@1240030002 : Record 14002862;
+      WarehouseShipmentHeader@1240030001 : Record 7320;
+      WarehouseShipmentHeaderFirst@1240030000 : Record 7320;
+    BEGIN
+      WhseActivityGroupLine.RESET;
+      WhseActivityGroupLine.SETRANGE("Warehouse Activity Group No.","No.");
+      IF WhseActivityGroupLine.FIND('-') THEN
+        REPEAT
+          IF WarehouseShipmentHeader.GET(WhseActivityGroupLine."Warehouse Shipment No.") THEN BEGIN
+            IF (WarehouseShipmentHeaderFirst."No." <> '') AND
+               (WarehouseShipmentHeaderFirst."No." <> WarehouseShipmentHeader."No.")
+            THEN BEGIN
+              CombineWarehouseShipments(
+                WarehouseShipmentHeaderFirst,WarehouseShipmentHeader,
+                WhseActivityGroupLine."Source Type",WhseActivityGroupLine."Source Subtype",
+                WhseActivityGroupLine."Source No.");
+
+              WhseActivityGroupLine2 := WhseActivityGroupLine;
+              WhseActivityGroupLine2."Original Whse. Shipment No." :=
+                WhseActivityGroupLine2."Warehouse Shipment No.";
+              WhseActivityGroupLine2."Warehouse Shipment No." := WarehouseShipmentHeaderFirst."No.";
+              WhseActivityGroupLine2.MODIFY;
+            END ELSE
+              WarehouseShipmentHeaderFirst := WarehouseShipmentHeader;
+          END;
+        UNTIL WhseActivityGroupLine.NEXT = 0;
+    END;
+
+    PROCEDURE CombineWarehouseShipments@47(FinalWhseShipmentHeader@1240030001 : Record 7320;AddWhseShipmentHeader@1240030000 : Record 7320;SourceTypeFilter@1240030013 : Integer;SourceSubtypeFilter@1240030014 : Integer;SourceIDFilter@1240030015 : Code[20]);
+    VAR
+      WhseShipmentLine@1240030009 : Record 7321;
+      WhseShipmentLine2@1240030008 : Record 7321;
+      WhseCommentLine@1240030007 : Record 5770;
+      WhseCommentLine2@1240030006 : Record 5770;
+      WhseActivityLine@1240030005 : Record 5767;
+      WhseActivityLine2@1240030004 : Record 5767;
+      RegistredWhseActivityLine@1240030003 : Record 5773;
+      RegistredWhseActivityLine2@1240030002 : Record 5773;
+      WhsePickRequest@1240030010 : Record 7325;
+      WhseItemTrackingLine@1240030011 : Record 6550;
+      WhseItemTrackingLine2@1240030012 : Record 6550;
+      DeleteHeader@1240030016 : Boolean;
+    BEGIN
+      FinalWhseShipmentHeader.TESTFIELD("No.");
+      AddWhseShipmentHeader.TESTFIELD("No.");
+
+      IF AddWhseShipmentHeader."No." = FinalWhseShipmentHeader."No." THEN
+        ERROR(Text001);
+
+      WhseShipmentLine.RESET;
+      WhseShipmentLine.SETRANGE("No.",AddWhseShipmentHeader."No.");
+      IF SourceIDFilter <> '' THEN BEGIN
+        WhseShipmentLine.SETRANGE("Source Type",SourceTypeFilter);
+        WhseShipmentLine.SETRANGE("Source Subtype",SourceSubtypeFilter);
+        WhseShipmentLine.SETFILTER("Source No.",SourceIDFilter);
+      END;
+      IF WhseShipmentLine.FIND('-') THEN BEGIN
+        WhseShipmentLine2.RESET;
+        WhseShipmentLine2.SETRANGE("No.",FinalWhseShipmentHeader."No.");
+        IF NOT WhseShipmentLine2.FIND('+') THEN BEGIN
+          CLEAR(WhseShipmentLine2);
+          WhseShipmentLine2."No." := FinalWhseShipmentHeader."No.";
+        END;
+
+        REPEAT
+          WhseShipmentLine2."Line No." := WhseShipmentLine2."Line No." + 10000;
+          WhseShipmentLine2.TRANSFERFIELDS(WhseShipmentLine,FALSE);
+          WhseShipmentLine2.INSERT;
+          WhseShipmentLine.DELETE;
+
+          WhseItemTrackingLine.RESET;
+          WhseItemTrackingLine.SETCURRENTKEY("Source ID","Source Type","Source Subtype");
+          WhseItemTrackingLine.SETRANGE("Source Type",DATABASE::"Warehouse Shipment Line");
+          WhseItemTrackingLine.SETRANGE("Source Subtype",0);
+          WhseItemTrackingLine.SETRANGE("Source ID",WhseShipmentLine."No.");
+          WhseItemTrackingLine.SETRANGE("Source Ref. No.",WhseShipmentLine."Line No.");
+          IF WhseItemTrackingLine.FIND('-') THEN
+            REPEAT
+              WhseItemTrackingLine2 := WhseItemTrackingLine;
+              WhseItemTrackingLine2."Source ID" := WhseShipmentLine2."No.";
+              WhseItemTrackingLine."Source Ref. No." := WhseShipmentLine2."Line No.";
+              WhseItemTrackingLine2.MODIFY;
+            UNTIL WhseItemTrackingLine.NEXT = 0;
+
+          WhseActivityLine.RESET;
+          WhseActivityLine.SETCURRENTKEY(
+            "Activity Type","No.","Whse. Document Type","Whse. Document No.","Whse. Document Line No.");
+          WhseActivityLine.SETRANGE(
+            "Whse. Document Type",WhseActivityLine."Whse. Document Type"::Shipment);
+          WhseActivityLine.SETRANGE("Whse. Document No.",WhseShipmentLine."No.");
+          WhseActivityLine.SETRANGE("Whse. Document Line No.",WhseShipmentLine."Line No.");
+          IF WhseActivityLine.FIND('-') THEN
+            REPEAT
+              WhseActivityLine2 := WhseActivityLine;
+              WhseActivityLine2."Whse. Document No." := WhseShipmentLine2."No.";
+              WhseActivityLine2."Whse. Document Line No." := WhseShipmentLine2."Line No.";
+              WhseActivityLine2.MODIFY;
+            UNTIL WhseActivityLine.NEXT = 0;
+
+          RegistredWhseActivityLine.RESET;
+          RegistredWhseActivityLine.SETCURRENTKEY(
+            "Whse. Document Type","Whse. Document No.","Whse. Document Line No.");
+          RegistredWhseActivityLine.SETRANGE(
+            "Whse. Document Type",RegistredWhseActivityLine."Whse. Document Type"::Shipment);
+          RegistredWhseActivityLine.SETRANGE("Whse. Document No.",WhseShipmentLine."No.");
+          RegistredWhseActivityLine.SETRANGE("Whse. Document Line No.",WhseShipmentLine."Line No.");
+          IF RegistredWhseActivityLine.FIND('-') THEN
+            REPEAT
+              RegistredWhseActivityLine2 := RegistredWhseActivityLine;
+              RegistredWhseActivityLine2."Whse. Document No." := WhseShipmentLine2."No.";
+              RegistredWhseActivityLine2."Whse. Document Line No." := WhseShipmentLine2."Line No.";
+              RegistredWhseActivityLine2.MODIFY;
+            UNTIL RegistredWhseActivityLine.NEXT = 0;
+        UNTIL WhseShipmentLine.NEXT = 0;
+      END;
+
+      WhseShipmentLine.SETRANGE("Source Type");
+      WhseShipmentLine.SETRANGE("Source Subtype");
+      WhseShipmentLine.SETRANGE("Source No.");
+      DeleteHeader := NOT WhseShipmentLine.FIND('-');
+      IF DeleteHeader THEN BEGIN
+        AddWhseShipmentHeader.DELETE;
+
+        WhsePickRequest.RESET;
+        WhsePickRequest.SETRANGE("Document Type",WhsePickRequest."Document Type"::Shipment);
+        WhsePickRequest.SETRANGE("Document Subtype",WhsePickRequest."Document Subtype"::"4");
+        WhsePickRequest.SETRANGE("Document No.",AddWhseShipmentHeader."No.");
+        WhsePickRequest.SETRANGE("Location Code",AddWhseShipmentHeader."Location Code");
+        WhsePickRequest.DELETEALL;
+      END;
+
+      WhseCommentLine.RESET;
+      WhseCommentLine.SETRANGE("Table Name",WhseCommentLine."Table Name"::"Whse. Shipment");
+      WhseCommentLine.SETRANGE(Type,0);
+      WhseCommentLine.SETRANGE("No.",AddWhseShipmentHeader."No.");
+      IF WhseCommentLine.FIND('-') THEN BEGIN
+        WhseCommentLine2.RESET;
+        WhseCommentLine2.SETRANGE("Table Name",WhseCommentLine2."Table Name"::"Whse. Shipment");
+        WhseCommentLine2.SETRANGE(Type,0);
+        WhseCommentLine2.SETRANGE("No.",FinalWhseShipmentHeader."No.");
+        IF NOT WhseCommentLine2.FIND('-') THEN BEGIN
+          CLEAR(WhseCommentLine2);
+          WhseCommentLine2."No." := FinalWhseShipmentHeader."No.";
+        END;
+
+        REPEAT
+          WhseCommentLine2."Line No." := WhseCommentLine2."Line No." + 10000;
+          WhseCommentLine2.TRANSFERFIELDS(WhseCommentLine,FALSE);
+          WhseCommentLine2.INSERT;
+          IF DeleteHeader THEN
+            WhseCommentLine.DELETE;
+        UNTIL WhseCommentLine.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE MergeWarehouseActivities@1240030001();
+    VAR
+      WhseActivityGroupLine2@1240030001 : Record 14002862;
+      WarehouseActivityHeader@1240030000 : Record 5766;
+      WarehouseActivityHeaderFirst@1240030003 : Record 5766;
+    BEGIN
+      WhseActivityGroupLine.RESET;
+      WhseActivityGroupLine.SETRANGE("Warehouse Activity Group No.","No.");
+      IF WhseActivityGroupLine.FIND('-') THEN
+        REPEAT
+          IF WarehouseActivityHeader.GET(
+            WarehouseActivityHeader.Type::Pick,WhseActivityGroupLine."Warehouse Activity No.")
+          THEN BEGIN
+            IF (WarehouseActivityHeaderFirst."No." <> '') AND
+               (WarehouseActivityHeaderFirst."No." <> WarehouseActivityHeader."No.")
+            THEN BEGIN
+              CombineWarehouseActivities(
+                WarehouseActivityHeaderFirst,WarehouseActivityHeader,
+                WhseActivityGroupLine."Source Type",WhseActivityGroupLine."Source Subtype",
+                WhseActivityGroupLine."Source No.");
+
+              WhseActivityGroupLine2 := WhseActivityGroupLine;
+              WhseActivityGroupLine2."Original Whse. Activity No." :=
+                WhseActivityGroupLine2."Warehouse Activity No.";
+              WhseActivityGroupLine2."Warehouse Activity No." := WarehouseActivityHeaderFirst."No.";
+              WhseActivityGroupLine2.MODIFY;
+            END ELSE
+              WarehouseActivityHeaderFirst := WarehouseActivityHeader;
+          END;
+        UNTIL WhseActivityGroupLine.NEXT = 0;
+    END;
+
+    PROCEDURE CombineWarehouseActivities@1240030003(FinalWhseActivityHeader@1240030001 : Record 5766;AddWhseActivityHeader@1240030000 : Record 5766;SourceTypeFilter@1240030007 : Integer;SourceSubtypeFilter@1240030006 : Integer;SourceIDFilter@1240030005 : Code[20]);
+    VAR
+      WarehouseActivityLine@1240030004 : Record 5767;
+      WarehouseActivityLine2@1240030003 : Record 5767;
+      WhseCommentLine@1240030009 : Record 5770;
+      WhseCommentLine2@1240030008 : Record 5770;
+      LastLineNo@1240030002 : Integer;
+      DeleteHeader@1240030010 : Boolean;
+    BEGIN
+      FinalWhseActivityHeader.TESTFIELD("No.");
+      AddWhseActivityHeader.TESTFIELD("No.");
+
+      IF AddWhseActivityHeader."No." = FinalWhseActivityHeader."No." THEN
+        ERROR(Text001);
+
+      WarehouseActivityLine.RESET;
+      WarehouseActivityLine.SETRANGE("Activity Type",FinalWhseActivityHeader.Type);
+      WarehouseActivityLine.SETRANGE("No.",FinalWhseActivityHeader."No.");
+      IF WarehouseActivityLine.FIND('+') THEN
+        LastLineNo := WarehouseActivityLine."Line No."
+      ELSE
+       LastLineNo := 0;
+
+      WarehouseActivityLine.RESET;
+      WarehouseActivityLine.SETRANGE("Activity Type",AddWhseActivityHeader.Type);
+      WarehouseActivityLine.SETRANGE("No.",AddWhseActivityHeader."No.");
+      IF SourceIDFilter <> '' THEN BEGIN
+        WarehouseActivityLine.SETRANGE("Source Type",SourceTypeFilter);
+        WarehouseActivityLine.SETRANGE("Source Subtype",SourceSubtypeFilter);
+        WarehouseActivityLine.SETFILTER("Source No.",SourceIDFilter);
+      END;
+      IF WarehouseActivityLine.FIND('-') THEN
+        REPEAT
+          WarehouseActivityLine2 := WarehouseActivityLine;
+          WarehouseActivityLine2."Activity Type" := FinalWhseActivityHeader.Type;
+          WarehouseActivityLine2."No." := FinalWhseActivityHeader."No.";
+          LastLineNo := LastLineNo + 10000;
+          WarehouseActivityLine2."Line No." := LastLineNo;
+          WarehouseActivityLine2.INSERT;
+
+          WarehouseActivityLine.DELETE;
+        UNTIL WarehouseActivityLine.NEXT = 0;
+
+      WarehouseActivityLine.SETRANGE("Source Type");
+      WarehouseActivityLine.SETRANGE("Source Subtype");
+      WarehouseActivityLine.SETRANGE("Source No.");
+      DeleteHeader := NOT WarehouseActivityLine.FIND('-');
+      IF DeleteHeader THEN
+        AddWhseActivityHeader.DELETE;
+
+      WhseCommentLine.RESET;
+      WhseCommentLine.SETRANGE("Table Name",WhseCommentLine."Table Name"::"Whse. Activity Header");
+      WhseCommentLine.SETRANGE(Type,AddWhseActivityHeader.Type);
+      WhseCommentLine.SETRANGE("No.",AddWhseActivityHeader."No.");
+      IF WhseCommentLine.FIND('-') THEN BEGIN
+        WhseCommentLine2.RESET;
+        WhseCommentLine2.SETRANGE("Table Name",WhseCommentLine2."Table Name"::"Whse. Activity Header");
+        WhseCommentLine2.SETRANGE(Type,FinalWhseActivityHeader.Type);
+        WhseCommentLine2.SETRANGE("No.",FinalWhseActivityHeader."No.");
+        IF NOT WhseCommentLine2.FIND('-') THEN BEGIN
+          CLEAR(WhseCommentLine2);
+          WhseCommentLine2."No." := FinalWhseActivityHeader."No.";
+        END;
+
+        REPEAT
+          WhseCommentLine2."Line No." := WhseCommentLine2."Line No." + 10000;
+          WhseCommentLine2.TRANSFERFIELDS(WhseCommentLine,FALSE);
+          WhseCommentLine2.INSERT;
+          IF DeleteHeader THEN
+            WhseCommentLine.DELETE;
+        UNTIL WhseCommentLine.NEXT = 0;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

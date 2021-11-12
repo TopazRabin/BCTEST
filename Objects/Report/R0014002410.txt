@@ -1,0 +1,387 @@
+OBJECT Report 14002410 Create E.D.I. InvtAdv Entries
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/13/20;
+    Time=12:00:00 PM;
+    Version List=SE0.62;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Create Inventory Advice Entries;
+    ProcessingOnly=Yes;
+    OnPostReport=BEGIN
+                   TmpItem.RESET;
+                   TmpItem.DELETEALL;
+                 END;
+
+  }
+  DATASET
+  {
+    { 8437;    ;DataItem;                    ;
+               DataItemTable=Table14002413;
+               OnAfterGetRecord=BEGIN
+                                  InventoryAdviceHdr.GET(
+                                    "E.D.I. Inventory Advice Header"."No.","E.D.I. Inventory Advice Header".Type);
+                                  TradePartner := InventoryAdviceHdr."Trade Partner No.";
+
+                                  InventoryAdviceLine.RESET;
+                                  InventoryAdviceLine.SETRANGE("Inventory Advice No.",InventoryAdviceHdr."No.");
+                                  InventoryAdviceLine.SETRANGE(Type,InventoryAdviceHdr.Type);
+                                  InventoryAdviceLine.DELETEALL;
+
+                                  DocumentNo := 'E_INVADV';
+
+                                  IF FORMAT(ExpectedDate) = '' THEN
+                                    ExpectedDate := CALCDATE(EDIDocument."Expected Receipt Date Formula",TODAY)
+                                  ELSE
+                                    ExpectedDate := CALCDATE(ExpectedDateFormula,TODAY);
+                                  IF TODAY = ExpectedDate THEN
+                                    ExpectedDate := 0D;
+
+                                  EDIDocument.SETRANGE("Trade Partner No.",TradePartner);
+                                  EDIDocument.SETFILTER(
+                                    Status,'%1|%2',EDIDocument.Status::Test,EDIDocument.Status::Production);
+                                  EDIDocument.SETRANGE("Navision Document",DocumentNo);
+                                  EDIDocument.SETRANGE(Type,EDIDocument.Type::Export);
+                                  IF NOT EDIDocument.FIND('-') THEN
+                                    ERROR(
+                                      Text001,
+                                      DocumentNo,TradePartner);
+
+                                  EDITemplate.GET(EDIDocument."EDI Template Code");
+
+                                  SetAdviceStatus("E.D.I. Inventory Advice Header",EDIDocument);
+
+                                  IF InventoryAdviceHdr.Released THEN
+                                    IF (EDIDocument."Reuse Existing InventoryAdvice") AND
+                                       (EDIDocument."Auto. Reopen on Recreate")
+                                    THEN
+                                      CreateInventoryAdvice.ReopenInventoryAdvice(InventoryAdviceHdr);
+                                END;
+                                 }
+
+    { 8129;    ;DataItem;                    ;
+               DataItemTable=Table27;
+               OnPreDataItem=BEGIN
+                               CLEAR(CreateInventoryAdvice);
+
+                               TmpItem.RESET;
+                               TmpItem.DELETEALL;
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  IF EDIDocument."Auto. Create Item Filter" =
+                                     EDIDocument."Auto. Create Item Filter"::"EDI Item Cross Reference"
+                                  THEN BEGIN
+                                    EDITradePtnrItem.RESET;
+                                    EDITradePtnrItem.SETRANGE("Trade Partner No.",TradePartner);
+                                    EDITradePtnrItem.SETRANGE(Discontinue,FALSE);
+                                    EDITradePtnrItem.SETFILTER("Partner Item No.",'<>%1','');
+                                    IF EDITradePtnrItem.FIND('-') THEN BEGIN
+                                      REPEAT
+                                        IF Item2.GET(EDITradePtnrItem."Navision Item No.") THEN BEGIN
+                                          IF (EDIDocument."Exclude Blocked Item" AND Item2.Blocked = FALSE) OR
+                                             (EDIDocument."Exclude Blocked Item" = FALSE)
+                                          THEN BEGIN
+                                            IF Item.GETFILTER("Location Filter") = '' THEN BEGIN
+                                              IF EDIDocument."Location Override" <> '' THEN
+                                               Item.SETFILTER("Location Filter",EDIDocument."Location Override")
+                                              ELSE
+                                                Item.SETFILTER("Location Filter",InventoryAdviceHdr."Location Code")
+                                            END;
+                                            Item2.COPYFILTERS(Item);
+
+                                            AdviceCreated :=
+                                              CreateInventoryAdvice.InsertItem(
+                                                Item2,EDIDocument,InventoryAdviceHdr."No.",ExpectedDate,AvailableQty,
+                                                ExpectedReceiptQty,EDITradePtnrItem."Navision Variant Code");
+                                          END;
+                                        END;
+                                      UNTIL EDITradePtnrItem.NEXT = 0;
+                                      COMMIT;
+                                      CurrReport.BREAK;
+                                    END ELSE
+                                      CurrReport.QUIT;
+                                  END ELSE BEGIN
+                                    ItemNoFilter := GETFILTER(Item."No.");
+                                    CASE EDIDocument."Auto. Create Item Filter" OF
+                                      EDIDocument."Auto. Create Item Filter"::"Cross-Reference Type No. (Customer)":
+                                        BEGIN
+                                          AutoFilterICRTypeNo := AutoFilterICRTypeNo::Customer;
+                                          CLEAR(ItemCrossReference);
+                                          WITH ItemCrossReference DO BEGIN
+                                            RESET;
+                                            SETFILTER("Cross-Reference Type",'<> %1',"Cross-Reference Type"::Vendor);
+                                            SETRANGE("Cross-Reference Type No.","E.D.I. Inventory Advice Header"."Sell-to Customer No.");
+                                            SETFILTER("Variant Code",Item."Variant Filter");
+                                            SETFILTER("Item No.",ItemNoFilter);
+                                            SETRANGE("Discontinue Bar Code",FALSE);
+                                            IF FIND('-') THEN BEGIN
+                                              REPEAT
+                                                Item2.GET(ItemCrossReference."Item No.");
+                                                IF (EDIDocument."Exclude Blocked Item" AND Item2.Blocked = FALSE) OR
+                                                   (EDIDocument."Exclude Blocked Item" = FALSE)
+                                                THEN BEGIN
+                                                  TmpItem.RESET;
+                                                  TmpItem.SETRANGE("No.",Item2."No.");
+                                                  IF NOT TmpItem.FIND('-') THEN BEGIN
+                                                    TmpItem."No." := Item2."No.";
+                                                    TmpItem.INSERT;
+                                                  IF Item.GETFILTER("Location Filter") = '' THEN BEGIN
+                                                    IF EDIDocument."Location Override" <> '' THEN
+                                                      Item.SETFILTER("Location Filter",EDIDocument."Location Override")
+                                                    ELSE
+                                                      Item.SETFILTER("Location Filter",InventoryAdviceHdr."Location Code");
+                                                   END;
+                                                    Item2.COPYFILTERS(Item);
+
+                                                    AdviceCreated :=
+                                                      CreateInventoryAdvice.ICRLookupItem(
+                                                        Item2,EDIDocument,InventoryAdviceHdr."No.",AutoFilterICRTypeNo,ExpectedDate,
+                                                        AvailableQty,ExpectedReceiptQty);
+                                                    END;
+                                                  END;
+                                              UNTIL NEXT = 0;
+                                            END;
+                                          END;
+                                          COMMIT;
+                                          CurrReport.BREAK;
+                                        END;
+                                      EDIDocument."Auto. Create Item Filter"::"Cross-Reference Type No. (Blank)":
+                                        BEGIN
+                                          AutoFilterICRTypeNo := AutoFilterICRTypeNo::Blank;
+                                          CLEAR(ItemCrossReference);
+                                          WITH ItemCrossReference DO BEGIN
+                                            RESET;
+                                            SETFILTER("Cross-Reference Type",'<> %1',"Cross-Reference Type"::Vendor);
+                                            SETRANGE("Cross-Reference Type No.",'');
+                                            SETFILTER("Variant Code",Item."Variant Filter");
+                                            SETFILTER("Item No.",ItemNoFilter);
+                                            SETRANGE("Discontinue Bar Code",FALSE);
+                                            IF FIND('-') THEN BEGIN
+                                              REPEAT
+                                                Item2.GET(ItemCrossReference."Item No.");
+                                                IF (EDIDocument."Exclude Blocked Item" AND Item2.Blocked = FALSE) OR
+                                                   (EDIDocument."Exclude Blocked Item" = FALSE)
+                                                THEN BEGIN
+                                                  TmpItem.RESET;
+                                                  TmpItem.SETRANGE("No.",Item2."No.");
+                                                  IF NOT TmpItem.FIND('-') THEN BEGIN
+                                                    TmpItem."No." := Item2."No.";
+                                                    TmpItem.INSERT;
+                                                    IF Item.GETFILTER("Location Filter") = '' THEN BEGIN
+                                                      IF EDIDocument."Location Override" <> '' THEN
+                                                        Item.SETFILTER("Location Filter",EDIDocument."Location Override")
+                                                      ELSE
+                                                        Item.SETFILTER("Location Filter",InventoryAdviceHdr."Location Code");
+                                                    END;
+                                                    Item2.COPYFILTERS(Item);
+
+                                                    AdviceCreated :=
+                                                      CreateInventoryAdvice.ICRLookupItem(
+                                                        Item2,EDIDocument,InventoryAdviceHdr."No.",AutoFilterICRTypeNo,ExpectedDate,
+                                                        AvailableQty,ExpectedReceiptQty);
+                                                  END;
+                                                END;
+                                              UNTIL NEXT = 0;
+                                            END;
+                                          END;
+                                          COMMIT;
+                                          CurrReport.BREAK;
+                                        END;
+                                      ELSE
+                                        CASE IncludeCrossRefTypeNo OF
+                                          IncludeCrossRefTypeNo::" ":
+                                            BEGIN
+                                              IF Item.GETFILTER("Location Filter") = '' THEN BEGIN
+                                                IF EDIDocument."Location Override" <> '' THEN
+                                                  Item.SETFILTER("Location Filter",EDIDocument."Location Override")
+                                                ELSE
+                                                  Item.SETFILTER("Location Filter",InventoryAdviceHdr."Location Code")
+                                              END;
+                                              IF (EDIDocument."Exclude Blocked Item" AND Item.Blocked = FALSE) OR
+                                                 (EDIDocument."Exclude Blocked Item" = FALSE)
+                                              THEN BEGIN
+                                                 AdviceCreated :=
+                                                   CreateInventoryAdvice.InsertItem(
+                                                     Item,EDIDocument,InventoryAdviceHdr."No.",ExpectedDate,AvailableQty,
+                                                     ExpectedReceiptQty,' ');
+                                                COMMIT;
+                                              END;
+                                            END;
+                                          IncludeCrossRefTypeNo::Customer:
+                                            BEGIN
+                                              AutoFilterICRTypeNo := AutoFilterICRTypeNo::Customer;
+                                              WITH ItemCrossReference DO BEGIN
+                                                RESET;
+                                                SETFILTER("Cross-Reference Type",'<> %1',"Cross-Reference Type"::Vendor);
+                                                SETRANGE(
+                                                  "Cross-Reference Type No.","E.D.I. Inventory Advice Header"."Sell-to Customer No.");
+                                                SETFILTER("Variant Code",Item."Variant Filter");
+                                                SETFILTER("Item No.",ItemNoFilter);
+                                                SETRANGE("Discontinue Bar Code",FALSE);
+                                                IF FIND('-') THEN BEGIN
+                                                  REPEAT
+                                                    Item2.GET(ItemCrossReference."Item No.");
+                                                    IF (EDIDocument."Exclude Blocked Item" AND Item2.Blocked = FALSE) OR
+                                                       (EDIDocument."Exclude Blocked Item" = FALSE)
+                                                    THEN BEGIN
+                                                      TmpItem.RESET;
+                                                      TmpItem.SETRANGE("No.",Item2."No.");
+                                                      IF NOT TmpItem.FIND('-') THEN BEGIN
+                                                        TmpItem."No." := Item2."No.";
+                                                        TmpItem.INSERT;
+                                                        IF Item.GETFILTER("Location Filter") = '' THEN BEGIN
+                                                         IF EDIDocument."Location Override" <> '' THEN
+                                                            Item.SETFILTER("Location Filter",EDIDocument."Location Override")
+                                                          ELSE
+                                                            Item.SETFILTER("Location Filter",InventoryAdviceHdr."Location Code");
+                                                        END;
+                                                        Item2.COPYFILTERS(Item);
+
+                                                        AdviceCreated :=
+                                                          CreateInventoryAdvice.ICRLookupItem(
+                                                            Item2,EDIDocument,InventoryAdviceHdr."No.",AutoFilterICRTypeNo,
+                                                            ExpectedDate,AvailableQty,ExpectedReceiptQty);
+                                                     END;
+                                                    END;
+                                                  UNTIL NEXT = 0;
+                                                END;
+                                              END;
+                                              COMMIT;
+                                              CurrReport.BREAK;
+                                            END;
+                                          IncludeCrossRefTypeNo::Blank:
+                                            BEGIN
+                                              AutoFilterICRTypeNo := AutoFilterICRTypeNo::Blank;
+                                              WITH ItemCrossReference DO BEGIN
+                                                RESET;
+                                                SETFILTER("Cross-Reference Type",'<> %1',"Cross-Reference Type"::Vendor);
+                                                SETRANGE("Cross-Reference Type No.",'');
+                                                SETFILTER("Variant Code",Item."Variant Filter");
+                                                SETFILTER("Item No.",ItemNoFilter);
+                                                SETRANGE("Discontinue Bar Code",FALSE);
+                                                IF FIND('-') THEN BEGIN
+                                                  REPEAT
+                                                    Item2.GET(ItemCrossReference."Item No.");
+                                                    IF (EDIDocument."Exclude Blocked Item" AND Item2.Blocked = FALSE) OR
+                                                       (EDIDocument."Exclude Blocked Item" = FALSE)
+                                                    THEN BEGIN
+                                                      TmpItem.RESET;
+                                                      TmpItem.SETRANGE("No.",Item2."No.");
+                                                      IF NOT TmpItem.FIND('-') THEN BEGIN
+                                                        TmpItem."No." := Item2."No.";
+                                                        TmpItem.INSERT;
+                                                        IF Item.GETFILTER("Location Filter") = '' THEN BEGIN
+                                                          IF EDIDocument."Location Override" <> '' THEN
+                                                            Item.SETFILTER("Location Filter",EDIDocument."Location Override")
+                                                          ELSE
+                                                            Item.SETFILTER("Location Filter",InventoryAdviceHdr."Location Code");
+                                                        END;
+                                                        Item2.COPYFILTERS(Item);
+
+                                                        AdviceCreated :=
+                                                          CreateInventoryAdvice.ICRLookupItem(
+                                                           Item2,EDIDocument,InventoryAdviceHdr."No.",AutoFilterICRTypeNo,
+                                                          ExpectedDate,AvailableQty,ExpectedReceiptQty);
+                                                      END;
+                                                    END;
+                                                  UNTIL NEXT = 0;
+                                                END;
+                                              END;
+                                              COMMIT;
+                                              CurrReport.BREAK;
+                                            END;
+                                        END;
+                                    END;
+                                  END;
+
+                                  COMMIT;
+                                END;
+
+               OnPostDataItem=VAR
+                                EDISetup@1240020000 : Record 14002367;
+                              BEGIN
+                                EDISetup.GET;
+
+                                IF (Release) OR (EDITemplate."Auto. Release Inventory Advice") THEN
+                                  CreateInventoryAdvice.ReleaseInventoryAdvice(InventoryAdviceHdr);
+                              END;
+
+               ReqFilterFields=No.,Location Filter }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=ENU=Options }
+
+      { 1240030000;2;Field  ;
+                  CaptionML=ENU=Qty. Available for Sale;
+                  DecimalPlaces=0:5;
+                  SourceExpr=AvailableQty }
+
+      { 1240030002;2;Field  ;
+                  CaptionML=ENU=Expected Receipt Qty.;
+                  DecimalPlaces=0:5;
+                  SourceExpr=ExpectedReceiptQty }
+
+      { 1240030003;2;Field  ;
+                  CaptionML=ENU=Expected Date Formula;
+                  SourceExpr=ExpectedDateFormula }
+
+      { 1240030008;2;Field  ;
+                  CaptionML=ENU=Cross-Reference Type No.;
+                  SourceExpr=IncludeCrossRefTypeNo }
+
+      { 1240030006;2;Field  ;
+                  CaptionML=ENU=Release Inventory Advice;
+                  SourceExpr=Release }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      EDIDocument@1240030000 : Record 14002353;
+      InventoryAdviceHdr@1240030010 : Record 14002413;
+      InventoryAdviceLine@1240030011 : Record 14002414;
+      EDITradePtnrItem@1240030003 : Record 14002364;
+      ItemCrossReference@1240030012 : Record 5717;
+      Item2@1240020009 : Record 27;
+      EDITemplate@1240020010 : Record 14002350;
+      TmpItem@1240020006 : TEMPORARY Record 27;
+      CreateInventoryAdvice@1240030002 : Codeunit 14002416;
+      TradePartner@1240030004 : Code[20];
+      Text001@1240030001 : TextConst 'ENU=An active EDI Document %1 was not found for Trading Partner %2.;ENC=An active EDI Document %1 was not found for Trading Partner %2.';
+      AvailableQty@1240030005 : Decimal;
+      ExpectedReceiptQty@1240030006 : Decimal;
+      ExpectedDate@1240030007 : Date;
+      ExpectedDateFormula@1240030008 : DateFormula;
+      Release@1240030009 : Boolean;
+      AutoFilterICRTypeNo@1240030013 : ' ,Customer,Blank';
+      IncludeCrossRefTypeNo@1240030015 : ' ,Customer,Blank';
+      DocumentNo@1240020005 : Code[10];
+      AdviceCreated@1240020011 : Boolean;
+      ItemNoFilter@1240020000 : Text;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

@@ -1,0 +1,604 @@
+OBJECT Codeunit 50032 WMDM Topaz Print Extension
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/18/21;
+    Time=[ 8:06:11 AM];
+    Modified=Yes;
+    Version List=TPZ000.00.00,001;
+  }
+  PROPERTIES
+  {
+    TableNo=23044511;
+    OnRun=BEGIN
+            trecEventParams.COPY(Rec, TRUE);  //make Rec data global
+
+            CASE getEvent OF
+              50004: printPostedPOPutAway;
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      trecEventParams@1000000000 : TEMPORARY Record 23044511;
+      cuWMDMCommon@1000000001 : Codeunit 23044501;
+      InspText@1000000002 : TextConst 'ENU=INSP.';
+      NPIText@1000000003 : TextConst 'ENU=NPI';
+      QUARText@1000000004 : TextConst 'ENU=QUAR';
+
+    LOCAL PROCEDURE examplePrintFunction@1000000001();
+    BEGIN
+      //
+      // get whatever variables are required to run the report
+      // E.g.
+      //   lcodSomeValue := trecEventParams.getValue('');
+      //
+
+      //
+      // initialize/run the report
+      //
+      //lrpt.initReport();
+      //lrpt.SETTABLEVIEW(lrecTable);
+      //lrpt.SHOWREQUESTFORM(FALSE);
+      //lrpt.RUNMODAL();
+
+      //
+      // or
+      //REPORT.RUNODAL(REPORT::"",FALSE,FALSE,lrecTable);
+    END;
+
+    LOCAL PROCEDURE printPostedPOPutAway@1000000000();
+    VAR
+      lcodReceiptNumber@1000000017 : Code[20];
+      lcodPostWhseRcptNumber@1000000014 : Code[20];
+      PONO@1000000006 : Code[20];
+      WhseActLine@1000000005 : Record 5767;
+      WhseActHeader@1000000004 : Record 5766;
+      lrecPostedWhseRcptHeader@1000000001 : Record 7318;
+      lrecPDAConfig@1000000003 : Record 23044504;
+      lrecReturnReceiptHeader@1000000000 : Record 6660;
+    BEGIN
+      // get the warehouse receipt number that was posted
+      lcodReceiptNumber := trecEventParams.getValue('No.');
+
+      // find the last posted document
+      lrecPostedWhseRcptHeader.SETRANGE("Whse. Receipt No.",lcodReceiptNumber);
+      //lrecPostedWhseRcptHeader.FINDLAST;
+      IF lrecPostedWhseRcptHeader.FINDLAST= FALSE THEN //EB 03/29/18
+        EXIT;//EB 03/29/18
+      lcodPostWhseRcptNumber := lrecPostedWhseRcptHeader."No.";
+
+
+      // filter the report dataitem
+      //lrecPostedWhseRcptHeader.RESET;
+      //lrecPostedWhseRcptHeader.SETRANGE("No.",lcodPostWhseRcptNumber);
+
+      // set the printer to use
+      //trecEventParams.getPDAConfig(lrecPDAConfig);
+      //cuWMDMCommon.setPrinterSelection(lrecPDAConfig."Regular Printer Name", REPORT::"Whse. - Posted Receipt");
+
+      // print the report
+      //REPORT.RUNMODAL(REPORT::"Whse. - Posted Receipt",FALSE,FALSE,lrecPostedWhseRcptHeader);
+
+      //<TPZ2039> Paperless put-away if location supported it.
+      //if location doesn't support it, then use the old way, print to put-away report to regular printer.
+      cuWMDMCommon.getDeviceConfig(lrecPDAConfig,trecEventParams);
+      WhseActLine.SETRANGE("Whse. Document No.", lcodPostWhseRcptNumber);
+      IF WhseActLine.FINDLAST = FALSE THEN
+        EXIT;
+
+      //IF ((WhseActLine."Location Code" = '1') OR (WhseActLine."Location Code" = '76')OR (WhseActLine."Location Code" = '30'))AND
+      IF (lrecPDAConfig."Label Printer IP" <> '') THEN BEGIN
+         WhseActHeader.GET(WhseActHeader.Type::"Put-away", WhseActLine."No.");
+         GlobalPrintPostedPOPutAwayPaperLess(lrecPDAConfig, WhseActHeader);
+         EXIT;
+      END;
+      WhseActLine.RESET;
+      //</TPZ2039>
+
+      WhseActLine.SETRANGE("Whse. Document No.", lcodPostWhseRcptNumber);
+      IF WhseActLine.FINDLAST THEN BEGIN
+        WhseActHeader.SETRANGE(Type, WhseActHeader.Type::"Put-away");
+        WhseActHeader.SETRANGE("No.", WhseActLine."No.");
+        //EB 03/29/18
+        IF WhseActHeader.COUNT<> 1 THEN
+            EXIT;
+        //EB 03/29/18
+        cuWMDMCommon.getDeviceConfig(lrecPDAConfig,trecEventParams);
+        cuWMDMCommon.setPrinterSelection(lrecPDAConfig."Regular Printer Name", 51054);
+
+        REPORT.RUNMODAL(51054,FALSE,FALSE,WhseActHeader);
+      END;
+    END;
+
+    PROCEDURE GlobalPrintPostedPOPutAwayPaperLess@1000000028(VAR pr_PDAConfig@1000000017 : Record 23044504;pr_ActivityHeader@1000000000 : Record 5766);
+    VAR
+      lt_Inspection@1000000016 : Text;
+      lt_NPI@1000000028 : Text;
+      lb_PInspection@1000000015 : Boolean;
+      lb_CrossDocks@1000000014 : Boolean;
+      li_Count@1000000025 : Integer;
+      li_Count2@1000000024 : Integer;
+      li_StartY@1000000019 : Integer;
+      li_NeedNewLabels@1000000023 : Integer;
+      lc_PONo@1000000018 : Code[20];
+      lr_DefDim@1000000029 : Record 352;
+      lr_Vendor@1000000013 : Record 23;
+      lr_Item@1000000012 : Record 27;
+      lr_WhseCrossDockOpportunity@1000000011 : Record 5768;
+      lr_WhseCrossDockOppHistory@1000000021 : Record 50024;
+      ltr_WhseCrossDockOpportunityTemp@1000000022 : TEMPORARY Record 5768;
+      lr_Location@1000000010 : Record 14;
+      lr_PL@1000000009 : Record 39;
+      lr_PurchPrice@1000000008 : Record 7012;
+      lr_WhseActLine@1000000007 : Record 5767;
+      lr_WhseActHeader@1000000006 : Record 5766;
+      lr_PostedWhsRcptHeader@1000000020 : Record 7318;
+      wHShell@1000000005 : Automation "{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B} 1.0:{72C24DD5-D70A-438B-8A42-98424B88AFB8}:'Windows Script Host Object Model'.WshShell";
+      TcpClient@1000000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.Sockets.TcpClient";
+      StreamWriter@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamWriter";
+      Encoding@1000000002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      Char@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Char";
+      SourceText@1000000026 : Text;
+      TransferHeader@1000000027 : Record 5740;
+      Item@1000000030 : Record 27;
+      VendorItemNo@1000000031 : Code[20];
+      WhseActivityLine@1000000032 : Record 5767;
+      LineStart@1000000033 : Integer;
+      li_tmpTrasferHeader@1000000034 : Record 5740;
+      TmpPurchLine@1000000035 : Record 39;
+      PurchLine@1000000036 : Record 39;
+      PurchPrice@1000000037 : Record 7012;
+      TmpTrnsReceiptHeader@1000000038 : Record 5746;
+      PInspection@1000000039 : Boolean;
+      Vendor@1000000040 : Record 23;
+      DaysText@1000000043 : Text;
+      DaysCount@1000000042 : Text;
+      YearCount@1000000041 : Text;
+      lt_Quar@1000000045 : Text;
+      lr_DefDim1@1000000044 : Record 352;
+      ItemCounter@1000000049 : Integer;
+      ItemArray@1000000048 : ARRAY [5] OF Code[20];
+      QtyArray@1000000047 : ARRAY [5] OF Decimal;
+      Xpos@1000000046 : Integer;
+    BEGIN
+      //kvb VSO2039 3/23/18 ->>>
+      pr_PDAConfig.TESTFIELD("Label Printer IP");
+      pr_PDAConfig.TESTFIELD("Label Printer Port");
+
+      //check inspection get po and vendor data
+      //presuming its always one PO, not many
+      lr_PurchPrice.SETCURRENTKEY("Item No.","Vendor No.","Unit of Measure Code");
+      lr_WhseActLine.SETRANGE("No.", pr_ActivityHeader."No.");
+      IF lr_WhseActLine.FINDSET THEN BEGIN
+        lc_PONo := lr_WhseActLine."Source No.";
+        //<TPZ3193>
+        ItemCounter := 1;
+        CLEAR(ItemArray);
+        CLEAR(QtyArray);
+        //</TPZ3193>
+
+        SourceText := '';
+        IF lr_WhseActLine."Source Type" = DATABASE::"Transfer Line" THEN BEGIN
+           IF TransferHeader.GET(lr_WhseActLine."Source No.") THEN BEGIN
+             SourceText := 'Transfer from ' + TransferHeader."Transfer-from Name";
+           END;
+        END;
+        REPEAT
+          IF (lt_Inspection = '')OR(lt_NPI = '')OR(lt_Quar = '') AND (lr_WhseActLine."Source Type" = DATABASE::"Purchase Line") THEN BEGIN //<TPZ2586>
+            IF lr_PL.GET(lr_WhseActLine."Source Subtype", lr_WhseActLine."Source No.", lr_WhseActLine."Source Line No.") THEN BEGIN
+              lc_PONo := lr_WhseActLine."Source No.";
+
+              lr_PurchPrice.SETRANGE("Item No.", lr_WhseActLine."Item No.");
+              lr_PurchPrice.SETRANGE("Vendor No.",lr_PL."Buy-from Vendor No.");
+              lr_PurchPrice.SETRANGE("Unit of Measure Code",'PCS');
+              lr_PurchPrice.SETRANGE(Inspection, TRUE);
+              lb_PInspection := NOT lr_PurchPrice.ISEMPTY;
+              IF lr_PL."Buy-from Vendor No." <> ''
+                THEN lr_Vendor.GET(lr_PL."Buy-from Vendor No.");
+              IF lr_Item."No." <> lr_WhseActLine."Item No."
+                THEN lr_Item.GET(lr_WhseActLine."Item No.");
+
+              lr_DefDim.SETRANGE("Table ID", 27);
+              lr_DefDim.SETRANGE("Dimension Code", 'PRODLIFECYCLE');
+              lr_DefDim.SETRANGE("No.", lr_Item."No.");
+              lr_DefDim.SETRANGE("Dimension Value Code", 'INTRO');
+
+              IF (lt_NPI = '')AND(NOT lr_DefDim.ISEMPTY)
+                THEN lt_NPI := NPIText;
+              //<TPZ2586>
+              lr_DefDim1.SETRANGE("Table ID", 27);
+              lr_DefDim1.SETRANGE("Dimension Code", 'PRODLIFECYCLE');
+              lr_DefDim1.SETRANGE("No.", lr_Item."No.");
+              lr_DefDim1.SETRANGE("Dimension Value Code", 'QUAR');
+
+              IF (lt_Quar = '')AND(NOT lr_DefDim1.ISEMPTY)
+                THEN lt_Quar := QUARText;
+              //<TPZ2586>
+
+              IF (lt_Inspection = '') AND (lr_Item.Inspection OR lr_Vendor.Inspection OR lb_PInspection) THEN BEGIN
+                lt_Inspection := InspText;
+              END
+            END;
+          END;
+
+         //<VSO2380>
+
+          IF (lt_Inspection = '')OR(lt_NPI = '')OR(lt_Quar = '') AND (lr_WhseActLine."Source Type" = DATABASE::"Transfer Line") THEN BEGIN //<TPZ2586>
+             PInspection:=FALSE;
+
+            IF TransferHeader.GET(lr_WhseActLine."Source No.") THEN BEGIN
+                TmpPurchLine.SETRANGE("No.", lr_WhseActLine."Item No.");
+                TmpPurchLine.SETRANGE("Inbound Container Number",TransferHeader."Inbound Container Number");
+                IF TmpPurchLine.FINDFIRST THEN
+                    PurchPrice.RESET;
+                    PurchPrice.SETCURRENTKEY("Item No.","Vendor No.","Unit of Measure Code");
+                    PurchPrice.SETRANGE("Vendor No.",TmpPurchLine."Buy-from Vendor No.");
+                    PurchPrice.SETRANGE("Unit of Measure Code",'PCS');
+                    PurchPrice.SETRANGE("Item No.", lr_WhseActLine."Item No.");
+                 IF (PurchPrice.FINDFIRST) AND (TmpPurchLine."Buy-from Vendor No."<>'') THEN
+                    PInspection := PurchPrice.Inspection;
+            END;
+
+                IF TmpPurchLine."Buy-from Vendor No." <> '' THEN
+                    Vendor.GET(TmpPurchLine."Buy-from Vendor No.");
+                  IF Item."No." <> lr_WhseActLine."Item No." THEN
+                    Item.GET(lr_WhseActLine."Item No.");
+
+
+              lr_DefDim.SETRANGE("Table ID", 27);
+              lr_DefDim.SETRANGE("Dimension Code", 'PRODLIFECYCLE');
+              lr_DefDim.SETRANGE("No.", lr_WhseActLine."Item No.");
+              lr_DefDim.SETRANGE("Dimension Value Code", 'INTRO');
+
+              IF (lt_NPI = '')AND(NOT lr_DefDim.ISEMPTY)
+                THEN lt_NPI := NPIText;
+
+               //<TPZ2586>
+              lr_DefDim1.SETRANGE("Table ID", 27);
+              lr_DefDim1.SETRANGE("Dimension Code", 'PRODLIFECYCLE');
+              lr_DefDim1.SETRANGE("No.", lr_WhseActLine."Item No.");
+              lr_DefDim1.SETRANGE("Dimension Value Code", 'QUAR');
+
+              IF (lt_Quar = '')AND(NOT lr_DefDim1.ISEMPTY)
+                THEN lt_Quar := QUARText;
+              //<TPZ2586>
+
+              IF Item.Inspection OR Vendor.Inspection OR PInspection THEN
+                  lt_Inspection := InspText;
+
+           END;
+
+        //</VSO2380>
+
+          //get crossdock data & inspection
+          IF (lr_WhseActLine."Cross-Dock Information" <> lr_WhseActLine."Cross-Dock Information"::" ") THEN BEGIN
+            IF lr_PostedWhsRcptHeader.GET(lr_WhseActLine."Whse. Document No.") THEN BEGIN
+              lr_Location.GET(lr_WhseActLine."Location Code");
+              IF (lr_Location."Cross-Dock Bin Code" <> '')AND(lr_WhseActLine."Bin Code" = lr_Location."Cross-Dock Bin Code") THEN BEGIN
+                lr_WhseCrossDockOpportunity.SETRANGE("Source Name/No.", lr_PostedWhsRcptHeader."Whse. Receipt No.");
+                lr_WhseCrossDockOpportunity.SETRANGE("Item No.", lr_WhseActLine."Item No.");
+                IF lr_WhseCrossDockOpportunity.FINDSET THEN REPEAT
+                  ltr_WhseCrossDockOpportunityTemp.INIT;
+                  ltr_WhseCrossDockOpportunityTemp.TRANSFERFIELDS(lr_WhseCrossDockOpportunity);
+                  IF ltr_WhseCrossDockOpportunityTemp."Qty. Needed (Base)" > lr_WhseActLine.Quantity
+                    THEN ltr_WhseCrossDockOpportunityTemp."Qty. Needed (Base)" := lr_WhseActLine.Quantity;
+
+                  IF ltr_WhseCrossDockOpportunityTemp.INSERT(FALSE) THEN;
+                UNTIL lr_WhseCrossDockOpportunity.NEXT = 0;
+
+
+                lr_WhseCrossDockOppHistory.SETRANGE("Source Name/No.", lr_PostedWhsRcptHeader."Whse. Receipt No.");
+                lr_WhseCrossDockOppHistory.SETRANGE("Item No.", lr_WhseActLine."Item No.");
+                //FOR li_Count2 := 0 TO 4 DO
+                IF lr_WhseCrossDockOppHistory.FINDSET THEN REPEAT
+                  ltr_WhseCrossDockOpportunityTemp.INIT;
+                  ltr_WhseCrossDockOpportunityTemp.TRANSFERFIELDS(lr_WhseCrossDockOppHistory);
+                  //ltr_WhseCrossDockOpportunityTemp."Source Name/No." += FORMAT(li_Count2);
+                  IF ltr_WhseCrossDockOpportunityTemp."Qty. Needed (Base)" > lr_WhseActLine.Quantity
+                    THEN ltr_WhseCrossDockOpportunityTemp."Qty. Needed (Base)" := lr_WhseActLine.Quantity;
+                  IF ltr_WhseCrossDockOpportunityTemp.INSERT(FALSE) THEN;
+                UNTIL lr_WhseCrossDockOppHistory.NEXT = 0;
+              END;
+            END;
+          END;
+          //<TPZ3193>
+          IF (ItemCounter < 4) AND (lr_WhseActLine."Action Type" = lr_WhseActLine."Action Type"::Place) THEN BEGIN
+            ItemArray[ItemCounter] := lr_WhseActLine."Item No.";
+            QtyArray[ItemCounter] := lr_WhseActLine.Quantity;
+            ItemCounter += 1;
+          END;
+          //</TPZ3193>
+
+        UNTIL lr_WhseActLine.NEXT = 0;
+      END;
+
+      // Create instance of TcpClient class and connect
+      TcpClient := TcpClient.TcpClient();
+      TcpClient.Connect(pr_PDAConfig."Label Printer IP", pr_PDAConfig."Label Printer Port");
+
+      // Create instance of StreamWriter class and set Encoding
+      StreamWriter := StreamWriter.StreamWriter(TcpClient.GetStream(), Encoding.UTF8);
+
+      // Create the commands and data to send to the printer
+      StreamWriter.WriteLine('^XA');
+      //inert Item no and Qty.
+      //<TPZ3193>
+      IF ItemCounter <> 1 THEN BEGIN
+        StreamWriter.WriteLine('^FO580,350^ADRN,24,10^FD^FD ' + 'Item No.' + '^FS');
+        StreamWriter.WriteLine('^FO580,520^ADRN,24,10^FD^FD ' + 'Qty.' + '^FS');
+        Xpos := 580;
+        REPEAT
+          Xpos -= 30;
+          ItemCounter -= 1;
+          StreamWriter.WriteLine('^FO'+ FORMAT(Xpos) +',350^ADRN,24,10^FD^FD ' + ItemArray[ItemCounter] + '^FS');
+          StreamWriter.WriteLine('^FO'+ FORMAT(Xpos) +',520^ADRN,24,10^FD^FD ' + FORMAT(QtyArray[ItemCounter]) + '^FS');
+
+        UNTIL ItemCounter = 1;
+      END;
+      //</TPZ3193>
+
+      //PO&Put-Away Doc No.
+      StreamWriter.WriteLine('^FO450,100^ADRN,24,10^FD^FD ' + lc_PONo + '^FS');
+
+      StreamWriter.WriteLine('^FO350,50^BCR,100,Y,N^FD' + pr_ActivityHeader."No." + '^FS');
+      //vendor
+      StreamWriter.WriteLine('^FO300,50^ADRN,24,10^FD');
+      IF SourceText <> '' THEN
+        StreamWriter.WriteLine('^FD' + SourceText + '^FS')
+      ELSE
+        StreamWriter.WriteLine('^FDVendor ' + lr_Vendor."No." + '/' + lr_Vendor.Name + '^FS');
+
+      li_StartY := 280;
+      li_Count := ltr_WhseCrossDockOpportunityTemp.COUNT;
+      IF li_Count > 11 THEN BEGIN
+        li_Count -= 11;
+        li_NeedNewLabels := li_Count DIV 22;
+        IF li_Count MOD 22 <> 0
+          THEN li_NeedNewLabels += 1;
+      END;
+
+      IF ltr_WhseCrossDockOpportunityTemp.FINDSET THEN REPEAT
+        StreamWriter.WriteLine('^FO' + FORMAT(li_StartY) + ',50^ADRN,24,10^FD');
+        StreamWriter.WriteLine('^FD' + ltr_WhseCrossDockOpportunityTemp."To Source No." + '     ' + FORMAT(ltr_WhseCrossDockOpportunityTemp."Qty. Needed (Base)") +
+          '     ' + FORMAT(ltr_WhseCrossDockOpportunityTemp."Due Date") + '^FS');
+        li_StartY -= 20;
+        ltr_WhseCrossDockOpportunityTemp.DELETE(FALSE);
+      UNTIL (NOT ltr_WhseCrossDockOpportunityTemp.FINDFIRST) OR (li_StartY <= 60);
+
+      //inspection
+      IF lt_Inspection <> '' THEN BEGIN
+        StreamWriter.WriteLine('^FO400,450^ADRN,48,20^FD');
+        StreamWriter.WriteLine('^FD' + lt_Inspection + '^FS');
+      END;
+
+      //NPI
+      IF lt_NPI <> '' THEN BEGIN
+        StreamWriter.WriteLine('^FO350,450^ADRN,48,20^FD');
+        StreamWriter.WriteLine('^FD' + lt_NPI + '^FS');
+
+      END;
+
+      //<TPZ2586>
+      //Quarantine
+      IF lt_Quar <> '' THEN BEGIN
+        StreamWriter.WriteLine('^FO350,450^ADRN,48,20^FD');
+        StreamWriter.WriteLine('^FD' + lt_Quar + '^FS');
+      END;
+      //</TPZ2586>
+      //<TPZ2573>
+      StreamWriter.WriteLine('^FO320,450^ADRN,30,20^FD');
+      DaysText := FORMAT((TODAY-CALCDATE( '<-CY>', TODAY)));
+      DaysCount := PADSTR('',3-STRLEN(DaysText),'0')+DaysText;
+      YearCount := COPYSTR(FORMAT(DATE2DMY(TODAY,3)),2);
+      StreamWriter.WriteLine('^FD' +YearCount+DaysCount + '^FS');
+      //</TPZ2573>
+      StreamWriter.WriteLine('^XZ');
+
+      IF li_NeedNewLabels <> 0 THEN BEGIN
+        FOR li_Count := 1 TO li_NeedNewLabels DO BEGIN
+          li_StartY := 460;
+
+          StreamWriter.WriteLine('^XA');
+          IF ltr_WhseCrossDockOpportunityTemp.FINDSET THEN REPEAT
+            StreamWriter.WriteLine('^FO' + FORMAT(li_StartY) + ',50^ADRN,24,10^FD');
+            StreamWriter.WriteLine('^FD' + ltr_WhseCrossDockOpportunityTemp."To Source No." + '     ' + FORMAT(ltr_WhseCrossDockOpportunityTemp."Qty. Needed (Base)") +
+              '     ' + FORMAT(ltr_WhseCrossDockOpportunityTemp."Due Date") + '^FS');
+
+            li_StartY -= 20;
+            ltr_WhseCrossDockOpportunityTemp.DELETE(FALSE);
+          UNTIL (NOT ltr_WhseCrossDockOpportunityTemp.FINDFIRST) OR (li_StartY <= 60);
+          StreamWriter.WriteLine('^XZ');
+        END;
+      END;
+
+      StreamWriter.Close();
+      TcpClient.Close();
+    END;
+
+    PROCEDURE GlobalPrintLicensePlate@1000000002(VAR pr_PDAConfig@1000000017 : Record 23044504;pcodLPDocNo@1000000027 : Code[20];piLineNumber@1000000026 : Integer);
+    VAR
+      lt_Inspection@1000000016 : Text;
+      lb_PInspection@1000000015 : Boolean;
+      lb_CrossDocks@1000000014 : Boolean;
+      li_Count@1000000025 : Integer;
+      li_Count2@1000000024 : Integer;
+      li_StartY@1000000019 : Integer;
+      li_NeedNewLabels@1000000023 : Integer;
+      lc_PONo@1000000018 : Code[20];
+      lr_LPH@1000000000 : Record 23044505;
+      lr_Vendor@1000000013 : Record 23;
+      lr_Item@1000000012 : Record 27;
+      lr_WhseCrossDockOpportunity@1000000011 : Record 5768;
+      lr_WhseCrossDockOppHistory@1000000021 : Record 50024;
+      ltr_WhseCrossDockOpportunityTemp@1000000022 : TEMPORARY Record 5768;
+      lr_Location@1000000010 : Record 14;
+      lr_PL@1000000009 : Record 39;
+      lr_PurchPrice@1000000008 : Record 7012;
+      lr_WhseActLine@1000000007 : Record 5767;
+      lr_WhseActHeader@1000000006 : Record 5766;
+      lr_PostedWhsRcptHeader@1000000020 : Record 7318;
+      wHShell@1000000005 : Automation "{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B} 1.0:{72C24DD5-D70A-438B-8A42-98424B88AFB8}:'Windows Script Host Object Model'.WshShell";
+      TcpClient@1000000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.Sockets.TcpClient";
+      StreamWriter@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamWriter";
+      Encoding@1000000002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      Char@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Char";
+    BEGIN
+      //kvb VSO2039 3/27/18 ->>>
+      lr_LPH.GET(pcodLPDocNo);
+
+      pr_PDAConfig.TESTFIELD("Label Printer IP");
+      pr_PDAConfig.TESTFIELD("Label Printer Port");
+
+      TcpClient := TcpClient.TcpClient();
+      TcpClient.Connect(pr_PDAConfig."Label Printer IP", pr_PDAConfig."Label Printer Port");
+
+      // Create instance of StreamWriter class and set Encoding
+      StreamWriter := StreamWriter.StreamWriter(TcpClient.GetStream(), Encoding.UTF8);
+
+      // Create the commands and data to send to the printer
+      StreamWriter.WriteLine('^XA');
+      //Doc No.
+      //StreamWriter.WriteLine('^FO450,100^ADRN,24,10^FD^FDPO# ' + lc_PONo + '^FS');
+      //StreamWriter.WriteLine('^FO350,150^BCR,100,Y,N^FD' + '%LP%'+ pcodLPDocNo + '^FS');
+      StreamWriter.WriteLine('^FO350,150^BCR,100,N,N^FD' + '%LP%'+ pcodLPDocNo + '^FS');
+      StreamWriter.WriteLine('^FO320,250^ADRN,24,10^FD^FD' + pcodLPDocNo + '^FS');
+      //status
+      StreamWriter.WriteLine('^FO300,200^ADRN,24,10^FD');
+      StreamWriter.WriteLine('^FD' + FORMAT(lr_LPH.Status) + '^FS');
+
+      //description
+      StreamWriter.WriteLine('^FO250,80^ADRN,24,10^FD');
+      StreamWriter.WriteLine('^FD' + COPYSTR(lr_LPH.Description, 1, 40) + '^FS');
+
+      StreamWriter.WriteLine('^FO225,80^ADRN,24,10^FD');
+      StreamWriter.WriteLine('^FD' + COPYSTR(lr_LPH.Description, 41, 40) + '^FS');
+
+      StreamWriter.WriteLine('^FO200,80^ADRN,24,10^FD');
+      StreamWriter.WriteLine('^FD' + COPYSTR(lr_LPH.Description, 81, 40) + '^FS');
+
+      StreamWriter.WriteLine('^FO175,80^ADRN,24,10^FD');
+      StreamWriter.WriteLine('^FD' + COPYSTR(lr_LPH.Description, 121, 40) + '^FS');
+
+      StreamWriter.WriteLine('^FO150,80^ADRN,24,10^FD');
+      StreamWriter.WriteLine('^FD' + COPYSTR(lr_LPH.Description, 161, 40) + '^FS');
+
+      StreamWriter.WriteLine('^FO125,80^ADRN,24,10^FD');
+      StreamWriter.WriteLine('^FD' + COPYSTR(lr_LPH.Description, 201, 40) + '^FS');
+
+      StreamWriter.WriteLine('^FO100,80^ADRN,24,10^FD');
+      StreamWriter.WriteLine('^FD' + COPYSTR(lr_LPH.Description, 241, 10) + '^FS');
+
+      StreamWriter.WriteLine('^XZ');
+
+      StreamWriter.Close();
+      TcpClient.Close();
+    END;
+
+    PROCEDURE GlobalItemLabel@1000000027(VAR pr_PDAConfig@1000000017 : Record 23044504;pc_ItemNo@1000000027 : Code[20]);
+    VAR
+      lt_Inspection@1000000016 : Text;
+      lb_PInspection@1000000015 : Boolean;
+      lb_CrossDocks@1000000014 : Boolean;
+      li_Count@1000000025 : Integer;
+      li_Count2@1000000024 : Integer;
+      li_StartY@1000000019 : Integer;
+      li_NeedNewLabels@1000000023 : Integer;
+      lc_PONo@1000000018 : Code[20];
+      BarcodeText@1000000008 : Text;
+      UPC@1000000007 : Text;
+      ItemCrossReference@1000000006 : Record 5717;
+      lr_LPH@1000000000 : Record 23044505;
+      lr_Vendor@1000000013 : Record 23;
+      lr_Item@1000000012 : Record 27;
+      wHShell@1000000005 : Automation "{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B} 1.0:{72C24DD5-D70A-438B-8A42-98424B88AFB8}:'Windows Script Host Object Model'.WshShell";
+      TcpClient@1000000004 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.Sockets.TcpClient";
+      StreamWriter@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamWriter";
+      Encoding@1000000002 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      Char@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Char";
+    BEGIN
+      //kvb VSO2039 3/27/18 ->>>
+      lr_Item.GET(pc_ItemNo);
+
+      pr_PDAConfig.TESTFIELD("Label Printer IP");
+      pr_PDAConfig.TESTFIELD("Label Printer Port");
+
+      TcpClient := TcpClient.TcpClient();
+      TcpClient.Connect(pr_PDAConfig."Label Printer IP", pr_PDAConfig."Label Printer Port");
+
+      // Create instance of StreamWriter class and set Encoding
+      StreamWriter := StreamWriter.StreamWriter(TcpClient.GetStream(), Encoding.UTF8);
+
+      // Create the commands and data to send to the printer
+      StreamWriter.WriteLine('^XA');
+      //Doc No.
+      //StreamWriter.WriteLine('^FO450,100^ADRN,24,10^FD^FDPO# ' + lc_PONo + '^FS');
+
+      //status
+      BarcodeText := lr_Item."No.";
+      UPC := '';
+      ItemCrossReference.SETRANGE("Item No.", lr_Item."No.");
+      ItemCrossReference.SETRANGE("Unit of Measure", lr_Item."Base Unit of Measure");
+      ItemCrossReference.SETRANGE("Cross-Reference Type", ItemCrossReference."Cross-Reference Type"::"Bar Code");
+      ItemCrossReference.SETRANGE("Unit of Measure", 'PCS');
+      ItemCrossReference.SETRANGE("Discontinue Bar Code", FALSE);
+      ItemCrossReference.SETFILTER("Cross-Reference No.", '<>%1', '');
+      IF ItemCrossReference.FINDFIRST THEN BEGIN
+        BarcodeText := ItemCrossReference."Cross-Reference No.";
+        UPC := ItemCrossReference."Cross-Reference No.";
+      END ELSE BEGIN
+        ItemCrossReference.SETRANGE("Unit of Measure");
+        IF ItemCrossReference.FINDFIRST THEN BEGIN
+          BarcodeText := ItemCrossReference."Cross-Reference No.";
+          UPC := ItemCrossReference."Cross-Reference No.";
+        END;
+      END;
+
+      StreamWriter.WriteLine('^FO350,150^BCR,100,Y,N^FD' + BarcodeText + '^FS');
+
+      {StreamWriter.WriteLine('^FO300,200^ADRN,24,10^FD');
+      StreamWriter.WriteLine('^FD' + FORMAT(UPC) + '^FS');}
+
+      //description
+      StreamWriter.WriteLine('^FO250,100^ADRN,24,10^FD');
+      StreamWriter.WriteLine('^FD' + lr_Item."No." + '^FS');
+
+      StreamWriter.WriteLine('^FO225,100^ADRN,24,10^FD');
+      StreamWriter.WriteLine('^FD' + COPYSTR(lr_Item.Description, 1, 50) + '^FS');
+
+      StreamWriter.WriteLine('^XZ');
+
+      StreamWriter.Close();
+      TcpClient.Close();
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Dynamic Manufacturing Solutions Inc 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+
+      <DMS>
+        <REVISION author="R.Trudeau" date="20/12/2016" version="IW16.12" issue="">
+          Example extension for extending whse. receipt to post + print.
+        </REVISION>
+      </DMS>
+
+      TPZ2039 4/13/2018 TMEI print label usign ZPL directly to label printer.
+
+      2018-08-15 VSO2380 EBAGIM
+        Add Inspection flag to Putaway for transfer receipts
+      2019-05-07 VSO2573 VAHAMAD
+        Added code in function GlobalPrintPostedPOPutAwayPaperLess to Print Days Year on Label
+      2019-06-26 VSO2586 UCHOUHAN
+        Added code for Quartine.
+      001 TPZ3193 GKG 08182021 Added Qty and item on label
+    }
+    END.
+  }
+}
+

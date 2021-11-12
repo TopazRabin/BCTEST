@@ -1,0 +1,187 @@
+OBJECT Table 14123503 ES Windows Login
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/02/17;
+    Time=12:00:00 PM;
+    Version List=ES1.41.32;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               IF ("User ID" = '') AND (ID <> '') THEN
+                 VALIDATE(ID);
+             END;
+
+    OnDelete=BEGIN
+               ESWindowsAccessControl.RESET;
+               ESWindowsAccessControl.SETRANGE("Login SID",SID);
+               ESWindowsAccessControl.DELETEALL(TRUE);
+
+               Comment(4,'');
+             END;
+
+    CaptionML=ENU=User;
+    LookupPageID=Page14123503;
+    DrillDownPageID=Page14123503;
+  }
+  FIELDS
+  {
+    { 1   ;   ;SID                 ;GUID          ;CaptionML=ENU=User Security ID;
+                                                   NotBlank=Yes }
+    { 2   ;   ;ID                  ;Text132       ;OnValidate=BEGIN
+                                                                "User ID" := FindUserID(ID);
+                                                              END;
+
+                                                   CaptionML=ENU=User Name }
+    { 3   ;   ;User Name           ;Text208       ;CaptionML=ENU=Full Name }
+    { 4   ;   ;State               ;Option        ;CaptionML=ENU=State;
+                                                   OptionCaptionML=ENU=Enabled,Disabled;
+                                                   OptionString=Enabled,Disabled }
+    { 5   ;   ;Expiry Date         ;DateTime      ;CaptionML=ENU=Expiry Date }
+    { 7   ;   ;Windows Security ID ;Text119       ;CaptionML=ENU=Windows Security ID }
+    { 8   ;   ;Change Password     ;Boolean       ;CaptionML=ENU=Change Password }
+    { 10  ;   ;License Type        ;Option        ;CaptionML=ENU=License Type;
+                                                   OptionCaptionML=ENU=Full User,Limited User,Device Only User,Windows Group,External User;
+                                                   OptionString=Full User,Limited User,Device Only User,Windows Group,External User }
+    { 1002;   ;User ID             ;Code50        ;CaptionML=ENU=User ID }
+    { 1003;   ;Windows Access Controls;Integer    ;FieldClass=FlowField;
+                                                   CalcFormula=Count("ES Windows Access Control" WHERE (Login SID=FIELD(SID)));
+                                                   CaptionML=ENU=User Access Controls;
+                                                   BlankZero=Yes;
+                                                   Editable=No }
+    { 1004;   ;Summary Permissions ;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("ES Summary Permission" WHERE (Type=CONST(Windows Login),
+                                                                                                    Code=FIELD(User ID)));
+                                                   CaptionML=ENU=Summary Permissions;
+                                                   BlankZero=Yes;
+                                                   Editable=No }
+    { 1005;   ;Full Name           ;Text80        ;CaptionML=ENU=Full Name }
+  }
+  KEYS
+  {
+    {    ;SID                                     ;Clustered=Yes }
+    {    ;User ID                                  }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      ESWindowsAccessControl@1240520008 : Record 14123504;
+      Text001@1001 : TextConst 'ENU=%1 records were updated.';
+
+    PROCEDURE FindUserID@1240520008(WindowsLoginID@1240520010 : Text[250]) : Code[50];
+    VAR
+      TempText@1240520009 : Text[1000];
+      Pos@1240520008 : Integer;
+    BEGIN
+      IF WindowsLoginID = '' THEN
+        EXIT('');
+
+      TempText := WindowsLoginID;
+      Pos := STRPOS(TempText,'\');
+      WHILE Pos > 0 DO BEGIN
+        TempText := COPYSTR(TempText,Pos + 1);
+        Pos := STRPOS(TempText,'\');
+      END;
+
+      IF STRLEN(TempText) > 20 THEN
+        EXIT(COPYSTR(TempText,STRLEN(TempText) - 19,20))
+      ELSE
+      EXIT(TempText);
+    END;
+
+    PROCEDURE UpdateWindowsLoginInLive@1240520001(ShowStatus@1240520005 : Boolean);
+    VAR
+      ESSecuritySetup@1240520004 : Record 14123521;
+      ESLoginSetup@1240520007 : Record 14123540;
+      ESRestorePoint@1240520008 : Record 14123523;
+      WindowsLogin@1240520001 : Record 2000000120;
+      WindowsAccessControl@1240520002 : Record 2000000053;
+      ESWindowsAccessControl@1240520003 : Record 14123504;
+      Role@1240520009 : Record 2000000004;
+      Company@1240520010 : Record 2000000006;
+      InsertedRecords@1240520006 : Integer;
+    BEGIN
+      ESSecuritySetup.GET;
+      ESSecuritySetup.TestPublishCompany;
+      ESSecuritySetup.TESTFIELD("Direct Login Integration");
+
+      ESLoginSetup.GET(USERID);
+      ESLoginSetup.TESTFIELD("Direct Login Integration");
+
+      IF NOT ESSecuritySetup."Direct Int. No Restore Point" THEN BEGIN
+        ESRestorePoint.INSERT(TRUE);
+        ESRestorePoint.CreateRestPntFromLive(ShowStatus);
+      END;
+
+      WindowsLogin.GET(SID);
+
+      WindowsAccessControl.RESET;
+      WindowsAccessControl.SETRANGE("User Security ID",WindowsLogin."User Security ID");
+      WindowsAccessControl.DELETEALL;
+
+      ESWindowsAccessControl.RESET;
+      ESWindowsAccessControl.SETRANGE("Login SID",WindowsLogin."User Security ID");
+      IF ESWindowsAccessControl.FIND('-') THEN
+        REPEAT
+          Role.GET(ESWindowsAccessControl."Role ID");
+          IF ESWindowsAccessControl."Company Name" <> '' THEN
+            Company.GET(ESWindowsAccessControl."Company Name");
+
+          WindowsAccessControl.TRANSFERFIELDS(ESWindowsAccessControl);
+          WindowsAccessControl."User Security ID" := WindowsLogin."User Security ID";
+          WindowsAccessControl.INSERT;
+
+          InsertedRecords := InsertedRecords + 1;
+        UNTIL ESWindowsAccessControl.NEXT = 0;
+
+      IF ShowStatus THEN
+        MESSAGE(Text001,InsertedRecords);
+    END;
+
+    PROCEDURE FormatAsTextLine@1240520010(VAR ESTextLine@1240520011 : Record 14123520;NoOfRelatedKeyFields@1240520009 : Integer;CalcFlowFields@1240520012 : Boolean) : Boolean;
+    VAR
+      ESFormatMgt@1240520013 : Codeunit 14123505;
+      RecRef@1240520010 : RecordRef;
+    BEGIN
+      ESFormatMgt.NewRecord(TABLECAPTION,SID,'','','','','','','','','',1,NoOfRelatedKeyFields);
+      ESFormatMgt.AddField(FIELDCAPTION(ID),FORMAT(ID));
+      ESFormatMgt.AddField(FIELDCAPTION("User Name"),FORMAT("User Name"));
+      ESFormatMgt.AddField(FIELDCAPTION("User ID"),FORMAT("User ID"));
+
+      IF CalcFlowFields THEN BEGIN
+        CALCFIELDS("Windows Access Controls","Summary Permissions");
+
+        IF "Windows Access Controls" <> 0 THEN
+          ESFormatMgt.AddFlowField(
+            FIELDCAPTION("Windows Access Controls"),FORMAT("Windows Access Controls"));
+        IF "Summary Permissions" <> 0 THEN
+          ESFormatMgt.AddFlowField(
+            FIELDCAPTION("Summary Permissions"),FORMAT("Summary Permissions"));
+      END;
+
+      RecRef.OPEN(DATABASE::"ES Windows Login");
+      RecRef.GETTABLE(Rec);
+      ESFormatMgt.FormatNewESTextLine(ESTextLine,DATABASE::"ES Windows Login",RecRef.RECORDID);
+
+      EXIT(ESFormatMgt.NoTextOverflow);
+    END;
+
+    PROCEDURE Comment@1240520009(FunctionNo@1240520008 : ' ,Insert,Show,Exist,DeleteAll';NewText@1240520010 : Text[250]) : Boolean;
+    VAR
+      ESComment@1240520009 : Record 14123524;
+    BEGIN
+      ESComment.RESET;
+      ESComment.SETRANGE("Table ID",DATABASE::"ES Windows Login");
+      ESComment.SETRANGE(SID,COPYSTR(SID,1,MAXSTRLEN(ESComment.SID)));
+      EXIT(ESComment.Functions(FunctionNo,NewText));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

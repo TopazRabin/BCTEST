@@ -1,0 +1,452 @@
+OBJECT Page 10044 Sales Credit Memo Stats.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/22/17;
+    Time=12:00:00 PM;
+    Version List=NAVNA11.00;
+  }
+  PROPERTIES
+  {
+    Editable=No;
+    CaptionML=[ENU=Sales Credit Memo Statistics;
+               ESM=Estad. nota cr‚dito ventas;
+               FRC=Statist. note cr‚dit ventes;
+               ENC=Sales Credit Memo Statistics];
+    SourceTable=Table114;
+    PageType=ListPlus;
+    OnAfterGetRecord=VAR
+                       TempSalesTaxAmtLine@1020002 : TEMPORARY Record 10011;
+                       PrevPrintOrder@1020001 : Integer;
+                       PrevTaxPercent@1020000 : Decimal;
+                     BEGIN
+                       CLEARALL;
+                       TaxArea.GET("Tax Area Code");
+
+                       IF "Currency Code" = '' THEN
+                         Currency.InitRoundingPrecision
+                       ELSE
+                         Currency.GET("Currency Code");
+
+                       SalesCrMemoLine.SETRANGE("Document No.","No.");
+
+                       IF SalesCrMemoLine.FIND('-') THEN
+                         REPEAT
+                           CustAmount := CustAmount + SalesCrMemoLine.Amount;
+                           AmountInclTax := AmountInclTax + SalesCrMemoLine."Amount Including VAT";
+                           IF "Prices Including VAT" THEN
+                             InvDiscAmount := InvDiscAmount + SalesCrMemoLine."Inv. Discount Amount" / (1 + SalesCrMemoLine."VAT %" / 100)
+                           ELSE
+                             InvDiscAmount := InvDiscAmount + SalesCrMemoLine."Inv. Discount Amount";
+                           CostLCY := CostLCY + (SalesCrMemoLine.Quantity * SalesCrMemoLine."Unit Cost (LCY)");
+                           LineQty := LineQty + SalesCrMemoLine.Quantity;
+                           TotalNetWeight := TotalNetWeight + (SalesCrMemoLine.Quantity * SalesCrMemoLine."Net Weight");
+                           TotalGrossWeight := TotalGrossWeight + (SalesCrMemoLine.Quantity * SalesCrMemoLine."Gross Weight");
+                           TotalVolume := TotalVolume + (SalesCrMemoLine.Quantity * SalesCrMemoLine."Unit Volume");
+                           IF SalesCrMemoLine."Units per Parcel" > 0 THEN
+                             TotalParcels := TotalParcels + ROUND(SalesCrMemoLine.Quantity / SalesCrMemoLine."Units per Parcel",1,'>');
+                           IF SalesCrMemoLine."VAT %" <> TaxPercentage THEN
+                             IF TaxPercentage = 0 THEN
+                               TaxPercentage := SalesCrMemoLine."VAT %"
+                             ELSE
+                               TaxPercentage := -1;
+                         UNTIL SalesCrMemoLine.NEXT = 0;
+                       TaxAmount := AmountInclTax - CustAmount;
+                       InvDiscAmount := ROUND(InvDiscAmount,Currency."Amount Rounding Precision");
+
+                       IF "Currency Code" = '' THEN
+                         AmountLCY := CustAmount
+                       ELSE
+                         AmountLCY :=
+                           CurrExchRate.ExchangeAmtFCYToLCY(
+                             WORKDATE,"Currency Code",CustAmount,"Currency Factor");
+                       ProfitLCY := AmountLCY - CostLCY;
+                       IF AmountLCY <> 0 THEN
+                         ProfitPct := ROUND(100 * ProfitLCY / AmountLCY,0.1);
+
+                       IF Cust.GET("Bill-to Customer No.") THEN
+                         Cust.CALCFIELDS("Balance (LCY)")
+                       ELSE
+                         CLEAR(Cust);
+                       IF Cust."Credit Limit (LCY)" = 0 THEN
+                         CreditLimitLCYExpendedPct := 0
+                       ELSE
+                         IF Cust."Balance (LCY)" / Cust."Credit Limit (LCY)" < 0 THEN
+                           CreditLimitLCYExpendedPct := 0
+                         ELSE
+                           IF Cust."Balance (LCY)" / Cust."Credit Limit (LCY)" > 1 THEN
+                             CreditLimitLCYExpendedPct := 10000
+                           ELSE
+                             CreditLimitLCYExpendedPct := ROUND(Cust."Balance (LCY)" / Cust."Credit Limit (LCY)" * 10000,1);
+
+                       SalesTaxCalculate.StartSalesTaxCalculation;
+                       TempSalesTaxLine.DELETEALL;
+
+                       OnAfterCalculateSalesTax(SalesCrMemoLine,TempSalesTaxLine,TempSalesTaxAmtLine,SalesTaxCalculationOverridden);
+                       IF NOT SalesTaxCalculationOverridden THEN
+                         IF TaxArea."Use External Tax Engine" THEN
+                           SalesTaxCalculate.CallExternalTaxEngineForDoc(DATABASE::"Sales Cr.Memo Header",0,"No.")
+                         ELSE BEGIN
+                           SalesTaxCalculate.AddSalesCrMemoLines("No.");
+                           SalesTaxCalculate.EndSalesTaxCalculation("Posting Date");
+                         END;
+
+                       SalesTaxCalculate.GetSalesTaxAmountLineTable(TempSalesTaxLine);
+
+                       IF NOT SalesTaxCalculationOverridden THEN
+                         SalesTaxCalculate.GetSummarizedSalesTaxTable(TempSalesTaxAmtLine);
+
+                       IF TaxArea."Country/Region" = TaxArea."Country/Region"::CA THEN
+                         BreakdownTitle := Text006
+                       ELSE
+                         BreakdownTitle := Text007;
+                       WITH TempSalesTaxAmtLine DO BEGIN
+                         RESET;
+                         SETCURRENTKEY("Print Order","Tax Area Code for Key","Tax Jurisdiction Code");
+                         IF FIND('-') THEN
+                           REPEAT
+                             IF ("Print Order" = 0) OR
+                                ("Print Order" <> PrevPrintOrder) OR
+                                ("Tax %" <> PrevTaxPercent)
+                             THEN BEGIN
+                               BrkIdx := BrkIdx + 1;
+                               IF BrkIdx > ARRAYLEN(BreakdownAmt) THEN BEGIN
+                                 BrkIdx := BrkIdx - 1;
+                                 BreakdownLabel[BrkIdx] := Text008;
+                               END ELSE
+                                 BreakdownLabel[BrkIdx] := STRSUBSTNO("Print Description","Tax %");
+                             END;
+                             BreakdownAmt[BrkIdx] := BreakdownAmt[BrkIdx] + "Tax Amount";
+                           UNTIL NEXT = 0;
+                       END;
+                       CurrPage.Subform.PAGE.SetTempTaxAmountLine(TempSalesTaxLine);
+                       CurrPage.Subform.PAGE.InitGlobals("Currency Code",FALSE,FALSE,FALSE,FALSE,"VAT Base Discount %");
+                     END;
+
+  }
+  CONTROLS
+  {
+    { 1900000001;0;Container;
+                ContainerType=ContentArea }
+
+    { 35  ;1   ;Group     ;
+                CaptionML=[ENU=General;
+                           ESM=General;
+                           FRC=G‚n‚ral;
+                           ENC=General] }
+
+    { 2   ;2   ;Field     ;
+                CaptionML=[ENU=Amount;
+                           ESM=Importe;
+                           FRC=Montant;
+                           ENC=Amount];
+                ToolTipML=[ENU=Specifies the transaction amount.;
+                           ESM=Especifica el importe de la transacci¢n.;
+                           FRC=Sp‚cifie le montant de la transaction.;
+                           ENC=Specifies the transaction amount.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=CustAmount + InvDiscAmount;
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code" }
+
+    { 6   ;2   ;Field     ;
+                CaptionML=[ENU=Inv. Discount Amount;
+                           ESM=Importe dto. factura;
+                           FRC=Montant d'escompte sur facture;
+                           ENC=Inv. Discount Amount];
+                ToolTipML=[ENU=Specifies the invoice discount amount for the entire sales document. If the Calc. Inv. Discount field in the Sales & Receivables Setup window is selected, the discount is automatically calculated.;
+                           ESM=Especifica el importe de descuento en factura de todo el documento de venta. Si se selecciona el campo Calc. dto. factura de la ventana Configuraci¢n de ventas y cobros, el descuento se calcula autom ticamente.;
+                           FRC=Sp‚cifie le montant de l'escompte facture pour l'ensemble du document de vente. Si le champ Calculer escompte facture dans la fenˆtre Configuration des ventes et des comptes … recevoir est s‚lectionn‚, l'escompte est automatiquement calcul‚.;
+                           ENC=Specifies the invoice discount amount for the entire sales document. If the Calc. Inv. Discount field in the Sales & Receivables Setup window is selected, the discount is automatically calculated.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=InvDiscAmount;
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code" }
+
+    { 12  ;2   ;Field     ;
+                CaptionML=[ENU=Total;
+                           ESM=Total;
+                           FRC=Total;
+                           ENC=Total];
+                ToolTipML=[ENU=Specifies the total amount less any invoice discount amount and exclusive of tax for the posted document.;
+                           ESM=Especifica el importe total menos el descuento en factura y sin incluir IVA para el documento registrado.;
+                           FRC=Sp‚cifie le montant total, hors TVA et sans escompte facture, du document report‚.;
+                           ENC=Specifies the total amount less any invoice discount amount and exclusive of tax for the posted document.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=CustAmount;
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code" }
+
+    { 16  ;2   ;Field     ;
+                CaptionML=[ENU=Tax Amount;
+                           ESM=Imp. impto.;
+                           FRC=Montant de la taxe;
+                           ENC=Tax Amount];
+                ToolTipML=[ENU=Specifies the tax amount.;
+                           ESM=Especifica el importe del impuesto.;
+                           FRC=Sp‚cifie le montant de la taxe.;
+                           ENC=Specifies the tax amount.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=TaxAmount;
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code" }
+
+    { 20  ;2   ;Field     ;
+                CaptionML=[ENU=Total Incl. Tax;
+                           ESM=Total impto. incl.;
+                           FRC=Total incluant taxe;
+                           ENC=Total Incl. Tax];
+                ToolTipML=[ENU=Specifies the total amount, including tax, that has been posted as invoiced.;
+                           ESM=Especifica el importe total con impuestos que se ha registrado como facturado.;
+                           FRC=Sp‚cifie le montant total (TVA incluse) qui a ‚t‚ report‚ comme factur‚.;
+                           ENC=Specifies the total amount, including tax, that has been posted as invoiced.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=AmountInclTax;
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code" }
+
+    { 26  ;2   ;Field     ;
+                CaptionML=[ENU=Sales ($);
+                           ESM=Ventas ($);
+                           FRC=Ventes ($);
+                           ENC=Sales ($)];
+                ToolTipML=[ENU=Specifies the sales amount.;
+                           ESM=Especifica el importe de venta.;
+                           FRC=Sp‚cifie le montant des ventes.;
+                           ENC=Specifies the sales amount.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=AmountLCY;
+                AutoFormatType=1 }
+
+    { 28  ;2   ;Field     ;
+                CaptionML=[ENU=Cost ($);
+                           ESM=Costo ($);
+                           FRC=Co–t ($);
+                           ENC=Cost ($)];
+                ToolTipML=[ENU=Specifies the cost of the sales order, rounded according to the Amount Rounding Precision field in the Currencies window.;
+                           ESM=Especifica el costo de la orden de venta, redondeado seg£n el campo Prec. redondeo importe de la ventana Divisas.;
+                           FRC=Sp‚cifie le co–t du document de vente, arrondi en fonction du champ Pr‚cision arrondis. montant dans la fenˆtre Devises.;
+                           ENC=Specifies the cost of the sales order, rounded according to the Amount Rounding Precision field in the Currencies window.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=CostLCY;
+                AutoFormatType=1 }
+
+    { 30  ;2   ;Field     ;
+                CaptionML=[ENU=Profit ($);
+                           ESM=Bf§ bruto ($);
+                           FRC=Profit ($);
+                           ENC=Profit ($)];
+                ToolTipML=[ENU="Specifies the profit expressed as an amount.  ";
+                           ESM="Especifica el beneficio expresado como un importe.  ";
+                           FRC="Sp‚cifie le profit exprim‚ en tant que montant.  ";
+                           ENC="Specifies the profit expressed as an amount.  "];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=ProfitLCY;
+                AutoFormatType=1 }
+
+    { 32  ;2   ;Field     ;
+                CaptionML=[ENU=Profit %;
+                           ESM=% Bf§ bruto;
+                           FRC=% profit;
+                           ENC=Profit %];
+                ToolTipML=[ENU="Specifies the profit expressed as a percentage.  ";
+                           ESM="Especifica el beneficio expresado como un porcentaje.  ";
+                           FRC="Sp‚cifie le profit exprim‚ en tant que pourcentage.  ";
+                           ENC="Specifies the profit expressed as a percentage.  "];
+                ApplicationArea=#Basic,#Suite;
+                DecimalPlaces=1:1;
+                SourceExpr=ProfitPct }
+
+    { 3   ;2   ;Field     ;
+                CaptionML=[ENU=Quantity;
+                           ESM=Cantidad;
+                           FRC=Quantit‚;
+                           ENC=Quantity];
+                ToolTipML=[ENU=Specifies the item quantity.;
+                           ESM=Especifica la cantidad del producto.;
+                           FRC=Sp‚cifie la quantit‚ de l'article.;
+                           ENC=Specifies the item quantity.];
+                ApplicationArea=#Basic,#Suite;
+                DecimalPlaces=0:5;
+                SourceExpr=LineQty }
+
+    { 13  ;2   ;Field     ;
+                CaptionML=[ENU=Parcels;
+                           ESM=Lotes;
+                           FRC=Colis;
+                           ENC=Parcels];
+                ToolTipML=[ENU=Specifies the number of parcels on the document.;
+                           ESM=Especifica el n£mero de lotes en el documento.;
+                           FRC=Sp‚cifie le nombre de colis sur le document.;
+                           ENC=Specifies the number of parcels on the document.];
+                DecimalPlaces=0:5;
+                SourceExpr=TotalParcels }
+
+    { 7   ;2   ;Field     ;
+                CaptionML=[ENU=Net Weight;
+                           ESM=Peso neto;
+                           FRC=Poids net;
+                           ENC=Net Weight];
+                ToolTipML=[ENU=Specifies the net weight of items on the sales order.;
+                           ESM=Especifica el peso neto de los productos en la orden de venta.;
+                           FRC=Sp‚cifie le poids net des articles du document de vente.;
+                           ENC=Specifies the net weight of items on the sales order.];
+                ApplicationArea=#Basic,#Suite;
+                DecimalPlaces=0:5;
+                SourceExpr=TotalNetWeight }
+
+    { 10  ;2   ;Field     ;
+                CaptionML=[ENU=Gross Weight;
+                           ESM=Peso bruto;
+                           FRC=Poids brut;
+                           ENC=Gross Weight];
+                ToolTipML=[ENU=Specifies the gross weight of items on the document.;
+                           ESM=Especifica el peso bruto de los productos en el documento.;
+                           FRC=Sp‚cifie le poids brut total des articles sur le document.;
+                           ENC=Specifies the gross weight of items on the document.];
+                DecimalPlaces=0:5;
+                SourceExpr=TotalGrossWeight }
+
+    { 17  ;2   ;Field     ;
+                CaptionML=[ENU=Volume;
+                           ESM=Volumen;
+                           FRC=Volume;
+                           ENC=Volume];
+                ToolTipML=[ENU=Specifies the volume of the invoiced items.;
+                           ESM=Especifica el volumen de los productos facturados.;
+                           FRC=Sp‚cifie le volume des articles factur‚s.;
+                           ENC=Specifies the volume of the invoiced items.];
+                DecimalPlaces=0:5;
+                SourceExpr=TotalVolume }
+
+    { 1020001;2;Field     ;
+                Name=BreakdownTitle;
+                ApplicationArea=#Basic,#Suite;
+                CaptionClass=FORMAT(BreakdownTitle);
+                Editable=FALSE }
+
+    { 1020005;2;Field     ;
+                ApplicationArea=#Basic,#Suite;
+                BlankZero=Yes;
+                SourceExpr=BreakdownAmt[1];
+                CaptionClass=FORMAT(BreakdownLabel[1]);
+                Editable=FALSE }
+
+    { 1020006;2;Field     ;
+                ApplicationArea=#Basic,#Suite;
+                BlankZero=Yes;
+                SourceExpr=BreakdownAmt[2];
+                CaptionClass=FORMAT(BreakdownLabel[2]);
+                Editable=FALSE }
+
+    { 1020007;2;Field     ;
+                ApplicationArea=#Basic,#Suite;
+                BlankZero=Yes;
+                SourceExpr=BreakdownAmt[3];
+                CaptionClass=FORMAT(BreakdownLabel[3]);
+                Editable=FALSE }
+
+    { 1020009;2;Field     ;
+                ApplicationArea=#Basic,#Suite;
+                BlankZero=Yes;
+                SourceExpr=BreakdownAmt[4];
+                CaptionClass=FORMAT(BreakdownLabel[4]);
+                Editable=FALSE }
+
+    { 18  ;1   ;Part      ;
+                Name=Subform;
+                ApplicationArea=#Basic,#Suite;
+                PagePartID=Page10040;
+                Editable=FALSE }
+
+    { 1903289601;1;Group  ;
+                CaptionML=[ENU=Customer;
+                           ESM=Cliente;
+                           FRC=Client;
+                           ENC=Customer] }
+
+    { 24  ;2   ;Field     ;
+                CaptionML=[ENU=Balance ($);
+                           ESM=Saldo ($);
+                           FRC=Solde ($);
+                           ENC=Balance ($)];
+                ToolTipML=[ENU="Specifies the customer's balance. ";
+                           ESM="Especifica el saldo del cliente. ";
+                           FRC="Sp‚cifie le solde du client. ";
+                           ENC="Specifies the customer's balance. "];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=Cust."Balance (LCY)";
+                AutoFormatType=1 }
+
+    { 21  ;2   ;Field     ;
+                CaptionML=[ENU=Credit Limit ($);
+                           ESM=Cr‚dito m x. ($);
+                           FRC=Limite de cr‚dit ($);
+                           ENC=Credit Limit ($)];
+                ToolTipML=[ENU=Specifies the customer's credit limit.;
+                           ESM=Especifica el l¡mite de cr‚dito del cliente.;
+                           FRC=Sp‚cifie la limite de cr‚dit du client.;
+                           ENC=Specifies the customer's credit limit.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=Cust."Credit Limit (LCY)";
+                AutoFormatType=1 }
+
+    { 1   ;2   ;Field     ;
+                ExtendedDatatype=Ratio;
+                CaptionML=[ENU=Expended % of Credit Limit ($);
+                           ESM=% L¡mite cr‚dito usado ($);
+                           FRC=% limite de cr‚dit ‚tendue ($);
+                           ENC=Expended % of Credit Limit ($)];
+                ToolTipML=[ENU=Specifies how must of the customer's credit is used, expressed as a percentage of the credit limit.;
+                           ESM=Especifica la cantidad usada del cr‚dito del cliente, expresada como un porcentaje del l¡mite de cr‚dito.;
+                           FRC=Sp‚cifie quelle quantit‚ du cr‚dit du client est utilis‚e, exprim‚e en pourcentage de la limite de cr‚dit.;
+                           ENC=Specifies how must of the customer's credit is used, expressed as a percentage of the credit limit.];
+                ApplicationArea=#Basic,#Suite;
+                SourceExpr=CreditLimitLCYExpendedPct }
+
+  }
+  CODE
+  {
+    VAR
+      CurrExchRate@1002 : Record 330;
+      SalesCrMemoLine@1003 : Record 115;
+      Cust@1004 : Record 18;
+      TempSalesTaxLine@1020001 : TEMPORARY Record 10011;
+      Currency@1022 : Record 4;
+      TaxArea@1020002 : Record 318;
+      SalesTaxCalculate@1020000 : Codeunit 398;
+      CustAmount@1006 : Decimal;
+      AmountInclTax@1007 : Decimal;
+      InvDiscAmount@1008 : Decimal;
+      TaxAmount@1009 : Decimal;
+      CostLCY@1010 : Decimal;
+      ProfitLCY@1011 : Decimal;
+      ProfitPct@1012 : Decimal;
+      LineQty@1013 : Decimal;
+      TotalNetWeight@1014 : Decimal;
+      TotalGrossWeight@1015 : Decimal;
+      TotalVolume@1016 : Decimal;
+      TotalParcels@1017 : Decimal;
+      AmountLCY@1018 : Decimal;
+      CreditLimitLCYExpendedPct@1019 : Decimal;
+      TaxPercentage@1020 : Decimal;
+      BreakdownTitle@1020006 : Text[35];
+      BreakdownLabel@1020005 : ARRAY [4] OF Text[30];
+      BreakdownAmt@1020004 : ARRAY [4] OF Decimal;
+      BrkIdx@1020003 : Integer;
+      Text006@1020009 : TextConst 'ENU=Tax Breakdown:;ESM=Desglose imptos.:;FRC=Ventilation fiscale :;ENC=Tax Breakdown:';
+      Text007@1020008 : TextConst 'ENU=Sales Tax Breakdown:;ESM=An lisis impto. vtas.:;FRC=Ventilation de la taxe de vente :;ENC=Sales Tax Breakdown:';
+      Text008@1020007 : TextConst 'ENU=Other Taxes;ESM=Otros impuestos;FRC=Autres taxes;ENC=Other Taxes';
+      SalesTaxCalculationOverridden@1020010 : Boolean;
+
+    [Integration]
+    [External]
+    LOCAL PROCEDURE OnAfterCalculateSalesTax@1020000(VAR SalesCrMemoLine@1020000 : Record 115;VAR SalesTaxAmountLine@1020001 : Record 10011;VAR SalesTaxAmountLine2@1020002 : Record 10011;VAR SalesTaxCalculationOverridden@1020003 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

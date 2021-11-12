@@ -1,0 +1,279 @@
+OBJECT Codeunit 14002703 Create Vendor Spend
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            InvMgt.CreateLogEntry('',Text004,LogEntryNo);
+            COMMIT;
+
+            VendorSpend.RESET;
+            VendorSpend.DELETEALL;
+
+            InvMgtSetup.GET;
+
+            VendorBuyingCalendar.RESET;
+            VendorBuyingCalendar.SETRANGE("Line Buy Vendor",TRUE);
+            IF VendorBuyingCalendar.FINDSET THEN BEGIN
+              IF GUIALLOWED THEN BEGIN
+                TotalCount := VendorBuyingCalendar.COUNT;
+                ProgWindow.OPEN(
+                  PADSTR(Text003,12) + '@1@@@@@@@@@@@@@@@@@@\' +
+                  PADSTR(Text002,12) + '#2########\' +
+                  PADSTR(Text005,12) + '#3##################');
+              END;
+              REPEAT
+                IF GUIALLOWED THEN BEGIN
+                  ProgCount := ProgCount + 1;
+                  ProgWindow.UPDATE(1,ROUND(10000 * (ProgCount / TotalCount),1));
+                  ProgWindow.UPDATE(2,VendorBuyingCalendar."Location Code");
+                  ProgWindow.UPDATE(3,VendorBuyingCalendar."Vendor No.");
+                END;
+                ByVendorBuyingCalendar(VendorBuyingCalendar);
+                VendorBuyingCalendar."Vendor Spend Start Date" := StartDateArray[1];
+                VendorBuyingCalendar.MODIFY;
+                COMMIT;
+              UNTIL VendorBuyingCalendar.NEXT = 0;
+            END;
+            IF GUIALLOWED THEN
+              ProgWindow.CLOSE;
+
+            InvMgt.CloseLogEntry(LogEntryNo,'');
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ForecastAdjust@1240030033 : Record 14002707;
+      InvMgtSetup@1240030010 : Record 14000551;
+      ItemUsage@1240030032 : Record 14000557;
+      Location@1240030013 : Record 14;
+      LocInvPeriod@1240030006 : Record 14000553;
+      ProcUnit@1240030001 : Record 14000555;
+      ProcUnit2@1240030034 : Record 14000555;
+      VendorBuyingCalendar@1240030000 : Record 14000563;
+      VendorSpend@1240030002 : Record 14002704;
+      CreLocInvRollUp@1240030011 : Codeunit 14000574;
+      Forecast@1240030012 : Codeunit 14000567;
+      InvMgt@1240030025 : Codeunit 14000553;
+      UBP@1240030030 : Codeunit 14000564;
+      ProgWindow@1240030020 : Dialog;
+      ItemCost@1240030017 : Decimal;
+      MinSOQ@1240030018 : Decimal;
+      PrevQty@1240030019 : Decimal;
+      SafetyStock@1240030014 : Decimal;
+      SafetyStockDays@1240030015 : InStream;
+      StartDate@1240030009 : Date;
+      StartDateArray@1240030003 : ARRAY [24] OF Date;
+      EndDateArray@1240030004 : ARRAY [24] OF Date;
+      i@1240030005 : Decimal;
+      Text000@1240030007 : TextConst 'ENU="Location %1 does not have the same Last Closed Period date as the other locations. "';
+      Text001@1240030008 : TextConst 'ENU=Location %1 does not have a closed period.';
+      Text002@1240030021 : TextConst 'ENU=Location';
+      Text003@1240030022 : TextConst 'ENU=Progress';
+      TotalCount@1240030023 : Integer;
+      ProgCount@1240030024 : Integer;
+      Text004@1240030026 : TextConst 'ENU=Create Vendor Spend';
+      LogEntryNo@1240030027 : Integer;
+      ProdStatusFilter@1240030028 : Text[250];
+      LocationFilter@1240030029 : Text[250];
+      PrevLocationCode@1240030035 : Code[10];
+      Text005@1240030036 : TextConst 'ENU=Vendor';
+
+    PROCEDURE ByVendorBuyingCalendar@1240030000(VAR CurrVendorBuyingCalendar@1240030000 : Record 14000563);
+    VAR
+      ForecastFound@1240020000 : Boolean;
+    BEGIN
+      IF (CurrVendorBuyingCalendar."Location Code" <> PrevLocationCode) THEN BEGIN
+        PrevLocationCode := CurrVendorBuyingCalendar."Location Code";
+        LocInvPeriod.RESET;
+        LocInvPeriod.SETRANGE("Location Code",CurrVendorBuyingCalendar."Location Code");
+        LocInvPeriod.SETRANGE("Period End Closed",TRUE);
+        IF LocInvPeriod.FIND('+') THEN BEGIN
+          IF StartDateArray[1] <> 0D THEN BEGIN
+            IF StartDateArray[1] <> CALCDATE('<+1D>',LocInvPeriod."Ending Date") THEN
+              ERROR(Text000,LocInvPeriod."Location Code");
+          END ELSE BEGIN
+            i := 0;
+            StartDate := CALCDATE('<+1D>',LocInvPeriod."Ending Date");
+            LocInvPeriod.SETRANGE("Period End Closed",FALSE);
+            LocInvPeriod.SETFILTER("Starting Date",'%1..',StartDate);
+            IF LocInvPeriod.FIND('-') THEN
+              REPEAT
+                i := i + 1;
+                StartDateArray[i] := LocInvPeriod."Starting Date";
+                EndDateArray[i] := LocInvPeriod."Ending Date";
+              UNTIL (LocInvPeriod.NEXT = 0) OR
+                    (i = 15);
+          END;
+        END ELSE
+          ERROR(Text001,LocInvPeriod."Location Code");
+        Location.GET(CurrVendorBuyingCalendar."Location Code");
+        ProdStatusFilter := UBP.GetProductionStatusFilter;
+      END;
+
+      ProcUnit.RESET;
+      ProcUnit.SETCURRENTKEY(
+        "Location Code","Replenishment Source Type","Replenishment Source Code");
+      ProcUnit.SETRANGE("Location Code",CurrVendorBuyingCalendar."Location Code");
+      ProcUnit.SETRANGE("Replenishment Source Type",ProcUnit."Replenishment Source Type"::Vendor);
+      ProcUnit.SETRANGE("Replenishment Source Code",CurrVendorBuyingCalendar."Vendor No.");
+      ProcUnit.SETRANGE("Division Code", CurrVendorBuyingCalendar."Division Code");
+      ProcUnit.SETRANGE("Nonstock Unit",FALSE);
+      IF ProcUnit.FINDSET THEN
+        REPEAT
+          // Is there a forecast
+          ForecastFound := FALSE;
+          LocationFilter := UBP.GetLocationFilter(ProcUnit,FALSE);
+          ItemUsage.RESET;
+          ItemUsage.SETCURRENTKEY(
+            "Location Code","Item No.","Variant Code","Starting Date","Ending Date");
+          ItemUsage.SETRANGE("Location Code",Location.Code);
+          ItemUsage.SETRANGE("Item No.",ProcUnit."Item No.");
+          ItemUsage.SETRANGE("Variant Code",ProcUnit."Variant Code");
+          ItemUsage.SETRANGE("Ending Date",Location."Last Closed Period Date");
+          IF ItemUsage.FIND('-') AND
+            (ItemUsage.Status = ItemUsage.Status::Reoccuring)
+          THEN
+            ForecastFound := TRUE;
+          IF NOT ForecastFound THEN BEGIN
+            ItemUsage.SETFILTER("Location Filter",LocationFilter);
+            ItemUsage.SETFILTER("Date Filter",'%1..',Location."Last Closed Period Date");
+            ItemUsage.CALCFIELDS("Customer Forecast");
+            IF ItemUsage."Customer Forecast" > 0 THEN
+              ForecastFound := TRUE;
+          END;
+          IF NOT ForecastFound THEN BEGIN
+            ForecastAdjust.RESET;
+            ForecastAdjust.SETCURRENTKEY("Item No.","Variant Code","Location Code","Starting Date");
+            ForecastAdjust.SETRANGE("Item No.",ProcUnit."Item No.");
+            ForecastAdjust.SETRANGE("Variant Code",ProcUnit."Variant Code");
+            ForecastAdjust.SETFILTER("Location Code", ProcUnit."Location Code");
+            ForecastAdjust.SETFILTER("Starting Date",'%1..',Location."Last Closed Period Date");
+            IF ForecastAdjust.FIND('-') THEN
+              ForecastFound := TRUE;
+          END;
+          IF NOT ForecastFound THEN BEGIN
+            ProcUnit2.COPY(ProcUnit);
+            ProcUnit2.SETFILTER("Location Filter",LocationFilter);
+            ProcUnit2.SETFILTER("Prod. Order Status Filter",ProdStatusFilter);
+            ProcUnit2.SETFILTER("Date Filter",'%1..',Location."Last Closed Period Date");
+            ProcUnit2.CALCFIELDS("Qty. on Component Lines");
+            IF ProcUnit."Qty. on Component Lines" <> 0 THEN
+              ForecastFound := TRUE;
+          END;
+          IF ForecastFound THEN BEGIN
+            ItemCost := UBP.GetUnitCost(ProcUnit."Location Code", ProcUnit."Item No.", ProcUnit."Variant Code");
+            VendorSpend.INIT;
+            VendorSpend."Vendor No." := ProcUnit."Replenishment Source Code";
+            VendorSpend."Location Code" := ProcUnit."Location Code";
+            VendorSpend."Division Code" := ProcUnit."Division Code";
+            VendorSpend."Item No." := ProcUnit."Item No.";
+            VendorSpend."Variant Code" := ProcUnit."Variant Code";
+            VendorSpend."Date Created" := TODAY;
+            VendorSpend."Unit Cost" := ItemCost;
+            i := 0;
+            PrevQty := 0;
+            REPEAT
+              i := i + 1;
+              MinSOQ := GetMinSOQ(InvMgtSetup,Location,ProcUnit,EndDateArray[i]) - PrevQty;
+              VendorSpend."Starting Date" := StartDateArray[i];
+              VendorSpend."Period Spend" := ROUND((ItemCost * MinSOQ),1.0);
+              IF VendorSpend."Period Spend" < 0 THEN BEGIN
+                VendorSpend."Period Spend" := 0;
+                MinSOQ := 0;
+              END;
+              PrevQty := PrevQty + MinSOQ;
+              VendorSpend.INSERT;
+            UNTIL i = 15;
+          END;
+        UNTIL ProcUnit.NEXT = 0;
+    END;
+
+    PROCEDURE GetMinSOQ@1240030001(CurrInvMgtSetup@1240030002 : Record 14000551;CurrLocation@1240030003 : Record 14;CurrProcUnit@1240030000 : Record 14000555;CurrDate@1240030001 : Date) Resp : Decimal;
+    VAR
+      LocInvRollUp@1240030004 : Record 14000583;
+      Text001@1240030005 : TextConst 'ENU=Must set a Roll Up Order Quantity Rule for Location %1.';
+      AccumCustForecast@1240030013 : Decimal;
+      AccumForecast@1240030012 : Decimal;
+      AccumTotal@1240030009 : Decimal;
+      InvPlusExpRec@1240030014 : Decimal;
+      LTHDate@1240030011 : Date;
+      MaxSOQQty@1240030007 : Decimal;
+      MinSOQQty@1240030006 : Decimal;
+      MinSOQ@1240030008 : Decimal;
+      NetInvPos@1240030016 : Decimal;
+      OrderMultipleQty@1240030019 : Decimal;
+      ReviewCycleDays@1240030015 : Integer;
+      SafetyStockDays@1240030018 : Decimal;
+      TotalConsumed@1240030017 : Decimal;
+      VendorLeadTimeDays@1240030010 : Integer;
+    BEGIN
+      IF InvMgtSetup."Roll Up Via Repl. Path" AND MultiLevel(CurrProcUnit) THEN BEGIN
+        CLEAR(CreLocInvRollUp);
+        CreLocInvRollUp.CalcRollUp(CurrProcUnit,FALSE,0,CurrDate);
+        CreLocInvRollUp.GetNextRollUpLine(LocInvRollUp,TRUE);
+        CASE Location."Roll Up Order Quantity Rule" OF
+          CurrLocation."Roll Up Order Quantity Rule"::" ":
+            ERROR(Text001,Location.Code);
+          CurrLocation."Roll Up Order Quantity Rule"::MinSOQ:
+            BEGIN
+              CreLocInvRollUp.GetMinMaxSOQ(MinSOQQty,MaxSOQQty);
+              MinSOQ := MinSOQQty;
+            END;
+          CurrLocation."Roll Up Order Quantity Rule"::MaxSOQ:
+            BEGIN
+              CreLocInvRollUp.GetMinMaxSOQ(MinSOQQty,MaxSOQQty);
+              MinSOQ := MaxSOQQty;
+            END;
+        END;
+        MinSOQ := MinSOQ - AccumTotal;
+      END ELSE BEGIN     // Non Roll-Up
+        CLEAR(Forecast);
+        Forecast.CalcNetNeed(CurrProcUnit, '', CurrDate,FALSE);
+        MinSOQ := Forecast.GetMinSOQ;
+        MinSOQ := MinSOQ - AccumTotal;
+      END;
+
+      IF MinSOQ > 0 THEN BEGIN
+        IF (CurrProcUnit."Order Multiple" <> 0) THEN BEGIN
+          OrderMultipleQty := MinSOQ MOD CurrProcUnit."Order Multiple";
+          IF OrderMultipleQty <> 0 THEN
+            MinSOQ := MinSOQ + CurrProcUnit."Order Multiple" - OrderMultipleQty;
+        END;
+        IF (CurrProcUnit."Order Minimum" <> 0) AND
+           (CurrProcUnit."Order Minimum" > MinSOQ) THEN
+          MinSOQ := CurrProcUnit."Order Minimum";
+        AccumTotal := AccumTotal + MinSOQ;
+        MinSOQ := ABS(MinSOQ);
+      END ELSE
+        MinSOQ := 0;
+      EXIT(MinSOQ);
+    END;
+
+    PROCEDURE MultiLevel@1240030002(CurrProcUnit@1240030000 : Record 14000555) Resp : Boolean;
+    VAR
+      LocProcUnit@1240030001 : Record 14000555;
+    BEGIN
+      LocProcUnit.RESET;
+      LocProcUnit.SETCURRENTKEY("Replenishment Source Type");
+      LocProcUnit.SETRANGE("Replenishment Source Type",CurrProcUnit."Replenishment Source Type"::Location);
+      LocProcUnit.SETRANGE("Replenishment Source Code",CurrProcUnit."Location Code");
+      LocProcUnit.SETRANGE("Item No.",CurrProcUnit."Item No.");
+      IF LocProcUnit.FIND('-') THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,276 @@
+OBJECT Codeunit 50082 USPS Address Verification DS
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/04/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=TPZ000.00.00,001;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            CheckSetup;
+            IF GUIALLOWED THEN
+              ProgressWindow.OPEN(Text50001);
+
+
+            //MESSAGE(SalesHeader."Sell-to Customer No.");
+            //MESSAGE(SalesHeader."Ship-to Code");
+              IF GUIALLOWED THEN BEGIN
+                ProgressWindow.UPDATE(1,SalesHeader."Sell-to Customer No.");
+                ProgressWindow.UPDATE(2,SalesHeader."Ship-to Code");
+              END;
+              CreateXMLRequest(SalesHeader);
+
+            IF GUIALLOWED THEN
+              ProgressWindow.CLOSE;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      HttpWebRequestMgt@1000000000 : Codeunit 1297;
+      OutStrm@1000000003 : OutStream;
+      ExportShiptoAddressUSPS@1000000002 : XMLport 50021;
+      USPSSetup@1000000001 : Record 50059;
+      TempBlob@1000000004 : Record 99008535;
+      ResponseError@1000000005 : Text;
+      XMLDocument@1000000007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      myOutstream@1000000008 : OutStream;
+      Streamreader@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      USPSAddressRecords@1000000011 : Record 50057;
+      ShiptoAddress@1000000012 : Record 222;
+      RequestText@1000000006 : Text;
+      ProgressWindow@1000000013 : Dialog;
+      Text50001@1000000014 : TextConst 'ENU=Verifying Address for\Customer No #1########Ship-to Code #2########';
+      ResponseText@1000000015 : Text;
+      Text50002@1000000016 : TextConst 'ENU=Unable to Process response received for Customer No %1 Ship-to Code %2.';
+      ImportUSPSAddressResponse@1000000017 : XMLport 50022;
+      Add1@1000000010 : Text;
+      Add2@1000000018 : Text;
+      "---"@1000000030 : Integer;
+      CustomerNo@1000000021 : Code[20];
+      ShiptocodeNo@1000000020 : Code[10];
+      ShiptoNameG@1000000022 : Text;
+      ShiptoAddG@1000000023 : Text;
+      ShiptoAddG2@1000000024 : Text;
+      ShiptoCityG@1000000025 : Text;
+      ShiptoStateG@1000000026 : Text;
+      ShiptoCountryregionG@1000000027 : Code[10];
+      ShiptoZipG@1000000028 : Code[20];
+      ManualyVerifyGlobal@1000000019 : Boolean;
+      SalesHeader@1000000029 : Record 36;
+      ExportShiptoAddressUSPS1@1000000031 : XMLport 50080;
+
+    LOCAL PROCEDURE CheckSetup@1000000001();
+    BEGIN
+
+      USPSSetup.GET;
+      USPSSetup.TESTFIELD(URL);
+      USPSSetup.TESTFIELD("User Name");
+      USPSSetup.TESTFIELD(Password);
+    END;
+
+    LOCAL PROCEDURE CreateXMLRequest@1000000000(SalesHeaderP@1000000000 : Record 36);
+    VAR
+      SalesHeader2@1000000001 : Record 36;
+      instrm@1000000002 : InStream;
+      TestRequestText@1000000003 : Text;
+    BEGIN
+      CLEAR(ExportShiptoAddressUSPS1);
+      CLEAR(OutStrm);
+      CLEAR(TempBlob);
+      //>> 001 TPZ2877
+      //>> Start Commenting old code
+      // SalesHeader2.SETRANGE("Document Type",SalesHeaderP."Document Type");
+      // SalesHeader2.SETRANGE("No.",SalesHeaderP."No.");
+
+
+      //ExportShiptoAddressUSPS1.SETTABLEVIEW(SalesHeader2);
+      //>> End Commenting old cod
+      ExportShiptoAddressUSPS1.SetSalesHeader(SalesHeaderP);
+      //<< 001 TPZ2877
+      TempBlob.INIT;
+      TempBlob.Blob.CREATEOUTSTREAM(OutStrm);
+      ExportShiptoAddressUSPS1.SETDESTINATION(OutStrm);
+      ExportShiptoAddressUSPS1.EXPORT;
+      TempBlob.Blob.CREATEINSTREAM(instrm);
+      Streamreader := Streamreader.StreamReader(instrm);
+      RequestText := Streamreader.ReadToEnd;
+      RequestText := COPYSTR(RequestText,57,STRLEN(RequestText)-56);
+      //IF ShiptoAddressP."Address 2"='' THEN
+        //RequestText := DELSTR(RequestText,STRPOS(RequestText,'<Address2 />'),STRLEN('<Address2 />'));
+      RequestText := USPSSetup.URL+RequestText;
+      //MESSAGE(RequestText);
+      PostRequest(SalesHeaderP,RequestText);
+    END;
+
+    LOCAL PROCEDURE PostRequest@1000000002(VAR SalesHeaderP@1000000007 : Record 36;VAR RequestTextP@1000000008 : Text);
+    VAR
+      ResponseInStrm@1000000000 : InStream;
+      HttpStatusCode@1000000002 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpStatusCode";
+      ResponseHeaders@1000000003 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NameValueCollection";
+      WebRequestHelper@1000000004 : Codeunit 1299;
+      WebException@1000000005 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.WebException";
+      Instrm@1000000006 : InStream;
+      USPSAddressRecords2@1000000001 : Record 50057;
+      ImportUSPSErrorResponse@1000000009 : XMLport 50078;
+      ShiptoAddV@1000000010 : Record 222;
+    BEGIN
+      CLEAR(Instrm);
+      //CLEAR(ResponseInStrm);
+      CLEAR(HttpWebRequestMgt);
+      CLEAR(ImportUSPSAddressResponse);
+      HttpWebRequestMgt.Initialize(USPSSetup.URL);
+      HttpWebRequestMgt.DisableUI();
+      HttpWebRequestMgt.SetMethod('POST');
+      //MESSAGE('Request\ %1',RequestTextP);
+      HttpWebRequestMgt.AddBodyAsText(RequestTextP);
+      TempBlob.INIT;
+      TempBlob.Blob.CREATEINSTREAM(ResponseInStrm);
+      IF HttpWebRequestMgt.GetResponse(ResponseInStrm,HttpStatusCode,ResponseHeaders) THEN BEGIN
+          ResponseInStrm.READ(ResponseText);
+          //MESSAGE('Response\%1',ResponseText);
+          //XMLPORT.IMPORT(XMLPORT::"Import USPS Address Response",ResponseInStrm);
+         //IF (XMLPORT.IMPORT(XMLPORT::"Import USPS Address Response",ResponseInStrm)) THEN BEGIN
+         ImportUSPSAddressResponse.SETSOURCE(ResponseInStrm);
+         IF ImportUSPSAddressResponse.IMPORT THEN BEGIN
+            CLEAR(Add1);
+            CLEAR(Add2);
+            USPSAddressRecords.RESET;
+            IF USPSAddressRecords.FINDLAST THEN BEGIN
+              USPSAddressRecords."Original Customer No" := SalesHeaderP."Sell-to Customer No.";
+              USPSAddressRecords."Original Ship-to Code" := SalesHeaderP."Ship-to Code";
+              //UTK
+              IF (USPSAddressRecords."Address 1"<>'') AND (USPSAddressRecords."Address 2"<>'') THEN BEGIN
+                 Add1 := USPSAddressRecords."Address 1";
+                 Add2 := USPSAddressRecords."Address 2";
+                 USPSAddressRecords."Address 1" := USPSAddressRecords."Address 2";
+                 USPSAddressRecords."Address 2" := Add1;
+              END ELSE IF (USPSAddressRecords."Address 1"='') AND (USPSAddressRecords."Address 2"<>'') THEN BEGIN
+                 USPSAddressRecords."Address 1" := USPSAddressRecords."Address 2";
+                 USPSAddressRecords."Address 2" := '';
+              END;
+              USPSAddressRecords.MODIFY;
+              //UTK
+             // USPSAddressRecords2.GET(USPSAddressRecords."Entry No");
+              {IF ((SalesHeaderP."Ship-to Address"<>'') AND (SalesHeaderP."Ship-to Address"=USPSAddressRecords2."Address 1"))
+                  AND ((SalesHeaderP."Address 2"<>'') AND (SalesHeaderP."Address 2"=USPSAddressRecords."Address 2"))
+                  AND ((SalesHeaderP."Ship-to City"<>'') AND (SalesHeaderP."Ship-to City"=USPSAddressRecords2.City))
+                  AND ((SalesHeaderP."Ship-to County"<>'') AND (SalesHeaderP."Ship-to County"=USPSAddressRecords2.State))
+                  AND ((SalesHeaderP."Ship-to Post Code"<>'') AND (SalesHeaderP."Ship-to Post Code"=USPSAddressRecords2.Zip5)) THEN BEGIN
+
+                     ShiptoAddV.RESET;
+                     ShiptoAddV.SETRANGE("Customer No.",SalesHeaderP."Sell-to Customer No.");
+                     ShiptoAddV.SETRANGE(Code,SalesHeaderP."Ship-to Code");
+                     IF ShiptoAddV.FINDFIRST THEN BEGIN
+                      ShiptoAddV."Address Verified" := TRUE;
+                      ShiptoAddV.MODIFY(TRUE);
+                      USPSAddressRecords2.Verified := TRUE;
+                      USPSAddressRecords2.MODIFY;
+                     END;
+              END;}
+            END;
+         END ELSE BEGIN
+           ImportUSPSErrorResponse.SETSOURCE(ResponseInStrm);
+           IF ImportUSPSErrorResponse.IMPORT THEN BEGIN
+             USPSAddressRecords.RESET;
+              IF USPSAddressRecords.FINDLAST THEN BEGIN
+                USPSAddressRecords."Original Customer No" := SalesHeaderP."Sell-to Customer No.";
+                USPSAddressRecords."Original Ship-to Code" := SalesHeaderP."Ship-to Code";
+                USPSAddressRecords.MODIFY;
+              END;
+           END ELSE BEGIN
+            USPSAddressRecords.INIT;
+            USPSAddressRecords."Original Customer No" := SalesHeaderP."Sell-to Customer No.";
+            USPSAddressRecords."Original Ship-to Code" := SalesHeaderP."Ship-to Code";
+            USPSAddressRecords."Response Message" := 'Unidentified Response Received';
+            USPSAddressRecords.INSERT(TRUE);
+           END;
+         END;
+          USPSAddressRecords2.RESET;
+          USPSAddressRecords2.SETRANGE("Original Customer No",USPSAddressRecords."Original Customer No");
+          USPSAddressRecords2.SETRANGE("Original Ship-to Code",USPSAddressRecords."Original Ship-to Code");
+          USPSAddressRecords2.SETFILTER("Entry No",'<>%1',USPSAddressRecords."Entry No");
+          IF USPSAddressRecords2.FINDSET THEN
+            USPSAddressRecords2.DELETEALL;
+          COMMIT;
+            //MESSAGE('Entry No %1',USPSAddressRecords."Entry No");
+      END ELSE BEGIN
+        ResponseError := WebRequestHelper.GetWebResponseError(WebException,USPSSetup.URL);
+        ERROR(ResponseError);
+      END;
+
+      //MESSAGE('%1',ResponseError);
+    END;
+
+    PROCEDURE SETShiToAdd@1000000003(CustNo@1000000000 : Code[20];ShiptoCode@1000000001 : Code[10];ShiptoName@1000000005 : Text;ShiptoAdd@1000000003 : Text;ShiptoAdd2@1000000004 : Text;ShiptoCity@1000000006 : Text;ShiptoZip@1000000007 : Code[20];ShiptoState@1000000008 : Text;ShiptoCountryregion@1000000009 : Code[10];ManualVerify@1000000002 : Boolean);
+    BEGIN
+      //UTKARSH
+      CustomerNo := CustNo;
+      ShiptocodeNo := ShiptoCode;
+      ShiptoNameG := ShiptoName;
+      ShiptoAddG  := ShiptoAdd;
+      ShiptoAddG2 := ShiptoAdd2;
+      ShiptoCityG := ShiptoCity;
+      ShiptoStateG := ShiptoState;
+      ShiptoZipG    := ShiptoZip;
+      ShiptoCountryregionG := ShiptoCountryregion;
+
+      ManualyVerifyGlobal := ManualVerify;
+    END;
+
+    PROCEDURE SETShiToAdd1@1000000004(SaesH@1000000000 : Record 36);
+    BEGIN
+      //UTKARSH
+      {CustomerNo := CustNo;
+      ShiptocodeNo := ShiptoCode;
+      ShiptoNameG := ShiptoName;
+      ShiptoAddG  := ShiptoAdd;
+      ShiptoAddG2 := ShiptoAdd2;
+      ShiptoCityG := ShiptoCity;
+      ShiptoStateG := ShiptoState;
+      ShiptoZipG    := ShiptoZip;
+      ShiptoCountryregionG := ShiptoCountryregion;
+
+      ManualyVerifyGlobal := ManualVerify;}
+
+      SalesHeader := SaesH;
+    END;
+
+    EVENT XMLDocument@1000000007::NodeInserting@94(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XMLDocument@1000000007::NodeInserted@95(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XMLDocument@1000000007::NodeRemoving@96(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XMLDocument@1000000007::NodeRemoved@97(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XMLDocument@1000000007::NodeChanging@98(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT XMLDocument@1000000007::NodeChanged@99(sender@1000000001 : Variant;e@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      2019-03-01 UCHOUHAN TPZ2762
+        Created new page for USPS Address
+      001 TPZ2877 UTK 07292020 - Auto Validate Drop ship Address in sales orders.
+    }
+    END.
+  }
+}
+

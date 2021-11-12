@@ -1,0 +1,213 @@
+OBJECT Codeunit 14002583 RF Bin Count Audit
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/22/18;
+    Time=12:00:00 PM;
+    Version List=RF1.50.11;
+  }
+  PROPERTIES
+  {
+    TableNo=7700;
+    OnRun=VAR
+            MiniformMgmt@1000 : Codeunit 7702;
+          BEGIN
+            MiniformMgmt.Initialize(
+              MiniformHeader,Rec,DOMxmlin,ReturnedNode,
+              RootNode,XMLDOMMgmt,ADCSCommunication,LoginID,
+              CurrentCode,StackCode,WhseEmpId,LocationFilter);
+
+            IF Code <> CurrentCode THEN
+              PrepareData
+            ELSE
+              ProcessSelection;
+
+            CLEAR(DOMxmlin);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      MiniformHeader@1000 : Record 7700;
+      MiniformHeader2@1001 : Record 7700;
+      BinCount@1003 : Record 14002580;
+      RFEmployeeSetup@1004 : Record 14002802;
+      XMLDOMMgmt@1005 : Codeunit 6224;
+      ADCSCommunication@1006 : Codeunit 7701;
+      ADCSNASStartup@1007 : Codeunit 7700;
+      DOMxmlin@1240020002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      ReturnedNode@1240020001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      RootNode@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      Text000@1240020003 : TextConst 'ENU=Function not found';
+      Text001@1012 : TextConst 'ENU=Bin Count Journal does not exist.';
+      Text002@1013 : TextConst 'ENU=Already Assigned';
+      Text006@1014 : TextConst 'ENU=No input Node found';
+      TextValue@1015 : Text[250];
+      LoginID@1016 : Text[250];
+      WhseEmpId@1240020004 : Text[250];
+      LocationFilter@1017 : Text[250];
+      CurrentCode@1019 : Text[250];
+      PreviousCode@1020 : Text[250];
+      StackCode@1021 : Text[250];
+      Remark@1022 : Text[250];
+      ActiveInputField@1023 : Integer;
+      Text009@1024 : TextConst 'ENU=No Documents found';
+      RecRef@1025 : RecordRef;
+      Text010@1240020005 : TextConst 'ENU=No avail Audit Counts remain';
+      Text011@1240020006 : TextConst 'ENU=Not set to Perform Audit Count';
+
+    LOCAL PROCEDURE ProcessSelection@8();
+    VAR
+      BinCountLine@1240020000 : Record 14002581;
+      RFEmployeeSetup@1240020001 : Record 14002802;
+      FuncGroup@1000 : Record 7702;
+      TableNo@1001 : Integer;
+      RecordId@1002 : RecordID;
+    BEGIN
+      IF XMLDOMMgmt.FindNode(RootNode,'Header/Input',ReturnedNode) THEN
+        TextValue := ReturnedNode.InnerText
+      ELSE
+        ERROR(Text006);
+
+      EVALUATE(TableNo,ADCSCommunication.GetNodeAttribute(ReturnedNode,'TableNo'));
+      RecRef.OPEN(TableNo);
+      EVALUATE(RecordId,ADCSCommunication.GetNodeAttribute(ReturnedNode,'RecordID'));
+      IF RecRef.GET(RecordId) THEN BEGIN
+        RecRef.SETTABLE(BinCount);
+        BinCount.SETRANGE("Location Code",LocationFilter);
+        BinCount.SETRANGE("Scheduled Date",0D,TODAY);
+        BinCount.SETFILTER("Count Type",'%1',
+          BinCount."Count Type"::"Audited Count");
+        BinCount.SETFILTER(Status,'%1|%2|%3',
+          BinCount.Status::Audit,BinCount.Status::"Pending Register",
+          BinCount.Status::"In Process");
+        RecRef.GETTABLE(BinCount);
+        ADCSCommunication.SetRecRef(RecRef);
+      END ELSE BEGIN
+        ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+        EXIT;
+      END;
+
+      FuncGroup.KeyDef := ADCSCommunication.GetFunctionKey(MiniformHeader.Code,TextValue);
+      ActiveInputField := 1;
+
+      CASE FuncGroup.KeyDef OF
+        FuncGroup.KeyDef::Esc:
+          ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+        FuncGroup.KeyDef::First:
+          ADCSCommunication.FindRecRef(0,MiniformHeader."No. of Records in List");
+        FuncGroup.KeyDef::LnDn:
+          IF NOT ADCSCommunication.FindRecRef(1,MiniformHeader."No. of Records in List") THEN
+            Remark := Text009;
+        FuncGroup.KeyDef::LnUp:
+          ADCSCommunication.FindRecRef(2,MiniformHeader."No. of Records in List");
+        FuncGroup.KeyDef::Last:
+          ADCSCommunication.FindRecRef(3,MiniformHeader."No. of Records in List");
+        FuncGroup.KeyDef::PgDn:
+          IF NOT ADCSCommunication.FindRecRef(4,MiniformHeader."No. of Records in List") THEN
+            Remark := Text009;
+        FuncGroup.KeyDef::PgUp:
+          ADCSCommunication.FindRecRef(5,MiniformHeader."No. of Records in List");
+        FuncGroup.KeyDef::Input:
+          BEGIN
+            IF NOT BinCount.FIND THEN BEGIN
+              ADCSNASStartup.SendError(Text001);
+              EXIT;
+            END;
+
+            RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+            IF RFEmployeeSetup."Perform Audit Bin Counts" THEN BEGIN
+              BinCountLine.RESET;
+              BinCountLine.SETRANGE("Bin Count No.",BinCount."Bin Count No.");
+              BinCountLine.SETFILTER("Audited User ID",'%1|%2','',WhseEmpId);
+              BinCountLine.SETRANGE("Count Performed",TRUE);
+              BinCountLine.SETRANGE("Count Marked for Audit",TRUE);
+              BinCountLine.SETRANGE("Audit Performed",FALSE);
+              IF BinCountLine.ISEMPTY THEN BEGIN
+                ADCSNASStartup.SendError(Text010);
+                EXIT;
+              END;
+
+              ADCSCommunication.IncreaseStack(DOMxmlin,MiniformHeader.Code);
+              ADCSCommunication.GetNextMiniForm(MiniformHeader,MiniformHeader2);
+              MiniformHeader2.SaveXMLin(DOMxmlin);
+              CODEUNIT.RUN(MiniformHeader2."Handling Codeunit",MiniformHeader2);
+            END ELSE BEGIN
+              ADCSNASStartup.SendError(Text011);
+              EXIT;
+            END;
+          END;
+        ELSE
+          ERROR(Text000);
+      END;
+
+      IF NOT (FuncGroup.KeyDef IN [FuncGroup.KeyDef::Esc,FuncGroup.KeyDef::Input]) THEN
+        SendForm(ActiveInputField);
+    END;
+
+    LOCAL PROCEDURE PrepareData@4();
+    BEGIN
+      WITH BinCount DO BEGIN
+        RESET;
+        SETRANGE("Location Code",LocationFilter);
+        SETRANGE("Scheduled Date",0D,TODAY);
+        SETFILTER("Count Type",'%1',
+          BinCount."Count Type"::"Audited Count");
+        SETFILTER(Status,'%1|%2|%3',
+          BinCount.Status::Audit,BinCount.Status::"Pending Register",
+          BinCount.Status::"In Process");
+        IF NOT FIND('-') THEN BEGIN
+          IF ADCSCommunication.GetNodeAttribute(ReturnedNode,'RunReturn') = '0' THEN BEGIN
+            ADCSNASStartup.SendError(Text009);
+            EXIT;
+          END;
+          ADCSCommunication.DecreaseStack(DOMxmlin,PreviousCode);
+          MiniformHeader2.GET(PreviousCode);
+          MiniformHeader2.SaveXMLin(DOMxmlin);
+          CODEUNIT.RUN(MiniformHeader2."Handling Codeunit",MiniformHeader2);
+        END ELSE BEGIN
+          RecRef.GETTABLE(BinCount);
+          ADCSCommunication.SetRecRef(RecRef);
+          ActiveInputField := 1;
+          SendForm(ActiveInputField);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE SendForm@1(InputField@1000 : Integer);
+    BEGIN
+      ADCSCommunication.EncodeMiniForm(MiniformHeader,StackCode,DOMxmlin,InputField,Remark,LoginID);
+      ADCSCommunication.GetReturnXML(DOMxmlin);
+      ADCSNASStartup.SendXMLReply(DOMxmlin);
+    END;
+
+    EVENT DOMxmlin@1240020002::NodeInserting@93(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020002::NodeInserted@94(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020002::NodeRemoving@95(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020002::NodeRemoved@96(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020002::NodeChanging@97(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020002::NodeChanged@98(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

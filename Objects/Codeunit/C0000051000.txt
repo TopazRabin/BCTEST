@@ -1,0 +1,2571 @@
+OBJECT Codeunit 51000 Warehouse Streamline Mgt.1
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=RF1.50.09,RF1.50.03,RS1.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      RFStatEntryGlobalTmp@1240030000 : TEMPORARY Record 14002804;
+      WarehouseRequestGlobalTmp@1240030001 : TEMPORARY Record 5765;
+      Text001@1240030002 : TextConst 'ENU=No Lines Found';
+      Text002@1240030003 : TextConst 'ENU=Warehouse Shipment %1 already contains lines from this Document';
+      Text003@1240030004 : TextConst 'ENU=No Warehouse ship lines found.';
+      Text004@1240030005 : TextConst 'ENU=First Record not Loaded.';
+      Text005@1240030006 : TextConst 'ENU=Must be location %1.';
+      Text006@1240030007 : TextConst 'ENU=Pick Exists';
+      Text007@1240030008 : TextConst 'ENU=Shipment Exists';
+      Text008@1240030009 : TextConst 'ENU=Nothing to Ship';
+      Text009@1240030010 : TextConst 'ENU=Nothing Available';
+      Text010@1240030011 : TextConst 'ENU=Partly Ship with Break Bulk (%1 of %2)';
+      Text011@1240030012 : TextConst 'ENU=Partly Ship (%1 of %2)';
+      Text012@1240030013 : TextConst 'ENU=Ship Complete with Break Bulk';
+      Text013@1240030014 : TextConst 'ENU=Ship Complete';
+      Text014@1240030015 : TextConst 'ENU=Wave Pick Exists';
+      Text015@1240030016 : TextConst 'ENU=Warehouse Pick %1 already contains lines from this Document';
+      Text016@1001 : TextConst 'ENU=Nothing is needed or available to replenish.';
+      Text017@1002 : TextConst 'ENU=Delete existing replenishment lines?';
+      Text018@1240030017 : TextConst 'ENU=No Wave Pick Bin found.';
+      Text019@1003 : TextConst 'ENU=Not a Sales Order.';
+      Text020@1004 : TextConst 'ENU=Multiple Locations.';
+      Text021@1005 : TextConst 'ENU=Wrong Calculation';
+      Text022@1006 : TextConst 'ENU=No Warehouse Request.';
+      Text023@1007 : TextConst 'ENU=Not a Return Order.';
+      RFSetup@1240040000 : Record 14002801;
+      OutboundWhseRequestFilterDef@1240040002 : Record 14002863;
+      MultiStatEntryGlobalTmp@1240020000 : TEMPORARY Record 14002804;
+      MultiStatEntryPrepTmp@1240020001 : TEMPORARY Record 14002804;
+      RFSetupRetrieved@1240040001 : Boolean;
+      MultiOrder@1240020002 : Boolean;
+      WhseSetup@1000000000 : Record 5769;
+      gCurrentWarehouseRequest@1000000001 : Record 5765;
+
+    PROCEDURE CreateWhseShipAndPick@1240030000(CurrentWarehouseRequest@1240030000 : Record 5765;OutboundWhseRequestFilter@1240030023 : Record 14002863;AssignedID@1240030014 : Code[50];AssignedWhseGroupCode@1240020000 : Code[20];VAR NewShipmentNo@1240030008 : Code[20];VAR NewPickNo@1240030009 : Code[20];GiveError@1240030016 : Boolean) : Boolean;
+    VAR
+      Location@1240030002 : Record 14;
+      WarehouseRequest@1240030007 : Record 5765;
+      WarehouseShipmentHeader@1240030006 : Record 7320;
+      WarehouseShipmentLine@1240030005 : Record 7321;
+      WarehouseShipmentLineTmp@1240030020 : TEMPORARY Record 7321;
+      WarehouseActivityLine@1240030018 : Record 5767;
+      WarehouseShipmentHeader2@1240020002 : Record 7320;
+      RFFlowrackMgt@1240020001 : Codeunit 14002852;
+      GetSourceDocuments@1240030004 : Report 5753;
+      WhseShipmentCreatePick@1240030003 : Report 7318;
+      WhseShipmentRelease@1240030001 : Codeunit 7310;
+      WhseDocPrint@1240020003 : Codeunit 5776;
+      CreatePickOnlyReturnVal@1000000000 : Boolean;
+      WarehouseActivityHeader@1000000001 : Record 5766;
+    BEGIN
+      //TM BEG 072115
+      CurrentWarehouseRequest.CALCFIELDS("Warehouse Shipment No.");
+      IF CurrentWarehouseRequest."Warehouse Shipment No." <> '' THEN BEGIN
+
+        //<TPZ1702>
+        IF AssignedID <> '' THEN BEGIN
+          WarehouseShipmentHeader.GET(CurrentWarehouseRequest."Warehouse Shipment No.");
+          WarehouseShipmentHeader.VALIDATE("Assigned User ID",AssignedID);
+          WarehouseShipmentHeader.MODIFY;
+        END;
+        //</TPZ1702>
+
+        CreatePickOnlyReturnVal := CreatePickOnly(CurrentWarehouseRequest, OutboundWhseRequestFilter, AssignedID,
+                                                  AssignedWhseGroupCode, NewShipmentNo, NewPickNo, GiveError);
+        EXIT(CreatePickOnlyReturnVal);
+      END;
+
+      //TM END 072115
+      CurrentWarehouseRequest.TESTFIELD(Type,CurrentWarehouseRequest.Type::Outbound);
+      Location.GET(CurrentWarehouseRequest."Location Code");
+      GetRFSetup;
+      IF NOT RFSetup."Auto Delete Warehouse Shipment" THEN BEGIN
+         CurrentWarehouseRequest.TESTFIELD("Completely Handled",FALSE);
+        IF CurrentWarehouseRequest."Warehouse Shipment No." = '' THEN
+          CurrentWarehouseRequest.CALCFIELDS("Warehouse Shipment No.");
+        CurrentWarehouseRequest.TESTFIELD("Warehouse Shipment No.",'');
+      END;
+
+      WarehouseShipmentLine.RESET;
+      WarehouseShipmentLine.SETCURRENTKEY("Source Type","Source Subtype","Source No.");
+      WarehouseShipmentLine.SETRANGE("Source Type",CurrentWarehouseRequest."Source Type");
+      WarehouseShipmentLine.SETRANGE("Source Subtype",CurrentWarehouseRequest."Source Subtype");
+      WarehouseShipmentLine.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+      WarehouseShipmentLine.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+      IF WarehouseShipmentLine.FIND('-') THEN
+        IF RFSetup."Auto Delete Warehouse Shipment" THEN BEGIN
+          WarehouseActivityLine.RESET;
+          WarehouseActivityLine.SETCURRENTKEY("Source Type","Source Subtype","Source No.");
+          WarehouseActivityLine.SETRANGE("Source Type",CurrentWarehouseRequest."Source Type");
+          WarehouseActivityLine.SETRANGE("Source Subtype",CurrentWarehouseRequest."Source Subtype");
+          WarehouseActivityLine.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+          WarehouseActivityLine.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+          IF NOT WarehouseActivityLine.FIND('-') THEN BEGIN
+            REPEAT
+              WarehouseShipmentHeader.GET(WarehouseShipmentLine."No.");
+              IF WarehouseShipmentHeader.Status = WarehouseShipmentHeader.Status::Released THEN
+                WhseShipmentRelease.Reopen(WarehouseShipmentHeader);
+
+              WarehouseShipmentLine.SETRANGE("No.",WarehouseShipmentHeader."No.");
+              WarehouseShipmentLine.DELETEALL(TRUE);
+              WarehouseShipmentLine.SETRANGE("No.");
+
+              WarehouseShipmentHeader2.RESET;
+              WarehouseShipmentHeader2.SETCURRENTKEY("No.");
+              WarehouseShipmentHeader2.SETRANGE("No.",WarehouseShipmentHeader."No.");
+              IF WarehouseShipmentHeader2.FIND('-') THEN
+                IF WarehouseShipmentHeader2.Status = WarehouseShipmentHeader2.Status::Open THEN
+                  WarehouseShipmentHeader2.DELETE;
+
+            UNTIL WarehouseShipmentLine.NEXT = 0;
+
+            COMMIT;
+          END ELSE
+            IF GiveError THEN
+              ERROR(Text015,WarehouseActivityLine."No.")
+            ELSE
+              EXIT(FALSE);
+        END ELSE
+          IF GiveError THEN
+            ERROR(Text002,WarehouseShipmentLine."No.")
+          ELSE
+            EXIT(FALSE);
+
+      WarehouseRequest.RESET;
+      WarehouseRequest := CurrentWarehouseRequest;
+      WarehouseRequest.SETRECFILTER;
+      CLEAR(GetSourceDocuments);
+      GetSourceDocuments.SetHideDialog(TRUE);
+      GetSourceDocuments.USEREQUESTPAGE(FALSE);
+      GetSourceDocuments.SETTABLEVIEW(WarehouseRequest);
+      GetSourceDocuments.RUNMODAL;
+      GetSourceDocuments.GetLastShptHeader(WarehouseShipmentHeader);
+
+      //TM BEG 072115
+      //WarehouseShipmentHeader.FIND;
+      IF WarehouseShipmentHeader.FIND = FALSE THEN
+        EXIT(FALSE);
+      //TM END 072115
+      IF AssignedID <> '' THEN
+        WarehouseShipmentHeader.VALIDATE("Assigned User ID",AssignedID);
+      IF OutboundWhseRequestFilter."Sorting Method for Act. Lines" > 0 THEN BEGIN
+        CASE OutboundWhseRequestFilter."Sorting Method for Act. Lines" OF
+          OutboundWhseRequestFilter."Sorting Method for Act. Lines"::"Bin Ranking",
+          OutboundWhseRequestFilter."Sorting Method for Act. Lines"::"Action Type",
+          OutboundWhseRequestFilter."Sorting Method for Act. Lines"::"Bin Sorting":
+            BEGIN
+              WarehouseShipmentHeader.VALIDATE("Sorting Method",0);
+            END;
+          ELSE
+            WarehouseShipmentHeader.VALIDATE(
+              "Sorting Method",OutboundWhseRequestFilter."Sorting Method for Act. Lines");
+        END;
+      END;
+
+      WarehouseShipmentHeader.MODIFY;
+
+      WhseShipmentRelease.Release(WarehouseShipmentHeader);
+      WarehouseShipmentHeader.FIND;
+      WarehouseShipmentHeader.TESTFIELD(Status,WarehouseShipmentHeader.Status::Released);
+
+      WarehouseShipmentLine.RESET;
+      WarehouseShipmentLine.SETRANGE("No.",WarehouseShipmentHeader."No.");
+      WarehouseShipmentLine.SETFILTER(Quantity,'>0');
+      WarehouseShipmentLine.SETRANGE("Completely Picked",FALSE);
+      IF OutboundWhseRequestFilter."Line Date Filter" <> '' THEN
+        WarehouseShipmentLine.SETFILTER("Due Date",OutboundWhseRequestFilter."Line Date Filter");
+      IF WarehouseShipmentLine.FIND('-') THEN BEGIN
+        IF OutboundWhseRequestFilter."Line Date Filter" <> '' THEN BEGIN
+          REPEAT
+            WarehouseShipmentLineTmp := WarehouseShipmentLine;
+            WarehouseShipmentLineTmp.INSERT;
+          UNTIL WarehouseShipmentLine.NEXT = 0;
+
+          WarehouseShipmentLine.SETRANGE("Due Date");
+          WarehouseShipmentLine.FIND('-');
+          REPEAT
+            IF NOT WarehouseShipmentLineTmp.GET(
+                     WarehouseShipmentLine."No.",WarehouseShipmentLine."Line No.")
+            THEN
+              WarehouseShipmentLine.DELETE;
+          UNTIL WarehouseShipmentLine.NEXT = 0;
+        END;
+
+        IF Location."Require Pick" THEN BEGIN
+          CLEAR(WhseShipmentCreatePick);
+          WhseShipmentCreatePick.SETTABLEVIEW(WarehouseShipmentLine);
+          WhseShipmentCreatePick.Initialize(
+            AssignedID,OutboundWhseRequestFilter."Sorting Method for Act. Lines",
+            OutboundWhseRequestFilter."Print Document" AND (OutboundWhseRequestFilter."Warehouse Activity Group Size" = 0),
+            OutboundWhseRequestFilter."Do Not Fill Qty. to Handle",
+            OutboundWhseRequestFilter."Set Breakbulk Filter",
+            OutboundWhseRequestFilter."Per Zone");
+          WhseShipmentCreatePick.SetPickFromFilter(
+            OutboundWhseRequestFilter."Pick-from Zone Filter",
+            OutboundWhseRequestFilter."Pick-from Bin Filter");
+          WhseShipmentCreatePick.SetWhseEmployeeGroupNo(AssignedWhseGroupCode);
+
+          WhseShipmentCreatePick.SetWhseShipmentLine(
+            WarehouseShipmentLine,WarehouseShipmentHeader);
+          WhseShipmentCreatePick.SetHideValidationDialog(TRUE);
+          WhseShipmentCreatePick.USEREQUESTPAGE(FALSE);
+          WhseShipmentCreatePick.RUNMODAL;
+          WhseShipmentCreatePick.GetResultMessage;
+          CLEAR(WhseShipmentCreatePick);
+          //<TPZ2666>
+          COMMIT;
+          WarehouseActivityHeader.RESET;
+          WarehouseActivityHeader.SETRANGE("Source Type",37);
+          WarehouseActivityHeader.SETRANGE("Source Document",WarehouseActivityHeader."Source Document"::"Sales Order");
+          WarehouseActivityHeader.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+          IF WarehouseActivityHeader.FINDFIRST THEN
+              REPORT.RUNMODAL(REPORT::"Picking List Webclient",TRUE,FALSE,WarehouseActivityHeader);
+          //</TPZ2666>
+        END ELSE BEGIN
+          IF Location."Require Shipment" THEN
+            IF OutboundWhseRequestFilter."Print Document" THEN BEGIN
+               //WhseDocPrint.PrintShptHeader(WarehouseShipmentHeader); //<TPZ2666>
+             //<TPZ2666>
+              COMMIT;
+              WarehouseActivityHeader.RESET;
+              WarehouseActivityHeader.SETRANGE("Source Type",37);
+              WarehouseActivityHeader.SETRANGE("Source Document",WarehouseActivityHeader."Source Document"::"Sales Order");
+              WarehouseActivityHeader.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+              IF WarehouseActivityHeader.FINDFIRST THEN
+                  REPORT.RUNMODAL(REPORT::"Picking List Webclient",TRUE,FALSE,WarehouseActivityHeader);
+              //</TPZ2666>
+            END;
+
+        END;
+      END ELSE
+        IF GiveError THEN
+          ERROR(Text001)
+        ELSE
+          EXIT(FALSE);
+
+      NewShipmentNo := WarehouseShipmentHeader."No.";
+      WarehouseRequest.CALCFIELDS("Put-away / Pick No.","Assembly Pick No.");
+      IF WarehouseRequest."Assembly Pick No." <> '' THEN
+        NewPickNo := WarehouseRequest."Assembly Pick No."
+      ELSE
+        NewPickNo := WarehouseRequest."Put-away / Pick No.";
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE PostWarehousePick@1240030002(CurrentWarehouseRequest@1240030001 : Record 5765);
+    VAR
+      WarehouseActivityLine@1240030000 : Record 5767;
+      WhsePostPick@1240030002 : Codeunit 7307;
+    BEGIN
+      WarehouseActivityLine.RESET;
+      WarehouseActivityLine.SETCURRENTKEY(
+        "Source Type","Source Subtype","Source No.","Source Line No.","Source Subline No.");
+      WarehouseActivityLine.SETRANGE("Activity Type",WarehouseActivityLine."Activity Type"::Pick);
+      WarehouseActivityLine.SETRANGE("Source Type",CurrentWarehouseRequest."Source Type");
+      WarehouseActivityLine.SETRANGE("Source Document",CurrentWarehouseRequest."Source Document");
+      WarehouseActivityLine.SETRANGE("Source Subtype",CurrentWarehouseRequest."Source Subtype");
+      WarehouseActivityLine.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+      IF WarehouseActivityLine.FIND('-') THEN
+        WarehouseActivityLine.SETFILTER("Breakbulk No.",'<>0');
+      // Very far from optimal key, but posting will only go through in line no.
+      // order. Another key should be added containing the source reference
+      IF WarehouseActivityLine.FIND('-') THEN
+        WarehouseActivityLine.SETCURRENTKEY("Activity Type","No.","Line No.");
+      WarehouseActivityLine.SETRANGE("Breakbulk No.");
+
+      WhsePostPick.RUN(WarehouseActivityLine);
+    END;
+
+    PROCEDURE PostWarehouseShipment@1240030001(CurrentWarehouseRequest@1240030000 : Record 5765;Invoice@1240030002 : Boolean;PrintDoc@1240030006 : Boolean);
+    VAR
+      WarehouseShipmentLine@1240030001 : Record 7321;
+      WhsePostShipment@1240030003 : Codeunit 5763;
+    BEGIN
+      CurrentWarehouseRequest.TESTFIELD(Type,CurrentWarehouseRequest.Type::Outbound);
+      CurrentWarehouseRequest.TESTFIELD("Completely Handled",FALSE);
+
+      WarehouseShipmentLine.RESET;
+      WarehouseShipmentLine.SETCURRENTKEY(
+        "Source Type","Source Subtype","Source No.","Source Line No.");
+      WarehouseShipmentLine.SETRANGE("Source Type",CurrentWarehouseRequest."Source Type");
+      WarehouseShipmentLine.SETRANGE("Source Document",CurrentWarehouseRequest."Source Document");
+      WarehouseShipmentLine.SETRANGE("Source Subtype",CurrentWarehouseRequest."Source Subtype");
+      WarehouseShipmentLine.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+      IF NOT WarehouseShipmentLine.FIND('-') THEN
+        ERROR(Text003);
+      CLEAR(WhsePostShipment);
+      WhsePostShipment.SetPrint(PrintDoc);
+      WhsePostShipment.SetPostingSettings(Invoice);
+      WhsePostShipment.RUN(WarehouseShipmentLine);
+    END;
+
+    PROCEDURE PostMultipleWarehouseShipment@1240030009(VAR CurrentWarehouseRequest@1240030000 : Record 5765;VAR NoOfWarehouseRequests@1240030006 : Integer;VAR NoOfShipmentsPosted@1240030005 : Integer;Invoice@1240030001 : Boolean;PrintDoc@1240030002 : Boolean);
+    VAR
+      WarehouseRequest@1240030008 : Record 5765;
+      WarehouseStreamlineMgt@1240030004 : Codeunit 14002809;
+      MultipleWarehouseRequests@1240030003 : Boolean;
+    BEGIN
+      MultipleWarehouseRequests :=
+        CurrentWarehouseRequest.FIND('-') AND (CurrentWarehouseRequest.NEXT <> 0);
+      NoOfWarehouseRequests := 0;
+      NoOfShipmentsPosted := 0;
+      IF CurrentWarehouseRequest.FIND('-') THEN
+        REPEAT
+          WarehouseRequest := CurrentWarehouseRequest;
+          WarehouseRequest.FIND;
+
+          NoOfWarehouseRequests := NoOfWarehouseRequests + 1;
+          WarehouseRequest.CALCFIELDS("Put-away / Pick No.","Warehouse Shipment No.");
+          IF NOT MultipleWarehouseRequests OR (WarehouseRequest."Warehouse Shipment No." <> '')
+          THEN BEGIN
+            WarehouseStreamlineMgt.PostWarehouseShipment(WarehouseRequest,Invoice,PrintDoc);
+            NoOfShipmentsPosted := NoOfShipmentsPosted + 1;
+          END;
+        UNTIL CurrentWarehouseRequest.NEXT = 0;
+    END;
+
+    PROCEDURE ShowWarehousePick@1240030003(CurrentWarehouseRequest@1240030001 : Record 5765);
+    VAR
+      WarehouseActivityHeader@1240030004 : Record 5766;
+      Location@1240020000 : Record 14;
+    BEGIN
+      CurrentWarehouseRequest.CALCFIELDS("Put-away / Pick No.");
+      CurrentWarehouseRequest.TESTFIELD("Put-away / Pick No.");
+
+      Location.GET(CurrentWarehouseRequest."Location Code");
+      IF (Location."Require Pick") AND (NOT Location."Require Shipment") THEN BEGIN
+        CASE CurrentWarehouseRequest."Source Type" OF
+          901:
+            BEGIN
+              WarehouseActivityHeader.GET(
+                WarehouseActivityHeader.Type::"Invt. Movement",CurrentWarehouseRequest."Put-away / Pick No.");
+              PAGE.RUNMODAL(PAGE::"Inventory Movement",WarehouseActivityHeader);
+            END;
+          ELSE BEGIN
+            WarehouseActivityHeader.GET(
+              WarehouseActivityHeader.Type::"Invt. Pick",CurrentWarehouseRequest."Put-away / Pick No.");
+            WarehouseActivityHeader.SETRECFILTER;
+            PAGE.RUNMODAL(PAGE::"Inventory Pick",WarehouseActivityHeader);
+          END;
+        END;
+      END ELSE BEGIN
+        WarehouseActivityHeader.GET(
+          WarehouseActivityHeader.Type::Pick,CurrentWarehouseRequest."Put-away / Pick No.");
+        WarehouseActivityHeader.SETRECFILTER;
+        PAGE.RUNMODAL(PAGE::"Warehouse Pick",WarehouseActivityHeader);
+      END;
+    END;
+
+    PROCEDURE ShowWarehouseShipment@1240030004(CurrentWarehouseRequest@1240030001 : Record 5765);
+    VAR
+      WarehouseShipmentHeader@1240030004 : Record 7320;
+    BEGIN
+      CurrentWarehouseRequest.CALCFIELDS("Warehouse Shipment No.");
+      CurrentWarehouseRequest.TESTFIELD("Warehouse Shipment No.");
+
+      WarehouseShipmentHeader.GET(CurrentWarehouseRequest."Warehouse Shipment No.");
+      WarehouseShipmentHeader.SETRECFILTER;
+      PAGE.RUNMODAL(PAGE::"Warehouse Shipment",WarehouseShipmentHeader);
+    END;
+
+    PROCEDURE ShowWarehouseActivityGroup@1240030018(CurrentWarehouseRequest@1240030001 : Record 5765);
+    VAR
+      WhseActivityGroupHeader@1240030000 : Record 14002861;
+    BEGIN
+      CurrentWarehouseRequest.CALCFIELDS("Whse. Activity Group No.");
+      CurrentWarehouseRequest.TESTFIELD("Whse. Activity Group No.");
+
+      WhseActivityGroupHeader.GET(CurrentWarehouseRequest."Whse. Activity Group No.");
+      WhseActivityGroupHeader.SETRECFILTER;
+      PAGE.RUNMODAL(PAGE::"Whse. Activity Group",WhseActivityGroupHeader);
+    END;
+
+    PROCEDURE ShowPickMovement@14002902(CurrentWarehouseRequest@1240020000 : Record 5765);
+    VAR
+      MovementHeader@14002901 : Record 14099001;
+    BEGIN
+      CurrentWarehouseRequest.CALCFIELDS("Pick Movement");
+      CurrentWarehouseRequest.TESTFIELD("Pick Movement");
+
+      MovementHeader.GET(CurrentWarehouseRequest."Pick Movement");
+      MovementHeader.SETRECFILTER;
+
+      PAGE.RUNMODAL(PAGE::Movement,MovementHeader);
+    END;
+
+    PROCEDURE PickLinesWithoutBinCodeExists@1240030005(CurrentWarehouseRequest@1240030000 : Record 5765) : Boolean;
+    VAR
+      WarehouseActivityLine@1240030001 : Record 5767;
+    BEGIN
+      IF CurrentWarehouseRequest."Put-away / Pick No." = '' THEN
+        CurrentWarehouseRequest.CALCFIELDS("Put-away / Pick No.");
+
+      IF CurrentWarehouseRequest."Put-away / Pick No." = '' THEN
+        EXIT(FALSE);
+
+      WarehouseActivityLine.RESET;
+      WarehouseActivityLine.SETRANGE("Activity Type",WarehouseActivityLine."Activity Type"::Pick);
+      WarehouseActivityLine.SETRANGE("No.",CurrentWarehouseRequest."Put-away / Pick No.");
+      WarehouseActivityLine.SETRANGE("Bin Code",'');
+      EXIT(WarehouseActivityLine.FIND('-'));
+    END;
+
+    PROCEDURE PickAssignedUserid@1240030006(CurrentWarehouseRequest@1240030000 : Record 5765) : Code[50];
+    VAR
+      WarehouseActivityHeader@1240030002 : Record 5766;
+      WarehouseActivityLine@1240030001 : Record 5767;
+      MovementHeader@1240020000 : Record 14099001;
+    BEGIN
+      IF CurrentWarehouseRequest."Pick Movement" = '' THEN BEGIN
+        WarehouseActivityLine.RESET;
+        WarehouseActivityLine.SETCURRENTKEY(
+          "Source Type","Source Subtype","Source No.","Source Line No.","Source Subline No.");
+        WarehouseActivityLine.SETRANGE("Activity Type",WarehouseActivityLine."Activity Type"::Pick);
+        WarehouseActivityLine.SETRANGE("Source Type",CurrentWarehouseRequest."Source Type");
+        WarehouseActivityLine.SETRANGE("Source Subtype",CurrentWarehouseRequest."Source Subtype");
+        WarehouseActivityLine.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+        IF WarehouseActivityLine.FIND('-') THEN
+          IF WarehouseActivityHeader.GET(
+               WarehouseActivityLine."Activity Type",WarehouseActivityLine."No.")
+          THEN
+            EXIT(WarehouseActivityHeader."Assigned User ID");
+      END ELSE BEGIN
+        IF MovementHeader.GET(CurrentWarehouseRequest."Pick Movement") THEN
+          EXIT(MovementHeader."Assigned User ID");
+      END;
+
+      EXIT('');
+    END;
+
+    PROCEDURE AssignedWarehouseEmployeeGroup@1240020001(CurrentWarehouseRequest@1240020000 : Record 5765) : Code[20];
+    VAR
+      WarehouseActivityLine@1240020001 : Record 5767;
+      WarehouseActivityHeader@1240020002 : Record 5766;
+      MovementHeader@1240020003 : Record 14099001;
+    BEGIN
+      IF CurrentWarehouseRequest."Pick Movement" = '' THEN BEGIN
+        WarehouseActivityLine.RESET;
+        WarehouseActivityLine.SETCURRENTKEY(
+          "Source Type","Source Subtype","Source No.","Source Line No.","Source Subline No.");
+        WarehouseActivityLine.SETRANGE("Activity Type",WarehouseActivityLine."Activity Type"::Pick);
+        WarehouseActivityLine.SETRANGE("Source Type",CurrentWarehouseRequest."Source Type");
+        WarehouseActivityLine.SETRANGE("Source Subtype",CurrentWarehouseRequest."Source Subtype");
+        WarehouseActivityLine.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+        IF WarehouseActivityLine.FINDFIRST THEN BEGIN
+          IF WarehouseActivityHeader.GET(
+               WarehouseActivityLine."Activity Type",WarehouseActivityLine."No.")
+          THEN
+            EXIT(WarehouseActivityHeader."Warehouse Employee Group");
+        END ELSE BEGIN  //Wave Pick?
+          CurrentWarehouseRequest.CALCFIELDS("Wave Pick No.");
+          WarehouseActivityHeader.SETRANGE(Type,WarehouseActivityHeader.Type::Pick);
+          WarehouseActivityHeader.SETRANGE("No.",CurrentWarehouseRequest."Wave Pick No.");
+          IF WarehouseActivityHeader.FINDFIRST THEN
+            EXIT(WarehouseActivityHeader."Warehouse Employee Group");
+        END;
+      END ELSE BEGIN
+        IF MovementHeader.GET(CurrentWarehouseRequest."Pick Movement") THEN
+          EXIT(MovementHeader."Warehouse Employee Group");
+      END;
+
+      EXIT('');
+    END;
+
+    PROCEDURE CalculateStatisticsSingle@1240030010(CurrentWarehouseRequest@1240030002 : Record 5765;VAR RFStatEntryTotal@1240030003 : Record 14002804;OutboundWhseRequestFilter@1240030004 : Record 14002863) : Boolean;
+    BEGIN
+      gCurrentWarehouseRequest:=CurrentWarehouseRequest; //RS1.00
+      CLEAR(RFStatEntryTotal);
+
+      RFStatEntryGlobalTmp.RESET;
+      RFStatEntryGlobalTmp.DELETEALL;
+
+      IF NOT FindRFStatisticsEntries(
+               CurrentWarehouseRequest,RFStatEntryGlobalTmp,OutboundWhseRequestFilter)
+      THEN
+        EXIT(FALSE);
+
+      IF NOT CalculateAvailable(
+               RFStatEntryGlobalTmp,OutboundWhseRequestFilter,CurrentWarehouseRequest."Location Code")
+      THEN
+        EXIT(FALSE);
+
+      IF RFStatEntryGlobalTmp.FIND('-') THEN BEGIN
+        RFStatEntryTotal."Location Code" := RFStatEntryGlobalTmp."Location Code";
+
+        REPEAT
+          RFStatEntryTotal.AddRFStatisticsEntry(RFStatEntryGlobalTmp);
+        UNTIL RFStatEntryGlobalTmp.NEXT = 0;
+
+        EXIT(TRUE);
+      END ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE AddWarehouseRequest@1240030016(WarehouseRequest@1240030000 : Record 5765;First@1240030001 : Boolean);
+    BEGIN
+      IF First THEN BEGIN
+        WarehouseRequestGlobalTmp.RESET;
+        WarehouseRequestGlobalTmp.DELETEALL;
+
+        WarehouseRequestGlobalTmp := WarehouseRequest;
+        WarehouseRequestGlobalTmp.INSERT;
+      END ELSE BEGIN
+        WarehouseRequestGlobalTmp.RESET;
+        IF NOT WarehouseRequestGlobalTmp.FIND('-') THEN
+          ERROR(Text004);
+
+        IF WarehouseRequest."Location Code" <> WarehouseRequestGlobalTmp."Location Code" THEN
+          ERROR(Text005,WarehouseRequestGlobalTmp."Location Code");
+
+        WarehouseRequestGlobalTmp := WarehouseRequest;
+        WarehouseRequestGlobalTmp.INSERT;
+      END;
+    END;
+
+    PROCEDURE CalculateStatisticsMultiple@1240030015(VAR RFStatEntryTotal@1240030004 : Record 14002804;OutboundWhseRequestFilter@1240030002 : Record 14002863) : Boolean;
+    VAR
+      WarehouseRequest@1240030000 : Record 5765;
+    BEGIN
+      CLEAR(RFStatEntryTotal);
+
+      RFStatEntryGlobalTmp.RESET;
+      RFStatEntryGlobalTmp.DELETEALL;
+
+      WarehouseRequestGlobalTmp.RESET;
+      IF NOT WarehouseRequestGlobalTmp.FIND('-') THEN
+        ERROR(Text004);
+
+      IF WarehouseRequestGlobalTmp.FIND('-') THEN
+        REPEAT
+          FindRFStatisticsEntries(WarehouseRequestGlobalTmp,RFStatEntryGlobalTmp,OutboundWhseRequestFilter);
+        UNTIL WarehouseRequestGlobalTmp.NEXT = 0;
+
+      IF NOT CalculateAvailable(
+               RFStatEntryGlobalTmp,OutboundWhseRequestFilter,WarehouseRequestGlobalTmp."Location Code")
+      THEN
+        EXIT(FALSE);
+
+      IF RFStatEntryGlobalTmp.FIND('-') THEN BEGIN
+        RFStatEntryTotal."Location Code" := RFStatEntryGlobalTmp."Location Code";
+
+        REPEAT
+          RFStatEntryTotal.AddRFStatisticsEntry(RFStatEntryGlobalTmp);
+        UNTIL RFStatEntryGlobalTmp.NEXT = 0;
+
+        EXIT(TRUE);
+      END ELSE
+        EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE FindRFStatisticsEntries@1240030013(CurrentWarehouseRequest@1240030000 : Record 5765;VAR RFStatEntryTmp@1240030005 : TEMPORARY Record 14002804;OutboundWhseRequestFilter@1240030007 : Record 14002863) : Boolean;
+    VAR
+      SalesLine@1240030004 : Record 37;
+      PurchaseLine@1240030003 : Record 39;
+      TransferLine@1240030002 : Record 5741;
+      Item@1240030001 : Record 27;
+      WarehouseShipmentLine@1240030006 : Record 7321;
+      Location@1240020000 : Record 14;
+      MovementLine@1240020001 : Record 14099002;
+      RegMoveLine@1240020002 : Record 14099004;
+      WMSMgt@1240030008 : Codeunit 7302;
+    BEGIN
+      Location.GET(CurrentWarehouseRequest."Location Code");
+
+      CASE CurrentWarehouseRequest."Source Type" OF
+        37:
+          BEGIN
+            SalesLine.RESET;
+            SalesLine.SETRANGE("Document Type",CurrentWarehouseRequest."Source Subtype");
+            SalesLine.SETRANGE("Document No.",CurrentWarehouseRequest."Source No.");
+            SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+            SalesLine.SETFILTER("No.",'<>%1','');
+            SalesLine.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+            SalesLine.SETFILTER("Outstanding Quantity",'<>0');
+            IF OutboundWhseRequestFilter."Line Date Filter" <> '' THEN
+              SalesLine.SETFILTER("Shipment Date",OutboundWhseRequestFilter."Line Date Filter");
+            IF SalesLine.FIND('-') THEN
+              REPEAT
+                IF (SalesLine."Qty. to Assemble to Order" > 0) AND
+                   (CurrentWarehouseRequest."ATO Pick Required")
+                THEN BEGIN
+                  FindRFATOStatisticsEntries(CurrentWarehouseRequest,RFStatEntryTmp,
+                     OutboundWhseRequestFilter,SalesLine);
+                END ELSE BEGIN
+                  RFStatEntryTmp.INIT;
+                  RFStatEntryTmp."Entry No." := RFStatEntryTmp."Entry No." + 1;
+                  RFStatEntryTmp."Item No." := SalesLine."No.";
+                  RFStatEntryTmp."Variant Code" := SalesLine."Variant Code";
+                  RFStatEntryTmp."Unit of Measure Code" := SalesLine."Unit of Measure Code";
+                  RFStatEntryTmp."Qty. per Unit of Measure" := SalesLine."Qty. per Unit of Measure";
+                  RFStatEntryTmp.Quantity := SalesLine.Quantity;
+                  RFStatEntryTmp."Quantity (Base)" := SalesLine."Quantity (Base)";
+                  RFStatEntryTmp.Description := SalesLine.Description;
+                  RFStatEntryTmp."Location Code" := SalesLine."Location Code";
+                  RFStatEntryTmp."Unit Price" := SalesLine."Unit Price";
+                  IF SalesLine.Quantity <> 0 THEN
+                    RFStatEntryTmp."Unit Amount" := SalesLine.Amount / SalesLine.Quantity;
+                  RFStatEntryTmp."Source Outstanding Quantity" :=
+                    SalesLine."Outstanding Quantity";
+                  RFStatEntryTmp."Source Outstanding Qty. (Base)" :=
+                    SalesLine."Outstanding Qty. (Base)";
+
+                  SalesLine.CALCFIELDS("Reserved Quantity","Reserved Qty. (Base)");
+                  RFStatEntryTmp."Reserved Quantity" := SalesLine."Reserved Quantity";
+                  RFStatEntryTmp."Reserved Qty. (Base)" := SalesLine."Reserved Qty. (Base)";
+                  RFStatEntryTmp."Inv. Reserved Qty. (Base)" :=
+                    CalcLineReservedQtyonInvt2(
+                      DATABASE::"Sales Line",SalesLine."Document Type",
+                      SalesLine."Document No.",SalesLine."Line No.",0);
+                  IF RFStatEntryTmp."Qty. per Unit of Measure" <> 1 THEN BEGIN
+                    RFStatEntryTmp."Inv. Reserved Quantity" :=
+                      ROUND(
+                        RFStatEntryTmp."Inv. Reserved Qty. (Base)" /
+                        RFStatEntryTmp."Qty. per Unit of Measure",
+                        0.00001);
+
+                    RFStatEntryTmp."Gross Weight (Base)" :=
+                      ROUND(
+                        SalesLine."Gross Weight" / RFStatEntryTmp."Qty. per Unit of Measure",0.00001);
+                    RFStatEntryTmp."Net Weight (Base)" :=
+                      ROUND(
+                        SalesLine."Net Weight" / RFStatEntryTmp."Qty. per Unit of Measure",0.00001);
+                    RFStatEntryTmp."Volume (Base)" :=
+                      ROUND(
+                        SalesLine."Unit Volume" / RFStatEntryTmp."Qty. per Unit of Measure",0.00001);
+                  END ELSE BEGIN
+                    RFStatEntryTmp."Inv. Reserved Quantity" := RFStatEntryTmp."Inv. Reserved Qty. (Base)";
+
+                    RFStatEntryTmp."Gross Weight (Base)" := SalesLine."Gross Weight";
+                    RFStatEntryTmp."Net Weight (Base)" := SalesLine."Net Weight";
+                    RFStatEntryTmp."Volume (Base)" := SalesLine."Unit Volume";
+                  END;
+                  RFStatEntryTmp."Outstanding No. of Lines" := 1;
+
+                  RFStatEntryTmp."Other Reserved Quantity" :=
+                    RFStatEntryTmp."Reserved Quantity" - RFStatEntryTmp."Inv. Reserved Quantity";
+                  RFStatEntryTmp."Other Reserved Qty. (Base)" :=
+                    RFStatEntryTmp."Reserved Qty. (Base)" - RFStatEntryTmp."Inv. Reserved Qty. (Base)";
+
+                  RFStatEntryTmp."Outstanding Inv. Quantity" :=
+                    RFStatEntryTmp."Source Outstanding Quantity" -
+                    RFStatEntryTmp."Other Reserved Quantity";
+                  RFStatEntryTmp."Outstanding Inv. Qty. (Base)" :=
+                    RFStatEntryTmp."Source Outstanding Qty. (Base)" -
+                    RFStatEntryTmp."Other Reserved Qty. (Base)";
+                  WarehouseShipmentLine.RESET;
+                  WarehouseShipmentLine.SETCURRENTKEY(
+                    "Source Type","Source Subtype","Source No.","Source Line No.");
+                  WarehouseShipmentLine.SETRANGE("Source Type",DATABASE::"Sales Line");
+                  WarehouseShipmentLine.SETRANGE("Source Subtype",SalesLine."Document Type");
+                  WarehouseShipmentLine.SETRANGE("Source No.",SalesLine."Document No.");
+                  WarehouseShipmentLine.SETRANGE("Source Line No.",SalesLine."Line No.");
+                  UpdateWhseShipmentLineInfo(WarehouseShipmentLine,RFStatEntryTmp);
+
+                  IF (Location."Require Pick") AND (NOT Location."Require Shipment") THEN
+                    UpdateInventoryPickLineInfo(RFStatEntryTmp,DATABASE::"Sales Line",
+                    SalesLine."Document Type",SalesLine."Document No.",SalesLine."Line No.");
+
+                  IF Location."Use ACE One WMS" THEN BEGIN
+                    MovementLine.SETRANGE("Source Type",DATABASE::"Sales Line");
+                    MovementLine.SETRANGE("Source Subtype",SalesLine."Document Type");
+                    MovementLine.SETRANGE("Source ID",SalesLine."Document No.");
+                    MovementLine.SETRANGE("Source Reference No.",SalesLine."Line No.");
+                    RegMoveLine.SETRANGE("Source Type",DATABASE::"Sales Line");
+                    RegMoveLine.SETRANGE("Source Sub ID",SalesLine."Document Type");
+                    RegMoveLine.SETRANGE("Source ID",SalesLine."Document No.");
+                    RegMoveLine.SETRANGE("Source Reference No.",SalesLine."Line No.");
+                    UpdateMovementLineInfo(MovementLine,RegMoveLine,RFStatEntryTmp);
+                  END;
+                  RFStatEntryTmp.INSERT;
+                END;
+              UNTIL SalesLine.NEXT = 0;
+          END;
+        39:
+          BEGIN
+            PurchaseLine.RESET;
+            PurchaseLine.SETRANGE("Document Type",CurrentWarehouseRequest."Source Subtype");
+            PurchaseLine.SETRANGE("Document No.",CurrentWarehouseRequest."Source No.");
+            PurchaseLine.SETRANGE(Type,PurchaseLine.Type::Item);
+            PurchaseLine.SETFILTER("No.",'<>%1','');
+            PurchaseLine.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+            PurchaseLine.SETFILTER("Outstanding Quantity",'<>0');
+            IF OutboundWhseRequestFilter."Line Date Filter" <> '' THEN
+              PurchaseLine.SETFILTER("Expected Receipt Date",OutboundWhseRequestFilter."Line Date Filter");
+            IF PurchaseLine.FIND('-') THEN
+              REPEAT
+                RFStatEntryTmp.INIT;
+                RFStatEntryTmp."Entry No." := RFStatEntryTmp."Entry No." + 1;
+                RFStatEntryTmp."Item No." := PurchaseLine."No.";
+                RFStatEntryTmp."Variant Code" := PurchaseLine."Variant Code";
+                RFStatEntryTmp."Unit of Measure Code" := PurchaseLine."Unit of Measure Code";
+                RFStatEntryTmp."Qty. per Unit of Measure" :=
+                  PurchaseLine."Qty. per Unit of Measure";
+                RFStatEntryTmp.Quantity := PurchaseLine.Quantity;
+                RFStatEntryTmp."Quantity (Base)" := PurchaseLine."Quantity (Base)";
+                RFStatEntryTmp.Description := PurchaseLine.Description;
+                RFStatEntryTmp."Location Code" := PurchaseLine."Location Code";
+                RFStatEntryTmp."Unit Price" := PurchaseLine."Direct Unit Cost";
+                RFStatEntryTmp."Unit Amount" := PurchaseLine.Amount / PurchaseLine.Quantity;
+                RFStatEntryTmp."Source Outstanding Quantity" :=
+                  PurchaseLine."Outstanding Quantity";
+                RFStatEntryTmp."Source Outstanding Qty. (Base)" :=
+                  PurchaseLine."Outstanding Qty. (Base)";
+
+                PurchaseLine.CALCFIELDS("Reserved Quantity","Reserved Qty. (Base)");
+                RFStatEntryTmp."Reserved Quantity" := PurchaseLine."Reserved Quantity";
+                RFStatEntryTmp."Reserved Qty. (Base)" := PurchaseLine."Reserved Qty. (Base)";
+                RFStatEntryTmp."Inv. Reserved Qty. (Base)" :=
+                  CalcLineReservedQtyonInvt2(
+                    DATABASE::"Purchase Line",PurchaseLine."Document Type",
+                      PurchaseLine."Document No.",PurchaseLine."Line No.",0);
+                IF RFStatEntryTmp."Qty. per Unit of Measure" <> 1 THEN BEGIN
+                  RFStatEntryTmp."Inv. Reserved Quantity" :=
+                    ROUND(
+                      RFStatEntryTmp."Inv. Reserved Qty. (Base)" /
+                      RFStatEntryTmp."Qty. per Unit of Measure",
+                      0.00001);
+
+                  RFStatEntryTmp."Gross Weight (Base)" :=
+                    ROUND(
+                      PurchaseLine."Gross Weight" / RFStatEntryTmp."Qty. per Unit of Measure",0.00001);
+                  RFStatEntryTmp."Net Weight (Base)" :=
+                    ROUND(
+                      PurchaseLine."Net Weight" / RFStatEntryTmp."Qty. per Unit of Measure",0.00001);
+                  RFStatEntryTmp."Volume (Base)" :=
+                    ROUND(
+                      PurchaseLine."Unit Volume" / RFStatEntryTmp."Qty. per Unit of Measure",0.00001);
+                END ELSE BEGIN
+                  RFStatEntryTmp."Inv. Reserved Quantity" := RFStatEntryTmp."Inv. Reserved Qty. (Base)";
+
+                  RFStatEntryTmp."Gross Weight (Base)" := PurchaseLine."Gross Weight";
+                  RFStatEntryTmp."Net Weight (Base)" := PurchaseLine."Net Weight";
+                  RFStatEntryTmp."Volume (Base)" := PurchaseLine."Unit Volume";
+                END;
+                RFStatEntryTmp."Outstanding No. of Lines" := 1;
+
+                RFStatEntryTmp."Other Reserved Quantity" :=
+                  RFStatEntryTmp."Reserved Quantity" - RFStatEntryTmp."Inv. Reserved Quantity";
+                RFStatEntryTmp."Other Reserved Qty. (Base)" :=
+                  RFStatEntryTmp."Reserved Qty. (Base)" - RFStatEntryTmp."Inv. Reserved Qty. (Base)";
+
+                RFStatEntryTmp."Outstanding Inv. Quantity" :=
+                  RFStatEntryTmp."Source Outstanding Quantity" -
+                  RFStatEntryTmp."Other Reserved Quantity";
+                RFStatEntryTmp."Outstanding Inv. Qty. (Base)" :=
+                  RFStatEntryTmp."Source Outstanding Qty. (Base)" -
+                  RFStatEntryTmp."Other Reserved Qty. (Base)";
+
+                WarehouseShipmentLine.RESET;
+                WarehouseShipmentLine.SETCURRENTKEY(
+                  "Source Type","Source Subtype","Source No.","Source Line No.");
+                WarehouseShipmentLine.SETRANGE("Source Type",DATABASE::"Purchase Line");
+                WarehouseShipmentLine.SETRANGE("Source Subtype",PurchaseLine."Document Type");
+                WarehouseShipmentLine.SETRANGE("Source No.",PurchaseLine."Document No.");
+                WarehouseShipmentLine.SETRANGE("Source Line No.",PurchaseLine."Line No.");
+                UpdateWhseShipmentLineInfo(WarehouseShipmentLine,RFStatEntryTmp);
+
+                IF (Location."Require Pick") AND (NOT Location."Require Shipment") THEN
+                  UpdateInventoryPickLineInfo(RFStatEntryTmp,DATABASE::"Purchase Line",
+                  PurchaseLine."Document Type",PurchaseLine."Document No.",PurchaseLine."Line No.");
+
+                IF Location."Use ACE One WMS" THEN BEGIN
+                  MovementLine.SETRANGE("Source Type",DATABASE::"Purchase Line");
+                  MovementLine.SETRANGE("Source Subtype",PurchaseLine."Document Type");
+                  MovementLine.SETRANGE("Source ID",PurchaseLine."Document No.");
+                  MovementLine.SETRANGE("Source Reference No.",PurchaseLine."Line No.");
+                  RegMoveLine.SETRANGE("Source Type",DATABASE::"Purchase Line");
+                  RegMoveLine.SETRANGE("Source Sub ID",PurchaseLine."Document Type");
+                  RegMoveLine.SETRANGE("Source ID",PurchaseLine."Document No.");
+                  RegMoveLine.SETRANGE("Source Reference No.",PurchaseLine."Line No.");
+                  UpdateMovementLineInfo(MovementLine,RegMoveLine,RFStatEntryTmp);
+                END;
+
+                RFStatEntryTmp.INSERT;
+              UNTIL PurchaseLine.NEXT = 0;
+          END;
+        5741:
+          BEGIN
+            TransferLine.RESET;
+            TransferLine.SETRANGE("Document No.",CurrentWarehouseRequest."Source No.");
+            TransferLine.SETFILTER("Item No.",'<>%1','');
+            TransferLine.SETRANGE("Transfer-from Code",CurrentWarehouseRequest."Location Code");
+            TransferLine.SETFILTER("Outstanding Quantity",'<>0');
+            IF OutboundWhseRequestFilter."Line Date Filter" <> '' THEN
+              TransferLine.SETFILTER("Shipment Date",OutboundWhseRequestFilter."Line Date Filter");
+            IF TransferLine.FIND('-') THEN
+              REPEAT
+                RFStatEntryTmp.INIT;
+                RFStatEntryTmp."Entry No." := RFStatEntryTmp."Entry No." + 1;
+                RFStatEntryTmp."Item No." := TransferLine."Item No.";
+                RFStatEntryTmp."Variant Code" := TransferLine."Variant Code";
+                RFStatEntryTmp."Unit of Measure Code" := TransferLine."Unit of Measure Code";
+                RFStatEntryTmp."Qty. per Unit of Measure" := TransferLine."Qty. per Unit of Measure";
+                RFStatEntryTmp.Quantity := TransferLine.Quantity;
+                RFStatEntryTmp."Quantity (Base)" := TransferLine."Quantity (Base)";
+                RFStatEntryTmp.Description := TransferLine.Description;
+                RFStatEntryTmp."Location Code" := TransferLine."Transfer-from Code";
+                Item.GET(TransferLine."Item No.");
+                RFStatEntryTmp."Unit Price" := Item."Unit Price";
+                RFStatEntryTmp."Unit Amount" := Item."Unit Price";
+                RFStatEntryTmp."Source Outstanding Quantity" :=
+                  TransferLine."Outstanding Quantity";
+                RFStatEntryTmp."Source Outstanding Qty. (Base)" :=
+                  TransferLine."Outstanding Qty. (Base)";
+
+                TransferLine.CALCFIELDS("Reserved Quantity Outbnd.","Reserved Qty. Outbnd. (Base)");
+                RFStatEntryTmp."Reserved Quantity" := TransferLine."Reserved Quantity Outbnd.";
+                RFStatEntryTmp."Reserved Qty. (Base)" := TransferLine."Reserved Qty. Outbnd. (Base)";
+                RFStatEntryTmp."Inv. Reserved Qty. (Base)" :=
+                  CalcLineReservedQtyonInvt2(
+                    DATABASE::"Transfer Line",0,
+                    TransferLine."Document No.",TransferLine."Line No.",0);
+                IF RFStatEntryTmp."Qty. per Unit of Measure" <> 1 THEN BEGIN
+                  RFStatEntryTmp."Inv. Reserved Quantity" :=
+                    ROUND(
+                      RFStatEntryTmp."Inv. Reserved Qty. (Base)" /
+                      RFStatEntryTmp."Qty. per Unit of Measure",
+                      0.00001);
+
+                  RFStatEntryTmp."Gross Weight (Base)" :=
+                    ROUND(
+                      TransferLine."Gross Weight" / RFStatEntryTmp."Qty. per Unit of Measure",0.00001);
+                  RFStatEntryTmp."Net Weight (Base)" :=
+                    ROUND(
+                      TransferLine."Net Weight" / RFStatEntryTmp."Qty. per Unit of Measure",0.00001);
+                  RFStatEntryTmp."Volume (Base)" :=
+                    ROUND(
+                      TransferLine."Unit Volume" / RFStatEntryTmp."Qty. per Unit of Measure",0.00001);
+                END ELSE BEGIN
+                  RFStatEntryTmp."Inv. Reserved Quantity" := RFStatEntryTmp."Inv. Reserved Qty. (Base)";
+
+                  RFStatEntryTmp."Gross Weight (Base)" := TransferLine."Gross Weight";
+                  RFStatEntryTmp."Net Weight (Base)" := TransferLine."Net Weight";
+                  RFStatEntryTmp."Volume (Base)" := TransferLine."Unit Volume";
+                END;
+                RFStatEntryTmp."Outstanding No. of Lines" := 1;
+
+                RFStatEntryTmp."Other Reserved Quantity" :=
+                  RFStatEntryTmp."Reserved Quantity" - RFStatEntryTmp."Inv. Reserved Quantity";
+                RFStatEntryTmp."Other Reserved Qty. (Base)" :=
+                  RFStatEntryTmp."Reserved Qty. (Base)" - RFStatEntryTmp."Inv. Reserved Qty. (Base)";
+
+                RFStatEntryTmp."Outstanding Inv. Quantity" :=
+                  RFStatEntryTmp."Source Outstanding Quantity" -
+                  RFStatEntryTmp."Other Reserved Quantity";
+                RFStatEntryTmp."Outstanding Inv. Qty. (Base)" :=
+                  RFStatEntryTmp."Source Outstanding Qty. (Base)" -
+                  RFStatEntryTmp."Other Reserved Qty. (Base)";
+
+                WarehouseShipmentLine.RESET;
+                WarehouseShipmentLine.SETCURRENTKEY(
+                  "Source Type","Source Subtype","Source No.","Source Line No.");
+                WarehouseShipmentLine.SETRANGE("Source Type",DATABASE::"Transfer Line");
+                WarehouseShipmentLine.SETRANGE("Source No.",TransferLine."Document No.");
+                WarehouseShipmentLine.SETRANGE("Source Line No.",TransferLine."Line No.");
+                UpdateWhseShipmentLineInfo(WarehouseShipmentLine,RFStatEntryTmp);
+
+                IF (Location."Require Pick") AND (NOT Location."Require Shipment") THEN
+                  UpdateInventoryPickLineInfo(RFStatEntryTmp,DATABASE::"Transfer Line",
+                  0,TransferLine."Document No.",TransferLine."Line No.");
+
+                IF Location."Use ACE One WMS" THEN BEGIN
+                  MovementLine.SETRANGE("Source Type",DATABASE::"Transfer Line");
+                  MovementLine.SETRANGE("Source ID",TransferLine."Document No.");
+                  MovementLine.SETRANGE("Source Reference No.",TransferLine."Line No.");
+                  RegMoveLine.SETRANGE("Source Type",DATABASE::"Transfer Line");
+                  RegMoveLine.SETRANGE("Source ID",TransferLine."Document No.");
+                  RegMoveLine.SETRANGE("Source Reference No.",TransferLine."Line No.");
+                  UpdateMovementLineInfo(MovementLine,RegMoveLine,RFStatEntryTmp);
+                END;
+
+                RFStatEntryTmp.INSERT;
+              UNTIL TransferLine.NEXT = 0;
+          END;
+        ELSE
+          EXIT(FALSE);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CalculateAvailable@1240030014(VAR RFStatEntryTmp@1240030000 : TEMPORARY Record 14002804;OutboundWhseRequestFilter@1240030002 : Record 14002863;LocationCode@1240030001 : Code[10]) : Boolean;
+    VAR
+      RFStatEntry@1240030006 : Record 14002804;
+      BinContent@1240030005 : Record 7302;
+      RFBinContentTmp@1240030010 : TEMPORARY Record 14002805;
+      RFEmployeeSetup@1240020000 : Record 14002802;
+      Location@1240020001 : Record 14;
+      TempDecimal@1240030003 : Decimal;
+      RemainingQtyNotAvailable@1240030007 : Decimal;
+      i@1240030008 : Integer;
+    BEGIN
+      RFEmployeeSetup.GetRFEmployeeSetup(USERID);
+
+      RFStatEntryTmp.RESET;
+      IF RFStatEntryTmp.FIND('-') THEN BEGIN
+        REPEAT
+          RFStatEntry := RFStatEntryTmp;
+
+          RFStatEntryTmp.RESET;
+          RFStatEntryTmp.SETCURRENTKEY("Item No.","Variant Code","Unit of Measure Code");
+          RFStatEntryTmp.SETRANGE("Item No.",RFStatEntryTmp."Item No.");
+          RFStatEntryTmp.SETRANGE("Variant Code",RFStatEntryTmp."Variant Code");
+          RFStatEntryTmp.SETRANGE("Unit of Measure Code",RFStatEntryTmp."Unit of Measure Code");
+          RFStatEntryTmp.SETFILTER("Entry No.",'>%1',RFStatEntryTmp."Entry No.");
+          IF RFStatEntryTmp.FIND('-') THEN BEGIN
+            REPEAT
+              IF (RFStatEntry."Source Outstanding Quantity" +
+                 RFStatEntryTmp."Source Outstanding Quantity") <> 0
+              THEN BEGIN
+                RFStatEntry."Unit Price" :=
+                  (RFStatEntry."Unit Price" * RFStatEntry."Source Outstanding Quantity" +
+                   RFStatEntryTmp."Unit Price" * RFStatEntryTmp."Source Outstanding Quantity") /
+                  (RFStatEntry."Source Outstanding Quantity" +
+                   RFStatEntryTmp."Source Outstanding Quantity");
+                RFStatEntry."Unit Amount" :=
+                  (RFStatEntry."Unit Amount" * RFStatEntry."Source Outstanding Quantity" +
+                   RFStatEntryTmp."Unit Amount" * RFStatEntryTmp."Source Outstanding Quantity") /
+                  (RFStatEntry."Source Outstanding Quantity" +
+                   RFStatEntryTmp."Source Outstanding Quantity");
+              END ELSE BEGIN
+                RFStatEntry."Unit Price" := 0;
+                RFStatEntry."Unit Amount" := 0;
+              END;
+
+              RFStatEntry."Source Outstanding Quantity" :=
+                RFStatEntry."Source Outstanding Quantity" +
+                RFStatEntryTmp."Source Outstanding Quantity";
+
+              RFStatEntry."Quantity (Base)" :=
+                RFStatEntry."Quantity (Base)" + RFStatEntryTmp."Quantity (Base)";
+              RFStatEntry."Outstanding Qty. (Base)" :=
+                RFStatEntry."Outstanding Qty. (Base)" + RFStatEntryTmp."Outstanding Qty. (Base)";
+              RFStatEntry."Pick Qty. (Base)" :=
+                RFStatEntry."Pick Qty. (Base)" + RFStatEntryTmp."Pick Qty. (Base)";
+              RFStatEntry."Shipment Qty. (Base)" :=
+                RFStatEntry."Shipment Qty. (Base)" + RFStatEntryTmp."Shipment Qty. (Base)";
+              RFStatEntry."Picked Qty. (Base)" :=
+                RFStatEntry."Picked Qty. (Base)" + RFStatEntryTmp."Picked Qty. (Base)";
+              RFStatEntry."Shipped Qty. (Base)" :=
+                RFStatEntry."Shipped Qty. (Base)" + RFStatEntryTmp."Shipped Qty. (Base)";
+              RFStatEntry."Source Outstanding Qty. (Base)" :=
+                RFStatEntry."Source Outstanding Qty. (Base)" +
+                RFStatEntryTmp."Source Outstanding Qty. (Base)";
+              RFStatEntry."Reserved Qty. (Base)" :=
+                RFStatEntry."Reserved Qty. (Base)" + RFStatEntryTmp."Reserved Qty. (Base)";
+              RFStatEntry."Inv. Reserved Qty. (Base)" :=
+                RFStatEntry."Inv. Reserved Qty. (Base)" + RFStatEntryTmp."Inv. Reserved Qty. (Base)";
+              RFStatEntry."Other Reserved Qty. (Base)" :=
+                RFStatEntry."Other Reserved Qty. (Base)" + RFStatEntryTmp."Other Reserved Qty. (Base)";
+              RFStatEntry."Outstanding No. of Lines" :=
+                RFStatEntry."Outstanding No. of Lines" + RFStatEntryTmp."Outstanding No. of Lines";
+              RFStatEntry."ATO Qty. (Base)" :=
+                RFStatEntry."ATO Qty. (Base)" + RFStatEntryTmp."ATO Qty. (Base)";
+              RFStatEntryTmp.DELETE;
+            UNTIL RFStatEntryTmp.NEXT = 0;
+          END;
+
+          RFStatEntryTmp := RFStatEntry;
+          RFStatEntryTmp."Qty. not Available (Base)" :=
+            RFStatEntryTmp."Outstanding Qty. (Base)";
+          RFStatEntryTmp.UpdateExpectedValues;
+          RFStatEntryTmp.MODIFY;
+
+          RFStatEntryTmp.RESET;
+          RFStatEntryTmp.GET(RFStatEntry."Entry No.");
+        UNTIL RFStatEntryTmp.NEXT = 0;
+
+        Location.GET(LocationCode);
+        GetRFSetup;
+        IF NOT RFSetup.CalculateBinTypeFilters THEN
+          EXIT(FALSE);
+        IF (RFSetup.GetPickBinTypeFilter = '') AND (Location."Directed Put-away and Pick") THEN
+          EXIT(FALSE);
+
+        RFStatEntryTmp.SETFILTER("Outstanding Qty. (Base)",'>0');
+        IF RFStatEntryTmp.FIND('-') THEN
+          REPEAT
+            CalculateBinContent(
+              RFBinContentTmp,OutboundWhseRequestFilter,LocationCode,RFStatEntryTmp."Item No.",
+              RFStatEntryTmp."Variant Code",RFStatEntryTmp."Unit of Measure Code",
+              RFSetup.GetPickBinTypeFilter,RFStatEntryTmp."Qty. not Available (Base)",
+              RFStatEntryTmp."Break Bulk Qty. (Base)",TempDecimal,TRUE);
+            RFStatEntryTmp."Available Qty. (Base)" :=
+              CalcAvailQtyAgainstReserve(RFStatEntryTmp."Item No.",RFStatEntryTmp."Variant Code",LocationCode,
+                RFStatEntryTmp."Outstanding Qty. (Base)",RFStatEntryTmp."Qty. not Available (Base)",
+                RFStatEntryTmp."Inv. Reserved Qty. (Base)");
+            RemainingQtyNotAvailable := RFStatEntryTmp."Qty. not Available (Base)";
+
+            RFStatEntryTmp."Available Qty. (Base)" :=
+              GetMultiOrderQtyApplied(RFStatEntryTmp,LocationCode,RFStatEntryTmp."Available Qty. (Base)");
+
+            IF Location."Directed Put-away and Pick" THEN BEGIN
+              FOR i := 1 TO 2 DO BEGIN
+                IF (RemainingQtyNotAvailable <> 0) AND
+                   (((RFSetup."Availabilty Bin Order" IN
+                      [RFSetup."Availabilty Bin Order"::"Pick - Receive",
+                       RFSetup."Availabilty Bin Order"::"Pick - Receive - Other"]) AND
+                     (i = 1)) OR
+                    ((RFSetup."Availabilty Bin Order" IN
+                      [RFSetup."Availabilty Bin Order"::"Pick - Other - Receive"]) AND
+                     (i = 2)))
+                THEN BEGIN
+                  RFStatEntryTmp."Receive Qty. not Avail. (Base)" := RemainingQtyNotAvailable;
+                  CalculateBinContent(
+                    RFBinContentTmp,OutboundWhseRequestFilter,LocationCode,RFStatEntryTmp."Item No.",
+                    RFStatEntryTmp."Variant Code",RFStatEntryTmp."Unit of Measure Code",
+                    RFSetup.GetReceiveBinTypeFilter,RFStatEntryTmp."Receive Qty. not Avail. (Base)",
+                    RFStatEntryTmp."Receive Break Bulk Qty. (Base)",
+                    RFStatEntryTmp."Receive Pick Qty. (Base)",FALSE);
+                  RFStatEntryTmp."Receive Available Qty. (Base)" :=
+                    RemainingQtyNotAvailable - RFStatEntryTmp."Receive Qty. not Avail. (Base)";
+                  RemainingQtyNotAvailable := RFStatEntryTmp."Receive Qty. not Avail. (Base)";
+                END;
+
+                IF (RemainingQtyNotAvailable <> 0) AND
+                   (((RFSetup."Availabilty Bin Order" IN
+                      [RFSetup."Availabilty Bin Order"::"Pick - Other",
+                       RFSetup."Availabilty Bin Order"::"Pick - Other - Receive"]) AND
+                     (i = 1)) OR
+                    ((RFSetup."Availabilty Bin Order" IN
+                      [RFSetup."Availabilty Bin Order"::"Pick - Receive - Other"]) AND
+                     (i = 2)))
+                THEN BEGIN
+                  RFStatEntryTmp."Other Qty. not Avail. (Base)" := RemainingQtyNotAvailable;
+                  CalculateBinContent(
+                    RFBinContentTmp,OutboundWhseRequestFilter,LocationCode,RFStatEntryTmp."Item No.",
+                    RFStatEntryTmp."Variant Code",RFStatEntryTmp."Unit of Measure Code",
+                    RFSetup.GetOtherBinTypeFilter,RFStatEntryTmp."Other Qty. not Avail. (Base)",
+                    RFStatEntryTmp."Other Break Bulk Qty. (Base)",
+                    RFStatEntryTmp."Other Break Bulk Quantity",FALSE);
+                  RFStatEntryTmp."Other Available Qty. (Base)" :=
+                    RemainingQtyNotAvailable - RFStatEntryTmp."Other Qty. not Avail. (Base)";
+                  RemainingQtyNotAvailable := RFStatEntryTmp."Other Qty. not Avail. (Base)";
+                END;
+              END;
+            END;
+
+            RFStatEntryTmp."Total Available Qty. (Base)" :=
+              RFStatEntryTmp."Available Qty. (Base)" +
+              RFStatEntryTmp."Receive Available Qty. (Base)" +
+              RFStatEntryTmp."Other Available Qty. (Base)";
+            RFStatEntryTmp."Total Break Bulk Qty. (Base)" :=
+              RFStatEntryTmp."Break Bulk Qty. (Base)" +
+              RFStatEntryTmp."Receive Break Bulk Qty. (Base)" +
+              RFStatEntryTmp."Other Break Bulk Qty. (Base)";
+
+            IF RFEmployeeSetup."Receive Qty not Available" THEN BEGIN
+              RFStatEntryTmp."Total Available Qty. (Base)" :=
+                RFStatEntryTmp."Total Available Qty. (Base)" -
+                RFStatEntryTmp."Receive Available Qty. (Base)";
+              RFStatEntryTmp."Total Break Bulk Qty. (Base)" :=
+                RFStatEntryTmp."Total Break Bulk Qty. (Base)" -
+                RFStatEntryTmp."Receive Break Bulk Qty. (Base)";
+            END;
+
+            RFStatEntryTmp.MODIFY;
+            PrepMultiOrderQtyApplied(RFStatEntryTmp);
+          UNTIL RFStatEntryTmp.NEXT = 0;
+
+        RFStatEntryTmp.SETRANGE("Outstanding Qty. (Base)");
+        RFStatEntryTmp.FIND('-');
+        REPEAT
+          RFStatEntryTmp."Pick or Picked Qty. (Base)" :=
+            RFStatEntryTmp."Pick Qty. (Base)" + RFStatEntryTmp."Picked Qty. (Base)" -
+            RFStatEntryTmp."Shipped Qty. (Base)";
+
+          RFStatEntryTmp.UpdateQtyFromQtyBase;
+          RFStatEntryTmp.UpdatePricesAndAmounts;
+
+          RFStatEntryTmp.MODIFY;
+        UNTIL RFStatEntryTmp.NEXT = 0;
+
+        EXIT(TRUE);
+      END ELSE
+        EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE CalculateBinContent@1240030019(VAR RFBinContentTmp@1240030000 : Record 14002805;OutboundWhseRequestFilter@1240030009 : Record 14002863;LocationCode@1240030005 : Code[10];ItemNo@1240030002 : Code[20];VariantCode@1240030003 : Code[10];UnitOfMeasureCode@1240030004 : Code[10];BinTypeFilter@1240030001 : Text[250];VAR QtyNotAvailableBase@1240030007 : Decimal;VAR BreakBulkQtyBase@1240030008 : Decimal;VAR PickQtyBase@1240030012 : Decimal;SubtractPick@1240030011 : Boolean);
+    VAR
+      BinContent@1240030006 : Record 7302;
+      Location@1240020000 : Record 14;
+      BinContent2@1000000000 : Record 7302;
+    BEGIN
+      Location.GET(LocationCode);
+
+      IF NOT Location."Bin Mandatory" THEN BEGIN
+        CalculateLocationContent(OutboundWhseRequestFilter,LocationCode,ItemNo,VariantCode,
+          UnitOfMeasureCode,QtyNotAvailableBase,BreakBulkQtyBase,PickQtyBase,SubtractPick);
+        EXIT;
+      END;
+
+      BinContent.RESET;
+      //>>RS1.00
+      WhseSetup.GET;
+      IF WhseSetup."Enable Bin Ranking for Picks" THEN
+        BinContent.SETCURRENTKEY("Location Code","Item No.","Variant Code","Unit of Measure Code","Bin Ranking") //RS1.00 Added
+      ELSE
+        BinContent.SETCURRENTKEY("Location Code","Item No.","Variant Code"); //RS1.00 Original
+      //<<RS1.00
+      BinContent.SETRANGE("Location Code",LocationCode);
+      BinContent.SETRANGE("Item No.",ItemNo);
+      BinContent.SETRANGE("Variant Code",VariantCode);
+      BinContent.SETRANGE("Unit of Measure Code",UnitOfMeasureCode);
+      //BinContent.SETRANGE(Fixed,TRUE);
+
+      IF NOT Location."Use ACE One WMS" THEN BEGIN
+        IF Location."Directed Put-away and Pick" THEN
+          BinContent.SETFILTER("Bin Type Code",BinTypeFilter);
+      END ELSE
+        BinContent.SETFILTER("Bin Code",'<>%1',Location."Ship Bin (ACE One WMS)");
+
+      IF OutboundWhseRequestFilter."Pick-from Zone Filter" <> '' THEN
+        BinContent.SETFILTER("Zone Code",OutboundWhseRequestFilter."Pick-from Zone Filter");
+      IF OutboundWhseRequestFilter."Pick-from Bin Filter" <> '' THEN
+        BinContent.SETFILTER("Bin Code",OutboundWhseRequestFilter."Pick-from Bin Filter");
+      BinContent.SETFILTER("Block Movement",'%1|%2',
+        BinContent."Block Movement"::" ",BinContent."Block Movement"::Inbound);
+
+      //>>RS1.00 - Test if we have quantities in that bin.
+      IF TestBinRanking(BinContent, Location,ItemNo) THEN
+        BinContent.SETFILTER("Bin Ranking", '>=%1', Location."Bulk Pick Ranking (>=)");
+      BinContent.ASCENDING(FALSE);
+      //<<RS1.00
+      IF BinContent.FIND('-') THEN
+        REPEAT
+          IF NOT RFBinContentTmp.GET(
+                   BinContent."Location Code",BinContent."Bin Code",BinContent."Item No.",
+                   BinContent."Variant Code",BinContent."Unit of Measure Code")
+          THEN BEGIN
+            BinContent.CALCFIELDS(Quantity,"Pick Qty.","Neg. Adjmt. Qty.","Movement Take Qty.");
+            RFBinContentTmp.TRANSFERFIELDS(BinContent);
+            IF SubtractPick THEN
+              RFBinContentTmp.Quantity :=
+                BinContent."Qty. per Unit of Measure" *
+                (BinContent.Quantity - BinContent."Pick Qty." - BinContent."Neg. Adjmt. Qty." -
+                   BinContent."Movement Take Qty.")
+            ELSE BEGIN
+              RFBinContentTmp.Quantity :=
+                BinContent."Qty. per Unit of Measure" *
+                (BinContent.Quantity - BinContent."Neg. Adjmt. Qty.");
+              RFBinContentTmp."Pick Qty." :=
+                BinContent."Qty. per Unit of Measure" * (BinContent."Pick Qty." + BinContent."Movement Take Qty.");
+            END;
+            RFBinContentTmp.INSERT;
+          END;
+
+          IF RFBinContentTmp.Quantity > 0 THEN BEGIN
+            IF QtyNotAvailableBase > RFBinContentTmp.Quantity THEN BEGIN
+              IF NOT SubtractPick THEN BEGIN
+                PickQtyBase := PickQtyBase + RFBinContentTmp."Pick Qty.";
+                RFBinContentTmp."Pick Qty." := 0;
+              END;
+
+              QtyNotAvailableBase := QtyNotAvailableBase - RFBinContentTmp.Quantity;
+              RFBinContentTmp.Quantity := 0;
+            END ELSE BEGIN
+              IF NOT SubtractPick THEN BEGIN
+                IF QtyNotAvailableBase > RFBinContentTmp."Pick Qty." THEN BEGIN
+                  PickQtyBase := PickQtyBase + RFBinContentTmp."Pick Qty.";
+                  RFBinContentTmp."Pick Qty." := 0;
+                END ELSE BEGIN
+                  PickQtyBase := PickQtyBase + QtyNotAvailableBase;
+                  RFBinContentTmp."Pick Qty." := RFBinContentTmp."Pick Qty.";
+                END;
+              END;
+
+              RFBinContentTmp.Quantity := RFBinContentTmp.Quantity - QtyNotAvailableBase;
+              QtyNotAvailableBase := 0;
+            END;
+
+            RFBinContentTmp.MODIFY;
+          END;
+        UNTIL (BinContent.NEXT = 0) OR (QtyNotAvailableBase <= 0);
+
+      IF QtyNotAvailableBase > 0 THEN BEGIN
+        BinContent.SETFILTER("Unit of Measure Code",'<>%1',UnitOfMeasureCode);
+        IF BinContent.FIND('-') THEN
+          REPEAT
+            IF NOT RFBinContentTmp.GET(
+                     BinContent."Location Code",BinContent."Bin Code",BinContent."Item No.",
+                     BinContent."Variant Code",BinContent."Unit of Measure Code")
+            THEN BEGIN
+              BinContent.CALCFIELDS(Quantity,"Pick Qty.","Neg. Adjmt. Qty.");
+              RFBinContentTmp.TRANSFERFIELDS(BinContent);
+              IF SubtractPick THEN
+                RFBinContentTmp.Quantity :=
+                  BinContent."Qty. per Unit of Measure" *
+                  (BinContent.Quantity - BinContent."Pick Qty." - BinContent."Neg. Adjmt. Qty.")
+             ELSE BEGIN
+                RFBinContentTmp.Quantity :=
+                  BinContent."Qty. per Unit of Measure" *
+                  (BinContent.Quantity - BinContent."Neg. Adjmt. Qty.");
+                RFBinContentTmp."Pick Qty." :=
+                  BinContent."Qty. per Unit of Measure" * BinContent."Pick Qty.";
+              END;
+              RFBinContentTmp.INSERT;
+            END;
+
+            IF RFBinContentTmp.Quantity > 0 THEN BEGIN
+              IF QtyNotAvailableBase > RFBinContentTmp.Quantity THEN BEGIN
+                BreakBulkQtyBase := BreakBulkQtyBase + RFBinContentTmp.Quantity;
+
+                IF NOT SubtractPick THEN BEGIN
+                  PickQtyBase := PickQtyBase + RFBinContentTmp."Pick Qty.";
+                  RFBinContentTmp."Pick Qty." := 0;
+                END;
+
+                QtyNotAvailableBase := QtyNotAvailableBase - RFBinContentTmp.Quantity;
+                RFBinContentTmp.Quantity := 0;
+              END ELSE BEGIN
+                BreakBulkQtyBase := BreakBulkQtyBase + QtyNotAvailableBase;
+
+                IF NOT SubtractPick THEN BEGIN
+                  IF QtyNotAvailableBase > RFBinContentTmp."Pick Qty." THEN BEGIN
+                    PickQtyBase := PickQtyBase + RFBinContentTmp."Pick Qty.";
+                    RFBinContentTmp."Pick Qty." := 0;
+                  END ELSE BEGIN
+                    PickQtyBase := PickQtyBase + QtyNotAvailableBase;
+                    RFBinContentTmp."Pick Qty." := RFBinContentTmp."Pick Qty." - QtyNotAvailableBase;
+                  END;
+                END;
+
+                RFBinContentTmp.Quantity := RFBinContentTmp.Quantity - QtyNotAvailableBase;
+                QtyNotAvailableBase := 0;
+              END;
+
+              RFBinContentTmp.MODIFY;
+            END;
+          UNTIL (BinContent.NEXT = 0) OR (QtyNotAvailableBase <= 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE CalculateLocationContent@1240020009(OutboundWhseRequestFilter@1240020009 : Record 14002863;LocationCode@1240020008 : Code[10];ItemNo@1240020007 : Code[20];VariantCode@1240020006 : Code[10];UnitOfMeasureCode@1240020005 : Code[10];VAR QtyNotAvailableBase@1240020003 : Decimal;VAR BreakBulkQtyBase@1240020002 : Decimal;VAR PickQtyBase@1240020001 : Decimal;SubtractPick@1240020000 : Boolean);
+    VAR
+      Location@1240020004 : Record 14;
+      ItemLedgerEntry@1240020010 : Record 32;
+      WarehouseActivityLine@1240020011 : Record 5767;
+      WarehouseShipmentLine@1240020012 : Record 7321;
+      QtyOnPickBase@1240020013 : Decimal;
+      QtyOnShipmentBase@1240020014 : Decimal;
+      QtyOutstandingBase@1240020015 : Decimal;
+      QtyAvailableBase@1240020016 : Decimal;
+      QtyNotInProcessBase@1240020017 : Decimal;
+    BEGIN
+      Location.GET(LocationCode);
+      IF Location."Bin Mandatory" THEN
+        EXIT;
+
+      QtyOutstandingBase := QtyNotAvailableBase;
+
+      CLEAR(QtyNotInProcessBase);
+      QtyNotInProcessBase := CalcLocationInvBalance(LocationCode,ItemNo,VariantCode) -
+        (CalcExistingPickQty(LocationCode,ItemNo,VariantCode) +
+        CalcExistingShipQty(LocationCode,ItemNo,VariantCode));
+
+      IF QtyOutstandingBase > QtyNotInProcessBase THEN
+        QtyAvailableBase := QtyNotInProcessBase
+      ELSE
+        QtyAvailableBase := QtyOutstandingBase;
+
+      QtyNotAvailableBase := QtyOutstandingBase - QtyAvailableBase;
+    END;
+
+    PROCEDURE GetRFStatisticEntries@1240030012(VAR RFStatEntry@1240030001 : Record 14002804);
+    BEGIN
+      RFStatEntry.DELETEALL;
+      IF RFStatEntryGlobalTmp.FIND('-') THEN
+        REPEAT
+          RFStatEntry := RFStatEntryGlobalTmp;
+          RFStatEntry.INSERT;
+        UNTIL RFStatEntryGlobalTmp.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateStatusText@1240030011(CurrentWarehouseRequest@1240030002 : Record 5765;VAR RFStatEntryTotal@1240030000 : Record 14002804) : Text[250];
+    VAR
+      WarehouseShipmentHeader@1240020000 : Record 7320;
+    BEGIN
+      IF (CurrentWarehouseRequest."Warehouse Shipment No." = '') OR
+         (CurrentWarehouseRequest."Put-away / Pick No." = '')
+      THEN
+        CurrentWarehouseRequest.CALCFIELDS(
+          "Warehouse Shipment No.","Put-away / Pick No.","Wave Pick Whse. Request Exists");
+
+      CASE TRUE OF
+        CurrentWarehouseRequest."Put-away / Pick No." <> '':
+          EXIT(Text006);
+        CurrentWarehouseRequest."Pick Movement" <> '':
+          EXIT(Text006);
+        CurrentWarehouseRequest."Warehouse Shipment No." <> '':
+          BEGIN
+            IF WarehouseShipmentHeader.GET(CurrentWarehouseRequest."Warehouse Shipment No.") THEN
+              IF WarehouseShipmentHeader."Document Status" = WarehouseShipmentHeader."Document Status"::" " THEN
+                EXIT(Text007)
+              ELSE
+                EXIT(STRSUBSTNO(FORMAT(WarehouseShipmentHeader."Document Status")));
+          END;
+        CurrentWarehouseRequest."Wave Pick Whse. Request Exists":
+          EXIT(Text014);
+        RFStatEntryTotal."Outstanding Qty. (Base)" = 0:
+          EXIT(Text008);
+        RFStatEntryTotal."Available Qty. (Base)" = 0:
+          EXIT(Text009);
+        (RFStatEntryTotal."Available Qty. (Base)" <
+         RFStatEntryTotal."Outstanding Qty. (Base)") AND
+        (RFStatEntryTotal."Break Bulk Qty. (Base)" <> 0):
+          EXIT(
+            STRSUBSTNO(
+              Text010,RFStatEntryTotal."Available Qty. (Base)",RFStatEntryTotal."Outstanding Qty. (Base)"));
+        (RFStatEntryTotal."Available Qty. (Base)" <
+         RFStatEntryTotal."Outstanding Qty. (Base)"):
+          EXIT(
+            STRSUBSTNO(
+              Text011,RFStatEntryTotal."Available Qty. (Base)",RFStatEntryTotal."Outstanding Qty. (Base)"));
+        (RFStatEntryTotal."Available Qty. (Base)" =
+         RFStatEntryTotal."Outstanding Qty. (Base)") AND
+        (RFStatEntryTotal."Break Bulk Qty. (Base)" <> 0):
+          EXIT(Text012);
+        ELSE
+          EXIT(Text013);
+      END;
+    END;
+
+    PROCEDURE UpdateMovementLineInfo@1240020000(VAR MovementLine@1240020000 : Record 14099002;VAR RegMoveLine@1240020002 : Record 14099004;VAR RFStatEntry@1240020001 : Record 14002804);
+    BEGIN
+      RFStatEntry."Pick Qty. (Base)" := 0;
+      RFStatEntry."Shipment Qty. (Base)" := 0;
+      RFStatEntry."Picked Qty. (Base)" := 0;
+      RFStatEntry."Shipped Qty. (Base)" := 0;
+
+      RegMoveLine.SETRANGE("Action Type",RegMoveLine."Action Type"::Take);
+      IF RegMoveLine.FINDSET THEN
+        REPEAT
+          RFStatEntry."Picked Qty. (Base)" :=
+            RFStatEntry."Picked Qty. (Base)" + RegMoveLine."Move Qty. (Base)";
+        UNTIL RegMoveLine.NEXT = 0;
+
+      MovementLine.SETRANGE("Action Type",MovementLine."Action Type"::Take);
+      IF MovementLine.FINDSET THEN
+        REPEAT
+          RFStatEntry."Pick Qty. (Base)" :=
+            RFStatEntry."Pick Qty. (Base)" + MovementLine."Qty. (Base)";
+        UNTIL MovementLine.NEXT = 0;
+
+      RFStatEntry."Outstanding Qty. (Base)" :=
+        RFStatEntry."Source Outstanding Qty. (Base)" -
+        (RFStatEntry."Pick Qty. (Base)" + RFStatEntry."Picked Qty. (Base)" -
+         RFStatEntry."Shipped Qty. (Base)");
+    END;
+
+    PROCEDURE UpdateWhseShipmentLineInfo@1240030017(VAR WarehouseShipmentLine@1240030003 : Record 7321;VAR RFStatEntry@1240030002 : Record 14002804);
+    BEGIN
+      RFStatEntry."Pick Qty. (Base)" := 0;
+      RFStatEntry."Shipment Qty. (Base)" := 0;
+      RFStatEntry."Picked Qty. (Base)" := 0;
+      RFStatEntry."Shipped Qty. (Base)" := 0;
+
+      IF WarehouseShipmentLine.FIND('-') THEN
+        REPEAT
+          WarehouseShipmentLine.CALCFIELDS("Pick Qty.","Pick Qty. (Base)");
+          RFStatEntry."Pick Qty. (Base)" :=
+            RFStatEntry."Pick Qty. (Base)" + WarehouseShipmentLine."Pick Qty. (Base)";
+          RFStatEntry."Shipment Qty. (Base)" :=
+            RFStatEntry."Shipment Qty. (Base)" + WarehouseShipmentLine."Qty. Outstanding (Base)";
+          RFStatEntry."Picked Qty. (Base)" :=
+            RFStatEntry."Picked Qty. (Base)" + WarehouseShipmentLine."Qty. Picked (Base)";
+          RFStatEntry."Shipped Qty. (Base)" :=
+            RFStatEntry."Shipped Qty. (Base)" + WarehouseShipmentLine."Qty. Shipped (Base)";
+        UNTIL WarehouseShipmentLine.NEXT = 0;
+
+      RFStatEntry."Outstanding Qty. (Base)" :=
+        RFStatEntry."Source Outstanding Qty. (Base)" -
+        (RFStatEntry."Pick Qty. (Base)" + RFStatEntry."Picked Qty. (Base)" -
+         RFStatEntry."Shipped Qty. (Base)");
+    END;
+
+    PROCEDURE UpdateInventoryPickLineInfo@1240020026(VAR RFStatEntry@1240020000 : Record 14002804;SourceType@1240020004 : Integer;SourceSubType@1240020003 : Option;SourceNo@1240020002 : Code[20];SourceLineNo@1240020001 : Integer);
+    VAR
+      WarehouseActivityLine@1240020005 : Record 5767;
+    BEGIN
+      RFStatEntry."Pick Qty. (Base)" := 0;
+      RFStatEntry."Shipment Qty. (Base)" := 0;
+      RFStatEntry."Picked Qty. (Base)" := 0;
+      RFStatEntry."Shipped Qty. (Base)" := 0;
+
+      WarehouseActivityLine.RESET;
+      WarehouseActivityLine.SETCURRENTKEY(
+        "Source Type","Source Subtype","Source No.","Source Line No.","Source Subline No.",
+        "Unit of Measure Code","Action Type","Breakbulk No.","Original Breakbulk",
+        "Activity Type","Assemble to Order");
+      WarehouseActivityLine.SETRANGE("Source Type",SourceType);
+      IF SourceType <> DATABASE::"Transfer Line" THEN
+        WarehouseActivityLine.SETRANGE("Source Subtype",SourceSubType);
+      WarehouseActivityLine.SETRANGE("Source No.",SourceNo);
+      WarehouseActivityLine.SETRANGE("Source Line No.",SourceLineNo);
+      IF WarehouseActivityLine.FIND('-') THEN
+        REPEAT
+          RFStatEntry."Pick Qty. (Base)" += WarehouseActivityLine."Qty. Outstanding (Base)";
+        UNTIL WarehouseActivityLine.NEXT = 0;
+
+      RFStatEntry."Outstanding Qty. (Base)" :=
+        RFStatEntry."Source Outstanding Qty. (Base)" - RFStatEntry."Pick Qty. (Base)";
+    END;
+
+    PROCEDURE CalcSalesHeaderWhseStatistics@1240040001(SalesHeader@1240040000 : Record 36;VAR RFStatEntryTotal@1240040005 : Record 14002804;VAR StatusText@1240040001 : Text[250];ShowStatistics@1240040003 : Boolean);
+    VAR
+      SalesLine@1240040007 : Record 37;
+      WarehouseRequest@1240040006 : Record 5765;
+      WarehouseRequestStatistics@1240040008 : Page 14002806;
+      CalculatedCorrectly@1240040002 : Boolean;
+    BEGIN
+      IF SalesHeader."Document Type" <> SalesHeader."Document Type"::Order THEN BEGIN
+        CLEAR(RFStatEntryTotal);
+        StatusText := Text019;
+
+        EXIT;
+      END;
+
+      SalesLine.RESET;
+      SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+      SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+      SalesLine.SETFILTER("No.",'<>%1','');
+      SalesLine.SETFILTER("Location Code",'<>%1',SalesHeader."Location Code");
+      IF SalesLine.FIND('-') THEN BEGIN
+        CLEAR(RFStatEntryTotal);
+        StatusText := Text020;
+
+        EXIT;
+      END;
+
+      IF WarehouseRequest.GET(
+           WarehouseRequest.Type::Outbound,SalesHeader."Location Code",37,
+           SalesHeader."Document Type",SalesHeader."No.")
+      THEN BEGIN
+        GetRFSetup;
+
+        IF ShowStatistics THEN BEGIN
+          WarehouseRequestStatistics.SetWarehouseRequest(WarehouseRequest,OutboundWhseRequestFilterDef);
+          WarehouseRequestStatistics.RUNMODAL;
+        END ELSE BEGIN
+          CalculatedCorrectly :=
+            CalculateStatisticsSingle(WarehouseRequest,RFStatEntryTotal,OutboundWhseRequestFilterDef);
+
+          IF CalculatedCorrectly THEN
+            StatusText := UpdateStatusText(WarehouseRequest,RFStatEntryTotal)
+          ELSE
+            StatusText := Text021;
+        END;
+      END ELSE BEGIN
+        CLEAR(RFStatEntryTotal);
+        StatusText := Text022;
+      END;
+    END;
+
+    PROCEDURE CalcPurchHeaderWhseStatistics@1240040002(PurchHeader@1240040000 : Record 38;VAR RFStatEntryTotal@1240040005 : Record 14002804;VAR StatusText@1240040001 : Text[250];ShowStatistics@1240040003 : Boolean);
+    VAR
+      PurchLine@1240040007 : Record 39;
+      WarehouseRequest@1240040006 : Record 5765;
+      WarehouseRequestStatistics@1240040008 : Page 14002806;
+      CalculatedCorrectly@1240040002 : Boolean;
+    BEGIN
+      IF PurchHeader."Document Type" <> PurchHeader."Document Type"::"Return Order" THEN BEGIN
+        CLEAR(RFStatEntryTotal);
+        StatusText := Text023;
+
+        EXIT;
+      END;
+
+      PurchLine.RESET;
+      PurchLine.SETRANGE("Document Type",PurchHeader."Document Type");
+      PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+      PurchLine.SETRANGE(Type,PurchLine.Type::Item);
+      PurchLine.SETFILTER("No.",'<>%1','');
+      PurchLine.SETFILTER("Location Code",'<>%1',PurchHeader."Location Code");
+      IF PurchLine.FIND('-') THEN BEGIN
+        CLEAR(RFStatEntryTotal);
+        StatusText := Text020;
+
+        EXIT;
+      END;
+
+      IF WarehouseRequest.GET(
+           WarehouseRequest.Type::Outbound,PurchHeader."Location Code",39,
+           PurchHeader."Document Type",PurchHeader."No.")
+      THEN BEGIN
+        GetRFSetup;
+
+        IF ShowStatistics THEN BEGIN
+          WarehouseRequestStatistics.SetWarehouseRequest(WarehouseRequest,OutboundWhseRequestFilterDef);
+          WarehouseRequestStatistics.RUNMODAL;
+        END ELSE BEGIN
+          CalculatedCorrectly :=
+            CalculateStatisticsSingle(WarehouseRequest,RFStatEntryTotal,OutboundWhseRequestFilterDef);
+
+          IF CalculatedCorrectly THEN
+            StatusText := UpdateStatusText(WarehouseRequest,RFStatEntryTotal)
+          ELSE
+            StatusText := Text021;
+        END;
+      END ELSE BEGIN
+        CLEAR(RFStatEntryTotal);
+        StatusText := Text022;
+      END;
+    END;
+
+    PROCEDURE CalcTransHeaderWhseStatistics@1240040004(TransferHeader@1240040000 : Record 5740;VAR RFStatEntryTotal@1240040005 : Record 14002804;VAR StatusText@1240040001 : Text[250];ShowStatistics@1240040003 : Boolean);
+    VAR
+      WarehouseRequest@1240040006 : Record 5765;
+      WarehouseRequestStatistics@1240040007 : Page 14002806;
+      CalculatedCorrectly@1240040002 : Boolean;
+    BEGIN
+      IF WarehouseRequest.GET(
+           WarehouseRequest.Type::Outbound,TransferHeader."Transfer-from Code",5741,
+           0,TransferHeader."No.")
+      THEN BEGIN
+        GetRFSetup;
+
+        IF ShowStatistics THEN BEGIN
+          WarehouseRequestStatistics.SetWarehouseRequest(WarehouseRequest,OutboundWhseRequestFilterDef);
+          WarehouseRequestStatistics.RUNMODAL;
+        END ELSE BEGIN
+          CalculatedCorrectly :=
+            CalculateStatisticsSingle(WarehouseRequest,RFStatEntryTotal,OutboundWhseRequestFilterDef);
+
+          IF CalculatedCorrectly THEN
+            StatusText := UpdateStatusText(WarehouseRequest,RFStatEntryTotal)
+          ELSE
+            StatusText := Text021;
+        END;
+      END ELSE BEGIN
+        CLEAR(RFStatEntryTotal);
+        StatusText := Text022;
+      END;
+    END;
+
+    PROCEDURE GetRFSetup@1240040000();
+    BEGIN
+      IF RFSetupRetrieved THEN
+        EXIT;
+
+      RFSetup.GET;
+      RFSetupRetrieved := TRUE;
+
+      IF RFSetup."Default Outbound WhseReqFilter" <> '' THEN
+        OutboundWhseRequestFilterDef.GET(RFSetup."Default Outbound WhseReqFilter")
+      ELSE
+        OutboundWhseRequestFilterDef.INIT;
+    END;
+
+    PROCEDURE CreateReplenishment@1240030007(WarehouseRequest@1240030012 : Record 5765;RFStatEntryTotal@1240030011 : Record 14002804;VAR RFStatEntryTmp@1240030010 : TEMPORARY Record 14002804);
+    VAR
+      WhseWorksheetTemplate@1240030009 : Record 7328;
+      WhseWorksheetName@1240030008 : Record 7327;
+      WhseWorksheetLine@1240030007 : Record 7326;
+      Location@1240030006 : Record 14;
+      BinContent@1240030005 : Record 7302;
+      BinContent2@1240020002 : Record 7302;
+      BinType@1240030004 : Record 7303;
+      RFEmployeeSetup@1240020000 : Record 14002802;
+      MovementWorksheet@1240030003 : Page 7351;
+      ReplenishBinContent@1240030002 : Report 7300;
+      TemplateFilter@1240030001 : Text[250];
+      BinTypeFilter@1240030000 : Text[250];
+      MaxQty@1240020001 : Decimal;
+    BEGIN
+      IF RFStatEntryTotal."Other Available Qty. (Base)" = 0 THEN
+        ERROR(Text016);
+
+      WhseWorksheetTemplate.RESET;
+      WhseWorksheetTemplate.SETRANGE(Type,WhseWorksheetTemplate.Type::Movement);
+      WhseWorksheetTemplate.FIND('-');
+      TemplateFilter := WhseWorksheetTemplate.Name;
+      WHILE (WhseWorksheetTemplate.NEXT <> 0) AND
+            (STRLEN(TemplateFilter) + 1 + STRLEN(WhseWorksheetTemplate.Name) <= MAXSTRLEN(TemplateFilter))
+      DO
+        TemplateFilter := TemplateFilter + '|' + WhseWorksheetTemplate.Name;
+
+      WhseWorksheetName.RESET;
+      WhseWorksheetName.SETFILTER("Worksheet Template Name",TemplateFilter);
+      WhseWorksheetName.SETRANGE("Location Code",WarehouseRequest."Location Code");
+      IF NOT (PAGE.RUNMODAL(PAGE::"RF Whse. Worksheet Names",WhseWorksheetName) = ACTION::LookupOK) THEN
+        EXIT;
+
+      WhseWorksheetName.TESTFIELD("Location Code",WarehouseRequest."Location Code");
+      WhseWorksheetTemplate.GET(WhseWorksheetName."Worksheet Template Name");
+      WhseWorksheetTemplate.TESTFIELD(Type,WhseWorksheetTemplate.Type::Movement);
+
+      WhseWorksheetLine.RESET;
+      WhseWorksheetLine.SETRANGE("Worksheet Template Name",WhseWorksheetName."Worksheet Template Name");
+      WhseWorksheetLine.SETRANGE(Name,WhseWorksheetName.Name);
+      WhseWorksheetLine.SETRANGE("Location Code",WhseWorksheetName."Location Code");
+      IF WhseWorksheetLine.FIND('-') THEN
+        IF CONFIRM(Text017,FALSE) THEN
+          WhseWorksheetLine.DELETEALL(TRUE);
+
+      BinType.RESET;
+      BinType.SETRANGE(Pick,TRUE);
+      BinType.FIND('-');
+      BinTypeFilter := BinType.Code;
+      WHILE (BinType.NEXT <> 0) AND
+            (STRLEN(BinTypeFilter) + 1 + STRLEN(BinType.Code) <= MAXSTRLEN(BinTypeFilter))
+      DO
+        BinTypeFilter := BinTypeFilter + '|' + BinType.Code;
+
+      Location.GET(WarehouseRequest."Location Code");
+
+      RFStatEntryTmp.RESET;
+      RFStatEntryTmp.SETFILTER("Other Available Qty. (Base)",'<>0');
+      IF RFStatEntryTmp.FIND('-') THEN
+        REPEAT
+          BinContent.RESET;
+          BinContent.SETRANGE("Location Code",RFStatEntryTmp."Location Code");
+          BinContent.SETRANGE("Item No.",RFStatEntryTmp."Item No.");
+          BinContent.SETRANGE("Variant Code",RFStatEntryTmp."Variant Code");
+          BinContent.SETRANGE("Unit of Measure Code",RFStatEntryTmp."Unit of Measure Code");
+          IF NOT Location."Use ACE One WMS" THEN
+            BinContent.SETFILTER("Bin Type Code",BinTypeFilter);
+
+          IF BinContent.FIND('-') THEN BEGIN
+            BinContent.SETRANGE(Fixed);
+            IF NOT Location."Use ACE One WMS" THEN
+              BinContent.SETRANGE("Bin Type Code");
+
+            CLEAR(ReplenishBinContent);
+            ReplenishBinContent.SETTABLEVIEW(BinContent);
+            ReplenishBinContent.InitializeRequest(
+              WhseWorksheetName."Worksheet Template Name",WhseWorksheetName.Name,
+              Location.Code,Location."Allow Breakbulk",TRUE,FALSE);
+            ReplenishBinContent.USEREQUESTPAGE(FALSE);
+            ReplenishBinContent.RUNMODAL;
+          END;
+        UNTIL RFStatEntryTmp.NEXT = 0;
+      RFStatEntryTmp.RESET;
+
+      WhseWorksheetLine.RESET;
+      WhseWorksheetLine.SETRANGE("Worksheet Template Name",WhseWorksheetName."Worksheet Template Name");
+      WhseWorksheetLine.SETRANGE(Name,WhseWorksheetName.Name);
+      WhseWorksheetLine.SETRANGE("Location Code",WhseWorksheetName."Location Code");
+      IF NOT WhseWorksheetLine.FIND('-') THEN
+        ERROR(Text016)
+      ELSE BEGIN
+        RFEmployeeSetup.GetRFEmployeeSetup(USERID);
+        IF RFEmployeeSetup."Replenishment Tolerance" <> 0 THEN BEGIN
+          RFStatEntryTmp.SETCURRENTKEY("Item No.","Variant Code","Unit of Measure Code");
+          REPEAT
+            RFStatEntryTmp.SETRANGE("Item No.",WhseWorksheetLine."Item No.");
+            RFStatEntryTmp.SETRANGE("Variant Code",WhseWorksheetLine."Variant Code");
+            RFStatEntryTmp.SETRANGE("Unit of Measure Code",WhseWorksheetLine."Unit of Measure Code");
+            IF RFStatEntryTmp.FINDFIRST THEN BEGIN
+              IF RFStatEntryTmp.Quantity > WhseWorksheetLine.Quantity THEN BEGIN
+                BinContent.SETRANGE("Location Code",WhseWorksheetLine."Location Code");
+                BinContent.SETRANGE("Bin Code",WhseWorksheetLine."To Bin Code");
+                BinContent.SETRANGE("Item No.",WhseWorksheetLine."Item No.");
+                BinContent.SETRANGE("Variant Code",WhseWorksheetLine."Variant Code");
+                BinContent.SETRANGE("Unit of Measure Code",WhseWorksheetLine."Unit of Measure Code");
+                BinContent.SETRANGE(Fixed,TRUE);
+                IF BinContent.FINDFIRST THEN BEGIN
+                  MaxQty := BinContent."Max. Qty." * (1 + (RFEmployeeSetup."Replenishment Tolerance"/100));
+                  MaxQty := ROUND(MaxQty,1);
+                  BinContent2.SETRANGE("Location Code",WhseWorksheetLine."Location Code");
+                  BinContent2.SETRANGE("Bin Code",WhseWorksheetLine."From Bin Code");
+                  BinContent2.SETRANGE("Item No.",WhseWorksheetLine."Item No.");
+                  BinContent2.SETRANGE("Variant Code",WhseWorksheetLine."Variant Code");
+                  BinContent2.SETRANGE("Unit of Measure Code",WhseWorksheetLine."Unit of Measure Code");
+                  IF BinContent2.FINDFIRST THEN
+                    IF MaxQty > BinContent2.CalcQtyAvailToPick(0) + WhseWorksheetLine.Quantity
+                      THEN MaxQty :=
+                        BinContent2.CalcQtyAvailToPick(0) + WhseWorksheetLine.Quantity;
+                  IF MaxQty > WhseWorksheetLine.Quantity + BinContent2.CalcQtyAvailToPick(0) THEN
+                    MaxQty := WhseWorksheetLine.Quantity + BinContent2.CalcQtyAvailToPick(0);
+                  IF MaxQty > RFStatEntryTmp.Quantity - BinContent.CalcQtyAvailToPick(0) THEN
+                    MaxQty := RFStatEntryTmp.Quantity - BinContent.CalcQtyAvailToPick(0);
+                  IF MaxQty <= WhseWorksheetLine.Quantity THEN
+                    MaxQty := WhseWorksheetLine.Quantity;
+                  WhseWorksheetLine.VALIDATE(Quantity,MaxQty);
+                  WhseWorksheetLine.MODIFY(TRUE);
+                END;
+              END;
+            END;
+          UNTIL WhseWorksheetLine.NEXT = 0;
+        END;
+      END;
+
+      COMMIT;
+
+      CLEAR(MovementWorksheet);
+      MovementWorksheet.SETRECORD(WhseWorksheetLine);
+      MovementWorksheet.SETTABLEVIEW(WhseWorksheetLine);
+      MovementWorksheet.SetWorksheetNameToOpen(WhseWorksheetLine.Name);
+      MovementWorksheet.RUNMODAL;
+    END;
+
+    PROCEDURE CreateMovement@1240030008(WarehouseRequest@1240030012 : Record 5765;RFStatEntryTotal@1240030011 : Record 14002804;VAR RFStatEntryTmp@1240030010 : TEMPORARY Record 14002804);
+    VAR
+      WhseWorksheetTemplate@1240030009 : Record 7328;
+      WhseWorksheetName@1240030008 : Record 7327;
+      WhseWorksheetLine@1240030007 : Record 7326;
+      Location@1240030006 : Record 14;
+      BinContent@1240030005 : Record 7302;
+      BinType@1240030004 : Record 7303;
+      Bin@1240030013 : Record 7354;
+      MovementWorksheet@1240030003 : Page 7351;
+      TemplateFilter@1240030001 : Text[250];
+      BinTypeFilter@1240030000 : Text[250];
+      LoopCount@1240030014 : Integer;
+      AvailableQty@1240030015 : Decimal;
+      AvailableQtyBase@1240030017 : Decimal;
+      QtyToMove@1240030016 : Decimal;
+      QtyToMoveBase@1240030018 : Decimal;
+    BEGIN
+      IF RFStatEntryTotal."Other Available Qty. (Base)" = 0 THEN
+        ERROR(Text016);;
+
+      Bin.RESET;
+      Bin.SETRANGE("Location Code",WarehouseRequest."Location Code");
+      Bin.SETRANGE("Wave Pick Bin",TRUE);
+      IF NOT Bin.FIND('-') THEN
+        ERROR(Text018);
+
+      IF PAGE.RUNMODAL(0,Bin) <> ACTION::LookupOK THEN
+        EXIT;
+      Bin.TESTFIELD("Wave Pick Bin");
+
+      WhseWorksheetTemplate.RESET;
+      WhseWorksheetTemplate.SETRANGE(Type,WhseWorksheetTemplate.Type::Movement);
+      WhseWorksheetTemplate.FIND('-');
+      TemplateFilter := WhseWorksheetTemplate.Name;
+      WHILE (WhseWorksheetTemplate.NEXT <> 0) AND
+            (STRLEN(TemplateFilter) + 1 + STRLEN(WhseWorksheetTemplate.Name) <= MAXSTRLEN(TemplateFilter))
+      DO
+        TemplateFilter := TemplateFilter + '|' + WhseWorksheetTemplate.Name;
+
+      WhseWorksheetName.RESET;
+      WhseWorksheetName.SETFILTER("Worksheet Template Name",TemplateFilter);
+      WhseWorksheetName.SETRANGE("Location Code",WarehouseRequest."Location Code");
+      IF NOT (PAGE.RUNMODAL(PAGE::"RF Whse. Worksheet Names",WhseWorksheetName) = ACTION::LookupOK) THEN
+        EXIT;
+
+      WhseWorksheetName.TESTFIELD("Location Code",WarehouseRequest."Location Code");
+      WhseWorksheetTemplate.GET(WhseWorksheetName."Worksheet Template Name");
+      WhseWorksheetTemplate.TESTFIELD(Type,WhseWorksheetTemplate.Type::Movement);
+
+      WhseWorksheetLine.RESET;
+      WhseWorksheetLine.SETRANGE("Worksheet Template Name",WhseWorksheetName."Worksheet Template Name");
+      WhseWorksheetLine.SETRANGE(Name,WhseWorksheetName.Name);
+      WhseWorksheetLine.SETRANGE("Location Code",WhseWorksheetName."Location Code");
+      IF NOT WhseWorksheetLine.FIND('-') THEN BEGIN
+        WhseWorksheetLine.INIT;
+        WhseWorksheetLine."Worksheet Template Name" := WhseWorksheetName."Worksheet Template Name";
+        WhseWorksheetLine.Name := WhseWorksheetName.Name;
+        WhseWorksheetLine."Location Code" := WhseWorksheetName."Location Code";
+      END ELSE
+        IF CONFIRM(Text017,FALSE) THEN
+          WhseWorksheetLine.DELETEALL(TRUE);
+
+      BinType.RESET;
+      BinType.SETRANGE(Receive,FALSE);
+      BinType.SETRANGE(Ship,FALSE);
+      BinType.SETRANGE(Pick,FALSE);
+      BinType.FIND('-');
+      BinTypeFilter := BinType.Code;
+      WHILE (BinType.NEXT <> 0) AND
+            (STRLEN(BinTypeFilter) + 1 + STRLEN(BinType.Code) <= MAXSTRLEN(BinTypeFilter))
+      DO
+        BinTypeFilter := BinTypeFilter + '|' + BinType.Code;
+
+      Location.GET(WarehouseRequest."Location Code");
+
+      RFStatEntryTmp.RESET;
+      RFStatEntryTmp.SETFILTER("Other Available Qty. (Base)",'<>0');
+      IF RFStatEntryTmp.FIND('-') THEN
+        REPEAT
+          BinContent.RESET;
+          BinContent.SETCURRENTKEY(
+            "Location Code","Item No.","Variant Code","Cross-Dock Bin",
+            "Qty. per Unit of Measure","Bin Ranking");
+          BinContent.SETRANGE("Location Code",RFStatEntryTmp."Location Code");
+          BinContent.SETRANGE("Item No.",RFStatEntryTmp."Item No.");
+          BinContent.SETRANGE("Variant Code",RFStatEntryTmp."Variant Code");
+          IF NOT Location."Use ACE One WMS" THEN
+            BinContent.SETFILTER("Bin Type Code",BinTypeFilter);
+          LoopCount := 0;
+          REPEAT
+            LoopCount :=  LoopCount + 1;
+            CASE LoopCount OF
+              1:
+                BinContent.SETRANGE(
+                  "Qty. per Unit of Measure",RFStatEntryTmp."Qty. per Unit of Measure");
+              2:
+                BinContent.SETFILTER(
+                  "Qty. per Unit of Measure",'<>%1',RFStatEntryTmp."Qty. per Unit of Measure");
+            END;
+
+            IF BinContent.FIND('+') THEN
+              REPEAT
+                BinContent.CALCFIELDS(Quantity,"Pick Qty.","Neg. Adjmt. Qty.");
+                AvailableQty :=
+                  BinContent.Quantity -  BinContent."Pick Qty." - BinContent."Neg. Adjmt. Qty.";
+                AvailableQtyBase :=
+                  AvailableQty * BinContent."Qty. per Unit of Measure";
+
+                IF AvailableQtyBase > 0 THEN BEGIN
+                  IF AvailableQtyBase > RFStatEntryTmp."Other Available Qty. (Base)" THEN BEGIN
+                    QtyToMoveBase := RFStatEntryTmp."Other Available Qty. (Base)";
+                    QtyToMove := ROUND(QtyToMoveBase / BinContent."Qty. per Unit of Measure",0.00001);
+                    RFStatEntryTmp."Other Available Qty. (Base)" := 0;
+                  END ELSE BEGIN
+                    QtyToMoveBase := AvailableQtyBase;
+                    QtyToMove := AvailableQty;
+                    RFStatEntryTmp."Other Available Qty. (Base)" :=
+                      RFStatEntryTmp."Other Available Qty. (Base)" - AvailableQtyBase;
+                  END;
+
+                  WhseWorksheetLine.INIT;
+                  WhseWorksheetLine."Line No." := WhseWorksheetLine."Line No." + 10000;
+                  WhseWorksheetLine.VALIDATE("Item No.",RFStatEntryTmp."Item No.");
+                  WhseWorksheetLine.VALIDATE("Variant Code",RFStatEntryTmp."Variant Code");
+                  WhseWorksheetLine.VALIDATE("Unit of Measure Code",BinContent."Unit of Measure Code");
+                  WhseWorksheetLine.VALIDATE("From Bin Code",BinContent."Bin Code");
+                  WhseWorksheetLine.VALIDATE("To Bin Code",Bin.Code);
+                  WhseWorksheetLine.VALIDATE(Quantity,QtyToMove);
+                  WhseWorksheetLine.INSERT(TRUE);
+                END;
+              UNTIL (BinContent.NEXT(-1) = 0) OR (RFStatEntryTmp."Other Available Qty. (Base)" = 0);
+          UNTIL (RFStatEntryTmp."Other Available Qty. (Base)" = 0) OR (LoopCount = 2);
+        UNTIL RFStatEntryTmp.NEXT = 0;
+      RFStatEntryTmp.RESET;
+
+      COMMIT;
+
+      WhseWorksheetLine.RESET;
+      WhseWorksheetLine.SETRANGE("Worksheet Template Name",WhseWorksheetName."Worksheet Template Name");
+      WhseWorksheetLine.SETRANGE(Name,WhseWorksheetName.Name);
+      WhseWorksheetLine.SETRANGE("Location Code",WhseWorksheetName."Location Code");
+      WhseWorksheetLine.FIND('-');
+
+      CLEAR(MovementWorksheet);
+      MovementWorksheet.SETRECORD(WhseWorksheetLine);
+      MovementWorksheet.SETTABLEVIEW(WhseWorksheetLine);
+      MovementWorksheet.SetWorksheetNameToOpen(WhseWorksheetLine.Name);
+      MovementWorksheet.RUNMODAL;
+    END;
+
+    PROCEDURE CreateInventoryPick@1240020002(CurrentWarehouseRequest@1240030000 : Record 5765;OutboundWhseRequestFilter@1240030023 : Record 14002863;AssignedID@1240030014 : Code[50];AssignedWhseGroupCode@1240020000 : Code[20];VAR NewPickNo@1240030009 : Code[20];GiveError@1240030016 : Boolean) : Boolean;
+    VAR
+      Location@1240030002 : Record 14;
+      WarehouseRequest@1240030007 : Record 5765;
+      WarehouseRequest2@1240020004 : Record 5765;
+      WarehouseActivityLine@1240030018 : Record 5767;
+      CreateInvtPutAwayPickMove@1240020001 : Report 7323;
+    BEGIN
+      CurrentWarehouseRequest.TESTFIELD(Type,CurrentWarehouseRequest.Type::Outbound);
+      GetRFSetup;
+
+      WarehouseRequest.RESET;
+      WarehouseRequest := CurrentWarehouseRequest;
+      WarehouseRequest.SETRECFILTER;
+
+      Location.GET(WarehouseRequest."Location Code");
+      IF (Location."Require Pick") AND (NOT Location."Require Shipment") THEN BEGIN
+        WarehouseRequest2 := WarehouseRequest;
+        WarehouseRequest2.SETRANGE("Source Type",WarehouseRequest."Source Type");
+        WarehouseRequest2.SETRANGE("Source Subtype",WarehouseRequest."Source Subtype");
+        WarehouseRequest2.SETRANGE("Source No.",WarehouseRequest."Source No.");
+        IF WarehouseRequest2.FIND('-') THEN BEGIN
+          CLEAR(CreateInvtPutAwayPickMove);
+          CreateInvtPutAwayPickMove.SETTABLEVIEW(WarehouseRequest2);
+          CreateInvtPutAwayPickMove.InitializeRequest(FALSE,TRUE,FALSE,
+            (OutboundWhseRequestFilter."Print Document") AND
+            (OutboundWhseRequestFilter."Warehouse Activity Group Size" = 0),FALSE);
+          CreateInvtPutAwayPickMove.SuppressMessages(TRUE);
+          CreateInvtPutAwayPickMove.USEREQUESTPAGE(FALSE);
+          CreateInvtPutAwayPickMove.RUNMODAL;
+        END;
+      END;
+
+      WarehouseRequest.CALCFIELDS("Put-away / Pick No.","Assembly Pick No.");
+      IF WarehouseRequest."Assembly Pick No." <> '' THEN
+        NewPickNo := WarehouseRequest."Assembly Pick No."
+      ELSE
+        NewPickNo := WarehouseRequest."Put-away / Pick No.";
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CalcLineReservedQtyonInvt2@1240020020(SourceType@1000 : Integer;SourceSubType@1004 : Option;SourceNo@1001 : Code[20];SourceLineNo@1002 : Integer;SourceSubLineNo@1003 : Integer) : Decimal;
+    VAR
+      ReservEntry@1005 : Record 337;
+      ReservEntry2@1007 : Record 337;
+      ReservQtyonInvt@1006 : Decimal;
+    BEGIN
+      ReservEntry.SETCURRENTKEY(
+        "Source Type","Source Subtype","Source ID","Source Batch Name",
+        "Source Prod. Order Line","Source Ref. No.","Reservation Status");
+      ReservEntry.SETRANGE(
+        "Reservation Status",ReservEntry."Reservation Status"::Reservation);
+      ReservEntry.SETRANGE("Source Type",SourceType);
+      ReservEntry.SETRANGE("Source Subtype",SourceSubType);
+      ReservEntry.SETRANGE("Source ID",SourceNo);
+      ReservEntry.SETRANGE("Source Batch Name",'');
+      IF SourceType = DATABASE::"Prod. Order Component" THEN BEGIN
+        ReservEntry.SETRANGE("Source Prod. Order Line",SourceLineNo);
+        ReservEntry.SETRANGE("Source Ref. No.",SourceSubLineNo);
+      END ELSE BEGIN
+        ReservEntry.SETRANGE("Source Prod. Order Line",0);
+        ReservEntry.SETRANGE("Source Ref. No.",SourceLineNo);
+      END;
+      IF ReservEntry.FIND('-') THEN
+        REPEAT
+          ReservEntry2.SETRANGE("Entry No.",ReservEntry."Entry No.");
+          ReservEntry2.SETRANGE(Positive,TRUE);
+          ReservEntry2.SETRANGE("Source Type",DATABASE::"Item Ledger Entry");
+          ReservEntry2.SETRANGE(
+            "Reservation Status",ReservEntry2."Reservation Status"::Reservation);
+          IF ReservEntry2.FIND('-') THEN
+            REPEAT
+              ReservQtyonInvt := ReservQtyonInvt + ReservEntry2."Quantity (Base)";
+            UNTIL ReservEntry2.NEXT = 0;
+        UNTIL ReservEntry.NEXT = 0;
+      EXIT(ReservQtyonInvt);
+    END;
+
+    PROCEDURE CalcAvailQtyAgainstReserve@1240020003(ItemNo@1240020000 : Code[20];VariantCode@1240020001 : Code[10];LocationCode@1240020002 : Code[10];RFStatOutstandingQty@1240020003 : Decimal;RFStatQtyNotAvail@1240020004 : Decimal;RFStatInvReservedQty@1240020005 : Decimal) : Decimal;
+    VAR
+      AvailableQuantity@1240020008 : Decimal;
+      LineAvailResQty@1240020009 : Decimal;
+      LineAvailPickQty@1240020010 : Decimal;
+      AvailQtyBase@1240020011 : Decimal;
+      AvailQtyReserved@1240020012 : Decimal;
+      AvailQtyNotReserved@1240020013 : Decimal;
+      TotalInvReservedQty@1240020015 : Decimal;
+      TotalAvailQty@1240020016 : Decimal;
+      AvailWhseInvNotReserved@1240020021 : Decimal;
+    BEGIN
+      CLEAR(AvailableQuantity);
+
+      CLEAR(TotalInvReservedQty);
+      TotalInvReservedQty := CalcInvReserveQty(ItemNo,VariantCode,LocationCode);
+
+      CLEAR(AvailWhseInvNotReserved);
+      IF TotalInvReservedQty > 0 THEN BEGIN
+        AvailWhseInvNotReserved := CalcAvailInvNotReserved(LocationCode,ItemNo,VariantCode);
+
+        CLEAR(LineAvailPickQty);
+        CLEAR(LineAvailResQty);
+        LineAvailPickQty := (RFStatOutstandingQty - RFStatQtyNotAvail);
+        IF RFStatInvReservedQty > LineAvailPickQty THEN
+          LineAvailResQty := LineAvailPickQty
+        ELSE
+          IF RFStatInvReservedQty <> 0 THEN
+            LineAvailResQty := RFStatInvReservedQty
+          ELSE
+            LineAvailResQty := 0;
+
+        CLEAR(AvailQtyReserved);
+        CLEAR(AvailQtyNotReserved);
+        AvailQtyReserved := LineAvailResQty;
+        IF AvailWhseInvNotReserved < LineAvailPickQty THEN
+          AvailQtyNotReserved := AvailWhseInvNotReserved
+        ELSE
+          AvailQtyNotReserved := LineAvailPickQty - LineAvailResQty;
+
+        CLEAR(TotalAvailQty);
+        IF RFStatInvReservedQty <> 0 THEN BEGIN
+          TotalAvailQty := AvailQtyReserved + AvailQtyNotReserved;
+          IF TotalAvailQty > RFStatOutstandingQty THEN
+            AvailableQuantity := RFStatOutstandingQty
+          ELSE
+            AvailableQuantity := TotalAvailQty;
+        END ELSE
+          AvailableQuantity := AvailQtyNotReserved;
+
+      END ELSE
+        AvailableQuantity := RFStatOutstandingQty - RFStatQtyNotAvail;
+
+      EXIT(AvailableQuantity);
+    END;
+
+    PROCEDURE CalcInvReserveQty@1240020004(ItemNo@1240020000 : Code[20];VariantCode@1240020001 : Code[10];LocationCode@1240020002 : Code[10]) : Decimal;
+    VAR
+      Item@1240020003 : Record 27;
+      ItemLedgerEntry@1240020004 : Record 32;
+      TotalInvReserveQtyBase@1240020005 : Decimal;
+    BEGIN
+      CLEAR(TotalInvReserveQtyBase);
+      Item.RESET;
+      Item.SETCURRENTKEY("No.");
+      Item.SETRANGE("No.",ItemNo);
+      Item.SETFILTER("Variant Filter",VariantCode);
+      Item.SETFILTER("Location Filter",LocationCode);
+      IF Item.FIND('-') THEN
+        Item.CALCFIELDS(Item."Reserved Qty. on Inventory");
+
+      TotalInvReserveQtyBase := Item."Reserved Qty. on Inventory";
+
+      EXIT(TotalInvReserveQtyBase);
+    END;
+
+    PROCEDURE CalcAvailInvNotReserved@1240020019(LocationCode@1240020000 : Code[10];ItemNo@1240020001 : Code[20];VariantCode@1240020002 : Code[10]) : Decimal;
+    VAR
+      Location@1240020003 : Record 14;
+      BinContent@1240020004 : Record 7302;
+      AvailInvNotReservedBase@1240020009 : Decimal;
+      TotalInvReservedQty@1240020005 : Decimal;
+      PickAvailQtyBase@1240020008 : Decimal;
+      PickPendResQtyBase@1240020007 : Decimal;
+      BinTypeFilter@1240020006 : Text[250];
+    BEGIN
+      CLEAR(AvailInvNotReservedBase);
+      Location.GET(LocationCode);
+
+      CLEAR(TotalInvReservedQty);
+      TotalInvReservedQty := CalcInvReserveQty(ItemNo,VariantCode,LocationCode);
+
+      IF Location."Bin Mandatory" THEN BEGIN
+        IF Location."Directed Put-away and Pick" THEN BEGIN
+          GetRFSetup;
+          RFSetup.CalculateBinTypeFilters;
+          BinTypeFilter := RFSetup.GetPickBinTypeFilter;
+        END ELSE
+          BinTypeFilter := '';
+
+        CLEAR(PickPendResQtyBase);
+        CLEAR(PickAvailQtyBase);
+        BinContent.RESET;
+        BinContent.SETCURRENTKEY("Location Code","Bin Code","Item No.","Variant Code","Unit of Measure Code");
+        BinContent.SETRANGE("Item No.",ItemNo);
+        BinContent.SETRANGE("Location Code",LocationCode);
+        BinContent.SETRANGE("Variant Code",VariantCode);
+        BinContent.SETFILTER("Bin Type Code",BinTypeFilter);
+        IF BinContent.FIND('-') THEN
+          REPEAT
+            PickPendResQtyBase := CalcPendingPickQtyReserved(BinContent);
+            PickAvailQtyBase := PickAvailQtyBase + (BinContent.CalcQtyAvailToPick(0)) + PickPendResQtyBase;
+          UNTIL BinContent.NEXT = 0;
+
+        IF TotalInvReservedQty >= PickAvailQtyBase THEN
+          AvailInvNotReservedBase := 0
+        ELSE
+          AvailInvNotReservedBase := PickAvailQtyBase - TotalInvReservedQty;
+
+      END ELSE BEGIN
+        AvailInvNotReservedBase := CalcLocationInvBalance(LocationCode,ItemNo,VariantCode) -
+          (CalcExistingPickQty(LocationCode,ItemNo,VariantCode) +
+          CalcExistingShipQty(LocationCode,ItemNo,VariantCode) +
+          TotalInvReservedQty);
+      END;
+
+      EXIT(AvailInvNotReservedBase);
+    END;
+
+    PROCEDURE CalcPendingPickQtyReserved@1240020005(BinContent@1240020000 : Record 7302) : Decimal;
+    VAR
+      WarehouseActivityLine@1240020001 : Record 5767;
+      ReservationEntry@1240020004 : Record 337;
+      PendingPickQtyResBase@1240020003 : Decimal;
+      AppliedResQtyBase@1240020006 : Decimal;
+      TotalPendingPickQtyResBase@1240020007 : Decimal;
+    BEGIN
+      CLEAR(TotalPendingPickQtyResBase);
+      WarehouseActivityLine.RESET;
+      WarehouseActivityLine.SETCURRENTKEY(
+         "Item No.","Bin Code","Location Code","Action Type","Variant Code",
+         "Unit of Measure Code","Breakbulk No.","Activity Type","Lot No.","Serial No.");
+      WarehouseActivityLine.SETRANGE("Item No.",BinContent."Item No.");
+      WarehouseActivityLine.SETRANGE("Bin Code",BinContent."Bin Code");
+      WarehouseActivityLine.SETRANGE("Location Code",BinContent."Location Code");
+      WarehouseActivityLine.SETRANGE("Action Type",WarehouseActivityLine."Action Type"::Take);
+      WarehouseActivityLine.SETRANGE("Variant Code",BinContent."Variant Code");
+      WarehouseActivityLine.SETRANGE("Unit of Measure Code",BinContent."Unit of Measure Code");
+      WarehouseActivityLine.SETRANGE("Breakbulk No.",0);
+      IF WarehouseActivityLine.FIND('-') THEN BEGIN
+        REPEAT
+          CLEAR(AppliedResQtyBase);
+          ReservationEntry.RESET;
+          ReservationEntry.SETCURRENTKEY(
+             "Source Type","Source Subtype","Source ID","Source Batch Name",
+             "Source Prod. Order Line","Source Ref. No.","Reservation Status");
+          ReservationEntry.SETRANGE("Source Type",WarehouseActivityLine."Source Type");
+          ReservationEntry.SETRANGE("Source Subtype",WarehouseActivityLine."Source Subtype");
+          ReservationEntry.SETRANGE("Source ID",WarehouseActivityLine."Source No.");
+          ReservationEntry.SETRANGE("Source Ref. No.",WarehouseActivityLine."Source Line No.");
+          ReservationEntry.SETRANGE(
+             "Reservation Status",ReservationEntry."Reservation Status"::Reservation);
+          IF ReservationEntry.FIND('-') THEN
+            REPEAT
+              AppliedResQtyBase := AppliedResQtyBase + ABS(ReservationEntry."Quantity (Base)");
+            UNTIL ReservationEntry.NEXT = 0;
+
+          CLEAR(PendingPickQtyResBase);
+          IF AppliedResQtyBase >= WarehouseActivityLine."Qty. Outstanding (Base)" THEN
+            PendingPickQtyResBase := WarehouseActivityLine."Qty. Outstanding (Base)"
+          ELSE
+            PendingPickQtyResBase := AppliedResQtyBase;
+
+          TotalPendingPickQtyResBase := TotalPendingPickQtyResBase + PendingPickQtyResBase;
+
+        UNTIL WarehouseActivityLine.NEXT = 0;
+      END;
+
+      EXIT(TotalPendingPickQtyResBase);
+    END;
+
+    PROCEDURE CalcLocationInvBalance@1240020015(LocationCode@1240020000 : Code[10];ItemNo@1240020001 : Code[20];VariantCode@1240020002 : Code[10]) : Decimal;
+    VAR
+      ItemLedgerEntry@1240020003 : Record 32;
+    BEGIN
+      ItemLedgerEntry.RESET;
+      ItemLedgerEntry.SETCURRENTKEY("Item No.",Open,"Variant Code",Positive,"Location Code","Posting Date");
+      ItemLedgerEntry.SETRANGE("Location Code",LocationCode);
+      ItemLedgerEntry.SETRANGE("Item No.",ItemNo);
+      ItemLedgerEntry.SETRANGE(Open,TRUE);
+      ItemLedgerEntry.SETRANGE("Variant Code",VariantCode);
+      ItemLedgerEntry.CALCSUMS("Remaining Quantity");
+
+      IF ItemLedgerEntry."Remaining Quantity" < 0 THEN
+        EXIT(0)
+      ELSE
+        EXIT(ItemLedgerEntry."Remaining Quantity");
+    END;
+
+    PROCEDURE CalcExistingPickQty@1240020013(LocationCode@1240020002 : Code[10];ItemNo@1240020001 : Code[20];VariantCode@1240020000 : Code[10]) : Decimal;
+    VAR
+      WarehouseActivityLine@1240020003 : Record 5767;
+      Location@1240020004 : Record 14;
+      QtyOnPickBase@1240020005 : Decimal;
+    BEGIN
+      Location.GET(LocationCode);
+
+      IF Location."Require Pick" THEN BEGIN
+        CLEAR(QtyOnPickBase);
+        WarehouseActivityLine.RESET;
+        WarehouseActivityLine.SETCURRENTKEY("Item No.","Location Code","Activity Type",
+          "Bin Type Code","Unit of Measure Code","Variant Code","Breakbulk No.",
+          "Action Type","Lot No.","Serial No.","Assemble to Order");
+        WarehouseActivityLine.SETRANGE("Location Code",LocationCode);
+        WarehouseActivityLine.SETRANGE("Item No.",ItemNo);
+        WarehouseActivityLine.SETRANGE("Variant Code",VariantCode);
+        WarehouseActivityLine.SETFILTER("Activity Type",'%1|%2',
+          WarehouseActivityLine."Activity Type"::"Invt. Pick",
+          WarehouseActivityLine."Activity Type"::Pick);
+        IF WarehouseActivityLine.FIND('-') THEN
+          REPEAT
+            QtyOnPickBase += WarehouseActivityLine."Qty. Outstanding (Base)";
+          UNTIL WarehouseActivityLine.NEXT = 0;
+      END;
+
+      EXIT(QtyOnPickBase);
+    END;
+
+    PROCEDURE CalcExistingShipQty@1240020014(LocationCode@1240020002 : Code[10];ItemNo@1240020001 : Code[20];VariantCode@1240020000 : Code[10]) : Decimal;
+    VAR
+      WarehouseShipmentLine@1240020003 : Record 7321;
+      Location@1240020004 : Record 14;
+      QtyOnShipmentBase@1240020005 : Decimal;
+    BEGIN
+      Location.GET(LocationCode);
+
+      IF (Location."Require Shipment") AND (NOT Location."Require Pick") THEN BEGIN
+        CLEAR(QtyOnShipmentBase);
+        WarehouseShipmentLine.RESET;
+        WarehouseShipmentLine.SETCURRENTKEY("Item No.","Location Code","Variant Code","Due Date");
+        WarehouseShipmentLine.SETRANGE("Location Code",LocationCode);
+        WarehouseShipmentLine.SETRANGE("Item No.",ItemNo);
+        WarehouseShipmentLine.SETRANGE("Variant Code",VariantCode);
+        IF WarehouseShipmentLine.FIND('-') THEN
+          REPEAT
+            QtyOnShipmentBase += WarehouseShipmentLine."Qty. Outstanding (Base)";
+          UNTIL WarehouseShipmentLine.NEXT = 0;
+      END;
+
+      EXIT(QtyOnShipmentBase);
+    END;
+
+    LOCAL PROCEDURE FindRFATOStatisticsEntries@1240020007(CurrentWarehouseRequest@1240020003 : Record 5765;VAR RFStatEntryTmp@1240020002 : TEMPORARY Record 14002804;OutboundWhseRequestFilter@1240020001 : Record 14002863;SalesLine@1240020000 : Record 37);
+    VAR
+      Item@1240020009 : Record 27;
+      WarehouseShipmentLine@1240020008 : Record 7321;
+      Location@1240020007 : Record 14;
+      MovementLine@1240020006 : Record 14099002;
+      RegMoveLine@1240020005 : Record 14099004;
+      AssemblyHeader@1240020004 : Record 900;
+      AssemblyLine@1240020010 : Record 901;
+      WMSMgt@1240020011 : Codeunit 7302;
+    BEGIN
+      IF NOT SalesLine.AsmToOrderExists(AssemblyHeader) THEN
+        EXIT;
+
+      AssemblyLine.RESET;
+      AssemblyLine.SETCURRENTKEY("Document Type","Document No.",Type,"Location Code");
+      AssemblyLine.SETRANGE("Document Type",AssemblyLine."Document Type"::Order);
+      AssemblyLine.SETRANGE("Document No.",AssemblyHeader."No.");
+      AssemblyLine.SETRANGE(Type,AssemblyLine.Type::Item);
+      AssemblyLine.SETRANGE("Location Code",SalesLine."Location Code");
+      IF AssemblyLine.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          RFStatEntryTmp.INIT;
+          RFStatEntryTmp."Entry No." := RFStatEntryTmp."Entry No." + 1;
+
+          IF Item.GET(AssemblyLine."No.") THEN;
+
+          RFStatEntryTmp."Item No." := AssemblyLine."No.";
+          RFStatEntryTmp."Variant Code" := AssemblyLine."Variant Code";
+          RFStatEntryTmp."Unit of Measure Code" := AssemblyLine."Unit of Measure Code";
+          RFStatEntryTmp."Qty. per Unit of Measure" := AssemblyLine."Qty. per Unit of Measure";
+          RFStatEntryTmp.Quantity := AssemblyLine.Quantity;
+          RFStatEntryTmp."Quantity (Base)" := AssemblyLine."Quantity (Base)";
+          RFStatEntryTmp."ATO Quantity" := AssemblyLine.Quantity;
+          RFStatEntryTmp."ATO Qty. (Base)" := AssemblyLine."Quantity (Base)";
+          RFStatEntryTmp.Description := AssemblyLine.Description;
+          RFStatEntryTmp."Location Code" := AssemblyLine."Location Code";
+          RFStatEntryTmp."Unit Price" := Item."Unit Price";
+          RFStatEntryTmp."Unit Amount" := Item."Unit Price";
+          RFStatEntryTmp."Source Outstanding Quantity" :=
+            AssemblyLine."Remaining Quantity";
+          RFStatEntryTmp."Source Outstanding Qty. (Base)" :=
+            AssemblyLine."Remaining Quantity (Base)";
+
+          AssemblyLine.CALCFIELDS("Reserved Quantity","Reserved Qty. (Base)");
+          RFStatEntryTmp."Reserved Quantity" := AssemblyLine."Reserved Quantity";
+          RFStatEntryTmp."Reserved Qty. (Base)" := AssemblyLine."Reserved Qty. (Base)";
+          RFStatEntryTmp."Inv. Reserved Qty. (Base)" :=
+            CalcLineReservedQtyonInvt2(
+              DATABASE::"Assembly Line",AssemblyLine."Document Type",
+              AssemblyLine."Document No.",AssemblyLine."Line No.",0);
+          IF RFStatEntryTmp."Qty. per Unit of Measure" <> 1 THEN
+            RFStatEntryTmp."Inv. Reserved Quantity" :=
+              ROUND(
+                RFStatEntryTmp."Inv. Reserved Qty. (Base)" /
+                RFStatEntryTmp."Qty. per Unit of Measure",
+                0.00001)
+          ELSE
+            RFStatEntryTmp."Inv. Reserved Quantity" := RFStatEntryTmp."Inv. Reserved Qty. (Base)";
+
+          RFStatEntryTmp."Gross Weight (Base)" := Item."Gross Weight";
+          RFStatEntryTmp."Net Weight (Base)" := Item."Net Weight";
+          RFStatEntryTmp."Volume (Base)" := Item."Unit Volume";
+
+          RFStatEntryTmp."Outstanding No. of Lines" := 1;
+
+          RFStatEntryTmp."Other Reserved Quantity" :=
+            RFStatEntryTmp."Reserved Quantity" - RFStatEntryTmp."Inv. Reserved Quantity";
+          RFStatEntryTmp."Other Reserved Qty. (Base)" :=
+            RFStatEntryTmp."Reserved Qty. (Base)" - RFStatEntryTmp."Inv. Reserved Qty. (Base)";
+
+          RFStatEntryTmp."Outstanding Inv. Quantity" :=
+            RFStatEntryTmp."Source Outstanding Quantity" -
+            RFStatEntryTmp."Other Reserved Quantity";
+          RFStatEntryTmp."Outstanding Inv. Qty. (Base)" :=
+            RFStatEntryTmp."Source Outstanding Qty. (Base)" -
+            RFStatEntryTmp."Other Reserved Qty. (Base)";
+
+          RFStatEntryTmp."Pick Qty. (Base)" := AssemblyLine."Pick Qty. (Base)";
+          RFStatEntryTmp."Shipment Qty. (Base)" := 0;
+          RFStatEntryTmp."Picked Qty. (Base)" := AssemblyLine."Qty. Picked (Base)";
+          RFStatEntryTmp."Shipped Qty. (Base)" := 0;
+
+          RFStatEntryTmp."Outstanding Qty. (Base)" :=
+            RFStatEntryTmp."Source Outstanding Qty. (Base)" -
+            (RFStatEntryTmp."Pick Qty. (Base)" + RFStatEntryTmp."Picked Qty. (Base)" -
+             RFStatEntryTmp."Shipped Qty. (Base)");
+
+          RFStatEntryTmp.INSERT;
+        UNTIL AssemblyLine.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ShowAssemblyPick@1240020006(CurrentWarehouseRequest@1240030001 : Record 5765);
+    VAR
+      WarehouseActivityHeader@1240030004 : Record 5766;
+      Location@1240020000 : Record 14;
+    BEGIN
+      CurrentWarehouseRequest.CALCFIELDS("Assembly Pick No.");
+      CurrentWarehouseRequest.TESTFIELD("Assembly Pick No.");
+
+      Location.GET(CurrentWarehouseRequest."Location Code");
+      IF (Location."Require Pick") AND (NOT Location."Require Shipment") THEN BEGIN
+        WarehouseActivityHeader.GET(
+          WarehouseActivityHeader.Type::"Invt. Movement",CurrentWarehouseRequest."Assembly Pick No.");
+        PAGE.RUNMODAL(PAGE::"Inventory Movement",WarehouseActivityHeader);
+      END ELSE BEGIN
+        WarehouseActivityHeader.GET(
+          WarehouseActivityHeader.Type::Pick,CurrentWarehouseRequest."Assembly Pick No.");
+        WarehouseActivityHeader.SETRECFILTER;
+        PAGE.RUNMODAL(PAGE::"Warehouse Pick",WarehouseActivityHeader);
+      END;
+    END;
+
+    PROCEDURE ShowAssemblyOrder@1240020008(CurrentWarehouseRequest@1240030001 : Record 5765);
+    VAR
+      ATOLink@1240030004 : Record 904;
+      AssemblyHeader@1240020000 : Record 900;
+    BEGIN
+      ATOLink.RESET;
+      ATOLink.SETCURRENTKEY(Type,"Document Type","Document No.","Document Line No.");
+      ATOLink.SETRANGE(Type,ATOLink.Type::Sale);
+      ATOLink.SETRANGE("Document Type",ATOLink."Document Type"::Order);
+      ATOLink.SETRANGE("Document No.",CurrentWarehouseRequest."Source No.");
+      IF ATOLink.FINDSET(FALSE) THEN
+        IF AssemblyHeader.GET(
+          ATOLink."Assembly Document Type",ATOLink."Assembly Document No.")
+        THEN BEGIN
+          AssemblyHeader.SETRECFILTER;
+          PAGE.RUNMODAL(PAGE::"Assembly Order",AssemblyHeader);
+        END;
+    END;
+
+    PROCEDURE SetMultiOrder@1240020022(NewMultiOrder@1240020000 : Boolean);
+    BEGIN
+      MultiOrder := NewMultiOrder;
+    END;
+
+    PROCEDURE PrepMultiOrderQtyApplied@1240020010(RFStatEntryTmp@1240020000 : TEMPORARY Record 14002804);
+    BEGIN
+      IF NOT MultiOrder THEN
+        EXIT;
+
+      MultiStatEntryPrepTmp.RESET;
+      MultiStatEntryPrepTmp.SETCURRENTKEY("Item No.","Variant Code","Unit of Measure Code");
+      MultiStatEntryPrepTmp.SETRANGE("Item No.",RFStatEntryTmp."Item No.");
+      MultiStatEntryPrepTmp.SETRANGE("Variant Code",RFStatEntryTmp."Variant Code");
+      MultiStatEntryPrepTmp.SETRANGE("Unit of Measure Code",RFStatEntryTmp."Unit of Measure Code");
+      IF NOT MultiStatEntryPrepTmp.FIND('-') THEN BEGIN
+        MultiStatEntryPrepTmp."Entry No." := RFStatEntryTmp."Entry No.";
+        MultiStatEntryPrepTmp."Item No." := RFStatEntryTmp."Item No.";
+        MultiStatEntryPrepTmp."Variant Code" := RFStatEntryTmp."Variant Code";
+        MultiStatEntryPrepTmp."Unit of Measure Code" := RFStatEntryTmp."Unit of Measure Code";
+        MultiStatEntryPrepTmp."Available Qty. (Base)" := RFStatEntryTmp."Available Qty. (Base)";
+        MultiStatEntryPrepTmp.INSERT;
+      END ELSE BEGIN
+        MultiStatEntryPrepTmp."Available Qty. (Base)" += RFStatEntryTmp."Available Qty. (Base)";
+        MultiStatEntryPrepTmp.MODIFY;
+      END;
+    END;
+
+    PROCEDURE SetMultiOrderQtyApplied@1240020011(ApplyQuantity@1240020000 : Boolean);
+    BEGIN
+      IF ApplyQuantity THEN BEGIN
+        MultiStatEntryPrepTmp.RESET;
+        IF MultiStatEntryPrepTmp.FIND('-') THEN BEGIN
+          REPEAT
+            MultiStatEntryGlobalTmp.RESET;
+            MultiStatEntryGlobalTmp.SETCURRENTKEY("Item No.","Variant Code","Unit of Measure Code");
+            MultiStatEntryGlobalTmp.SETRANGE("Item No.",MultiStatEntryPrepTmp."Item No.");
+            MultiStatEntryGlobalTmp.SETRANGE("Variant Code",MultiStatEntryPrepTmp."Variant Code");
+            MultiStatEntryGlobalTmp.SETRANGE("Unit of Measure Code",MultiStatEntryPrepTmp."Unit of Measure Code");
+            IF NOT MultiStatEntryGlobalTmp.FIND('-') THEN BEGIN
+              MultiStatEntryGlobalTmp."Entry No." := MultiStatEntryPrepTmp."Entry No.";
+              MultiStatEntryGlobalTmp."Item No." := MultiStatEntryPrepTmp."Item No.";
+              MultiStatEntryGlobalTmp."Variant Code" := MultiStatEntryPrepTmp."Variant Code";
+              MultiStatEntryGlobalTmp."Unit of Measure Code" := MultiStatEntryPrepTmp."Unit of Measure Code";
+              MultiStatEntryGlobalTmp."Available Qty. (Base)" := MultiStatEntryPrepTmp."Available Qty. (Base)";
+              MultiStatEntryGlobalTmp.INSERT;
+            END ELSE BEGIN
+              MultiStatEntryGlobalTmp."Available Qty. (Base)" += MultiStatEntryPrepTmp."Available Qty. (Base)";
+              MultiStatEntryGlobalTmp.MODIFY;
+            END;
+            MultiStatEntryPrepTmp.DELETE;
+          UNTIL MultiStatEntryPrepTmp.NEXT = 0;
+        END;
+      END ELSE BEGIN
+        MultiStatEntryPrepTmp.RESET;
+        MultiStatEntryPrepTmp.DELETEALL;
+      END;
+    END;
+
+    PROCEDURE GetMultiOrderQtyApplied@1240020012(RFStatEntryTmp@1240020000 : TEMPORARY Record 14002804;LocationCode@1240020003 : Code[10];PendAvailQtyBase@1240020004 : Decimal) : Decimal;
+    VAR
+      BinContent@1240020001 : Record 7302;
+      Location@1240020005 : Record 14;
+      RFSetup@1240020006 : Record 14002801;
+      PickAvailQtyBase@1240020002 : Decimal;
+      RemainingQtyAvailBase@1240020008 : Decimal;
+      BinTypeFilter@1240020007 : Text[250];
+    BEGIN
+      IF NOT MultiOrder THEN
+        EXIT(PendAvailQtyBase);
+
+      CLEAR(PickAvailQtyBase);
+      Location.GET(LocationCode);
+      IF Location."Bin Mandatory" THEN BEGIN
+        IF Location."Directed Put-away and Pick" THEN BEGIN
+          GetRFSetup;
+          RFSetup.CalculateBinTypeFilters;
+          BinTypeFilter := RFSetup.GetPickBinTypeFilter;
+        END ELSE
+          BinTypeFilter := '';
+
+        BinContent.RESET;
+        BinContent.SETCURRENTKEY("Location Code","Bin Code","Item No.","Variant Code","Unit of Measure Code");
+        BinContent.SETRANGE("Item No.",RFStatEntryTmp."Item No.");
+        BinContent.SETRANGE("Location Code",LocationCode);
+        BinContent.SETRANGE("Variant Code",RFStatEntryTmp."Variant Code");
+        BinContent.SETFILTER("Bin Type Code",BinTypeFilter);
+        IF BinContent.FIND('-') THEN
+          REPEAT
+            PickAvailQtyBase := PickAvailQtyBase + (BinContent.CalcQtyAvailToPick(0));
+          UNTIL BinContent.NEXT = 0;
+      END ELSE
+        PickAvailQtyBase := CalcLocationInvBalance(LocationCode,RFStatEntryTmp."Item No.",RFStatEntryTmp."Variant Code");
+
+      // Subtract the pending pick quantities already applied to other acceptable orders in the group
+      CLEAR(RemainingQtyAvailBase);
+      MultiStatEntryGlobalTmp.RESET;
+      MultiStatEntryGlobalTmp.SETCURRENTKEY("Item No.","Variant Code","Unit of Measure Code");
+      MultiStatEntryGlobalTmp.SETRANGE("Item No.",RFStatEntryTmp."Item No.");
+      MultiStatEntryGlobalTmp.SETRANGE("Variant Code",RFStatEntryTmp."Variant Code");
+      MultiStatEntryGlobalTmp.SETRANGE("Unit of Measure Code",RFStatEntryTmp."Unit of Measure Code");
+      IF MultiStatEntryGlobalTmp.FIND('-') THEN
+        RemainingQtyAvailBase := PickAvailQtyBase - MultiStatEntryGlobalTmp."Available Qty. (Base)"
+      ELSE
+        RemainingQtyAvailBase := PickAvailQtyBase;
+
+      IF RemainingQtyAvailBase > PendAvailQtyBase THEN
+        EXIT(PendAvailQtyBase)
+      ELSE
+        EXIT(RemainingQtyAvailBase);
+    END;
+
+    PROCEDURE CreatePickOnly@1000000000(CurrentWarehouseRequest@1240030000 : Record 5765;OutboundWhseRequestFilter@1240030023 : Record 14002863;AssignedID@1240030014 : Code[50];AssignedWhseGroupCode@1240020000 : Code[20];VAR NewShipmentNo@1240030008 : Code[20];VAR NewPickNo@1240030009 : Code[20];GiveError@1240030016 : Boolean) : Boolean;
+    VAR
+      Location@1240030002 : Record 14;
+      WarehouseRequest@1240030007 : Record 5765;
+      WarehouseShipmentHeader@1240030006 : Record 7320;
+      WarehouseShipmentLine@1240030005 : Record 7321;
+      WarehouseShipmentLineTmp@1240030020 : TEMPORARY Record 7321;
+      WarehouseSetup@1240030017 : Record 5769;
+      WarehouseActivityLine@1240030018 : Record 5767;
+      RFFlowrackMgt@1240020001 : Codeunit 14002852;
+      GetSourceDocuments@1240030004 : Report 5753;
+      WhseShipmentCreatePick@1240030003 : Report 7318;
+      WhseShipmentRelease@1240030001 : Codeunit 7310;
+    BEGIN
+      //TM BEG 072115 create pick ticket only
+      CurrentWarehouseRequest.TESTFIELD(Type,CurrentWarehouseRequest.Type::Outbound);
+      WarehouseSetup.GET;
+      IF NOT WarehouseSetup."Auto Delete Warehouse Shipment" THEN BEGIN
+         CurrentWarehouseRequest.TESTFIELD("Completely Handled",FALSE);
+        IF CurrentWarehouseRequest."Warehouse Shipment No." = '' THEN
+          CurrentWarehouseRequest.CALCFIELDS("Warehouse Shipment No.");
+        CurrentWarehouseRequest.TESTFIELD("Warehouse Shipment No.",'');
+      END;
+
+      CurrentWarehouseRequest.CALCFIELDS("Warehouse Shipment No.");
+      WarehouseShipmentHeader.GET(CurrentWarehouseRequest."Warehouse Shipment No.");
+      WarehouseShipmentLine.RESET;
+      WarehouseShipmentLine.SETRANGE("No.",WarehouseShipmentHeader."No.");
+      WarehouseShipmentLine.SETRANGE("Location Code", CurrentWarehouseRequest."Location Code");
+
+      WarehouseShipmentLine.SETFILTER(Quantity,'>0');
+      WarehouseShipmentLine.SETRANGE("Completely Picked",FALSE);
+      IF OutboundWhseRequestFilter."Line Date Filter" <> '' THEN
+        WarehouseShipmentLine.SETFILTER("Due Date",OutboundWhseRequestFilter."Line Date Filter");
+      IF WarehouseShipmentLine.FIND('-') THEN BEGIN
+        IF OutboundWhseRequestFilter."Line Date Filter" <> '' THEN BEGIN
+          REPEAT
+            WarehouseShipmentLineTmp := WarehouseShipmentLine;
+            WarehouseShipmentLineTmp.INSERT;
+          UNTIL WarehouseShipmentLine.NEXT = 0;
+
+          WarehouseShipmentLine.SETRANGE("Due Date");
+          WarehouseShipmentLine.FIND('-');
+          REPEAT
+            IF NOT WarehouseShipmentLineTmp.GET(
+                     WarehouseShipmentLine."No.",WarehouseShipmentLine."Line No.")
+            THEN
+              WarehouseShipmentLine.DELETE;
+          UNTIL WarehouseShipmentLine.NEXT = 0;
+        END;
+
+        CLEAR(WhseShipmentCreatePick);
+        WhseShipmentCreatePick.SETTABLEVIEW(WarehouseShipmentLine);
+        WhseShipmentCreatePick.Initialize(
+          AssignedID,OutboundWhseRequestFilter."Sorting Method for Act. Lines",
+          OutboundWhseRequestFilter."Print Document",
+          OutboundWhseRequestFilter."Do Not Fill Qty. to Handle",
+          OutboundWhseRequestFilter."Set Breakbulk Filter",
+          OutboundWhseRequestFilter."Per Zone");
+        WhseShipmentCreatePick.SetPickFromFilter(
+          OutboundWhseRequestFilter."Pick-from Zone Filter",
+          OutboundWhseRequestFilter."Pick-from Bin Filter");
+        WhseShipmentCreatePick.SetWhseEmployeeGroupNo(AssignedWhseGroupCode);
+
+        WhseShipmentCreatePick.SetWhseShipmentLine(
+          WarehouseShipmentLine,WarehouseShipmentHeader);
+        WhseShipmentCreatePick.SetHideValidationDialog(TRUE);
+        WhseShipmentCreatePick.USEREQUESTPAGE(FALSE);
+        WhseShipmentCreatePick.RUNMODAL;
+        WhseShipmentCreatePick.GetResultMessage;
+        CLEAR(WhseShipmentCreatePick);
+      END ELSE
+        IF GiveError THEN
+          ERROR(Text001)
+        ELSE
+          EXIT(FALSE);
+
+      NewShipmentNo := WarehouseShipmentHeader."No.";
+      WarehouseRequest.CALCFIELDS("Put-away / Pick No.");
+      NewPickNo := WarehouseRequest."Put-away / Pick No.";
+      //RFFlowrackMgt.FlowRackProcessing(WarehouseRequest); //TM 061115 No license to use
+      EXIT(TRUE);
+      //TM END 072115
+    END;
+
+    LOCAL PROCEDURE "************Custom F(x)************"@1000000002();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE TestBinRanking@1000000001(VAR BinCont@1000000000 : Record 7302;VAR Loc@1000000001 : Record 14;VAR ItemNo@1000000004 : Code[20]) : Boolean;
+    VAR
+      TransLine@1000000002 : Record 5741;
+      OrdQty@1000000003 : Decimal;
+    BEGIN
+      //>>RS1.00
+      //Add a new filter and see if inventory exists for the item.
+      //If it does Exit(true) else False to allow the filter to be used, otherwise default back
+      //use the OUTBOUND WAREHOUSE TRANFER Document to find the QTY on the order and check that the qty is available in
+      //that bin to Pick from it. If not available to meet the need, "IGNORE" Bulk Pick Ranking.
+      OrdQty:=0;
+      IF gCurrentWarehouseRequest."Source Document" = gCurrentWarehouseRequest."Source Document"::"Outbound Transfer" THEN BEGIN
+        TransLine.RESET;
+        TransLine.SETRANGE("Document No.",gCurrentWarehouseRequest."Source No.");
+        TransLine.SETRANGE("Item No.", ItemNo);
+        IF TransLine.FINDSET THEN BEGIN
+        REPEAT
+          OrdQty:=OrdQty+TransLine.Quantity;
+          UNTIL TransLine.NEXT =0;
+        END;
+
+        IF OrdQty <> 0 THEN BEGIN
+          BinCont.SETFILTER("Bin Ranking", '>=%1', Loc."Bulk Pick Ranking (>=)");
+          IF BinCont.FINDFIRST THEN BEGIN
+          REPEAT
+            BinCont.CALCFIELDS(Quantity,"Pick Qty.","Neg. Adjmt. Qty.");
+          IF (BinCont.Quantity - (BinCont."Pick Qty." + BinCont."Neg. Adjmt. Qty.")) >= OrdQty THEN
+            EXIT(TRUE);
+          UNTIL BinCont.NEXT=0;
+          END;
+        END;
+      END;
+      BinCont.SETRANGE("Bin Ranking");
+      EXIT(FALSE);
+      //<<RS1.00
+    END;
+
+    BEGIN
+    {
+      vaseem2019.04.10 - RS1.00 - TPZ2410 Bin Ranking Modification
+    }
+    END.
+  }
+}
+

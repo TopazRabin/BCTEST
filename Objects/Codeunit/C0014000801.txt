@@ -1,0 +1,844 @@
+OBJECT Codeunit 14000801 LTL Transaction
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12/28/17;
+    Time=12:00:00 PM;
+    Version List=SE0.60.18;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PackingStation@1000000000 : Record 14000709;
+      ShippingSetup@1000000001 : Record 14000707;
+      ShippingAgent@1000000002 : Record 291;
+      ShippingAgentService@1000000003 : Record 14000708;
+      Shipping@1000000004 : Codeunit 14000701;
+      ShippingSetupRetrieved@1000000006 : Boolean;
+      Text001@1001 : TextConst 'ENU=Freight Type weight sum is %1 it should be %2';
+      EShipValidation@1240020000 : Codeunit 14000240;
+
+    PROCEDURE GetShippingCharge@12(VAR CurrentPackage@1000000000 : Record 14000701;GiveNoError@1000000001 : Boolean);
+    VAR
+      LTLOptionPage@1000000002 : Record 14000801;
+      ShippingAgentAccount@1000000003 : Record 14000803;
+      LTLWeightDistr@1000000004 : Record 14000807;
+      RateShopLine@1000000005 : Record 14000742;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        GetShippingAgent("Shipping Agent Code");
+        IF ShippingAgent."Disable Rate Calculation" THEN
+          EXIT;
+
+        GetShippingSetup;
+        GetPackingStation;
+        ShippingAgent.TESTFIELD("LTL Shipping Agent Account No.");
+        ShippingAgentAccount.GET(ShippingAgent."LTL Shipping Agent Account No.");
+        GetShippingAgentService("Shipping Agent Code","Shipping Agent Service","World Wide Service");
+        LTLOptionPage.GET(LTLOptionPage.Type::Package,"No.",0,0);
+
+        ClearTotalValueFields;
+        IF ShippingSetup."Default Weight Units" = ShippingSetup."Default Weight Units"::KGS THEN BEGIN
+          "Calculation Weight (LBS)" := ROUND(ShippingSetup.KiloToPound(GetWeight),1,'>');
+          "Calculation Weight" := ROUND(GetWeight,1,'>');
+        END ELSE BEGIN
+          "Calculation Weight" := ROUND(GetWeight,1,'>');
+          "Calculation Weight (LBS)" := "Calculation Weight";
+        END;
+        TESTFIELD("Calculation Weight");
+        GetCalculationFields(0,'');
+        TESTFIELD("Calculation Value");
+
+        IF COD AND ShippingAgentAccount."Calculate Charge per Package" THEN
+          TESTFIELD("COD Amount");
+
+        LTLWeightDistr.UpdateFromPackage(CurrentPackage,ShippingSetup);
+
+        IF NOT CalculateShippingCharge(
+                 RateShopLine,ShippingAgentService,ShippingAgentAccount,LTLOptionPage,LTLWeightDistr,
+                 "LTL Freight Type","Ship-to Country Code","Ship-to ZIP Code",
+                 "Calculation Weight (LBS)",1,TRUE,GiveNoError,COD,
+                 "Ship-to Type","Ship-to No.","Ship-to Code","Residential Delivery")
+        THEN
+          EXIT;
+
+        "Base Charge" := RateShopLine."Base Charge";
+        Surcharge := RateShopLine.Surcharge;
+        "Accessorial Charge" := RateShopLine."Accessorial Charge";
+        "Discount Amount" := RateShopLine."Discount Amount";
+        "Rebate Amount" := RateShopLine."Rebate Amount";
+        "Shipping Cost" := RateShopLine."Shipping Cost";
+        Markup := RateShopLine.Markup;
+
+        IF NOT Closed THEN
+          IF "Override Shipping Charge" <> 0 THEN
+            "Shipping Charge" := "Override Shipping Charge"
+          ELSE
+            "Shipping Charge" := "Shipping Cost" + Markup + "Additional Shipping Charge";
+        TestAndTransferToThirdParty(CurrentPackage,LTLOptionPage,ShippingAgentService);
+      END;
+    END;
+
+    PROCEDURE RateShop@14(RateShopHeader@1000000000 : Record 14000741;VAR RateShopLine@1000000001 : Record 14000742;CurrentShippingAgentService@1000000002 : Record 14000708);
+    VAR
+      LTLOptionPage@1000000003 : Record 14000801;
+      ShippingAgentAccount@1000000004 : Record 14000803;
+      LTLWeightDistr@1000000005 : Record 14000807;
+      InsureThroughShippingAgent@1240030000 : Boolean;
+    BEGIN
+      WITH RateShopHeader DO BEGIN
+        GetShippingAgent(CurrentShippingAgentService."Shipping Agent Code");
+        IF ShippingAgent."Disable Rate Calculation" THEN
+          EXIT;
+
+        GetShippingSetup;
+        CLEAR(PackingStation);
+        IF "Rate Shop Packing Station Code" <> '' THEN
+          PackingStation.GET("Rate Shop Packing Station Code")
+        ELSE
+          GetPackingStation;
+        ShippingAgent.TESTFIELD("LTL Shipping Agent Account No.");
+        ShippingAgentAccount.GET(ShippingAgent."LTL Shipping Agent Account No.");
+
+        IF NOT LTLOptionPage.GET(LTLOptionPage.Type::"Rate Shop",RateShopHeader."No.",0,0) THEN
+          IF NOT LTLOptionPage.GET(LTLOptionPage.Type::Package,RateShopHeader."Package No.",0,0) THEN
+            IF NOT LTLOptionPage.GET(
+                     LTLOptionPage.Type::Document,RateShopHeader."Source ID",
+                     RateShopHeader."Source Type",RateShopHeader."Source Subtype")
+            THEN
+              IF NOT LTLOptionPage.GET(
+                       LTLOptionPage.Type::"Bill of Lading",RateShopHeader."Bill of Lading No.",0,0)
+              THEN BEGIN
+                LTLOptionPage.RESET;
+                LTLOptionPage.SETCURRENTKEY(
+                  Type,"Shipping Agent Code","Shipping Agent Service","World Wide Service");
+                LTLOptionPage.SETRANGE(Type,LTLOptionPage.Type::Setup);
+                LTLOptionPage.SETRANGE(
+                  "Shipping Agent Code",CurrentShippingAgentService."Shipping Agent Code");
+                LTLOptionPage.SETRANGE("Shipping Agent Service",CurrentShippingAgentService.Code);
+                LTLOptionPage.SETRANGE(
+                  "World Wide Service",CurrentShippingAgentService."World Wide Service");
+                IF NOT LTLOptionPage.FIND('-') THEN
+                  LTLOptionPage.INIT;
+              END;
+
+        IF NOT ShippingAgentAccount."Calculate Charge per Package" THEN
+          "No. of Packages" := 1;
+        IF ShippingSetup."Default Weight Units" = ShippingSetup."Default Weight Units"::KGS THEN BEGIN
+          "Calculation Weight (LBS)" :=
+            ROUND(ShippingSetup.KiloToPound(GetWeight / "No. of Packages"),1,'>');
+          "Calculation Weight" := ROUND(GetWeight / "No. of Packages",1,'>');
+        END ELSE BEGIN
+          "Calculation Weight" := ROUND(GetWeight / "No. of Packages",1,'>');
+          "Calculation Weight (LBS)" := "Calculation Weight";
+        END;
+        TESTFIELD("Calculation Weight");
+        "Calculation Value" := GetValue / "No. of Packages";
+        TESTFIELD("Calculation Value");
+
+        CASE "Shipping Insurance" OF
+          "Shipping Insurance"::" ":
+            IF "Shipping Payment Type" = "Shipping Payment Type"::Prepaid THEN
+              InsureThroughShippingAgent := ShippingAgentAccount."Insure Through Carrier"
+            ELSE
+              InsureThroughShippingAgent := ShippingAgentAccount."Insured Third Party/Collect";
+          "Shipping Insurance"::Never:
+            InsureThroughShippingAgent := FALSE;
+          "Shipping Insurance"::Always:
+            InsureThroughShippingAgent := TRUE;
+        END;
+        "Calculation Insured Value" := GetInsuredValue(InsureThroughShippingAgent) / "No. of Packages";
+
+        "Calculation Volume" := GetVolume / "No. of Packages";
+        // Add Handling for Rate Shop for Dimensions
+        IF COD THEN
+          TESTFIELD("COD Amount");
+        "COD Amount" := "COD Amount" / "No. of Packages";
+
+        IF "LTL Freight Type" = '' THEN
+          "LTL Freight Type" := CurrentShippingAgentService."Default LTL Freight Type";
+        IF ShippingAgentAccount."Use Multiple LTL Freight Types" THEN
+          IF NOT LTLWeightDistr.GET(LTLWeightDistr.Type::"Rate Shop","No.") THEN BEGIN
+            LTLWeightDistr.INIT;
+            LTLWeightDistr.Type := LTLWeightDistr.Type::"Rate Shop";
+            LTLWeightDistr."No." := "No.";
+            LTLWeightDistr."Default Freight Type Weight" := "Calculation Weight (LBS)";
+          END;
+
+        RateShopLine.INIT;
+        RateShopLine."Rate Shop No." := "No.";
+        RateShopLine."Shipping Agent Code" := CurrentShippingAgentService."Shipping Agent Code";
+        RateShopLine."World Wide Service" := CurrentShippingAgentService."World Wide Service";
+        RateShopLine."Shipping Agent Service" := CurrentShippingAgentService.Code;
+        RateShopLine."Insure Through Shipping Agent" := InsureThroughShippingAgent;
+        RateShopLine.Sorting := CurrentShippingAgentService."Rateshop Sorting";
+        RateShopLine."Service Description" := CurrentShippingAgentService.Description;
+        IF NOT CalculateShippingCharge(
+                 RateShopLine,CurrentShippingAgentService,ShippingAgentAccount,
+                 LTLOptionPage,LTLWeightDistr,
+                 "LTL Freight Type","Ship-to Country Code","Ship-to ZIP Code",
+                 "Calculation Weight (LBS)",1,FALSE,TRUE,COD,
+                 0,"Sell-to Customer No.","Ship-to Code","Residential Delivery")
+        THEN
+          EXIT;
+
+        RateShopLine."Shipping Charge" :=
+          RateShopLine."Shipping Cost" + RateShopLine.Markup + "Additional Shipping Charge";
+        TestAndTransferToThirdPartyRS(
+          RateShopHeader,RateShopLine,LTLOptionPage,CurrentShippingAgentService);
+        IF "No. of Packages" > 1 THEN
+          RateShopLine.MultiplyCharges("No. of Packages");
+
+        IF "Value (Price)" <> 0 THEN
+          RateShopLine."Order Amount" := "Value (Price)"
+        ELSE
+          RateShopLine."Order Amount" := "Override Value";
+        RateShopLine."Total Amount" :=
+          RateShopLine."Order Amount" + RateShopLine."Shipping Charge";
+        RateShopLine.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE CalculateShippingCharge@2(VAR CurrentRateShopLine@1240030000 : Record 14000742;CurrentShippingAgentService@1240030001 : Record 14000708;CurrentShippingAgentAccount@1240030002 : Record 14000803;CurrentLTLOptionPage@1240030003 : Record 14000801;CurrentLTLWeightDistr@1240030004 : Record 14000807;DefaultLTLFreightType@1240030005 : Code[10];ToCountryCode@1240030006 : Code[10];ToZipCode@1240030007 : Code[20];CalculationWeightLBS@1240030008 : Decimal;NoOfPackages@1240030009 : Integer;CalculateForPackage@1240030010 : Boolean;GiveNoError@1240030011 : Boolean;COD@1240030012 : Boolean;ShipToType@1240030013 : Integer;ShipToNo@1240030014 : Code[20];ShipToCode@1240030015 : Code[10];ResidentialDelivery@1240030019 : Boolean) : Boolean;
+    VAR
+      LTLRate@1000000016 : Record 14000804;
+      LTLRateLine@1000000017 : Record 14000805;
+      LTLRateLine2@1000000019 : Record 14000805;
+      Country@1000000018 : Record 9;
+      LTLFreightType@1000000021 : Record 14000806;
+      BaseCharge@1000000022 : Decimal;
+      RebateAmount@1000000023 : Decimal;
+      MinimumCharge@1000000024 : Decimal;
+      CurrentWeight@1000000025 : Decimal;
+      CurrentWeightLBS@1000000026 : Decimal;
+      TotalWeightLBS@1000000027 : Decimal;
+      BaseChargeHigher@1000000028 : Decimal;
+      RebateAmountHigher@1000000029 : Decimal;
+      TotalBaseChargeHigher@1000000030 : Decimal;
+      TotalRebateAmountHigher@1000000031 : Decimal;
+      WeightDifferenceAdded@1000000032 : Boolean;
+      BaseChargeSurcharge@1240030024 : Decimal;
+      MinimumChargeSurcharge@1240030022 : Decimal;
+      BaseChargeSurchargeHigher@1240030018 : Decimal;
+      TotalBaseChargeSurchargeHigher@1240030016 : Decimal;
+      AccessorialChargeDiscount@1240030017 : Decimal;
+    BEGIN
+      WITH CurrentRateShopLine DO BEGIN
+        "Base Charge" := 0;
+        Surcharge := 0;
+        "Accessorial Charge" := 0;
+        "Discount Amount" := 0;
+        "Rebate Amount" := 0;
+        "Shipping Cost" := 0;
+        CurrentRateShopLine.Markup := 0;
+
+        IF CalculateForPackage THEN
+          IF NOT CurrentShippingAgentAccount."Calculate Charge per Package" THEN
+            EXIT(FALSE);
+
+        GetPackingStation;
+
+        LTLRate.GET(CurrentShippingAgentService."LTL Rate Code");
+
+        LTLRateLine.RESET;
+        LTLRateLine.SETCURRENTKEY(
+          "LTL Rate Code","LTL Freight Type","From Zip Code Min","From Zip Code Max",
+          "To Country Code","To ZIP Code Min","To ZIP Code Max","Minimum Weight",Type);
+        LTLRateLine.SETRANGE("LTL Rate Code",LTLRate.Code);
+        LTLRateLine.SETFILTER("From Zip Code Min",'<=%1',PackingStation."Ship-from ZIP Code");
+        LTLRateLine.SETFILTER("From Zip Code Max",'>=%1',PackingStation."Ship-from ZIP Code");
+        IF NOT Country.GET(ToCountryCode) THEN
+          CLEAR(Country);
+        IF EShipValidation."Country/Region-LTLWorldWideService"(Country) THEN BEGIN
+          Country.TESTFIELD(LTL);
+          Country.TESTFIELD("ISO 2 char Country Code");
+          LTLRateLine.SETRANGE("To Country Code",Country."ISO 2 char Country Code");
+        END ELSE BEGIN
+          LTLRateLine.SETRANGE("To Country Code",'');
+          IF STRLEN(ToZipCode) > 5 THEN
+            ToZipCode := COPYSTR(ToZipCode,1,5);
+        END;
+
+        LTLRateLine.SETFILTER("To ZIP Code Min",'<=%1',ToZipCode);
+        LTLRateLine.SETFILTER("To ZIP Code Max",'>=%1',ToZipCode);
+        LTLRateLine.SETRANGE(Type,LTLRateLine.Type::Charge);
+
+        TotalWeightLBS := 0;
+        MinimumCharge := 0;
+        TotalBaseChargeHigher := 0;
+        TotalRebateAmountHigher := 0;
+        WeightDifferenceAdded := FALSE;
+        LTLFreightType.RESET;
+        LTLFreightType.SETCURRENTKEY("Standard Freight Type");
+        IF NOT CurrentShippingAgentAccount."Use Multiple LTL Freight Types" THEN
+          LTLFreightType.SETRANGE(Code,DefaultLTLFreightType);
+        IF LTLFreightType.FIND('-') THEN
+          REPEAT
+            LTLFreightType.SETFILTER(
+              "Standard Freight Type",'>%1',LTLFreightType."Standard Freight Type");
+            IF CurrentShippingAgentAccount."Use Multiple LTL Freight Types" THEN BEGIN
+              CurrentWeight := 0;
+              CurrentWeightLBS := 0;
+              CASE LTLFreightType."Standard Freight Type" OF
+                LTLFreightType."Standard Freight Type"::"50":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 50 Weight";
+                LTLFreightType."Standard Freight Type"::"55":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 55 Weight";
+                LTLFreightType."Standard Freight Type"::"60":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 60 Weight";
+                LTLFreightType."Standard Freight Type"::"65":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 65 Weight";
+                LTLFreightType."Standard Freight Type"::"70":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 70 Weight";
+                LTLFreightType."Standard Freight Type"::"77.5":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 77.5 Weight";
+                LTLFreightType."Standard Freight Type"::"85":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 85 Weight";
+                LTLFreightType."Standard Freight Type"::"92.5":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 92.5 Weight";
+                LTLFreightType."Standard Freight Type"::"100":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 100 Weight";
+                LTLFreightType."Standard Freight Type"::"110":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 110 Weight";
+                LTLFreightType."Standard Freight Type"::"125":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 125 Weight";
+                LTLFreightType."Standard Freight Type"::"150":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 150 Weight";
+                LTLFreightType."Standard Freight Type"::"175":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 175 Weight";
+                LTLFreightType."Standard Freight Type"::"200":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 200 Weight";
+                LTLFreightType."Standard Freight Type"::"250":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 250 Weight";
+                LTLFreightType."Standard Freight Type"::"300":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 300 Weight";
+                LTLFreightType."Standard Freight Type"::"350":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 350 Weight";
+                LTLFreightType."Standard Freight Type"::"400":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 400 Weight";
+                LTLFreightType."Standard Freight Type"::"500":
+                  CurrentWeight := CurrentLTLWeightDistr."Class 500 Weight";
+              END;
+
+              IF LTLFreightType.Code = DefaultLTLFreightType THEN
+                CurrentWeight := CurrentWeight + CurrentLTLWeightDistr."Default Freight Type Weight";
+              IF ShippingSetup."Default Weight Units" = ShippingSetup."Default Weight Units"::KGS THEN
+                CurrentWeightLBS := ShippingSetup.KiloToPound(CurrentWeight)
+              ELSE
+                CurrentWeightLBS := CurrentWeight;
+            END ELSE
+              CurrentWeightLBS := CalculationWeightLBS;
+
+            IF CurrentWeightLBS <> 0 THEN BEGIN
+              TotalWeightLBS := TotalWeightLBS + CurrentWeightLBS;
+
+              LTLRateLine.SETRANGE("LTL Freight Type",LTLFreightType.Code);
+              LTLRateLine.SETFILTER("Minimum Weight",'<=%1',CalculationWeightLBS);
+
+              IF GiveNoError THEN BEGIN
+                IF NOT LTLRateLine.FIND('+') THEN
+                  EXIT(FALSE);
+              END ELSE
+                LTLRateLine.FIND('+');
+
+              BaseCharge := ROUND(LTLRateLine."Rate per 100 Pound" * CurrentWeightLBS / 100);
+              BaseChargeSurcharge := CalculateSurcharge(CurrentShippingAgentAccount,BaseCharge);
+              RebateAmount := ROUND((LTLRateLine."Rebate %" / 100) * (BaseCharge + BaseChargeSurcharge));
+
+              IF LTLRate."Allow Next Above if Cheaper" THEN BEGIN
+                LTLRateLine2.COPY(LTLRateLine);
+                LTLRateLine2.SETRANGE("Minimum Weight");
+                IF LTLRateLine2.NEXT <> 0 THEN BEGIN
+                  IF WeightDifferenceAdded THEN BEGIN
+                    BaseChargeHigher :=
+                      ROUND(LTLRateLine2."Rate per 100 Pound" * CurrentWeightLBS / 100);
+                  END ELSE BEGIN
+                    BaseChargeHigher :=
+                      ROUND(
+                        LTLRateLine2."Rate per 100 Pound" *
+                        (CurrentWeightLBS + (LTLRateLine2."Minimum Weight" - CalculationWeightLBS)) / 100);
+                    WeightDifferenceAdded := TRUE;
+                  END;
+                  BaseChargeSurchargeHigher :=
+                    CalculateSurcharge(CurrentShippingAgentAccount,BaseChargeHigher);
+                END ELSE BEGIN
+                  BaseChargeHigher := BaseCharge;
+                  BaseChargeSurchargeHigher := BaseChargeSurcharge;
+                END;
+
+                RebateAmountHigher :=
+                  ROUND((LTLRateLine."Rebate %" / 100) * (BaseChargeHigher + BaseChargeSurchargeHigher));
+                TotalBaseChargeHigher := TotalBaseChargeHigher + BaseChargeHigher;
+                TotalBaseChargeSurchargeHigher :=
+                  TotalBaseChargeSurchargeHigher + BaseChargeSurchargeHigher;
+                TotalRebateAmountHigher := TotalRebateAmountHigher + RebateAmountHigher;
+              END;
+
+              "Base Charge" := "Base Charge" + BaseCharge;
+              Surcharge := Surcharge + BaseChargeSurcharge;
+              "Rebate Amount" := "Rebate Amount" + RebateAmount;
+
+              LTLRateLine2.COPY(LTLRateLine);
+              LTLRateLine2.SETFILTER("Minimum Weight",'<=%1',CalculationWeightLBS);
+              LTLRateLine2.SETRANGE(Type,LTLRateLine.Type::Minimum);
+              IF LTLRateLine2.FIND('+') THEN
+                IF LTLRateLine2."Minimum Charge" > MinimumCharge THEN BEGIN
+                  MinimumCharge := LTLRateLine2."Minimum Charge";
+                  MinimumChargeSurcharge :=
+                    CalculateSurcharge(CurrentShippingAgentAccount,MinimumCharge);
+                END;
+            END;
+          UNTIL LTLFreightType.NEXT = 0;
+
+        IF (TotalBaseChargeHigher <> 0) AND (TotalBaseChargeHigher < "Base Charge") THEN BEGIN
+          "Base Charge" := TotalBaseChargeHigher;
+          Surcharge := TotalBaseChargeSurchargeHigher;
+          "Rebate Amount" := TotalRebateAmountHigher;
+        END;
+
+        IF CalculationWeightLBS - TotalWeightLBS > 1 THEN
+          IF GiveNoError THEN
+            EXIT(FALSE)
+          ELSE
+            ERROR(Text001,TotalWeightLBS,CalculationWeightLBS);
+
+        IF COD THEN
+          "Accessorial Charge" := "Accessorial Charge" + LTLRate."COD Charge";
+        IF CurrentLTLOptionPage."Ship Notification" THEN
+          "Accessorial Charge" := "Accessorial Charge" + LTLRate."Ship Notification Charge";
+        IF CurrentLTLOptionPage."Construction Site Delivery" THEN
+          "Accessorial Charge" := "Accessorial Charge" + LTLRate."Construction Site Delivery Chg";
+        IF CurrentLTLOptionPage."Inside Delivery" THEN
+          "Accessorial Charge" := "Accessorial Charge" + LTLRate."Inside Delivery Charge";
+        IF CurrentLTLOptionPage."Liftgate Delivery" THEN
+          "Accessorial Charge" := "Accessorial Charge" + LTLRate."Liftgate Delivery Charge";
+        IF CurrentLTLOptionPage."Notify Prior to Delivery" THEN
+          "Accessorial Charge" := "Accessorial Charge" + LTLRate."Notify Prior to Delivery Chg.";
+        IF ResidentialDelivery THEN
+          "Accessorial Charge" := "Accessorial Charge" + LTLRate."Residential Delivery Charge";
+        IF CurrentLTLOptionPage."Dangerous Goods" THEN
+          "Accessorial Charge" := "Accessorial Charge" + LTLRate."Dangerous Goods Charge";
+        IF CurrentLTLOptionPage."Single Shipment" THEN
+          "Accessorial Charge" := "Accessorial Charge" + LTLRate."Single Shipment Charge";
+        IF CurrentLTLOptionPage."Additional Handling" THEN
+          "Accessorial Charge" := "Accessorial Charge" + LTLRate."Additional Handling Charge";
+
+        "Discount Amount" :=
+          ROUND(
+            (CurrentShippingAgentService."LTL Discount %" / 100) *
+            ("Base Charge" + Surcharge));
+        IF LTLRate."Discount on Accessorial Charge" AND ("Accessorial Charge" <> 0) THEN
+          AccessorialChargeDiscount :=
+            ROUND((CurrentShippingAgentService."LTL Discount %" / 100) * "Accessorial Charge")
+        ELSE
+          AccessorialChargeDiscount := 0;
+
+        IF LTLRate."Discount on Minimum Charge" THEN BEGIN
+          MinimumCharge :=
+            ROUND((1 - CurrentShippingAgentService."LTL Discount %" / 100) * MinimumCharge);
+          MinimumChargeSurcharge := CalculateSurcharge(CurrentShippingAgentAccount,MinimumCharge);
+        END;
+
+        IF MinimumCharge + MinimumChargeSurcharge >
+           "Base Charge" + Surcharge - "Discount Amount" - "Rebate Amount"
+        THEN BEGIN
+          "Shipping Cost" :=
+            MinimumCharge + MinimumChargeSurcharge + "Accessorial Charge" - AccessorialChargeDiscount;
+          IF LTLRate."Markup on Minimum Charge" THEN
+            Markup :=
+              Shipping.GetMarkup(
+                CurrentShippingAgentService,"Shipping Cost",ShipToType,ShipToNo,ShipToCode)
+          ELSE
+            Markup := 0;
+        END ELSE BEGIN
+          "Shipping Cost" :=
+            "Base Charge" + Surcharge + "Accessorial Charge" -
+            "Discount Amount" - "Rebate Amount" - AccessorialChargeDiscount;
+          Markup :=
+            Shipping.GetMarkup(
+              CurrentShippingAgentService,"Shipping Cost",ShipToType,ShipToNo,ShipToCode);
+        END;
+        "Discount Amount" := "Discount Amount" + AccessorialChargeDiscount;
+
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE CalculateSurcharge@1240030000(CurrentShippingAgentAccount@1240030000 : Record 14000803;Amount@1240030001 : Decimal) : Decimal;
+    BEGIN
+      WITH CurrentShippingAgentAccount DO BEGIN
+        CASE "Surcharge Type" OF
+          "Surcharge Type"::Amount:
+            EXIT("Fuel Surcharge");
+          "Surcharge Type"::Percent:
+            EXIT(ROUND(Amount * "Fuel Surcharge" / 100));
+          ELSE
+            EXIT(0);
+        END;
+      END;
+    END;
+
+    PROCEDURE ClosePackage@7(VAR CurrentPackage@1240030000 : Record 14000701;VAR MultiDocPackageTmp@1240030001 : Record 14000701;CurrentShippingAgent@1240030002 : Record 291;PrintLabel@1240030003 : Boolean);
+    VAR
+      LTLOptionPage@1000000002 : Record 14000801;
+      ShippingAgentAccount@1000000003 : Record 14000803;
+      MultiDocPackageMgt@1240030004 : Codeunit 14000703;
+      LTLWeightDistr@1000000004 : Record 14000807;
+      RateShopLine@1000000007 : Record 14000742;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        TESTFIELD(Closed,FALSE);
+
+        IF CurrentShippingAgent."Enter Ext. Track. No. on Close" THEN
+          Shipping.EnterExternalTrackingNo(CurrentPackage,FALSE);
+
+        IF "Manual Shipment" THEN BEGIN
+          "Closed by Packing Station Code" := PackingStation.Code;
+          ClearTotalValueFields;
+          VALIDATE("Calculation Weight",GetWeight);
+          GetCalculationFields(0,'');
+          "Packing Date" := WORKDATE;
+          "Packing Time" := TIME;
+          "Packed By" := USERID;
+          "Shipping Cost" := 0;
+          Markup := 0;
+          IF "Override Shipping Charge" <> 0 THEN
+            "Shipping Charge" := "Override Shipping Charge"
+          ELSE
+            "Shipping Charge" := "Shipping Cost" + Markup + "Additional Shipping Charge";
+          Closed := TRUE;
+          MODIFY;
+          COMMIT;
+
+          IF "Multi Document Package" THEN BEGIN
+            GetShippingSetup;
+            GetPackingStation;
+            MultiDocPackageMgt.SplitMultiDocPackage(
+              CurrentPackage,MultiDocPackageTmp,PackingStation,ShippingSetup);
+            COMMIT;
+          END;
+
+          EXIT;
+        END;
+
+        GetShippingSetup;
+        GetPackingStation;
+
+        TESTFIELD("Shipping Agent Account No.");
+        ShippingAgentAccount.GET("Shipping Agent Account No.");
+        ShippingAgentAccount.TESTFIELD("Shipping Agent Code","Shipping Agent Code");
+        GetShippingAgentService("Shipping Agent Code","Shipping Agent Service","World Wide Service");
+        LTLOptionPage.GET(LTLOptionPage.Type::Package,"No.",0,0);
+
+        GetShippingAgent("Shipping Agent Code");
+        CheckName(
+          ShippingAgent,0,"Ship-to Name","Ship-to Name 2","Ship-to Contact",
+          FIELDCAPTION("Ship-to Name"),FIELDCAPTION("Ship-to Name 2"),FIELDCAPTION("Ship-to Contact"));
+        CheckAddress(
+          ShippingAgent,0,"Ship-to Address","Ship-to Address 2","Ship-to City",
+          "Ship-to ZIP Code","Ship-to State","Ship-to Country Code",
+          FIELDCAPTION("Ship-to Address"),FIELDCAPTION("Ship-to Address 2"),
+          FIELDCAPTION("Ship-to City"),FIELDCAPTION("Ship-to ZIP Code"),
+          FIELDCAPTION("Ship-to State"),FIELDCAPTION("Ship-to Country Code"));
+
+        "Closed by Packing Station Code" := PackingStation.Code;
+        ClearTotalValueFields;
+        IF ShippingSetup."Default Weight Units" = ShippingSetup."Default Weight Units"::KGS THEN BEGIN
+          "Calculation Weight (LBS)" :=
+            ROUND(ShippingSetup.KiloToPound(GetWeight),1,'>');
+          "Calculation Weight" := ROUND(GetWeight,1,'>');
+        END ELSE BEGIN
+          "Calculation Weight" := ROUND(GetWeight,1,'>');
+          "Calculation Weight (LBS)" := "Calculation Weight";
+        END;
+        TESTFIELD("Calculation Weight (LBS)");
+        GetCalculationFields(0,'');
+        IF COD AND ShippingAgentAccount."Calculate Charge per Package" THEN
+          TESTFIELD("COD Amount");
+
+        TESTFIELD("LTL Freight Type");
+
+        IF ShippingAgentAccount."Use Multiple LTL Freight Types" THEN BEGIN
+          IF NOT LTLWeightDistr.GET(LTLWeightDistr.Type::Package,"No.") THEN BEGIN
+            LTLWeightDistr.Type := LTLWeightDistr.Type::Package;
+            LTLWeightDistr."No." := "No.";
+            LTLWeightDistr.UpdateFromPackage(CurrentPackage,ShippingSetup);
+            LTLWeightDistr.INSERT;
+          END ELSE BEGIN
+            LTLWeightDistr.UpdateFromPackage(CurrentPackage,ShippingSetup);
+            LTLWeightDistr.MODIFY;
+          END;
+        END ELSE
+          CLEAR(LTLWeightDistr);
+
+        CalculateShippingCharge(
+          RateShopLine,ShippingAgentService,ShippingAgentAccount,LTLOptionPage,LTLWeightDistr,
+          "LTL Freight Type","Ship-to Country Code","Ship-to ZIP Code",
+          "Calculation Weight (LBS)",1,TRUE,FALSE,COD,
+          "Ship-to Type","Ship-to No.","Ship-to Code","Residential Delivery");
+
+        "Base Charge" := RateShopLine."Base Charge";
+        Surcharge := RateShopLine.Surcharge;
+        "Accessorial Charge" := RateShopLine."Accessorial Charge";
+        "Discount Amount" := RateShopLine."Discount Amount";
+        "Rebate Amount" := RateShopLine."Rebate Amount";
+        "Shipping Cost" := RateShopLine."Shipping Cost";
+        Markup := RateShopLine.Markup;
+        IF "Override Shipping Charge" <> 0 THEN
+          "Shipping Charge" := "Override Shipping Charge"
+        ELSE
+          "Shipping Charge" := "Shipping Cost" + Markup + "Additional Shipping Charge";
+        TestAndTransferToThirdParty(CurrentPackage,LTLOptionPage,ShippingAgentService);
+
+        IF COD AND "Add Shipping Charge to COD Amt" THEN
+          "COD Amount" := "COD Amount" + "Shipping Charge";
+
+        "Packing Date" := WORKDATE;
+        "Packing Time" := TIME;
+        "Packed By" := USERID;
+        Closed := TRUE;
+        MODIFY;
+        COMMIT;
+
+        IF "Multi Document Package" THEN BEGIN
+          GetShippingSetup;
+          GetPackingStation;
+          MultiDocPackageMgt.SplitMultiDocPackage(
+            CurrentPackage,MultiDocPackageTmp,PackingStation,ShippingSetup);
+          COMMIT;
+        END;
+
+        IF PrintLabel THEN
+          PrintPackageLabel(CurrentPackage);
+      END;
+    END;
+
+    PROCEDURE OpenPackage@16(VAR CurrentPackage@1000000000 : Record 14000701);
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        TESTFIELD(Closed);
+        TESTFIELD("Manifest No.",'');
+
+        IF "Manual Shipment" THEN BEGIN
+          Closed := FALSE;
+          MODIFY;
+          COMMIT;
+
+          EXIT;
+        END;
+
+        // Code for Delete Package
+
+        "External Tracking No." := '';
+
+        IF COD AND "Add Shipping Charge to COD Amt" THEN
+          "COD Amount" := "COD Amount" - "Shipping Charge";
+
+        Closed := FALSE;
+        MODIFY;
+        COMMIT;
+      END;
+    END;
+
+    PROCEDURE ReOpenPostedPackage@1(VAR CurrentPostedPackage@1000000000 : Record 14000704);
+    BEGIN
+      WITH CurrentPostedPackage DO BEGIN
+        TESTFIELD(Closed);
+        TESTFIELD("Manifest No.",'');
+
+        IF "Manual Shipment" THEN BEGIN
+          Closed := FALSE;
+          MODIFY;
+          COMMIT;
+
+          EXIT;
+        END;
+
+        // Code for Delete Package
+
+        "External Tracking No." := '';
+
+        IF COD AND "Add Shipping Charge to COD Amt" THEN
+          "COD Amount" := "COD Amount" - "Shipping Charge";
+
+        Closed := FALSE;
+        MODIFY;
+        COMMIT;
+      END;
+    END;
+
+    PROCEDURE PrintPackageLabel@20(CurrentPackage@1000000000 : Record 14000701);
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        IF "Manual Shipment" THEN
+          EXIT;
+
+        TESTFIELD(Closed);
+
+        GetPackingStation;
+        GetShippingAgentService("Shipping Agent Code","Shipping Agent Service","World Wide Service");
+
+        // Code to Print Label
+
+      END;
+    END;
+
+    PROCEDURE RePrintPostedPackageLabel@21(VAR CurrentPostedPackage@1000000000 : Record 14000704);
+    VAR
+      Package@1000000001 : Record 14000701;
+    BEGIN
+      WITH CurrentPostedPackage DO BEGIN
+        IF "Manual Shipment" THEN
+          EXIT;
+
+        Package.TRANSFERFIELDS(CurrentPostedPackage);
+
+        PrintPackageLabel(Package);
+      END;
+    END;
+
+    PROCEDURE CreateManifest@49(CurrentShippingAgentAccount@1000000000 : Record 14000803);
+    VAR
+      ManifestHeader@1000000001 : Record 14000712;
+    BEGIN
+      WITH CurrentShippingAgentAccount DO BEGIN
+        TESTFIELD("Shipping Agent Code");
+
+        CLEAR(ManifestHeader);
+        ManifestHeader.INSERT(TRUE);
+        ManifestHeader."Shipping Agent Code" := "Shipping Agent Code";
+        ManifestHeader."Shipping Agent Account" := "Account No.";
+        ManifestHeader.MODIFY(TRUE);
+
+        ManifestHeader.GetSuggestedLines;
+
+        COMMIT;
+
+        PAGE.RUNMODAL(PAGE::Manifest,ManifestHeader);
+      END;
+    END;
+
+    PROCEDURE CloseManifest@47(VAR CurrentManifestHeader@1000000000 : Record 14000712);
+    BEGIN
+      WITH CurrentManifestHeader DO BEGIN
+        TESTFIELD(Posted);
+        TESTFIELD("LTL Processing Required");
+
+        // Code to close Manifest
+
+        LOCKTABLE;
+        FIND;
+        "LTL Processing Required" := FALSE;
+        MODIFY;
+        COMMIT;
+      END;
+    END;
+
+    PROCEDURE OpenManifest@48(VAR CurrentManifestHeader@1000000000 : Record 14000712);
+    BEGIN
+      WITH CurrentManifestHeader DO BEGIN
+        TESTFIELD(Posted,FALSE);
+        TESTFIELD("LTL Processing Required");
+
+        // Code to open Manifest
+
+        LOCKTABLE;
+        FIND;
+        "LTL Processing Required" := FALSE;
+        MODIFY;
+        COMMIT;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetPackingStation@51();
+    BEGIN
+      IF PackingStation.Code = '' THEN
+        PackingStation.GetPackingStation;
+    END;
+
+    LOCAL PROCEDURE GetShippingSetup@33();
+    BEGIN
+      IF NOT ShippingSetupRetrieved THEN BEGIN
+        ShippingSetup.GET;
+        ShippingSetupRetrieved := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetShippingAgent@45(ShippingAgentCode@1000000000 : Code[10]);
+    BEGIN
+      IF (ShippingAgent.Code <> ShippingAgentCode) OR
+         (ShippingAgentCode = '')
+      THEN
+        ShippingAgent.GET(ShippingAgentCode);
+    END;
+
+    LOCAL PROCEDURE GetShippingAgentService@15(ShippingAgentCode@1000000000 : Code[10];ShippingAgentServiceCode@1000000001 : Code[30];WorldWideService@1000000002 : Boolean);
+    BEGIN
+      IF (ShippingAgentService.Code <> ShippingAgentCode) OR
+         (ShippingAgentService."World Wide Service" <> WorldWideService) OR
+         (ShippingAgentService.Code <> ShippingAgentServiceCode) OR
+         (ShippingAgentServiceCode = '')
+      THEN
+        ShippingAgentService.GET(ShippingAgentCode,ShippingAgentServiceCode,WorldWideService);
+    END;
+
+    LOCAL PROCEDURE TestAndTransferToThirdParty@60(VAR CurrentPackage@1000000000 : Record 14000701;LTLOptionPage@1000000001 : Record 14000801;CurrentShippingAgentService@1000000002 : Record 14000708);
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        IF "Shipping Payment Type" <> "Shipping Payment Type"::Prepaid THEN
+          TransferToThirdPartyCost(CurrentShippingAgentService."Markup on Zero Shipping Cost")
+        ELSE
+          ClearThirdPartyCost;
+      END;
+    END;
+
+    LOCAL PROCEDURE TestAndTransferToThirdPartyRS@61(CurrentRateShopHeader@1000000000 : Record 14000741;VAR CurrentRateShopLine@1000000001 : Record 14000742;LTLOptionPage@1000000002 : Record 14000801;CurrentShippingAgentService@1000000003 : Record 14000708);
+    BEGIN
+      WITH CurrentRateShopLine DO BEGIN
+        IF CurrentRateShopHeader."Shipping Payment Type" <>
+           CurrentRateShopHeader."Shipping Payment Type"::Prepaid
+        THEN
+          TransferToThirdPartyCost(
+            CurrentRateShopHeader,CurrentShippingAgentService."Markup on Zero Shipping Cost")
+        ELSE
+          ClearThirdPartyCost;
+      END;
+    END;
+
+    PROCEDURE TrackPackage@1240030001(CurrentPackage@1240030000 : Record 14000701);
+    VAR
+      Country@1240030010 : Record 9;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        ShippingAgent.GET("Shipping Agent Code");
+
+        Country.INIT;
+        IF "Ship-to Country Code" <> '' THEN
+          Country.GET("Ship-to Country Code");
+
+        HYPERLINK(
+          STRSUBSTNO(
+            ShippingAgent."Internet Address","External Tracking No.",Country.Code,
+            "Pickup Date",ShippingAgent."Account No."));
+      END;
+    END;
+
+    PROCEDURE CheckName@1240030019(ShippingAgent@1240030010 : Record 291;FromType@1240030004 : 'Package,Document,Master Data';VAR Name@1240030001 : Text[100];VAR Name2@1240030002 : Text[100];VAR Contact@1240030005 : Text[100];NameCaption@1240030009 : Text[100];Name2Caption@1240030008 : Text[100];ContactCaption@1240030000 : Text[100]);
+    BEGIN
+    END;
+
+    PROCEDURE CheckAddress@1240031001(ShippingAgent@1240030010 : Record 291;FromType@1240030014 : 'Package,Document,Master Data';VAR Address@1240030012 : Text[100];VAR Address2@1240030011 : Text[100];VAR City@1240030009 : Text[100];VAR PostCode@1240030008 : Code[100];VAR State@1240030007 : Text[100];VAR Country@1240030006 : Code[100];AddressCaption@1240030005 : Text[100];Address2Caption@1240030004 : Text[100];CityCaption@1240030003 : Text[100];PostCodeCaption@1240030002 : Text[100];StateCaption@1240030001 : Text[100];CountryCaption@1240030000 : Text[100]);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

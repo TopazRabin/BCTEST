@@ -1,0 +1,409 @@
+OBJECT Codeunit 23044529 WHI Links and Documents
+{
+  OBJECT-PROPERTIES
+  {
+    Date=04/15/19;
+    Time=[ 6:19:14 PM];
+    Version List=WHI2.4.7684.0;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      cuWHISetup@1000000000 : Codeunit 23044590;
+      cuCommonBase@1000000001 : Codeunit 23044519;
+      cuCommonFuncs@1000000002 : Codeunit 23044501;
+
+    PROCEDURE insertRecordLink@1000000109(prrRecRef@1000000002 : RecordRef;ptxtDescription@1000000011 : Text;ptxtNote@1000000005 : Text;pcodUserID@1000000006 : Code[50];pnPageID@1000000010 : Integer;pcodNotifyUser@1000000012 : Code[50]);
+    VAR
+      lrecRecLink@1000000001 : Record 2000000068;
+      losOutStream@1000000004 : OutStream;
+      loBinStream@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.BinaryWriter";
+      loTextEncoder@1000000000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      ltxtLink@1000000007 : Text;
+      lrecServerInst@1000000009 : Record 2000000112;
+    BEGIN
+      // Creates a record link with note
+      IF ptxtNote<>'' THEN BEGIN
+        lrecServerInst.GET(SERVICEINSTANCEID);
+
+        ltxtLink := STRSUBSTNO('dynamicsnav://%1:%2/%3/%4/runpage?page=%5&personalization=%5&bookmark=%6&mode=Edit',
+          lrecServerInst."Server Computer Name",
+          lrecServerInst."Server Port",
+          lrecServerInst."Server Instance Name",
+          COMPANYNAME,
+          pnPageID,
+          FORMAT(prrRecRef.RECORDID,0,10));
+
+        lrecRecLink.GET(prrRecRef.ADDLINK(ltxtLink));
+        lrecRecLink.Note.CREATEOUTSTREAM(losOutStream);
+        loBinStream := loBinStream.BinaryWriter(losOutStream, loTextEncoder.UTF8);
+        loBinStream.Write(ptxtNote);
+        lrecRecLink.Type := lrecRecLink.Type::Note;
+        lrecRecLink.Description := ptxtDescription;
+        lrecRecLink."User ID" := pcodUserID;
+        IF pcodNotifyUser<>'' THEN BEGIN
+          lrecRecLink.Notify := TRUE;
+          lrecRecLink."To User ID" := pcodNotifyUser;
+        END;//if
+        lrecRecLink.MODIFY;
+      END;//if
+    END;
+
+    PROCEDURE GetRecordRef@1000000003(VAR ptrecEventParams@1000000000 : TEMPORARY Record 23044511;VAR poutRecordRef@1000000001 : RecordRef) pbOutFound : Boolean;
+    VAR
+      lcodDocument@1000000004 : Code[20];
+      liDocumentLine@1000000005 : Integer;
+      lrecLocation@1000000002 : Record 14;
+      lrecIgnoredFoundWithSearch@1000000007 : Record 23044529;
+    BEGIN
+      //
+      // Will attempt to use what's supplied in the event parameters to find an
+      // appropriate record ref based on documents used in WHI
+      //
+      ptrecEventParams.getLocation( lrecLocation );
+
+      pbOutFound := GetRecordRefKeys(
+          lrecLocation.Code, // pcodLoc
+          ptrecEventParams.getBin(), // pcodBin
+          ptrecEventParams.getDocumentNo(), // document
+          ptrecEventParams.getLineNo(), // piline
+          ptrecEventParams.getItemNo(), // pcodItem
+          FALSE, // pbWithQuantityField
+          ptrecEventParams,
+          poutRecordRef, // out recordref
+          lrecIgnoredFoundWithSearch );
+    END;
+
+    PROCEDURE GetRecordRefKeys@1000000031(pcodLoc@1000000005 : Code[20];pcodBin@1000000004 : Code[20];pcodDoc@1000000000 : Code[20];piLine@1000000012 : Integer;pcodItem@1000000013 : Text;pbWithQuantityField@1000000006 : Boolean;VAR ptrecEventParams@1240060000 : TEMPORARY Record 23044511;VAR prrefOutFoundRecord@1000000001 : RecordRef;VAR precOutSearchRule@1000000011 : Record 23044529) pbOutFound : Boolean;
+    VAR
+      lrecDocLinkSearch@1000000002 : Record 23044529;
+      lrrefValue@1000000009 : RecordRef;
+      lfrefFieldNo@1000000008 : FieldRef;
+      lfrefFieldLineNo@1000000010 : FieldRef;
+      liEventID@1000000003 : Integer;
+    BEGIN
+      //
+      // Will attempt to use what's supplied in the event parameters to find an
+      // appropriate record ref based on documents used in WHI
+      //
+      pbOutFound := FALSE;
+
+      lrecDocLinkSearch.SETCURRENTKEY("Search Order", "Entry No.");
+      IF ( pbWithQuantityField ) THEN BEGIN
+        lrecDocLinkSearch.SETFILTER( "Qty. Adjust Field No.", '>0');
+      END;
+
+      liEventID := ptrecEventParams.getEvent();
+      IF (liEventID <> 0) THEN BEGIN
+        lrecDocLinkSearch.SETRANGE("Specific Event", liEventID);
+        IF (NOT lrecDocLinkSearch.FINDSET(FALSE)) THEN BEGIN
+          lrecDocLinkSearch.SETRANGE("Specific Event", 0);
+        END;
+      END;
+
+      IF (lrecDocLinkSearch.FINDSET(FALSE)) THEN BEGIN
+        REPEAT
+          lrrefValue.OPEN(lrecDocLinkSearch."Table No.");
+          IF ( lrecDocLinkSearch."Extra Filter" <> '' ) THEN BEGIN
+            lrrefValue.SETVIEW( getTokenFilter(
+              lrecDocLinkSearch."Extra Filter", ptrecEventParams ) );
+          END;
+
+          IF ( pcodDoc <> '' ) AND ( lrecDocLinkSearch."Doc. Field No." <> 0 ) THEN BEGIN // doc no
+            lfrefFieldNo := lrrefValue.FIELD(lrecDocLinkSearch."Doc. Field No.");
+            lfrefFieldNo.SETFILTER( pcodDoc );
+          END;
+
+          IF (0 <> piLine )  AND ( lrecDocLinkSearch."Line Field No." <> 0 ) THEN BEGIN // line No.
+            lfrefFieldLineNo := lrrefValue.FIELD(lrecDocLinkSearch."Line Field No.");
+            lfrefFieldLineNo.SETRANGE(piLine);
+          END;
+
+
+          IF ( lrrefValue.FINDFIRST() ) AND ( piLine > 0 ) AND ( pcodDoc <> '' ) THEN BEGIN
+            //
+            // already have a document and line.
+            // and it's good enough.
+          END ELSE BEGIN
+            //
+            // In this condition, we don't have a document line / document field
+            // so, let's look for more details.
+            //
+            IF ( pcodItem <> '' ) AND ( lrecDocLinkSearch."Item Field No." <> 0 ) THEN BEGIN // Item no
+              lfrefFieldNo := lrrefValue.FIELD(lrecDocLinkSearch."Item Field No.");
+              lfrefFieldNo.SETFILTER( pcodItem );
+            END;
+
+            IF ( pcodLoc <> '' ) AND ( lrecDocLinkSearch."Location Field No." <> 0 ) THEN BEGIN // location no
+              lfrefFieldNo := lrrefValue.FIELD(lrecDocLinkSearch."Location Field No.");
+              lfrefFieldNo.SETFILTER( STRSUBSTNO( '%1|''''' , pcodLoc )  ); //known location or blank
+            END;
+
+            IF ( pcodBin <> '' ) AND ( lrecDocLinkSearch."Bin Field No." <> 0 ) THEN BEGIN // Bin no
+              lfrefFieldNo := lrrefValue.FIELD(lrecDocLinkSearch."Bin Field No.");
+              lfrefFieldNo.SETFILTER( STRSUBSTNO( '%1|''''' , pcodBin ) ); // known bin or blank
+            END;
+
+          END; // can we find just by doc line ?
+
+          IF (lrrefValue.FINDFIRST()) THEN BEGIN
+            prrefOutFoundRecord := lrrefValue;
+            pbOutFound := TRUE;
+          END ELSE BEGIN
+            lrrefValue.CLOSE();
+          END;
+          precOutSearchRule := lrecDocLinkSearch;
+        UNTIL ((lrecDocLinkSearch.NEXT = 0) OR pbOutFound);
+      END;
+    END;
+
+    PROCEDURE insertRecordLinkOnDocument@1000000001(VAR ptrecEventParams@1000000000 : TEMPORARY Record 23044511;ptxtServerPath@1000000001 : Text) liOutID : Integer;
+    VAR
+      lrrefSomething@1000000002 : RecordRef;
+      lrecPDAConfig@1000000003 : Record 23044504;
+    BEGIN
+      //
+      // Using the supplied parameters, attempts to find an appropriate
+      // record to insert on.   If it can't find one, then it will
+      // just connect the upload to the Device configuration
+      //
+      GetRecordRef( ptrecEventParams, lrrefSomething );
+
+      // if we couldn't find what to connect this to, then
+      // connect to the device configuration.
+      IF ( 0 =  lrrefSomething.NUMBER ) THEN BEGIN
+        cuCommonFuncs.getDeviceConfig( lrecPDAConfig,ptrecEventParams );
+        lrrefSomething.GETTABLE( lrecPDAConfig );
+      END;
+
+      // add the link
+      liOutID := lrrefSomething.ADDLINK( ptxtServerPath );
+    END;
+
+    PROCEDURE getTokenFilter@1240060001(ptxtInputFilter@1240060000 : Text[250];VAR ptrecEventParams@1240060001 : TEMPORARY Record 23044511) rtxtOut : Text[250];
+    VAR
+      liStartPostion@1240060002 : Integer;
+      liEndPostion@1240060003 : Integer;
+      ltxtFieldName@1240060004 : Text[80];
+      liFieldNameLength@1240060005 : Integer;
+      ltxtFieldValue@1240060006 : Text[80];
+      ltxtCurrentSearchString@1240060007 : Text[250];
+    BEGIN
+      //
+      // Using this to find configured filter field
+      //
+
+      liStartPostion := -1;
+      liEndPostion := -1;
+      rtxtOut := '';
+      ltxtCurrentSearchString := COPYSTR(ptxtInputFilter, 1, MAXSTRLEN(ltxtCurrentSearchString));
+
+      WHILE ((liStartPostion <> 0) OR (liEndPostion <> 0)) DO BEGIN
+        liStartPostion := STRPOS(ltxtCurrentSearchString, '[');
+        liEndPostion := STRPOS(ltxtCurrentSearchString, ']');
+        IF ((liStartPostion > 0) AND
+            (liEndPostion > 0 ) AND
+            (liEndPostion > liStartPostion)) THEN BEGIN
+          IF (liEndPostion - liStartPostion - 1 > MAXSTRLEN(ltxtFieldName)) THEN BEGIN
+            // too long
+            liFieldNameLength := MAXSTRLEN(ltxtFieldName);
+          END ELSE BEGIN
+            liFieldNameLength := liEndPostion - liStartPostion - 1;
+          END;
+
+          ltxtFieldName := COPYSTR(ltxtCurrentSearchString, liStartPostion + 1, liFieldNameLength);
+          ltxtFieldValue := ptrecEventParams.getValue(ltxtFieldName);
+          rtxtOut += COPYSTR(ltxtCurrentSearchString, 1, liStartPostion - 1);
+          rtxtOut += ltxtFieldValue;
+          ltxtCurrentSearchString := COPYSTR(ltxtCurrentSearchString, liEndPostion + 1, MAXSTRLEN(ltxtCurrentSearchString));
+        END;
+      END;
+
+      rtxtOut += ltxtCurrentSearchString;
+    END;
+
+    PROCEDURE getTokenFilterRec@1000000000(ptxtInputFilter@1240060000 : Text[250];VAR prrefInputRecord@1240060001 : RecordRef) rtxtOut : Text[250];
+    VAR
+      liStartPostion@1240060002 : Integer;
+      liEndPostion@1240060003 : Integer;
+      ltxtFieldName@1240060004 : Text[80];
+      liFieldNameLength@1240060005 : Integer;
+      ltxtFieldValue@1240060006 : Text[80];
+      ltxtCurrentSearchString@1240060007 : Text[250];
+      lrecField@1000000000 : Record 2000000041;
+      lfrefField@1000000001 : FieldRef;
+    BEGIN
+      //
+      // Using this to find configured filter field
+      //
+
+      liStartPostion := -1;
+      liEndPostion := -1;
+      rtxtOut := '';
+      ltxtCurrentSearchString := COPYSTR(ptxtInputFilter, 1, MAXSTRLEN(ltxtCurrentSearchString));
+
+      WHILE ((liStartPostion <> 0) OR (liEndPostion <> 0)) DO BEGIN
+        liStartPostion := STRPOS(ltxtCurrentSearchString, '[');
+        liEndPostion := STRPOS(ltxtCurrentSearchString, ']');
+        IF ((liStartPostion > 0) AND
+            (liEndPostion > 0 ) AND
+            (liEndPostion > liStartPostion)) THEN BEGIN
+          IF (liEndPostion - liStartPostion - 1 > MAXSTRLEN(ltxtFieldName)) THEN BEGIN
+            // too long
+            liFieldNameLength := MAXSTRLEN(ltxtFieldName);
+          END ELSE BEGIN
+            liFieldNameLength := liEndPostion - liStartPostion - 1;
+          END;
+
+          ltxtFieldName := COPYSTR(ltxtCurrentSearchString, liStartPostion + 1, liFieldNameLength);
+          lrecField.RESET();
+          lrecField.SETRANGE(TableNo, prrefInputRecord.NUMBER );
+          lrecField.SETRANGE(FieldName, ltxtFieldName  );
+          ltxtFieldValue := '';
+          IF ( lrecField.FIND('-') ) THEN BEGIN
+            lfrefField := prrefInputRecord.FIELD( lrecField."No." );
+            ltxtFieldValue := FORMAT( lfrefField.VALUE );
+          END;
+          rtxtOut += COPYSTR(ltxtCurrentSearchString, 1, liStartPostion - 1);
+          rtxtOut += ltxtFieldValue;
+          ltxtCurrentSearchString := COPYSTR(ltxtCurrentSearchString, liEndPostion + 1, MAXSTRLEN(ltxtCurrentSearchString));
+        END;
+      END;
+
+      rtxtOut += ltxtCurrentSearchString;
+    END;
+
+    PROCEDURE getDefautPageIDFromRec@1000000002(prrefRecord@1000000000 : RecordRef) : Integer;
+    VAR
+      liPageNo@1000000001 : Integer;
+      liSubType@1000000002 : Integer;
+      liTableNo@1000000003 : Integer;
+    BEGIN
+      // returns the currently supported default page numbers
+      // used for attaching notes
+      liPageNo := 0;
+      liSubType := getSubTypeFromRecRef(prrefRecord);
+      CASE prrefRecord.NUMBER OF
+        DATABASE::"Warehouse Receipt Header": liPageNo := PAGE::"Warehouse Receipt";
+        DATABASE::"Warehouse Shipment Header": liPageNo := PAGE::"Warehouse Shipment";
+        DATABASE::"Warehouse Activity Header":
+          BEGIN
+            CASE liSubType OF
+              1: liPageNo := PAGE::"Warehouse Put-away";
+              2: liPageNo := PAGE::"Warehouse Pick";
+              3: liPageNo := PAGE::"Warehouse Movement";
+              4: liPageNo := PAGE::"Inventory Put-away";
+              5: liPageNo := PAGE::"Inventory Pick";
+              6: liPageNo := PAGE::"Inventory Movement";
+              ELSE liPageNo := PAGE::"Inventory Pick";
+            END;
+          END;
+        DATABASE::"Sales Header":
+          BEGIN
+            CASE liSubType OF
+              0: liPageNo := PAGE::"Sales Quote";
+              1: liPageNo := PAGE::"Sales Order";
+              2: liPageNo := PAGE::"Sales Invoice";
+              3: liPageNo := PAGE::"Sales Credit Memo";
+              5: liPageNo := PAGE::"Sales Return Order";
+              ELSE liPageNo := PAGE::"Sales Order";
+            END;
+          END;
+        DATABASE::"Purchase Header":
+          BEGIN
+            CASE liSubType OF
+              0: liPageNo := PAGE::"Purchase Quote";
+              1: liPageNo := PAGE::"Purchase Order";
+              2: liPageNo := PAGE::"Purchase Invoice";
+              3: liPageNo := PAGE::"Purchase Credit Memo";
+              5: liPageNo := PAGE::"Purchase Return Order";
+              ELSE liPageNo := PAGE::"Purchase Order";
+            END;
+          END;
+        DATABASE::"Production Order":
+          BEGIN
+            CASE liSubType OF
+              0: liPageNo := PAGE::"Simulated Production Order";
+              1: liPageNo := PAGE::"Planned Production Order";
+              2: liPageNo := PAGE::"Firm Planned Prod. Order";
+              3: liPageNo := PAGE::"Released Production Order";
+              5: liPageNo := PAGE::"Finished Production Order";
+              ELSE liPageNo := PAGE::"Released Production Order";
+            END;
+          END;
+        DATABASE::"Assembly Header":
+          BEGIN
+            CASE liSubType OF
+              0: liPageNo := PAGE::"Assembly Quote";
+              1: liPageNo := PAGE::"Assembly Order";
+              ELSE liPageNo := PAGE::"Assembly Order";
+            END;
+          END;
+
+        DATABASE::"IWX License Plate Header": liPageNo := PAGE::"IWX License Plate";
+        DATABASE::"IWX Count Sheet Line": liPageNo := 0; //PAGE::Page23044304;
+        DATABASE::"IWX Inventory Count Header": liPageNo := 0; //PAGE::Page23044304;
+      END;
+
+      EXIT(liPageNo);
+    END;
+
+    PROCEDURE getSubTypeFromRecRef@1000000004(prrefRecord@1000000001 : RecordRef) : Integer;
+    VAR
+      liSubType@1000000000 : Integer;
+      lrecWhseActivityHeader@1000000002 : Record 5766;
+      lrecSalesHeader@1000000003 : Record 36;
+      lrecPurchaseHeader@1000000004 : Record 38;
+      lrecProdOrder@1000000005 : Record 5405;
+      lrecAssemblyHeader@1000000006 : Record 900;
+    BEGIN
+      liSubType := -1;
+      CASE prrefRecord.NUMBER OF
+        DATABASE::"Warehouse Activity Header":
+          BEGIN
+            prrefRecord.SETTABLE(lrecWhseActivityHeader);
+            liSubType := lrecWhseActivityHeader.Type;
+          END;
+        DATABASE::"Sales Header":
+          BEGIN
+            prrefRecord.SETTABLE(lrecSalesHeader);
+            liSubType := lrecSalesHeader."Document Type";
+          END;
+        DATABASE::"Purchase Header":
+          BEGIN
+            prrefRecord.SETTABLE(lrecPurchaseHeader);
+            liSubType := lrecPurchaseHeader."Document Type";
+          END;
+        DATABASE::"Production Order":
+          BEGIN
+            prrefRecord.SETTABLE(lrecProdOrder);
+            liSubType := lrecProdOrder.Status;
+          END;
+        DATABASE::"Assembly Header":
+          BEGIN
+            prrefRecord.SETTABLE(lrecAssemblyHeader);
+            liSubType := lrecAssemblyHeader."Document Type";
+          END;
+      END;
+
+      EXIT(liSubType);
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects EScontent is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+    }
+    END.
+  }
+}
+

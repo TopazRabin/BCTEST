@@ -1,0 +1,195 @@
+OBJECT Report 14000552 Create Forecast Inv. Periods
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/15/16;
+    Time=12:00:00 PM;
+    Version List=UBP2.95;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Create Forecast Inv. Periods;
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  IF PeriodStartDate <> 0D THEN BEGIN
+                    InvPeriod."Starting Date" := PeriodStartDate;
+                    InvPeriod.TESTFIELD("Starting Date");
+                  END ELSE BEGIN
+                    InvPeriod.RESET;
+                    IF NOT InvPeriod.FIND('+') THEN
+                      ERROR(Text001);
+                    PeriodStartDate := CALCDATE('<+1D>',InvPeriod."Ending Date");
+                  END;
+
+                  IF InvPeriod.FIND('+') THEN BEGIN
+                    EndDate := InvPeriod."Ending Date";
+                    InvPeriod.FIND('-');
+                    StartDate := InvPeriod."Starting Date";
+                    IF (EndDate >= PeriodStartDate) AND (StartDate <= PeriodStartDate) THEN
+                      ERROR(
+                        Text002,PeriodStartDate,
+                        StartDate,EndDate);
+                  END;
+                  IF PeriodStartDate < StartDate THEN
+                    EndDate := StartDate
+                  ELSE
+                    EndDate := 0D;
+
+                  FirstPeriodStartDate := PeriodStartDate;
+                  i := 1;
+                  REPEAT
+                    InvPeriod.INIT;
+                    InvPeriod."Starting Date" := PeriodStartDate;
+                    PeriodStartDate := CALCDATE(PeriodLength,PeriodStartDate);
+                    IF (EndDate = 0D) OR (CALCDATE('<-1D>',PeriodStartDate) < EndDate) THEN BEGIN
+                      InvPeriod."Ending Date" := CALCDATE('<-1D>',PeriodStartDate);
+                      InvPeriod.INSERT;
+                      InventoryMgt.CreateLocationInventoryPeriods(InvPeriod,PeriodClosed,LocationCode);
+                    END ELSE IF EndDate <> 0D THEN
+                      i := NoOfPeriods;
+                    i := i + 1;
+                  UNTIL i > NoOfPeriods;
+                  LastPeriodEndDate := InvPeriod."Ending Date";
+
+                  IF (CalcStartDate = 0D) AND
+                     (CalcPeriodLength = '')
+                  THEN BEGIN
+                    InvPeriod.RESET;
+                    InvPeriod.SETRANGE(Type,InvPeriod.Type::" ");
+                    InvPeriod.FIND('-');
+                    REPEAT
+                      CalcInvPeriod.Type := CalcInvPeriod.Type::Calculate;
+                      CalcInvPeriod."Starting Date" := InvPeriod."Starting Date";
+                      CalcInvPeriod."Ending Date" := InvPeriod."Ending Date";
+                      IF CalcInvPeriod.INSERT THEN;
+                    UNTIL InvPeriod.NEXT = 0;
+                  END ELSE BEGIN
+                    InvPeriod.FIND('-');
+                    IF (CalcStartDate = 0D) OR
+                       (CalcPeriodLength = '') THEN
+                      ERROR(Text003);
+                    InvPeriod.SETRANGE("Starting Date",FirstPeriodStartDate);
+                    InvPeriod.FIND('-');
+                    IF (CalcStartDate < InvPeriod."Starting Date") OR
+                       (CalcStartDate > InvPeriod."Ending Date") THEN
+                      ERROR(Text004,CalcStartDate,InvPeriod."Starting Date",InvPeriod."Ending Date");
+                    InvPeriod.FIND('+');
+                    REPEAT
+                      CalcInvPeriod.Type := CalcInvPeriod.Type::Calculate;
+                      CalcInvPeriod."Starting Date" := CalcStartDate;
+                      CalcInvPeriod."Ending Date" := CALCDATE(CalcPeriodLength,CalcStartDate);
+                      CalcInvPeriod."Ending Date" := CALCDATE('<-1D>',CalcInvPeriod."Ending Date");
+                      CalcStartDate := CALCDATE('<+1D>',CalcInvPeriod."Ending Date");
+                      IF CalcInvPeriod.INSERT THEN;
+                    UNTIL CalcInvPeriod."Ending Date" >= LastPeriodEndDate;
+                  END;
+
+                  COMMIT;
+                END;
+
+  }
+  DATASET
+  {
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnOpenPage=BEGIN
+                   IF PeriodStartDate = 0D THEN BEGIN
+                     IF InvMgtSetup.GET THEN;
+                     InvPeriod.RESET;
+                     InvPeriod.SETRANGE(Type,InvPeriod.Type::" ");
+                     IF InvPeriod.FIND('+') THEN
+                       PeriodStartDate := CALCDATE('<+1D>',InvPeriod."Ending Date")
+                     ELSE BEGIN
+                       PeriodStartDate := InvMgtSetup."Usage Start Date";
+                       NoOfPeriods := 0;
+                       CalcStartDate := 0D;
+                     END;
+                   END;
+
+                   IF PeriodLength = '' THEN BEGIN
+                     CASE InvMgtSetup."No. of Periods in a Year" OF
+                       12: PeriodLength := '1M';
+                       52: PeriodLength := '1W';
+                     END;
+                   END;
+
+                   IF CalcStartDate = 0D THEN BEGIN
+                     CalcInvPeriod.RESET;
+                     CalcInvPeriod.SETRANGE(CalcInvPeriod.Type,CalcInvPeriod.Type::Calculate);
+                     IF CalcInvPeriod.FIND('+') THEN BEGIN
+                       CalcStartDate := CALCDATE('<+1D>',CalcInvPeriod."Ending Date");
+                     END;
+                   END;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=ENU=Options }
+
+      { 1   ;2   ;Field     ;
+                  CaptionML=ENU=Forc. Starting Date;
+                  SourceExpr=PeriodStartDate }
+
+      { 2   ;2   ;Field     ;
+                  CaptionML=ENU=Forc. No. of Periods;
+                  SourceExpr=NoOfPeriods }
+
+      { 3   ;2   ;Field     ;
+                  CaptionML=ENU=Forc. Period Length;
+                  DateFormula=Yes;
+                  SourceExpr=PeriodLength }
+
+      { 1240030003;2;Field  ;
+                  CaptionML=ENU=Calc. Starting Date;
+                  SourceExpr=CalcStartDate }
+
+      { 1240030000;2;Field  ;
+                  CaptionML=ENU=Calc. Period Length;
+                  SourceExpr=CalcPeriodLength }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      InvMgtSetup@1240030005 : Record 14000551;
+      InvPeriod@14000500 : Record 14000552;
+      CalcInvPeriod@1240030002 : Record 14000552;
+      InventoryMgt@14000502 : Codeunit 14000553;
+      NoOfPeriods@14000503 : Integer;
+      PeriodLength@14000504 : Code[20];
+      LocationCode@14000505 : Code[10];
+      PeriodStartDate@14000506 : Date;
+      StartDate@14000507 : Date;
+      EndDate@14000508 : Date;
+      i@14000509 : Integer;
+      PeriodClosed@14000510 : Boolean;
+      Text001@1001 : TextConst 'ENU=Please enter the starting date.';
+      Text002@1002 : TextConst 'ENU=Starting date %1 is between the existing period range:%2..%3';
+      FirstPeriodStartDate@1240030006 : Date;
+      LastPeriodEndDate@1240030007 : Date;
+      CalcStartDate@1240030000 : Date;
+      CalcPeriodLength@1240030001 : Code[20];
+      Text003@1240030003 : TextConst 'ENU=You must specify both the Calc. Starting Date and Calc. Period Length';
+      Text004@1240030004 : TextConst 'ENU=Calculate Start Date %1 must fall between %2 and %3';
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

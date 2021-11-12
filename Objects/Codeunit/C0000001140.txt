@@ -1,0 +1,396 @@
+OBJECT Codeunit 1140 OAuth 2.0 Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/21/19;
+    Time=12:00:00 PM;
+    Version List=NAVW111.00.00.36462;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AuthRequiredNotificationMsg@1011 : TextConst 'ENU=Choose the Request Authorization Code action to complete the authorization process.;ESM=Elija la acci¢n C¢digo de autorizaci¢n de la solicitud para completar el proceso de autorizaci¢n.;FRC=SÇlectionnez l''action Demander le code d''autorisation pour terminer le processus d''autorisation.;ENC=Choose the Request Authorization Code action to complete the authorization process.';
+      RequestAuthCodeTxt@1010 : TextConst '@@@={Locked};ENU=Request authorization code.;ESM=Request authorization code.;FRC=Request authorization code.;ENC=Request authorization code.';
+      RequestAccessTokenTxt@1007 : TextConst '@@@={Locked};ENU=Request access token.;ESM=Request access token.;FRC=Request access token.;ENC=Request access token.';
+      RefreshAccessTokenTxt@1008 : TextConst '@@@={Locked};ENU=Refresh access token.;ESM=Refresh access token.;FRC=Refresh access token.;ENC=Refresh access token.';
+      InvokeRequestTxt@1009 : TextConst '@@@={Locked}, %1 - request type, e.g. GET, POST;ENU=Invoke %1 request.;ESM=Invoke %1 request.;FRC=Invoke %1 request.;ENC=Invoke %1 request.';
+      RefreshSuccessfulTxt@1005 : TextConst 'ENU=Refresh token successful.;ESM=Token de actualizaci¢n correcto.;FRC=Jeton d''actualisation rÇussi.;ENC=Refresh token successful.';
+      RefreshFailedTxt@1004 : TextConst 'ENU=Refresh token failed.;ESM=Error de token de actualizaci¢n.;FRC=êchec du jeton d''actualisation.;ENC=Refresh token failed.';
+      AuthorizationSuccessfulTxt@1003 : TextConst 'ENU=Authorization successful.;ESM=Autorizaci¢n correcta.;FRC=Autorisation rÇussie.;ENC=Authorization successful.';
+      AuthorizationFailedTxt@1002 : TextConst 'ENU=Authorization failed.;ESM=Error de autorizaci¢n.;FRC=êchec de l''autorisation.;ENC=Authorization failed.';
+      ReasonTxt@1001 : TextConst 'ENU="Reason: ";ESM="Motivo: ";FRC="Motifˇ: ";ENC="Reason: "';
+      EncryptionIsNotActivatedQst@1000 : TextConst 'ENU=Data encryption is not activated. It is recommended that you encrypt data. \Do you want to open the Data Encryption Management window?;ESM=El cifrado de datos no est† activado. Se recomienda cifrar los datos. \®Desea abrir la ventana Administraci¢n del cifrado de datos?;FRC=Le chiffrement des donnÇes n''est pas activÇ. Nous vous recommandons de chiffrer les donnÇes. \Voulez-vous ouvrir la fenàtre Gestion du chiffrement des donnÇesˇ?;ENC=Data encryption is not activated. It is recommended that you encrypt data. \Do you want to open the Data Encryption Management window?';
+      ActivityLogContextTxt@1006 : TextConst '@@@={Locked};ENU=OAuth 2.0;ESM=OAuth 2.0;FRC=OAuth 2.0;ENC=OAuth 2.0';
+      AuthorizeTxt@1012 : TextConst 'ENU=Authorize;ESM=Autorizar;FRC=Autoriser;ENC=Authorize';
+      LimitExceededTxt@1014 : TextConst '@@@={Locked};ENU=Http daily request limit is exceeded.;ESM=Http daily request limit is exceeded.;FRC=Http daily request limit is exceeded.;ENC=Http daily request limit is exceeded.';
+
+    [EventSubscriber(Page,1140,OnAfterGetCurrRecordEvent)]
+    LOCAL PROCEDURE OnAfterGetCurrRecordPageEvent@22(VAR Rec@1000 : Record 1140);
+    VAR
+      SetupNotification@1001 : Notification;
+    BEGIN
+      SetupNotification.ID := GetRequestAuthNotificationGUID;
+      SetupNotification.RECALL;
+
+      IF NOT (Rec.Status IN [Rec.Status::Disabled,Rec.Status::Error]) THEN
+        EXIT;
+
+      SetupNotification.MESSAGE := AuthRequiredNotificationMsg;
+      SetupNotification.SCOPE := NOTIFICATIONSCOPE::LocalScope;
+      SetupNotification.SETDATA(Rec.FIELDNAME(Code),Rec.Code);
+      SetupNotification.ADDACTION(AuthorizeTxt,CODEUNIT::"OAuth 2.0 Mgt.",'RequestAuthFromNotification');
+      SetupNotification.SEND;
+    END;
+
+    PROCEDURE RequestAuthFromNotification@16(AuthNotification@1000 : Notification);
+    VAR
+      OAuth20Setup@1001 : Record 1140;
+    BEGIN
+      IF NOT AuthNotification.HASDATA(OAuth20Setup.FIELDNAME(Code)) THEN
+        EXIT;
+
+      IF NOT OAuth20Setup.GET(AuthNotification.GETDATA(OAuth20Setup.FIELDNAME(Code))) THEN
+        EXIT;
+
+      OAuth20Setup.RequestAuthorizationCode;
+    END;
+
+    LOCAL PROCEDURE GetRequestAuthNotificationGUID@21() : GUID;
+    BEGIN
+      EXIT('7CC74E1E-641D-4FCC-A074-1F64CEE53AEA');
+    END;
+
+    [External]
+    PROCEDURE GetAuthorizationURL@1(OAuth20Setup@1000 : Record 1140;ClientID@1001 : Text) : Text;
+    BEGIN
+      WITH OAuth20Setup DO BEGIN
+        TESTFIELD("Service URL");
+        TESTFIELD("Authorization URL Path");
+        TESTFIELD("Authorization Response Type");
+        TESTFIELD("Access Token URL Path");
+        TESTFIELD("Client ID");
+        TESTFIELD(Scope);
+        TESTFIELD("Redirect URL");
+
+        LogActivity(OAuth20Setup,TRUE,RequestAuthCodeTxt,'','','');
+        EXIT(
+          STRSUBSTNO(
+            '%1%2?response_type=%3&client_id=%4&scope=%5&redirect_uri=%6',
+            "Service URL","Authorization URL Path","Authorization Response Type",ClientID,Scope,"Redirect URL"));
+      END;
+    END;
+
+    [External]
+    PROCEDURE RequestAccessToken@3(VAR OAuth20Setup@1000 : Record 1140;VAR MessageText@1002 : Text;AuthorizationCode@1003 : Text;ClientID@1006 : Text;ClientSecret@1007 : Text;VAR AccessToken@1008 : Text;VAR RefreshToken@1009 : Text) : Boolean;
+    BEGIN
+      EXIT(
+        RequestAccessTokenWithGivenRequestJson(
+          OAuth20Setup,'',MessageText,AuthorizationCode,ClientID,ClientSecret,AccessToken,RefreshToken));
+    END;
+
+    [External]
+    PROCEDURE RequestAccessTokenWithGivenRequestJson@26(VAR OAuth20Setup@1000 : Record 1140;RequestJson@1004 : Text;VAR MessageText@1002 : Text;AuthorizationCode@1003 : Text;ClientID@1006 : Text;ClientSecret@1007 : Text;VAR AccessToken@1008 : Text;VAR RefreshToken@1009 : Text) Result : Boolean;
+    VAR
+      RequestJsonContent@1001 : Text;
+      HttpError@1011 : Text;
+    BEGIN
+      WITH OAuth20Setup DO BEGIN
+        Status := Status::Disabled;
+        TESTFIELD("Service URL");
+        TESTFIELD("Access Token URL Path");
+        TESTFIELD("Client ID");
+        TESTFIELD("Client Secret");
+        TESTFIELD("Redirect URL");
+
+        CreateContentRequestJSONForAccessToken(RequestJsonContent,ClientSecret,ClientID,"Redirect URL",AuthorizationCode);
+        CreateRequestJSONForAccessRefreshToken(RequestJson,"Service URL","Access Token URL Path",RequestJsonContent);
+
+        Result := RequestAccessAndRefreshTokens(RequestJson,AccessToken,RefreshToken,HttpError);
+        SaveResultForRequestAccessAndRefreshTokens(
+          OAuth20Setup,MessageText,Result,RequestAccessTokenTxt,AuthorizationSuccessfulTxt,AuthorizationFailedTxt,HttpError);
+      END;
+    END;
+
+    [External]
+    PROCEDURE RefreshAccessToken@12(VAR OAuth20Setup@1000 : Record 1140;VAR MessageText@1002 : Text;ClientID@1010 : Text;ClientSecret@1009 : Text;VAR AccessToken@1006 : Text;VAR RefreshToken@1001 : Text) : Boolean;
+    BEGIN
+      EXIT(
+        RefreshAccessTokenWithGivenRequestJson(
+          OAuth20Setup,'',MessageText,ClientID,ClientSecret,AccessToken,RefreshToken));
+    END;
+
+    [External]
+    PROCEDURE RefreshAccessTokenWithGivenRequestJson@29(VAR OAuth20Setup@1000 : Record 1140;RequestJson@1004 : Text;VAR MessageText@1002 : Text;ClientID@1010 : Text;ClientSecret@1009 : Text;VAR AccessToken@1006 : Text;VAR RefreshToken@1001 : Text) Result : Boolean;
+    VAR
+      RequestJsonContent@1005 : Text;
+      HttpError@1008 : Text;
+    BEGIN
+      WITH OAuth20Setup DO BEGIN
+        Status := Status::Disabled;
+        TESTFIELD("Service URL");
+        TESTFIELD("Refresh Token URL Path");
+        TESTFIELD("Client ID");
+        TESTFIELD("Client Secret");
+        TESTFIELD("Refresh Token");
+
+        CreateContentRequestJSONForRefreshAccessToken(RequestJsonContent,ClientSecret,ClientID,RefreshToken);
+        CreateRequestJSONForAccessRefreshToken(RequestJson,"Service URL","Refresh Token URL Path",RequestJsonContent);
+
+        Result := RequestAccessAndRefreshTokens(RequestJson,AccessToken,RefreshToken,HttpError);
+        SaveResultForRequestAccessAndRefreshTokens(
+          OAuth20Setup,MessageText,Result,RefreshAccessTokenTxt,RefreshSuccessfulTxt,RefreshFailedTxt,HttpError);
+      END;
+    END;
+
+    LOCAL PROCEDURE SaveResultForRequestAccessAndRefreshTokens@25(VAR OAuth20Setup@1000 : Record 1140;VAR MessageText@1005 : Text;Result@1001 : Boolean;Context@1006 : Text;SuccessMsg@1002 : Text;ErrorMsg@1003 : Text;HttpError@1004 : Text);
+    BEGIN
+      IF Result THEN BEGIN
+        MessageText := SuccessMsg;
+        OAuth20Setup.Status := OAuth20Setup.Status::Enabled;
+      END ELSE BEGIN
+        MessageText := ErrorMsg;
+        IF HttpError <> '' THEN
+          MessageText += '\' + ReasonTxt + HttpError;
+        OAuth20Setup.Status := OAuth20Setup.Status::Error;
+      END;
+      LogActivity(OAuth20Setup,Result,Context,MessageText,'','');
+    END;
+
+    [External]
+    PROCEDURE InvokeRequest@8(VAR OAuth20Setup@1000 : Record 1140;RequestJson@1004 : Text;VAR ResponseJson@1002 : Text;VAR HttpError@1003 : Text;AccessToken@1005 : Text;RetryOnCredentialsFailure@1006 : Boolean) Result : Boolean;
+    VAR
+      JSONMgt@1001 : Codeunit 5459;
+    BEGIN
+      IF RetryOnCredentialsFailure AND (OAuth20Setup."Access Token Due DateTime" <> 0DT) THEN
+        IF OAuth20Setup."Access Token Due DateTime" < CURRENTDATETIME THEN BEGIN
+          IF OAuth20Setup.RefreshAccessToken(HttpError) THEN
+            EXIT(OAuth20Setup.InvokeRequest(RequestJson,ResponseJson,HttpError,FALSE));
+          EXIT(FALSE);
+        END;
+
+      Result := InvokeSingleRequest(OAuth20Setup,RequestJson,ResponseJson,HttpError,AccessToken);
+      IF NOT Result AND RetryOnCredentialsFailure THEN
+        IF JSONMgt.InitializeFromString(ResponseJson) THEN
+          IF JSONMgt.HasValue('Error.code','401') THEN // Unauthorized
+            IF OAuth20Setup.RefreshAccessToken(HttpError) THEN
+              EXIT(OAuth20Setup.InvokeRequest(RequestJson,ResponseJson,HttpError,FALSE));
+    END;
+
+    PROCEDURE RequestAuthorizationCode@14(OAuth20Setup@1000 : Record 1140);
+    BEGIN
+      HYPERLINK(GetAuthorizationURL(OAuth20Setup,OAuth20Setup.GetToken(OAuth20Setup."Client ID")));
+    END;
+
+    PROCEDURE RequestAndSaveAccessToken@13(VAR OAuth20Setup@1004 : Record 1140;VAR MessageText@1001 : Text;AuthorizationCode@1000 : Text) Result : Boolean;
+    VAR
+      AccessToken@1003 : Text;
+      RefreshToken@1002 : Text;
+    BEGIN
+      Result :=
+        RequestAccessToken(
+          OAuth20Setup,MessageText,AuthorizationCode,
+          OAuth20Setup.GetToken(OAuth20Setup."Client ID"),OAuth20Setup.GetToken(OAuth20Setup."Client Secret"),
+          AccessToken,RefreshToken);
+
+      IF Result THEN
+        SaveTokens(OAuth20Setup,AccessToken,RefreshToken);
+    END;
+
+    PROCEDURE RefreshAndSaveAccessToken@15(VAR OAuth20Setup@1003 : Record 1140;VAR MessageText@1000 : Text) Result : Boolean;
+    VAR
+      AccessToken@1002 : Text;
+      RefreshToken@1001 : Text;
+    BEGIN
+      RefreshToken := OAuth20Setup.GetToken(OAuth20Setup."Refresh Token");
+      Result :=
+        RefreshAccessToken(
+          OAuth20Setup,MessageText,
+          OAuth20Setup.GetToken(OAuth20Setup."Client ID"),OAuth20Setup.GetToken(OAuth20Setup."Client Secret"),
+          AccessToken,RefreshToken);
+
+      IF Result THEN
+        SaveTokens(OAuth20Setup,AccessToken,RefreshToken);
+    END;
+
+    PROCEDURE InvokeRequestBasic@17(VAR OAuth20Setup@1004 : Record 1140;RequestJSON@1002 : Text;VAR ResponseJSON@1001 : Text;VAR HttpError@1000 : Text;RetryOnCredentialsFailure@1003 : Boolean) : Boolean;
+    BEGIN
+      EXIT(
+        InvokeRequest(
+          OAuth20Setup,RequestJSON,ResponseJSON,HttpError,
+          OAuth20Setup.GetToken(OAuth20Setup."Access Token"),RetryOnCredentialsFailure));
+    END;
+
+    PROCEDURE CheckEncryption@11();
+    BEGIN
+      IF NOT ENCRYPTIONENABLED AND GUIALLOWED THEN
+        IF CONFIRM(EncryptionIsNotActivatedQst) THEN
+          PAGE.RUNMODAL(PAGE::"Data Encryption Management");
+    END;
+
+    LOCAL PROCEDURE InvokeSingleRequest@6(VAR OAuth20Setup@1000 : Record 1140;RequestJson@1004 : Text;VAR ResponseJson@1002 : Text;VAR HttpError@1003 : Text;AccessToken@1005 : Text) Result : Boolean;
+    VAR
+      HttpWebRequestMgt@1007 : Codeunit 1297;
+      JSONMgt@1001 : Codeunit 5459;
+    BEGIN
+      WITH OAuth20Setup DO BEGIN
+        TESTFIELD("Service URL");
+        TESTFIELD("Access Token");
+
+        JSONMgt.InitializeObject(RequestJson);
+        JSONMgt.SetValue('ServiceURL',"Service URL");
+        JSONMgt.SetValue('Header.Authorization',STRSUBSTNO('Bearer %1',AccessToken));
+        RequestJson := JSONMgt.WriteObjectToString;
+
+        IF "Latest Datetime" = 0DT THEN
+          "Daily Count" := 0
+        ELSE
+          IF "Latest Datetime" < CREATEDATETIME(TODAY,0T) THEN
+            "Daily Count" := 0;
+        IF ("Daily Limit" <= 0) OR ("Daily Count" < "Daily Limit") OR ("Latest Datetime" = 0DT) THEN BEGIN
+          Result := HttpWebRequestMgt.InvokeJSONRequest(RequestJson,ResponseJson,HttpError);
+          "Latest Datetime" := CURRENTDATETIME;
+          "Daily Count" += 1;
+        END ELSE BEGIN
+          Result := FALSE;
+          HttpError := LimitExceededTxt;
+        END;
+
+        LogActivity(OAuth20Setup,Result,STRSUBSTNO(InvokeRequestTxt,JSONMgt.GetValue('Method')),HttpError,RequestJson,ResponseJson);
+      END;
+    END;
+
+    LOCAL PROCEDURE SaveTokens@18(VAR OAuth20Setup@1002 : Record 1140;AccessToken@1001 : Text;RefreshToken@1000 : Text);
+    BEGIN
+      WITH OAuth20Setup DO BEGIN
+        SetToken("Access Token",AccessToken);
+        SetToken("Refresh Token",RefreshToken);
+        MODIFY;
+        COMMIT; // need to prevent rollback to save new keys
+      END;
+    END;
+
+    LOCAL PROCEDURE RequestAccessAndRefreshTokens@4(RequestJson@1002 : Text;VAR AccessToken@1005 : Text;VAR RefreshToken@1003 : Text;VAR HttpError@1006 : Text) : Boolean;
+    VAR
+      HttpWebRequestMgt@1000 : Codeunit 1297;
+      ResponseJson@1001 : Text;
+    BEGIN
+      AccessToken := '';
+      RefreshToken := '';
+      IF HttpWebRequestMgt.InvokeJSONRequest(RequestJson,ResponseJson,HttpError) THEN
+        EXIT(ParseAccessAndRefreshTokens(ResponseJson,AccessToken,RefreshToken));
+    END;
+
+    LOCAL PROCEDURE ParseAccessAndRefreshTokens@9(ResponseJson@1000 : Text;VAR AccessToken@1002 : Text;VAR RefreshToken@1003 : Text) : Boolean;
+    VAR
+      JSONMgt@1001 : Codeunit 5459;
+      NewAccessToken@1006 : Text;
+      NewRefreshToken@1005 : Text;
+    BEGIN
+      IF NOT JSONMgt.InitializeFromString(ResponseJson) THEN
+        EXIT(FALSE);
+
+      JSONMgt.SelectTokenFromRoot('Content');
+      NewAccessToken := JSONMgt.GetValue('access_token');
+      IF NewAccessToken = '' THEN
+        EXIT(FALSE);
+
+      NewRefreshToken := JSONMgt.GetValue('refresh_token');
+      IF NewRefreshToken = '' THEN
+        EXIT(FALSE);
+
+      AccessToken := NewAccessToken;
+      RefreshToken := NewRefreshToken;
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateRequestJSONForAccessRefreshToken@10(VAR JsonString@1002 : Text;ServiceURL@1003 : Text;URLRequestPath@1000 : Text;Content@1001 : Text);
+    VAR
+      JSONMgt@1004 : Codeunit 5459;
+    BEGIN
+      JSONMgt.InitializeObject(JsonString);
+      JSONMgt.SetValue('ServiceURL',ServiceURL);
+      JSONMgt.SetValue('Method','POST');
+      JSONMgt.SetValue('URLRequestPath',URLRequestPath);
+      JSONMgt.SetValue('Header.Content-Type','application/json');
+      JSONMgt.SetValue('Content',Content);
+      JsonString := JSONMgt.WriteObjectToString;
+    END;
+
+    LOCAL PROCEDURE CreateContentRequestJSONForAccessToken@2(VAR JsonString@1000 : Text;ClientSecret@1002 : Text;ClientID@1003 : Text;RedirectURI@1004 : Text;AuthorizationCode@1005 : Text);
+    VAR
+      JSONMgt@1001 : Codeunit 5459;
+    BEGIN
+      JSONMgt.SetValue('grant_type','authorization_code');
+      JSONMgt.SetValue('client_secret',ClientSecret);
+      JSONMgt.SetValue('client_id',ClientID);
+      JSONMgt.SetValue('redirect_uri',RedirectURI);
+      JSONMgt.SetValue('code',AuthorizationCode);
+      JsonString := JSONMgt.WriteObjectToString;
+    END;
+
+    LOCAL PROCEDURE CreateContentRequestJSONForRefreshAccessToken@7(VAR JsonString@1000 : Text;ClientSecret@1002 : Text;ClientID@1001 : Text;RefreshToken@1005 : Text);
+    VAR
+      JSONMgt@1003 : Codeunit 5459;
+    BEGIN
+      JSONMgt.SetValue('grant_type','refresh_token');
+      JSONMgt.SetValue('client_secret',ClientSecret);
+      JSONMgt.SetValue('client_id',ClientID);
+      JSONMgt.SetValue('refresh_token',RefreshToken);
+      JsonString := JSONMgt.WriteObjectToString;
+    END;
+
+    LOCAL PROCEDURE LogActivity@5(VAR OAuth20Setup@1001 : Record 1140;Result@1005 : Boolean;ActivityDescription@1002 : Text;ActivityMessage@1003 : Text;RequestJson@1008 : Text;ResponseJson@1007 : Text);
+    VAR
+      ActivityLog@1000 : Record 710;
+      JSONMgt@1009 : Codeunit 5459;
+      Context@1004 : Text[30];
+      Status@1006 : Option;
+      JsonString@1010 : Text;
+    BEGIN
+      Context := COPYSTR(STRSUBSTNO('%1 %2',ActivityLogContextTxt,OAuth20Setup.Code),1,MAXSTRLEN(Context));
+      IF Result THEN
+        Status := ActivityLog.Status::Success
+      ELSE
+        Status := ActivityLog.Status::Failed;
+
+      ActivityLog.LogActivity(OAuth20Setup.RECORDID,Status,Context,ActivityDescription,ActivityMessage);
+      JSONMgt.AddJson('Request',MaskHeaders(RequestJson));
+      JSONMgt.AddJson('Response',ResponseJson);
+      JsonString := JSONMgt.WriteObjectToString;
+      IF JsonString <> '' THEN
+        ActivityLog.SetDetailedInfoFromText(JsonString);
+      OAuth20Setup."Activity Log ID" := ActivityLog.ID;
+      OAuth20Setup.MODIFY;
+
+      COMMIT; // need to prevent rollback to save the log
+    END;
+
+    LOCAL PROCEDURE MaskHeaders@27(RequestJson@1000 : Text) Result : Text;
+    VAR
+      JSONMgt@1001 : Codeunit 5459;
+      ResultJSONMgt@1002 : Codeunit 5459;
+      Name@1003 : Text;
+      Value@1004 : Text;
+    BEGIN
+      Result := RequestJson;
+      JSONMgt.InitializeObject(RequestJson);
+      IF JSONMgt.SelectTokenFromRoot('Header') THEN
+        IF JSONMgt.ReadProperties THEN BEGIN
+          ResultJSONMgt.InitializeObject(Result);
+          WHILE JSONMgt.GetNextProperty(Name,Value) DO
+            ResultJSONMgt.SetValue(STRSUBSTNO('Header.%1',Name),'***');
+          Result := ResultJSONMgt.WriteObjectToString;
+        END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

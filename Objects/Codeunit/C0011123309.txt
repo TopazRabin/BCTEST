@@ -1,0 +1,984 @@
+OBJECT Codeunit 11123309 SC - Common Functions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=SCW19.2.0;
+  }
+  PROPERTIES
+  {
+    TableNo=11123302;
+    OnRun=VAR
+            RequestBuff@11123303 : TEMPORARY Record 11123303;
+            ResponseBuff@11123302 : TEMPORARY Record 11123303;
+            Params@11123305 : TEMPORARY Record 11123310;
+          BEGIN
+            Context.GetRequestBuff(RequestBuff);
+            Context.GetResponseBuff(ResponseBuff);
+            Context.GetParams(Params);
+
+            CASE Code OF
+              UPPERCASE('GetEntities') : GetEntities(RequestBuff,ResponseBuff);
+              UPPERCASE('GetEntityFields') : GetEntityFields(RequestBuff,ResponseBuff);
+              UPPERCASE('GetParamsDescriptionNo') : GetParamsDescriptionNo(Params);
+              UPPERCASE('GetAttachmentFile') : GetAttachmentFile(RequestBuff,ResponseBuff);
+            END;
+
+            Context.SetParams(Params);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Context@11123302 : Codeunit 11123305;
+      Text11123302@11123303 : TextConst 'ENU=Field %1 cannot be more then %2 characters.';
+      Text11123304@11123306 : TextConst 'ENU=FieldClass must be Normal for field %1 in table %2.';
+      Text11123305@11123307 : TextConst 'ENU=Field %1 must be Active in table %2.';
+      Text11123306@11123309 : TextConst 'ENU=Value %1 is not acceptable for field %2 in table %3.';
+      Text11123307@11123304 : TextConst 'ENU=Atribute Name must be present in EntityField node.';
+      Text11123308@11123308 : TextConst 'ENU=Field %1 is the part of primary key in table %2. You cannot modify primary key using Entity Fields.';
+      Text11123312@11123310 : TextConst 'ENU=Cannot find field %1 in table %2.';
+      Text11123313@11123311 : TextConst 'ENU=Table %1 with complex keys not supported in item attributes.';
+
+    PROCEDURE GetEntities@11123302(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      ObjectRec@11123320 : Record 2000000001;
+      AllObjRec@11123319 : Record 2000000058;
+      EntityNodeBuff@11123322 : TEMPORARY Record 11123303;
+      CountNodeBuff@11123323 : TEMPORARY Record 11123303;
+      Params@11123318 : TEMPORARY Record 11123310;
+      TempFilterList@11123312 : TEMPORARY Record 11123330;
+      TempExtraFieldList@11123305 : TEMPORARY Record 11123330;
+      FilterHelper@11123316 : Codeunit 11123321;
+      RecRef@11123311 : RecordRef;
+      ObjectName@11123314 : Text[80];
+      StartRecord@11123309 : BigInteger;
+      RecordExist@11123308 : Boolean;
+      TotalCntr@11123307 : Integer;
+      I@11123306 : Integer;
+      ObjectID@11123304 : Integer;
+    BEGIN
+      ObjectName := InXMLBuff.SelectSingleNodeText('//Table');
+
+      ObjectName := TableNameMapping(ObjectName);
+
+      ObjectRec.SETRANGE(Type,ObjectRec.Type::Table);
+      ObjectRec.SETRANGE(Name,ObjectName);
+
+      IF ObjectRec.FINDFIRST THEN
+        ObjectID := ObjectRec.ID
+      ELSE BEGIN
+        AllObjRec.SETRANGE("Object Type",AllObjRec."Object Type"::Table);
+        AllObjRec.SETRANGE("Object Name",ObjectName);
+        IF NOT AllObjRec.FINDFIRST THEN
+          EXIT;
+        ObjectID := AllObjRec."Object ID";
+      END;
+
+      Params.InitParams(InXMLBuff,ObjectID);
+      RecRef.OPEN(ObjectID);
+
+      IF NOT Params.FilterIsEmpty THEN BEGIN
+        Params.GetFilterList(TempFilterList);
+        IF NOT FilterHelper.SetRecordFilter(RecRef,TempFilterList) THEN
+          EXIT;
+      END;
+
+      IF RecRef.FIND('-') THEN BEGIN
+        StartRecord := Params.PageIndex * Params.PageSize;
+        TotalCntr := RecRef.COUNT;
+        IF TotalCntr <= StartRecord - 1 THEN
+          RecordExist := FALSE
+        ELSE BEGIN
+          IF StartRecord = 0 THEN
+            RecordExist := TRUE
+          ELSE
+            RecordExist := RecRef.NEXT(StartRecord) <> 0;
+        END;
+
+        OutXMLBuff.AddElement(CountNodeBuff,'TotalCount',FORMAT(TotalCntr));
+
+        FOR I := 1 TO Params.PageSize DO BEGIN
+          IF RecordExist THEN BEGIN
+            OutXMLBuff.AddElement(EntityNodeBuff,'Entity','');
+
+            IF NOT Params.ExtraFieldListIsEmpty THEN BEGIN
+              Params.GetExtraFieldList(TempExtraFieldList);
+              GetEntityXMLByFields(RecRef,EntityNodeBuff,TempExtraFieldList);
+            END ELSE
+              GetEntityXML(EntityNodeBuff,RecRef);
+          END ELSE
+            EXIT;
+          RecordExist := RecRef.NEXT <> 0;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetEntityXML@11123303(VAR ResultNodeBuff@11123303 : Record 11123303;VAR RecRef@11123306 : RecordRef);
+    VAR
+      FieldLookup@11123304 : Record 2000000041;
+    BEGIN
+      FieldLookup.RESET;
+      FieldLookup.SETRANGE(TableNo,RecRef.NUMBER);
+      IF FieldLookup.FINDSET THEN
+        REPEAT
+          ResultNodeBuff.AddFieldElementByNo(RecRef,FieldLookup."No.");
+        UNTIL FieldLookup.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE GetEntityXMLByFields@11123304(VAR RecRef@11123302 : RecordRef;VAR ResultNodeBuff@11123303 : Record 11123303;VAR ExtraFieldList@11123304 : Record 11123330);
+    VAR
+      FieldNo@11123308 : Integer;
+    BEGIN
+      IF ExtraFieldList.FINDSET THEN
+        REPEAT
+          FieldNo := GetFieldNoByName(RecRef.NUMBER,ExtraFieldList.Value);
+          IF FieldNo <> 0 THEN
+            ResultNodeBuff.AddFieldElementByNo(RecRef,FieldNo);
+        UNTIL ExtraFieldList.NEXT = 0;
+    END;
+
+    PROCEDURE AddRelationalFieldXML@11123321(VAR ResultNodeBuff@11123304 : Record 11123303;VAR RecRef@11123303 : RecordRef;CombinedFieldName@11123302 : Text[1024]);
+    VAR
+      FieldLookup@11123306 : Record 2000000041;
+      RelationRecRef@11123310 : RecordRef;
+      FieldRef@11123311 : FieldRef;
+      RelationKeyFieldRef@11123312 : FieldRef;
+      RelationFieldRef@11123313 : FieldRef;
+      FieldName@11123308 : Text[1024];
+      RelationFieldName@11123309 : Text[1024];
+      FieldNo@11123305 : Integer;
+      Position@11123307 : Integer;
+    BEGIN
+      Position := STRPOS(CombinedFieldName,';');
+      IF Position = 0 THEN
+        EXIT;
+
+      FieldName := COPYSTR(CombinedFieldName,1,Position - 1);
+      FieldName := FieldNameMapping(RecRef.NUMBER,FieldName);
+
+      RelationFieldName := COPYSTR(CombinedFieldName,Position + 1);
+
+      FieldNo := GetFieldNoByName(RecRef.NUMBER,FieldName);
+      GetFieldLookup(RecRef.NUMBER,FieldNo,FieldLookup);
+
+      FieldRef := RecRef.FIELD(FieldNo);
+
+      IF NOT CheckField(FieldRef) THEN
+        EXIT;
+
+      IF (FieldLookup.RelationTableNo <> 0) AND (FORMAT(FieldRef.VALUE) <> '') THEN BEGIN
+        RelationRecRef.OPEN(FieldLookup.RelationTableNo);
+        RelationFieldName := FieldNameMapping(RelationRecRef.NUMBER,RelationFieldName);
+        IF IsTableHasComplexPrimaryKey(RelationRecRef) THEN
+          ERROR(Text11123313,RelationRecRef.NUMBER);
+
+        FieldLookup.RESET;
+        FieldLookup.SETRANGE(TableNo,RelationRecRef.NUMBER);
+        FieldLookup.SETRANGE(FieldName,RelationFieldName);
+        IF NOT FieldLookup.FINDFIRST THEN
+          ERROR(Text11123312,RelationFieldName,RelationRecRef.NUMBER);
+
+        RelationKeyFieldRef := RelationRecRef.FIELD(GetPrimaryKeyNo(RelationRecRef));
+        RelationKeyFieldRef.VALUE := FieldRef.VALUE;
+        IF RelationRecRef.FIND THEN BEGIN
+
+          RelationFieldRef := RelationRecRef.FIELD(FieldLookup."No.");
+
+          IF NOT CheckField(RelationFieldRef) THEN
+            EXIT;
+
+          CombinedFieldName :=
+            STRSUBSTNO(
+              '%1;%2',
+              FieldName,
+              FieldLookup.FieldName);
+
+          ResultNodeBuff.AddFieldElementByName(RelationFieldRef,CombinedFieldName);
+        END;
+      END ELSE
+        ResultNodeBuff.AddFieldElementByName(FieldRef,FieldNameMapping(RecRef.NUMBER,FieldRef.NAME));
+    END;
+
+    PROCEDURE IsRelationalField@11123318(FieldName@11123302 : Text[1024]) : Boolean;
+    VAR
+      Position@11123303 : Integer;
+    BEGIN
+      Position := STRPOS(FieldName,';');
+      EXIT(Position <> 0);
+    END;
+
+    PROCEDURE IsTableHasComplexPrimaryKey@11123307(VAR TableRef@11123302 : RecordRef) : Boolean;
+    VAR
+      KeyRef@11123303 : KeyRef;
+    BEGIN
+      KeyRef := TableRef.KEYINDEX(1);
+      EXIT(KeyRef.FIELDCOUNT > 1);
+    END;
+
+    PROCEDURE GetFieldLookup@11123326(TableNumber@11123302 : Integer;FieldNo@11123303 : Integer;VAR FieldLookup@11123304 : Record 2000000041);
+    BEGIN
+      FieldLookup.RESET;
+      FieldLookup.SETRANGE(TableNo,TableNumber);
+      FieldLookup.SETRANGE("No.",FieldNo);
+      IF NOT FieldLookup.FINDFIRST THEN
+        ERROR(Text11123312,FieldNo,TableNumber);
+    END;
+
+    PROCEDURE GetPrimaryKeyNo@11123334(VAR RecRef@11123302 : RecordRef) : Integer;
+    VAR
+      KeyRef@11123303 : KeyRef;
+      KeyFieldRef@11123304 : FieldRef;
+    BEGIN
+      KeyRef := RecRef.KEYINDEX(1);
+      KeyFieldRef := KeyRef.FIELDINDEX(1);
+      EXIT(KeyFieldRef.NUMBER);
+    END;
+
+    PROCEDURE GetEntityFields@11123306(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      ObjectRec@11123306 : Record 2000000001;
+      FieldLookup@11123308 : Record 2000000041;
+      ResultNodeBuff@11123315 : TEMPORARY Record 11123303;
+      Params@11123304 : TEMPORARY Record 11123310;
+      RecordRef@11123307 : RecordRef;
+      FieldRef@11123309 : FieldRef;
+      ObjectName@11123305 : Text[30];
+      RelatedTable@11123312 : Text[1024];
+      UseField@11123313 : Boolean;
+    BEGIN
+      ObjectName := InXMLBuff.SelectSingleNodeText('//Table');
+
+      ObjectName := TableNameMapping(ObjectName);
+
+      ObjectRec.SETRANGE(Type,ObjectRec.Type::Table);
+      ObjectRec.SETRANGE(Name,ObjectName);
+      ObjectRec.FINDFIRST;
+
+      Params.InitParams(InXMLBuff,ObjectRec.ID);
+      RecordRef.OPEN(ObjectRec.ID);
+
+      FieldLookup.RESET;
+      FieldLookup.SETRANGE(TableNo,RecordRef.NUMBER);
+      IF FieldLookup.FINDSET THEN
+        REPEAT
+          RelatedTable := '';
+          FieldRef := RecordRef.FIELD(FieldLookup."No.");
+
+          UseField := CheckField(FieldRef);
+
+          IF UseField AND (FieldLookup.RelationTableNo <> 0) THEN
+            IF NOT IsTableHasComplexPrimaryKey(RecordRef) THEN BEGIN
+              ObjectRec.RESET;
+              ObjectRec.SETRANGE(Type,ObjectRec.Type::Table);
+              ObjectRec.SETRANGE(ID,FieldLookup.RelationTableNo);
+              IF ObjectRec.FINDFIRST THEN
+                RelatedTable := ObjectRec.Name;
+            END;
+
+          IF UseField THEN BEGIN
+            OutXMLBuff.AddElement(ResultNodeBuff,'Field','');
+            ResultNodeBuff.AddFieldElement('Name',FieldNameMapping(FieldLookup.TableNo,FieldLookup.FieldName));
+            ResultNodeBuff.AddFieldElement('Caption',FieldLookup."Field Caption");
+            ResultNodeBuff.AddFieldElement('Type',FieldTypeMapping(FORMAT(FieldLookup.Type)));
+            ResultNodeBuff.AddFieldElement('RelatedTable',RelatedTable);
+          END;
+
+          IF FORMAT(FieldLookup.Type) = 'Option' THEN
+            AddOptionStringValuesToXML(ResultNodeBuff,FieldRef);
+
+        UNTIL FieldLookup.NEXT = 0;
+
+      AddItemAttributes(RecordRef,OutXMLBuff); // Specific functionality for NAV2017
+    END;
+
+    PROCEDURE CheckField@11123308(VAR Field@11123302 : FieldRef) : Boolean;
+    VAR
+      FieldClass@11123303 : Text[30];
+      FieldType@11123304 : Text[30];
+    BEGIN
+      IF NOT Field.ACTIVE THEN
+        EXIT(FALSE);
+
+      FieldType := FORMAT(Field.TYPE);
+
+      IF (FieldType = 'BLOB') OR
+         (FieldType = 'Binary') OR
+         (FieldType = 'TableFilter') OR
+         (FieldType = 'MediaSet') THEN
+        EXIT(FALSE);
+
+      FieldClass := FORMAT(Field.CLASS);
+      IF (FieldClass <> 'Normal') AND (FieldClass <> 'FlowField')  THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE GetCorrectTableNoFromRecRef@11123309(VAR RecRef@11123303 : RecordRef) : Integer;
+    VAR
+      TableNumber@11123304 : Integer;
+    BEGIN
+      TableNumber := RecRef.NUMBER;
+      IF TableNumber >= 2000100000 THEN
+        TableNumber := GetTableNoByName(RecRef.NAME);
+      EXIT(TableNumber);
+    END;
+
+    PROCEDURE GetTableNoByName@11123310(TableName@11123302 : Text[1024]) : Integer;
+    VAR
+      ObjectRec@11123303 : Record 2000000001;
+    BEGIN
+      ObjectRec.RESET;
+      ObjectRec.SETCURRENTKEY(Type,Name);
+      ObjectRec.SETRANGE(Type,ObjectRec.Type::Table);
+      ObjectRec.SETRANGE(Name,TableName);
+      IF ObjectRec.FINDFIRST THEN
+        EXIT(ObjectRec.ID);
+    END;
+
+    PROCEDURE SetCurrentKeyByFieldName@11123311(VAR RecRef@11123302 : RecordRef;KeyFieldName@11123303 : Text[1024];SortAscending@11123307 : Boolean);
+    VAR
+      KeyReference@11123309 : KeyRef;
+      KeyFieldReference@11123308 : FieldRef;
+      KeyIndex@11123306 : Integer;
+      TryToFindKey@11123305 : Boolean;
+      KeyFound@11123304 : Boolean;
+    BEGIN
+      TryToFindKey := KeyFieldName <> '';
+
+      WHILE TryToFindKey DO BEGIN
+        KeyIndex := KeyIndex + 1;
+        KeyReference := RecRef.KEYINDEX(KeyIndex);
+        IF KeyReference.ACTIVE THEN BEGIN
+          KeyFieldReference := KeyReference.FIELDINDEX(1);
+          IF KeyFieldReference.NAME = KeyFieldName THEN
+            KeyFound := TRUE;
+        END;
+        IF KeyFound OR (KeyIndex = RecRef.KEYCOUNT) THEN
+          TryToFindKey := FALSE;
+      END;
+
+      IF KeyFound THEN BEGIN
+        RecRef.CURRENTKEYINDEX(KeyIndex);
+        IF NOT SortAscending THEN
+          RecRef.ASCENDING(FALSE);
+      END;
+    END;
+
+    PROCEDURE GetFieldValueByName@11123312(VAR RecRef@11123302 : RecordRef;FieldName@11123303 : Text[1024]) : Text[1024];
+    VAR
+      FieldNo@11123307 : Integer;
+    BEGIN
+      FieldNo := GetFieldNoByName(GetCorrectTableNoFromRecRef(RecRef),FieldName);
+      EXIT(GetFieldValueByNo(RecRef,FieldNo));
+    END;
+
+    PROCEDURE GetFieldNoByName@11123313(TableNumber@11123302 : Integer;Name@11123303 : Text[1024]) : Integer;
+    VAR
+      FieldRec@11123304 : Record 2000000041;
+    BEGIN
+      FieldRec.SETRANGE(TableNo,TableNumber);
+      FieldRec.SETRANGE(FieldName,Name);
+      IF FieldRec.FINDFIRST THEN
+        EXIT(FieldRec."No.");
+    END;
+
+    PROCEDURE GetFieldValueByNo@11123315(VAR RecRef@11123302 : RecordRef;FieldNo@11123303 : Integer) : Text[1024];
+    VAR
+      FieldRef@11123304 : FieldRef;
+      OptionValue@11123305 : Integer;
+      Type@11123306 : Text[30];
+      ReturnValue@11123307 : Text[1024];
+    BEGIN
+      IF RecRef.FIELDEXIST(FieldNo) THEN BEGIN
+        FieldRef := RecRef.FIELD(FieldNo);
+        IF CheckField(FieldRef) THEN
+          Type := FORMAT(FieldRef.TYPE);
+          CASE Type OF
+            'Option' :
+              BEGIN
+                OptionValue := FieldRef.VALUE;
+                ReturnValue := FORMAT(OptionValue);
+              END;
+            'Date','Time','DateTime' :
+              ReturnValue := FORMAT(FieldRef);
+            ELSE
+              ReturnValue := FORMAT(FieldRef,0,2);
+          END;
+      END;
+      EXIT(ReturnValue);
+    END;
+
+    PROCEDURE CopyRecRefByFields@11123316(VAR FromRecRef@11123302 : RecordRef;VAR ToRecRef@11123303 : RecordRef);
+    VAR
+      FromFieldRef@11123304 : FieldRef;
+      ToFieldRef@11123305 : FieldRef;
+      I@11123306 : Integer;
+    BEGIN
+      FOR I := 1 TO FromRecRef.FIELDCOUNT DO BEGIN
+        FromFieldRef := FromRecRef.FIELDINDEX(I);
+        IF FORMAT(FromFieldRef.CLASS) = 'Normal' THEN BEGIN
+          ToFieldRef := ToRecRef.FIELD(FromFieldRef.NUMBER);
+          ToFieldRef.VALUE(FromFieldRef.VALUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE DuplicateRecRef@11123340(VAR FromRecRef@11123303 : RecordRef;VAR ToRecRef@11123302 : RecordRef);
+    BEGIN
+      ToRecRef := FromRecRef.DUPLICATE;
+    END;
+
+    LOCAL PROCEDURE GetParamsDescriptionNo@11123314(VAR Params@11123302 : Record 11123310);
+    BEGIN
+      Params.ItemDescriptionNo := 1;
+      Params.VariantDescriptionNo := 1;
+    END;
+
+    PROCEDURE AutoSaveFields@11123319(VAR ReceRef@11123302 : RecordRef;VAR RootNodeBuff@11123303 : Record 11123303) : Boolean;
+    VAR
+      ResultNodeBuff@11123316 : TEMPORARY Record 11123303;
+      AttributeNodeBuff@11123304 : TEMPORARY Record 11123303;
+      FieldReference@11123308 : FieldRef;
+      KeyFieldReference@11123309 : FieldRef;
+      KeyReference@11123310 : KeyRef;
+      FieldName@11123311 : Text[1024];
+      FieldValue@11123312 : Text[250];
+      FieldNo@11123313 : Integer;
+      i@11123314 : Integer;
+      CallModify@11123315 : Boolean;
+    BEGIN
+      IF RootNodeBuff.SelectNodes('field',ResultNodeBuff) THEN BEGIN
+        WHILE ResultNodeBuff.NextNode DO BEGIN
+          IF ResultNodeBuff.SelectSingleNode('@name',AttributeNodeBuff) THEN BEGIN
+            IF STRLEN(AttributeNodeBuff.InnerText) <= MAXSTRLEN(FieldName) THEN
+              FieldName := AttributeNodeBuff.InnerText
+            ELSE
+              ERROR(Text11123302,AttributeNodeBuff.InnerText,MAXSTRLEN(FieldName));
+          END ELSE
+            ERROR(Text11123307);
+
+          IF ResultNodeBuff.SelectSingleNode('@value',AttributeNodeBuff) THEN BEGIN
+            IF STRLEN(AttributeNodeBuff.InnerText) <= MAXSTRLEN(FieldValue) THEN
+              FieldValue := AttributeNodeBuff.InnerText
+            ELSE
+              ERROR(Text11123302,AttributeNodeBuff.InnerText,MAXSTRLEN(FieldValue));
+          END;
+
+          FieldNo := GetFieldNoByName(ReceRef.NUMBER,FieldName);
+          IF FieldNo <> 0 THEN BEGIN
+            FieldReference := ReceRef.FIELD(FieldNo);
+
+            IF FORMAT(FieldReference.CLASS) <> 'Normal' THEN
+              ERROR(Text11123304,FieldName,ReceRef.NAME);
+
+            IF NOT FieldReference.ACTIVE THEN
+              ERROR(Text11123305,FieldName,ReceRef.NAME);
+
+            KeyReference := ReceRef.KEYINDEX(1);
+            FOR i := 1 TO KeyReference.FIELDCOUNT DO BEGIN
+              KeyFieldReference := KeyReference.FIELDINDEX(i);
+              IF KeyFieldReference.NUMBER = FieldReference.NUMBER THEN
+                ERROR(Text11123308,FieldName,ReceRef.NAME);
+            END;
+
+            IF FieldValue <> '' THEN
+              IF EVALUATE(FieldReference,FieldValue) THEN
+                CallModify := TRUE
+              ELSE
+                ERROR(Text11123306,FieldValue,FieldName,ReceRef.NAME);
+          END;
+        END;
+      END;
+
+      IF CallModify THEN
+        ReceRef.MODIFY;
+    END;
+
+    PROCEDURE TableNameMapping@11123317(TableName@11123302 : Text[80]) : Text[80];
+    BEGIN
+      CASE TableName OF
+        'SalesPerson' :
+          TableName := 'Mfr. Rep.'; //<TPZ2027>
+        'Product' :
+          TableName := 'Item';
+        'ShippingAddress' :
+          TableName := 'Ship-to Address';
+      END;
+      EXIT(TableName);
+    END;
+
+    PROCEDURE FieldNameMapping@11123320(TableNo@11123302 : Integer;FieldName@11123303 : Text[80]) : Text[80];
+    BEGIN
+      CASE TableNo OF
+        DATABASE::"Mfr. Rep." : //<TPZ2027>
+          FieldName := SalespersonFieldNameMapping(FieldName);
+        DATABASE::Customer :
+          FieldName := CustomerFieldNameMapping(FieldName);
+        DATABASE::Item :
+          FieldName := ProductFieldNameMapping(FieldName);
+        DATABASE::"Ship-to Address" :
+          FieldName := ShipAddressFieldNameMapping(FieldName);
+        DATABASE::Contact :
+          FieldName := ContactFieldNameMapping(FieldName);
+      END;
+
+      CASE FieldName OF
+        // NAV to XML
+        'Address 2' : FieldName := 'Address2';
+        'Post Code' : FieldName := 'ZipCode';
+        'Country/Region Code','Country Code' : FieldName := 'CountryId';
+        'County' : FieldName := 'State';
+        'Contact' : FieldName := 'ContactName';
+        'Currency Code' : FieldName := 'CurrencyId';
+        'Phone No.' : FieldName := 'PhoneNo';
+        'Fax No.' : FieldName := 'FaxNo';
+        'E-Mail' : FieldName := 'Email';
+        'Salesperson Code' : FieldName := 'SalesPersonId';
+        'Language Code' : FieldName := 'LanguagePreference';
+        'Last Date/Time Modified' : FieldName := 'ModifiedDate';
+
+        // XML to NAV
+        'Address2' : FieldName := 'Address 2';
+        'ZipCode' : FieldName := 'Post Code';
+        'CountryId' : FieldName := 'Country/Region Code';
+        'State' : FieldName := 'County';
+        'ContactName' : FieldName := 'Contact';
+        'CurrencyId' : FieldName := 'Currency Code';
+        'PhoneNo' : FieldName := 'Phone No.';
+        'FaxNo' : FieldName := 'Fax No.';
+        'Email' : FieldName := 'E-Mail';
+        'SalesPersonId' : FieldName := 'Salesperson Code';
+        'LanguagePreference' : FieldName := 'Language Code';
+        'ModifiedDate' : FieldName := 'Last Date/Time Modified';
+      END;
+      EXIT(FieldName);
+    END;
+
+    PROCEDURE SalespersonFieldNameMapping@11123330(FieldName@11123303 : Text[80]) : Text[80];
+    BEGIN
+      CASE FieldName OF
+        // NAV to XML
+        'Code' : FieldName := 'Id';
+        'Job Title' : FieldName := 'JobTitle';
+
+        // XML to NAV
+        'Id' : FieldName := 'Code';
+        'JobTitle' : FieldName := 'Job Title';
+      END;
+      EXIT(FieldName);
+    END;
+
+    PROCEDURE CustomerFieldNameMapping@11123329(FieldName@11123303 : Text[80]) : Text[80];
+    BEGIN
+      CASE FieldName OF
+        // NAV to XML
+        'No.' : FieldName := 'Id';
+        'Bill-to Customer No.' : FieldName := 'BillToCustomerId';
+        'Prices Including VAT' : FieldName := 'PricesInclTax';
+        'B2C Customer' : FieldName := 'B2cCustomer';
+        'Credit Limit (LCY)' : FieldName := 'CreditLimit';
+        'Customer Price Group' : FieldName := 'CustomerGroupId';
+        'Sana Customer No.' : FieldName := 'SanaCustomerId';
+
+        // XML to NAV
+        'Id' : FieldName := 'No.';
+        'BillToCustomerId' : FieldName := 'Bill-to Customer No.';
+        'PricesInclTax' : FieldName := 'Prices Including VAT';
+        'B2cCustomer' : FieldName := 'B2C Customer';
+        'CreditLimit' : FieldName := 'Credit Limit (LCY)';
+        'CustomerGroupId' : FieldName := 'Customer Price Group';
+        'SanaCustomerId' : FieldName := 'Sana Customer No.';
+      END;
+      EXIT(FieldName);
+    END;
+
+    PROCEDURE ProductFieldNameMapping@11123331(FieldName@11123303 : Text[80]) : Text[80];
+    BEGIN
+      CASE FieldName OF
+        // NAV to XML
+        'No.' : FieldName := 'Id';
+        'Description' : FieldName := 'Title';
+        'Visible in Webshop' : FieldName := 'Visible';
+        'Unit Price' : FieldName := 'Price';
+
+        // XML to NAV
+        'Id' : FieldName := 'No.';
+        'Title' : FieldName := 'Description';
+        'Visible' : FieldName := 'Visible in Webshop';
+        'Price' : FieldName := 'Unit Price';
+      END;
+      EXIT(FieldName);
+    END;
+
+    PROCEDURE ShipAddressFieldNameMapping@11123332(FieldName@11123303 : Text[80]) : Text[80];
+    BEGIN
+      CASE FieldName OF
+        // NAV to XML
+        'Code' : FieldName := 'Id';
+
+        // XML to NAV
+        'Id' : FieldName := 'Code';
+      END;
+      EXIT(FieldName);
+    END;
+
+    PROCEDURE ContactFieldNameMapping@11123333(FieldName@11123303 : Text[80]) : Text[80];
+    BEGIN
+      CASE FieldName OF
+        // NAV to XML
+        'No.' : FieldName := 'Id';
+        'VAT Registration No.' : FieldName := 'TaxNo';
+
+        // XML to NAV
+        'Id' : FieldName := 'No.';
+        'TaxNo' : FieldName := 'VAT Registration No.';
+      END;
+      EXIT(FieldName);
+    END;
+
+    PROCEDURE FieldTypeMapping@11123322(NavFieldType@11123302 : Text[50]) : Text[50];
+    VAR
+      DotNetFieldType@11123303 : Text[50];
+    BEGIN
+      DotNetFieldType := NavFieldType;
+
+      CASE NavFieldType OF
+        'Char','Code','Text','BigText','DateFormula' :
+          DotNetFieldType := 'String';
+        'Option' :
+          DotNetFieldType := 'Enum';
+      END;
+
+      EXIT(DotNetFieldType);
+    END;
+
+    PROCEDURE IsCustomFieldNo@11123305(FieldNo@11123302 : Integer) : Boolean;
+    BEGIN
+      IF FieldNo = 0 THEN
+        EXIT(TRUE);
+
+      IF FieldNo >= 50000 THEN
+        IF FieldNo <= 99999 THEN
+          EXIT(TRUE);
+    END;
+
+    PROCEDURE LSRetailConnectorIsUsed@11123339() : Boolean;
+    VAR
+      TableRef@11123306 : RecordRef;
+      FieldRef@11123305 : FieldRef;
+      WebsiteID@11123304 : Code[50];
+      EnableLSRetailConnector@11123303 : Boolean;
+    BEGIN
+      IF NOT Context.LsAddonIsUsed THEN
+        EXIT;
+
+      IF NOT Context.LsObjectsExist THEN
+        EXIT;
+
+      WebsiteID := Context.GetCurrentWebsiteID;
+      TableRef.OPEN(11123350);                 // "SC - LS Retail Setup"
+      IF TableRef.FIELDEXIST(1) THEN BEGIN
+        FieldRef := TableRef.FIELD(1);         // "Webshop ID"
+        FieldRef.SETRANGE(WebsiteID);
+        IF TableRef.FINDFIRST THEN BEGIN
+          FieldRef := TableRef.FIELD(4);       // "Enable LS Retail Connector"
+          EnableLSRetailConnector := FieldRef.VALUE;
+        END;
+      END;
+
+      EXIT(EnableLSRetailConnector);
+    END;
+
+    PROCEDURE DefineClientTier@11123324() : Integer;
+    VAR
+      ClientTier@11123302 : 'RTC,WEBSERVICE,CLASSIC,NAS';
+    BEGIN
+      IF ISSERVICETIER THEN BEGIN
+        IF GUIALLOWED THEN
+          EXIT(ClientTier::RTC)
+        ELSE
+          EXIT(ClientTier::WEBSERVICE);
+      END ELSE BEGIN
+        IF GUIALLOWED THEN
+          EXIT(ClientTier::CLASSIC)
+        ELSE
+          EXIT(ClientTier::NAS);
+      END;
+    END;
+
+    PROCEDURE GetAttachmentFile@11123325(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      Params@11123304 : TEMPORARY Record 11123310;
+      TempBlob@11123307 : TEMPORARY Record 99008535;
+      OrdersFunc@11123305 : Codeunit 11123319;
+      AttachmentURL@11123306 : Text[250];
+    BEGIN
+      Params.InitParams(InXMLBuff,0);
+
+      AttachmentURL := GetAttachmenURL(Params);
+      IF EXISTS(AttachmentURL) THEN
+        TempBlob.Blob.IMPORT(AttachmentURL);
+
+      OrdersFunc.CreateBinaryDataXML(OutXMLBuff,TempBlob,Params);
+    END;
+
+    PROCEDURE AddAttachmentsToXml@11123323(VAR ResultNodeBuff@11123302 : Record 11123303;TableRec@11123307 : RecordRef;VAR Params@11123303 : Record 11123310);
+    VAR
+      AttachmentsNodeBuff@11123312 : TEMPORARY Record 11123303;
+      RecordLink@11123309 : Record 2000000068;
+    BEGIN
+      ResultNodeBuff.AddElement(AttachmentsNodeBuff,'Attachments','');
+
+      IF NOT EnableAttachmentDownloads(TableRec,Params) THEN
+        EXIT;
+
+      RecordLink.SETRANGE("Record ID",TableRec.RECORDID);
+      IF RecordLink.FINDSET THEN
+        REPEAT
+          IF GetAndValidateAttachmentType(RecordLink,Params) THEN BEGIN
+            Params.AttachmentDescription := RecordLink.Description;
+            GetAttachmentValue(RecordLink,Params);
+            AddAttachmentXml(AttachmentsNodeBuff,Params);
+          END;
+        UNTIL RecordLink.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE AddAttachmentXml@11123409(VAR AttachmentsNodeBuff@11123302 : Record 11123303;VAR Params@11123303 : Record 11123310);
+    VAR
+      AttachmentNodeBuff@11123307 : TEMPORARY Record 11123303;
+    BEGIN
+      AttachmentsNodeBuff.AddElement(AttachmentNodeBuff,'Attachment','');
+      AttachmentNodeBuff.AddFieldElement('Type',Params.AttachmentType);
+      AttachmentNodeBuff.AddFieldElement('Value',Params.AttachmentValue);
+      AttachmentNodeBuff.AddFieldElement('Description',Params.AttachmentDescription);
+    END;
+
+    PROCEDURE GetAndValidateAttachmentType@11123408(RecordLink@11123304 : Record 2000000068;VAR Params@11123302 : Record 11123310) : Boolean;
+    VAR
+      String@11123303 : Text[30];
+    BEGIN
+      String := COPYSTR(RecordLink.URL1,1,4);
+
+      IF IsWebPathCriterion(UPPERCASE(String)) THEN BEGIN
+        Params.AttachmentType := 'Url';
+        EXIT(TRUE);
+      END;
+
+      IF STRPOS(UPPERCASE(String),'FILE') <> 0 THEN
+        IF EXISTS(COPYSTR(RecordLink.URL1,8)) THEN BEGIN
+          Params.AttachmentType := 'File';
+          EXIT(TRUE);
+        END;
+
+      IF EXISTS(RecordLink.URL1) THEN BEGIN
+        Params.AttachmentType := 'File';
+        EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE IsWebPathCriterion@11123327(Creterion@11123302 : Text[30]) : Boolean;
+    BEGIN
+      IF Creterion IN ['HTTP','FTP:','FTPS'] THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE GetAttachmenURL@11123338(VAR Params@11123302 : Record 11123310) : Text[250];
+    VAR
+      RecordLink@11123304 : Record 2000000068;
+      Pos@11123303 : Integer;
+      RecordLinkPrimaryKey@11123307 : Integer;
+      RecordLinkPrimaryKeyTxt@11123305 : Text[30];
+      AttachmentURL@11123306 : Text[250];
+    BEGIN
+      Pos := STRPOS(Params.AttachmentFileName,'__');
+      IF Pos = 0 THEN
+        EXIT;
+
+      RecordLinkPrimaryKeyTxt := COPYSTR(Params.AttachmentFileName,1,Pos - 1);
+      EVALUATE(RecordLinkPrimaryKey,RecordLinkPrimaryKeyTxt);
+      IF RecordLink.GET(RecordLinkPrimaryKey) THEN
+        IF STRPOS(UPPERCASE(RecordLink.URL1),'FILE://') <> 0 THEN
+          AttachmentURL := COPYSTR(RecordLink.URL1,8)
+        ELSE
+          AttachmentURL := RecordLink.URL1;
+
+      EXIT(AttachmentURL);
+    END;
+
+    PROCEDURE GetAttachmentValue@11123407(RecordLink@11123303 : Record 2000000068;VAR Params@11123302 : Record 11123310);
+    VAR
+      FileName@11123306 : Text[250];
+    BEGIN
+      IF Params.AttachmentType = 'File' THEN BEGIN
+        FileName := GetFileName(RecordLink);
+        Params.AttachmentValue := GenerateUniqFileName(RecordLink,FileName);
+      END ELSE
+        Params.AttachmentValue := RecordLink.URL1;
+    END;
+
+    PROCEDURE GetFileName@11123413(RecordLink@11123303 : Record 2000000068) FileName : Text[1024];
+    VAR
+      Separator@11123302 : Text[1];
+    BEGIN
+      FileName := RecordLink.URL1;
+
+
+      IF STRPOS(FileName,'\') <> 0 THEN
+        Separator := '\'
+      ELSE
+        Separator := '/';
+
+      WHILE STRPOS(FileName,Separator) <> 0 DO
+        FileName := COPYSTR(FileName, 1 + STRPOS(FileName,Separator));
+    END;
+
+    PROCEDURE GenerateUniqFileName@11123336(RecordLink@11123302 : Record 2000000068;FileName@11123303 : Text[250]) NewFileName : Text[250];
+    BEGIN
+      NewFileName := FORMAT(RecordLink."Link ID") + '__' + FileName;
+      EXIT(NewFileName);
+    END;
+
+    PROCEDURE EnableAttachmentDownloads@11123335(TableRec@11123303 : RecordRef;VAR Params@11123302 : Record 11123310) : Boolean;
+    VAR
+      Webshop@11123306 : Record 11123313;
+      RecMgtm@11123305 : Codeunit 11123326;
+      TableNumber@11123304 : Integer;
+    BEGIN
+      RecMgtm.GetWebshop(Params.WebsiteId,Webshop,TRUE);
+      TableNumber := GetCorrectTableNoFromRecRef(TableRec);
+      IF TableNumber IN [DATABASE::Item,DATABASE::"Item Variant"] THEN
+        IF Webshop."Enable Product Attachment" THEN
+          EXIT(TRUE);
+
+      IF TableNumber IN [DATABASE::"Sales Header",DATABASE::"Sales Shipment Header",DATABASE::"Sales Invoice Header",
+        DATABASE::"Sales Cr.Memo Header",DATABASE::"Return Receipt Header"]
+      THEN
+        IF Webshop."Enable Document Attachment" THEN
+          EXIT(TRUE);
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE AddOptionStringValuesToXML@11123388(VAR ResultNodeBuff@11123303 : Record 11123303;FieldRef@11123305 : FieldRef);
+    VAR
+      OptionStringNodesBuff@11123304 : TEMPORARY Record 11123303;
+      OptionStringNodeBuff@11123302 : TEMPORARY Record 11123303;
+      OptionId@11123309 : Integer;
+      OptionStringValue@11123310 : Text[1024];
+      TempStringValue@11123306 : Text[1024];
+    BEGIN
+      ResultNodeBuff.AddElement(OptionStringNodesBuff,'EnumMembers','');
+      OptionStringValue := FieldRef.OPTIONSTRING;
+      TempStringValue := OptionStringValue;
+
+      WHILE STRLEN(TempStringValue) <> 0 DO BEGIN
+        IF STRPOS(TempStringValue,',') <> 0 THEN BEGIN
+          OptionStringValue := COPYSTR(TempStringValue,1,STRPOS(TempStringValue,',') - 1);
+          TempStringValue := COPYSTR(TempStringValue,1 + STRPOS(TempStringValue,','));
+        END ELSE BEGIN
+          OptionStringValue := TempStringValue;
+          TempStringValue := '';
+        END;
+
+        IF OptionStringValue <> '' THEN BEGIN
+          OptionStringNodesBuff.AddElement(OptionStringNodeBuff,'EnumMember','');
+          OptionStringNodeBuff.AddFieldElement('Value',FORMAT(OptionId));
+          OptionStringNodeBuff.AddFieldElement('Caption',FORMAT(OptionStringValue));
+        END;
+
+        OptionId += 1;
+      END;
+    END;
+
+    LOCAL PROCEDURE AddItemAttributes@11123328(RecordRef@11123303 : RecordRef;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      ItemAttribute@11123304 : Record 7500;
+      ItemAttributeValue@11123305 : Record 7501;
+      ItemAttributeValueMapping@11123306 : Record 7505;
+    BEGIN
+      // START, SC  Specific functionality for NAV2017
+      IF RecordRef.NUMBER <> DATABASE::Item THEN
+        EXIT;
+
+      IF ItemAttribute.FINDSET THEN
+        REPEAT
+          ItemAttributeValueMapping.SETRANGE("Table ID",DATABASE::Item);
+          ItemAttributeValueMapping.SETRANGE("Item Attribute ID",ItemAttribute.ID);
+          IF NOT ItemAttributeValueMapping.ISEMPTY THEN
+            AddItemAttributeXML(ItemAttribute,OutXMLBuff);
+        UNTIL ItemAttribute.NEXT = 0;
+      // END, SC
+    END;
+
+    LOCAL PROCEDURE AddItemAttributeXML@11123342(ItemAttribute@11123303 : Record 7500;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      ResultNodeBuff@11123304 : TEMPORARY Record 11123303;
+    BEGIN
+      // START, SC  Specific functionality for NAV2017
+      OutXMLBuff.AddElement(ResultNodeBuff,'Field','');
+      ResultNodeBuff.AddFieldElement('Name',MakeAttributeName(ItemAttribute.ID));
+      ResultNodeBuff.AddFieldElement('Caption',ItemAttribute.Name);
+      ResultNodeBuff.AddFieldElement('Type',AttributeFieldTypeMapping(FORMAT(ItemAttribute.Type)));
+      AddItemAttributeTranslations(ResultNodeBuff,ItemAttribute);
+      // END, SC
+    END;
+
+    PROCEDURE MakeAttributeName@11123343(ItemAttributeId@11123302 : Integer) : Text;
+    BEGIN
+      // START, SC  Specific functionality for NAV2017
+      EXIT(STRSUBSTNO('%1__%2','Attribute',ItemAttributeId));
+      // END, SC
+    END;
+
+    LOCAL PROCEDURE AddItemAttributeTranslations@11123345(VAR OutXMLBuff@11123302 : Record 11123303;ItemAttribute@11123303 : Record 7500);
+    VAR
+      ItemAttributeTranslation@11123304 : Record 7502;
+      Languages@11123307 : Record 8;
+      FieldName@11123305 : Text;
+      FieldKey@11123306 : Text;
+    BEGIN
+      // START, SC  Specific functionality for NAV2017
+      ItemAttributeTranslation.SETRANGE("Attribute ID",ItemAttribute.ID);
+      IF ItemAttributeTranslation.FINDSET THEN
+        REPEAT
+          IF Languages.GET(ItemAttributeTranslation."Language Code") THEN BEGIN
+            FieldName := 'Caption';
+            FieldKey := STRSUBSTNO('%1_%2',FieldName,Languages."Windows Language ID");
+            OutXMLBuff.AddFieldElement(FieldKey,ItemAttributeTranslation.Name);
+          END;
+        UNTIL ItemAttributeTranslation.NEXT = 0;
+      // END, SC
+    END;
+
+    PROCEDURE AttributeFieldTypeMapping@11123337(NavFieldType@11123302 : Text[50]) : Text[50];
+    VAR
+      DotNetFieldType@11123303 : Text[50];
+    BEGIN
+      // START, SC  Specific functionality for NAV2017
+      DotNetFieldType := NavFieldType;
+
+      CASE NavFieldType OF
+        'Option','Text' :
+          DotNetFieldType := 'String';
+      END;
+
+      EXIT(DotNetFieldType);
+      // END, SC
+    END;
+
+    BEGIN
+    {
+      2017-10-13 TPZ2027 EBAGIM
+        Swaping Salesperon with MfrRep table
+    }
+    END.
+  }
+}
+

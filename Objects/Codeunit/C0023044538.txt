@@ -1,0 +1,414 @@
+OBJECT Codeunit 23044538 WHI Assembly Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/16/20;
+    Time=[ 3:25:54 PM];
+    Version List=WHI2.4.7684.0;
+  }
+  PROPERTIES
+  {
+    TableNo=23044511;
+    OnRun=VAR
+            loptExtensibility@1000000001 : Option;
+            lbtMessage@1000000003 : BigText;
+            losMessage@1000000002 : OutStream;
+          BEGIN
+            iEventID := Rec.getEvent();
+            loptExtensibility := Rec.getExtensibilityEvent();
+            bOverrideBehaviour := FALSE;
+
+            executeEvent(iEventID, Rec, lbtMessage);
+
+            "Extensibility Blob".CREATEOUTSTREAM( losMessage );
+            setExtensibilityOverride(bOverrideBehaviour);
+            lbtMessage.WRITE(losMessage);
+            MODIFY();
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      iEventID@1000000000 : Integer;
+      recConfig@1000000001 : Record 23044504;
+      recWHISetup@1000000002 : Record 23044502;
+      cuCommonFuncs@1000000004 : Codeunit 23044501;
+      cuResMgmt@1000000005 : Codeunit 23044514;
+      tcSucceedPost@1000000006 : TextConst 'ENU="You successfully posted %1 %2 %3. ";ESM="usted envi¢ con ‚xito %1 %2 %3. ";FRC="vous avez publi‚ avec succŠs %1 %2 %3. ";ENC="You successfully posted %1 %2 %3. "';
+      tcMoreComponent@1000000007 : TextConst 'ENU=You need %1 more %2 %3 when you output %4 %5 %6.;ESM=que necesita %1 m s %2 %3 cuando la producci¢n %4 %5 %6.;FRC=vous avez besoin %1 plus %2 %3 lorsque vous sortie %4 %5 %6.;ENC=You need %1 more %2 %3 when you output %4 %5 %6.';
+      cuActivityLogMgt@1000000008 : Codeunit 23044537;
+      bOverrideBehaviour@1000000009 : Boolean;
+      tcAssemblyNotSupported@1000000010 : TextConst 'ENU=Assembly Orders are not supported in 2009R2.;ESM=Las ¢rdenes de montaje no son compatibles en 2009R2.;FRC=Les commandes d''assemblage ne sont pas prises en charge en 2009R2.;ENC=Assembly Orders are not supported in 2009R2.';
+
+    PROCEDURE executeEvent@1000000001(piEventID@1000000002 : Integer;VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    BEGIN
+      CASE piEventID OF
+        97200: getAssemblyOrderList(ptrecEventParams, pbsOutput);
+        97201: getAssemblyOrder(ptrecEventParams, pbsOutput);
+        97202: updateAssemblyOrder(ptrecEventParams, pbsOutput);
+        97203: updateAssemblyOrderBin(ptrecEventParams, pbsOutput);
+        97204: outputAssemblyOrder(ptrecEventParams, pbsOutput);
+      END;
+    END;
+
+    PROCEDURE getAssemblyOrderList@1000000004(VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      lrecAssemblyHeader@1000000002 : Record 900;
+      ltrecAssemblyHeaderTemp@1000000008 : TEMPORARY Record 900;
+      lsFilter@1000000004 : Text[250];
+      ldnOutput@1000000012 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lcuDatasetTools@1000000003 : Codeunit 23044535;
+      lrrefAssemblyOrders@1000000005 : RecordRef;
+      lcodUser@1000000010 : Code[50];
+      liMaxDocList@1000000007 : Integer;
+      liCount@1000000011 : Integer;
+      lbOnlyAssignedDocs@1000000009 : Boolean;
+    BEGIN
+      //
+      // Return all the assembly orders based on the location
+      //
+      //
+      lsFilter := ptrecEventParams.getValue('filter');
+      lcodUser := ptrecEventParams.getValue('user_name');
+
+      IF( lsFilter <> '' ) THEN BEGIN
+        lsFilter := '*' + lsFilter + '*';
+      END;
+
+      cuCommonFuncs.getDeviceConfig(recConfig,ptrecEventParams);
+      recWHISetup.GET;
+
+      liMaxDocList := recWHISetup."Document Max List";
+      IF liMaxDocList = 0 THEN
+        liMaxDocList := 999999;
+
+
+      lbOnlyAssignedDocs := ( lcodUser<>'' ) AND ( NOT recConfig."Show All Documents");
+
+      lrecAssemblyHeader.SETRANGE("Location Code", recConfig."Location Code");
+
+
+      IF (lsFilter <> '') THEN BEGIN
+        lrecAssemblyHeader.SETFILTER("No.", lsFilter);
+      END;
+
+      IF( lbOnlyAssignedDocs ) THEN
+        lrecAssemblyHeader.SETFILTER("Assigned User ID",'%1|%2','','*'+ lcodUser);
+
+      IF NOT recConfig."Show All Documents" THEN
+        lrecAssemblyHeader.SETRANGE(Status, lrecAssemblyHeader.Status::Released);
+
+      liCount := 0;
+
+      IF(lrecAssemblyHeader.FINDSET(FALSE)) THEN BEGIN
+        REPEAT
+          liCount += 1;
+          ltrecAssemblyHeaderTemp := lrecAssemblyHeader;
+          ltrecAssemblyHeaderTemp.INSERT;
+        UNTIL((lrecAssemblyHeader.NEXT=0) OR (liCount >= liMaxDocList));
+      END;
+
+      ltrecAssemblyHeaderTemp.RESET;
+      lrrefAssemblyOrders.GETTABLE( ltrecAssemblyHeaderTemp );
+      IF (lrrefAssemblyOrders.FINDFIRST() ) THEN;
+
+      ldnOutput := ldnOutput.StringBuilder();
+      lcuDatasetTools.BuildLinesOnlyDataset(iEventID, lrrefAssemblyOrders, FALSE, ldnOutput);
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      bOverrideBehaviour := TRUE;
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE getAssemblyOrder@1000000000(VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      lrecAssemblyHeader@1000000003 : Record 900;
+      lrecAssemblyLine@1000000002 : Record 901;
+      lrrefAssemblyHeader@1000000004 : RecordRef;
+      lrrefAssemblyLine@1000000005 : RecordRef;
+      lcodDocumentNo@1000000006 : Code[20];
+      lcuDatasetTools@1000000007 : Codeunit 23044535;
+      ldnOutput@1000000010 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      ldRemainingQty@1000000009 : Decimal;
+    BEGIN
+      //
+      // Return an assembly order
+      //
+      //
+      lcodDocumentNo := ptrecEventParams.getDocumentNo();
+      cuCommonFuncs.getDeviceConfig(recConfig,ptrecEventParams);
+
+      lrecAssemblyHeader.GET(lrecAssemblyHeader."Document Type"::Order, lcodDocumentNo);
+
+      AssignAssemblyOrder(lrecAssemblyHeader, ptrecEventParams);
+
+
+      lrecAssemblyHeader.SETRECFILTER();
+
+      lrecAssemblyLine.SETRANGE("Document Type", lrecAssemblyLine."Document Type"::Order);
+      lrecAssemblyLine.SETRANGE("Document No.", lcodDocumentNo);
+      lrecAssemblyLine.SETRANGE(Type, lrecAssemblyLine.Type::Item);
+      lrecAssemblyLine.SETRANGE("Location Code", recConfig."Location Code");
+
+
+      IF (lrecAssemblyLine.FINDSET(FALSE)) THEN BEGIN
+        REPEAT
+          ldRemainingQty := lrecAssemblyLine."Remaining Quantity" - lrecAssemblyLine."Qty. Picked";
+          IF ldRemainingQty < 0 THEN
+            ldRemainingQty := 0;
+
+          lcuDatasetTools.SetOverrideValueEachRow(iEventID,DATABASE::"Assembly Line",-2, FORMAT(lrecAssemblyLine."Line No."),FORMAT(ldRemainingQty), FALSE,TRUE,3);
+        UNTIL(lrecAssemblyLine.NEXT=0);
+      END;
+
+      IF lrecAssemblyLine.FINDSET THEN ;
+
+      lrrefAssemblyHeader.GETTABLE( lrecAssemblyHeader );
+      lrrefAssemblyLine.GETTABLE( lrecAssemblyLine );
+      ldnOutput := ldnOutput.StringBuilder();
+
+      lcuDatasetTools.BuildHeaderLineDatasetEmbedRes(
+                                                    iEventID,
+                                                    lrrefAssemblyHeader,
+                                                    lrrefAssemblyLine,
+                                                    FALSE,
+                                                    TRUE,
+                                                    ldnOutput );
+
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      bOverrideBehaviour := TRUE;
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Assembly Line"));
+      ptrecEventParams.setValue('Document No.', lcodDocumentNo);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE updateAssemblyOrder@1000000002(VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      lrecAssemblyLine@1000000006 : Record 901;
+      lrrefAssemblyLine@1000000005 : RecordRef;
+      lcodDocumentNo@1000000004 : Code[20];
+      lcuDatasetTools@1000000003 : Codeunit 23044535;
+      ldnOutput@1000000015 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      liLineNo@1000000007 : Integer;
+      ldQtyToPick@1000000008 : Decimal;
+      lsSerialNumber@1000000010 : Text;
+      lsLotNumber@1000000009 : Text;
+      ldChange@1000000011 : Decimal;
+      lrecReservationEntry@1000000012 : Record 337;
+      ldExistingQuantity@1000000013 : Decimal;
+      ldPreviousQuantity@1000000014 : Decimal;
+    BEGIN
+      //
+      // update existing assembly order based on the information from device
+      // We are using "Qty. Picked" field to show quantity to consume on device side
+      // instead of real NAV "Quantity to Consume" field
+      lcodDocumentNo := ptrecEventParams.getDocumentNo();
+      liLineNo := ptrecEventParams.getLineNo();
+      cuCommonFuncs.getDeviceConfig(recConfig,ptrecEventParams);
+      ldQtyToPick := ptrecEventParams.getValueAsDecimal('qty_to_consume');
+      lsSerialNumber := ptrecEventParams.getSerialNo();
+      lsLotNumber := ptrecEventParams.getLotNo();
+
+      lrecAssemblyLine.GET(lrecAssemblyLine."Document Type"::Order,
+                           lcodDocumentNo,
+                           liLineNo);
+
+      ldPreviousQuantity := lrecAssemblyLine."Qty. Picked";
+
+      ldChange := ldQtyToPick - lrecAssemblyLine."Qty. Picked";
+      lrecAssemblyLine.VALIDATE("Qty. Picked", ldQtyToPick);
+      lrecAssemblyLine.MODIFY;
+
+
+      IF ((lsSerialNumber <> '') OR (lsLotNumber <> '')) THEN BEGIN
+        cuResMgmt.AddRemoveAssemblyTracking(lrecAssemblyLine,
+                                            lsSerialNumber,
+                                            lsLotNumber,
+                                            ldChange,
+                                            lrecAssemblyLine."Unit of Measure Code");
+      END;
+
+      ldnOutput := ldnOutput.StringBuilder();
+
+      lcuDatasetTools.SetOverrideValueEachRow(97201,DATABASE::"Assembly Line",-2,
+            FORMAT(lrecAssemblyLine."Line No."),
+            FORMAT(lrecAssemblyLine."Remaining Quantity" - lrecAssemblyLine."Qty. Picked"),
+            FALSE,TRUE,3);
+
+
+      lrecAssemblyLine.SETRECFILTER();
+      lrrefAssemblyLine.GETTABLE( lrecAssemblyLine );
+
+
+      lcuDatasetTools.BuildLineTableEmbedRes(97201, lrrefAssemblyLine, TRUE, ldnOutput);
+
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      bOverrideBehaviour := TRUE;
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Assembly Line"));
+      ptrecEventParams.setValue('Document No.', lcodDocumentNo);
+      ptrecEventParams.setValue('Document Line No.', FORMAT(liLineNo));
+      ptrecEventParams.setValue('Previous Quantity', FORMAT(ldPreviousQuantity));
+      ptrecEventParams.setValue('New Quantity', FORMAT(ldQtyToPick));
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE outputAssemblyOrder@1000000006(VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      lrecAssemblyHeader@1000000003 : Record 900;
+      lrecLocation@100000000 : Record 14;
+      lcodDocumentNo@1000000002 : Code[20];
+      lcuAssemblyPost@1000000005 : Codeunit 900;
+      ldQuantityToAssemble@1000000004 : Decimal;
+      lrecAssemblyLines@1000000006 : Record 901;
+    BEGIN
+      //
+      // Post
+      //
+      //
+      lcodDocumentNo := ptrecEventParams.getDocumentNo();
+      cuCommonFuncs.getDeviceConfig(recConfig,ptrecEventParams);
+      ldQuantityToAssemble := ptrecEventParams.getValueAsDecimal('quantity');
+
+      lrecAssemblyHeader.GET(lrecAssemblyHeader."Document Type"::Order, lcodDocumentNo);
+      lrecAssemblyHeader.VALIDATE("Quantity to Assemble", ldQuantityToAssemble);
+      lrecAssemblyHeader."Posting Date" := TODAY;
+      lrecAssemblyHeader.MODIFY;
+
+      lrecLocation.GET(lrecAssemblyHeader."Location Code");
+
+      // check the quantity to consume (Qty. Picked) on all the lines
+      IF NOT lrecLocation."Require Pick" THEN BEGIN
+        lrecAssemblyLines.SETRANGE("Document Type", lrecAssemblyLines."Document Type"::Order);
+        lrecAssemblyLines.SETRANGE("Document No.", lcodDocumentNo);
+        lrecAssemblyLines.SETRANGE(Type, lrecAssemblyLines.Type::Item);
+        lrecAssemblyLines.SETRANGE("Location Code", recConfig."Location Code");
+        // if fully output, can't find anything lines
+        IF (lrecAssemblyLines.FINDSET(FALSE)) THEN BEGIN
+          REPEAT
+            IF (lrecAssemblyLines."Qty. Picked" < lrecAssemblyLines."Quantity to Consume") THEN BEGIN
+              ERROR(tcMoreComponent,
+                     lrecAssemblyLines."Quantity to Consume" - lrecAssemblyLines."Qty. Picked",
+                     lrecAssemblyLines."Unit of Measure Code",
+                     lrecAssemblyLines."No.",
+                     ldQuantityToAssemble,
+                     lrecAssemblyHeader."Unit of Measure Code",
+                     lrecAssemblyHeader."Item No." );
+            END ELSE BEGIN
+              lrecAssemblyLines."Qty. Picked" := 0;
+              lrecAssemblyLines.MODIFY(FALSE);
+            END;
+          UNTIL (lrecAssemblyLines.NEXT = 0);
+        END;
+      END;
+
+      lcuAssemblyPost.RUN(lrecAssemblyHeader);
+
+      cuCommonFuncs.generateSuccessReturnWithMsg(1, STRSUBSTNO(tcSucceedPost,
+                                                              ldQuantityToAssemble,
+                                                              lrecAssemblyHeader."Unit of Measure Code",
+                                                              lrecAssemblyHeader."Item No."), pbsOutput);
+
+      bOverrideBehaviour := TRUE;
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Assembly Header"));
+      ptrecEventParams.setValue('Document No.', lcodDocumentNo);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE updateAssemblyOrderBin@1000000038(VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      lrecAssemblyLine@1000000006 : Record 901;
+      lrrefAssemblyLine@1000000005 : RecordRef;
+      lcodDocumentNo@1000000004 : Code[20];
+      lcuDatasetTools@1000000003 : Codeunit 23044535;
+      ldnOutput@1000000012 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      liLineNo@1000000007 : Integer;
+      lcodBinCode@1000000008 : Code[20];
+      lcuReleaseAssemblyDoc@1000000009 : Codeunit 903;
+      lrecAssemblyHeader@1000000010 : Record 900;
+      lcodPreviousBin@1000000011 : Code[20];
+    BEGIN
+      //
+      // update existing assembly order based on the information from device
+      //
+      //
+
+      lcodDocumentNo := ptrecEventParams.getDocumentNo();
+      liLineNo := ptrecEventParams.getLineNo();
+      cuCommonFuncs.getDeviceConfig(recConfig,ptrecEventParams);
+      lcodBinCode := ptrecEventParams.getValue('bin_code');
+
+      lrecAssemblyHeader.GET(lrecAssemblyHeader."Document Type"::Order, lcodDocumentNo);
+
+      lcuReleaseAssemblyDoc.Reopen(lrecAssemblyHeader);  // Reopen document
+
+      lrecAssemblyLine.GET(lrecAssemblyLine."Document Type"::Order,
+                           lcodDocumentNo,
+                           liLineNo);
+
+      lcodPreviousBin:= lrecAssemblyLine."Bin Code";
+
+      lrecAssemblyLine.VALIDATE("Bin Code", lcodBinCode);
+      lrecAssemblyLine.MODIFY;
+
+      lcuReleaseAssemblyDoc.RUN(lrecAssemblyHeader);  // Release document
+
+      ldnOutput := ldnOutput.StringBuilder();
+      lrecAssemblyLine.SETRECFILTER();
+      lrrefAssemblyLine.GETTABLE( lrecAssemblyLine );
+      lcuDatasetTools.BuildLineTableEmbedRes(97201, lrrefAssemblyLine, TRUE, ldnOutput);
+
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      bOverrideBehaviour := TRUE;
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Assembly Line"));
+      ptrecEventParams.setValue('Document No.', lcodDocumentNo);
+      ptrecEventParams.setValue('Document Line No.', FORMAT(liLineNo));
+      ptrecEventParams.setValue('Previous Bin', lcodPreviousBin);
+      ptrecEventParams.setValue('New Bin', lcodBinCode);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE AssignAssemblyOrder@1000000021(VAR precAssemblyHeader@1000000000 : Record 900;VAR ptrecEventParams@1000000002 : TEMPORARY Record 23044511);
+    VAR
+      lrecConfig@1000000003 : Record 23044504;
+      lcodUserName@1000000001 : Code[50];
+    BEGIN
+      //<FUNC>
+      //  Description: Assigns the user to the assembly header if required.
+      //  Side Effect: None
+      //</FUNC>
+
+      lcodUserName := cuCommonFuncs.getUserNameWithDomain(ptrecEventParams);
+
+
+      IF( lcodUserName <> '' ) THEN BEGIN
+        cuCommonFuncs.getDeviceConfig(lrecConfig,ptrecEventParams);
+
+        IF (lrecConfig."Assign Document" = lrecConfig."Assign Document"::Always) OR
+          ((lrecConfig."Assign Document" = lrecConfig."Assign Document"::Unassigned) AND (precAssemblyHeader."Assigned User ID"='')) THEN BEGIN
+          precAssemblyHeader."Assigned User ID" := lcodUserName;
+          precAssemblyHeader.MODIFY;
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+    }
+    END.
+  }
+}
+

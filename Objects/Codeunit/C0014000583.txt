@@ -1,0 +1,357 @@
+OBJECT Codeunit 14000583 Create Surp. Sug. Transfer
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.02;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InvMgtSetup@1240030009 : Record 14000551;
+      InvNeed@1240030015 : Record 14000596;
+      Item@1240030022 : Record 27;
+      ItemUOM@1240030023 : Record 5404;
+      ItemUsage@1240030018 : Record 14000557;
+      Location@1240030000 : Record 14;
+      LocationTransferRule@1240030016 : Record 14000595;
+      LocInvPeriod@1240030017 : Record 14000553;
+      ProcUnit@1240030005 : Record 14000555;
+      SugTransferHdr@1240030006 : Record 14000592;
+      SugTransferLine@1240030007 : Record 14000593;
+      SurplusInvValue@1240030013 : Record 14000584;
+      TransferCalendar@1240030025 : Record 14000597;
+      ForecastAdj@1240020000 : Record 14002707;
+      ForecastEntry@1240020001 : Record 14002603;
+      CreateLocInvRollUp@1240030010 : Codeunit 14000574;
+      Need@1240030014 : Decimal;
+      ProgWindow@1240030001 : Dialog;
+      Text001@1240030002 : TextConst 'ENU=Location';
+      Text002@1240030003 : TextConst 'ENU=item';
+      Text003@1240030004 : TextConst 'ENU=Create Surplus Suggested Transfers';
+      LineNo@1240030020 : Integer;
+      FromLocationArray@1240030027 : ARRAY [200] OF Code[10];
+      FromPriorityArray@1240030029 : ARRAY [200] OF Integer;
+      LocMinSOQ@1240030011 : Decimal;
+      LocMaxSOQ@1240030012 : Decimal;
+      TempNoSeries@1240030008 : Code[10];
+      ToTransfer@1240030019 : Decimal;
+      TransferUOM@1240030021 : Code[10];
+      TransferQty@1240030024 : Decimal;
+      EntryNo@1240030026 : Integer;
+      PrevToLocation@1240030028 : Code[10];
+      i@1240030030 : Integer;
+      AddQty@1240030031 : Decimal;
+      SubtQty@1240030032 : Decimal;
+      SurplusQty@1240030033 : Decimal;
+
+    PROCEDURE CalcSurplusForSelLocations@1240030004();
+    VAR
+      LogEntryNo@1240020000 : Integer;
+      InvMgmt@1240020001 : Codeunit 14000553;
+    BEGIN
+      IF GUIALLOWED THEN BEGIN
+        ProgWindow.OPEN(
+          '#1#######################################\' +
+          PADSTR(Text001,10) + '#2########\' +
+          PADSTR(Text002,10) + '#3##################');
+        ProgWindow.UPDATE(1,Text003);
+      END;
+
+      IF NOT GUIALLOWED THEN BEGIN
+        InvMgmt.CreateLogEntry('',Text003,LogEntryNo);
+        COMMIT;
+      END;
+
+      InvMgtSetup.GET;
+
+      InvNeed.RESET;
+      InvNeed.DELETEALL(TRUE);
+      SugTransferHdr.RESET;
+      SugTransferHdr.SETRANGE("Document Type",SugTransferHdr."Document Type"::"Inv. Balancing");
+      SugTransferHdr.DELETEALL(TRUE);
+
+      TransferCalendar.RESET;
+      TransferCalendar.SETCURRENTKEY(TransferCalendar."Inv. Balancing Priority");
+      TransferCalendar.SETRANGE("Select Inv. Balancing",TRUE);
+      IF TransferCalendar.FIND('-') THEN
+        REPEAT
+          IF PrevToLocation <> TransferCalendar."Location Code" THEN BEGIN
+            PrevToLocation := TransferCalendar."Location Code";
+            LoadFromLocArray(TransferCalendar."Location Code");
+          END;
+          Location.GET(TransferCalendar."Location Code");
+          ProcUnit.RESET;
+          ProcUnit.SETCURRENTKEY("Location Code","Replenishment Source Type","Replenishment Source Code");
+          ProcUnit.SETRANGE("Location Code",TransferCalendar."Location Code");
+          ProcUnit.SETFILTER("Replenishment Source Type", '<>%1', ProcUnit."Replenishment Source Type"::Location);
+          ProcUnit.SETRANGE("Manual Bypass Replenishment", FALSE);
+          ProcUnit.SETRANGE("Exclude From Replenishment", FALSE);
+          IF ProcUnit.FINDSET THEN BEGIN
+            REPEAT
+              IF GUIALLOWED THEN BEGIN
+                ProgWindow.UPDATE(2,ProcUnit."Location Code");
+                ProgWindow.UPDATE(3,ProcUnit."Item No.");
+              END;
+              CalcSuggestionByProcUnit;
+            UNTIL ProcUnit.NEXT = 0;
+          END;
+          TransferCalendar."Last Inv. Bal. Create Date" := TODAY;
+          TransferCalendar."Last Inv. Bal. Create Time" := TIME;
+          TransferCalendar."Last Inv. Bal. Create User" := USERID;
+          TransferCalendar.MODIFY;
+        UNTIL TransferCalendar.NEXT = 0;
+
+      InvNeed.RESET;
+      InvNeed.SETFILTER("Transfer Quantity",'<>%1',0);
+      IF InvNeed.FIND('-') THEN
+        REPEAT
+          CreateSuggTransferLine(InvNeed);
+        UNTIL InvNeed.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        ProgWindow.CLOSE;
+
+      IF NOT GUIALLOWED THEN
+        InvMgmt.CloseLogEntry(LogEntryNo,'');
+    END;
+
+    PROCEDURE CalcSuggestionByProcUnit@1240030002();
+    BEGIN
+      CASE ProcUnit."Replenishment Model" OF
+        ProcUnit."Replenishment Model"::"Lead Time Horizon",
+        ProcUnit."Replenishment Model"::"Usage Based Procurement":
+          BEGIN
+            IF (ReoccuringUsage = TRUE) AND
+               (ProcUnit."Nonstock Unit" = FALSE)
+            THEN BEGIN
+              CLEAR(CreateLocInvRollUp);
+              CreateLocInvRollUp.CalcRollUp(ProcUnit,FALSE,0,0D);
+              CreateLocInvRollUp.GetMinMaxSOQ(LocMinSOQ,LocMaxSOQ);
+              Need := 0;
+              CASE Location."Roll Up Order Quantity Rule" OF
+                Location."Roll Up Order Quantity Rule"::MinSOQ:
+                  IF ROUND(LocMinSOQ,1.0) > 0 THEN
+                    Need := ROUND(LocMinSOQ,1.0);
+                Location."Roll Up Order Quantity Rule"::MaxSOQ:
+                  IF ROUND(LocMaxSOQ,1.0) > 0 THEN
+                    Need := ROUND(LocMaxSOQ,1.0);
+              END;
+              IF Need > 0 THEN BEGIN
+                // Order Multiple - Round Up Need
+                IF ProcUnit."Order Multiple" <> 0 THEN BEGIN
+                  AddQty := Need MOD (ProcUnit."Order Multiple");
+                  IF AddQty > 0 THEN
+                    Need := Need + (ProcUnit."Order Multiple" - AddQty);
+                END;
+                InvNeed.INIT;
+                EntryNo := EntryNo + 1;
+                InvNeed."Entry No." := EntryNo;
+                InvNeed."Item No." := ProcUnit."Item No.";
+                InvNeed."Variant Code" := ProcUnit."Variant Code";
+                InvNeed.Type := InvNeed.Type::Need;
+                InvNeed."To Priority" := TransferCalendar."Inv. Balancing Priority";
+                InvNeed."To Location Code" := ProcUnit."Location Code";
+                InvNeed.Need := Need;
+                // Order Multiple
+                InvNeed."Previous Need" := Need;
+                InvNeed."Remaining Need" := Need;
+                InvNeed.INSERT(TRUE);
+                i := 0;
+                REPEAT
+                  i := i + 1;
+                  SurplusInvValue.RESET;
+                  SurplusInvValue.SETCURRENTKEY("Item No.","Location Code","Variant Code");
+                  SurplusInvValue.SETRANGE("Item No.",ProcUnit."Item No.");
+                  SurplusInvValue.SETFILTER("Location Code",FromLocationArray[i]);
+                  SurplusInvValue.SETRANGE("Variant Code",ProcUnit."Variant Code");
+                  SurplusInvValue.SETRANGE("Surplus Available",TRUE);
+                  IF SurplusInvValue.FIND('-') THEN BEGIN
+                    SurplusInvValue.CALCFIELDS("Outstanding Surplus Qty (Base)");
+                    IF SurplusInvValue."Outstanding Surplus Qty (Base)" > 0 THEN BEGIN
+                      InvNeed.INIT;
+                      EntryNo := EntryNo + 1;
+                      InvNeed."Entry No." := EntryNo;
+                      InvNeed."Item No." := ProcUnit."Item No.";
+                      InvNeed."Variant Code" := ProcUnit."Variant Code";
+                      InvNeed.Type := InvNeed.Type::Surplus;
+                      InvNeed."To Priority" := TransferCalendar."Inv. Balancing Priority";
+                      InvNeed."From Priority" := FromPriorityArray[i];
+                      InvNeed."To Location Code" := ProcUnit."Location Code";
+                      InvNeed."From Location Code" := FromLocationArray[i];
+                      // Order Multiple
+                      IF ProcUnit."Order Multiple" <> 0 THEN BEGIN
+                        SubtQty := SurplusInvValue."Outstanding Surplus Qty (Base)" MOD ProcUnit."Order Multiple";
+                        SurplusQty := SurplusInvValue."Outstanding Surplus Qty (Base)" - SubtQty;
+                        InvNeed."Surplus Quantity" := SurplusQty;
+                      END ELSE
+                        InvNeed."Surplus Quantity" := SurplusInvValue."Outstanding Surplus Qty (Base)";
+                      InvNeed."Previous Need" := Need;
+                      IF InvNeed."Surplus Quantity" <= Need THEN BEGIN
+                        InvNeed."Transfer Quantity" := InvNeed."Surplus Quantity";
+                        InvNeed."Surplus Remaining Qty." := 0;
+                        Need := Need - InvNeed."Transfer Quantity";
+                        InvNeed."Remaining Need" := Need;
+                      END ELSE BEGIN
+                        InvNeed."Transfer Quantity" := Need;
+                        Need := 0;
+                        InvNeed."Remaining Need" := Need;
+                        InvNeed."Surplus Remaining Qty." := InvNeed."Surplus Quantity" - InvNeed."Transfer Quantity";
+                      END;
+                      InvNeed.INSERT(TRUE);
+                    END;
+                  END;
+                UNTIL (FromLocationArray[i + 1] = '') OR
+                      (Need = 0);
+              END;
+            END;
+          END;
+      END;
+    END;
+
+    PROCEDURE ReoccuringUsage@1240030006() Resp : Boolean;
+    BEGIN
+      IF LocInvPeriod."Location Code" <> ProcUnit."Location Code" THEN BEGIN
+        LocInvPeriod.SETRANGE("Location Code",ProcUnit."Location Code");
+        LocInvPeriod.SETRANGE("Period End Closed",TRUE);
+        LocInvPeriod.FIND('+');
+      END;
+
+      IF (ProcUnit."Frozen Usage per Day" <> 0) AND
+         (ProcUnit."Frozen Usage Expiration Date" > TODAY)
+      THEN
+        EXIT(TRUE);
+
+      ItemUsage.RESET;
+      ItemUsage.SETCURRENTKEY("Location Code","Item No.","Variant Code","Starting Date","Ending Date");
+      ItemUsage.SETRANGE("Location Code",ProcUnit."Location Code");
+      ItemUsage.SETRANGE("Item No.",ProcUnit."Item No.");
+      ItemUsage.SETRANGE("Variant Code",ProcUnit."Variant Code");
+      ItemUsage.SETRANGE("Starting Date",LocInvPeriod."Starting Date");
+      IF ItemUsage.FIND('-') THEN
+        IF ItemUsage.Status = ItemUsage.Status::Reoccuring THEN
+          EXIT(TRUE);
+
+      ForecastAdj.RESET;
+      ForecastAdj.SETCURRENTKEY("Item No.","Variant Code","Location Code","Starting Date");
+      ForecastAdj.SETRANGE("Item No.",ProcUnit."Item No.");
+      ForecastAdj.SETRANGE("Variant Code",ProcUnit."Variant Code");
+      ForecastAdj.SETFILTER("Location Code",ProcUnit."Location Code");
+      ForecastAdj.SETFILTER("Starting Date",'>%1',LocInvPeriod."Ending Date");
+      ForecastAdj.CALCSUMS(Quantity);
+      IF ForecastAdj.Quantity <> 0 THEN
+        EXIT(TRUE);
+
+      ForecastEntry.RESET;
+      ForecastEntry.SETCURRENTKEY(
+        "Location Code","Item No.","Variant Code","Starting Date",Released);
+      ForecastEntry.SETFILTER("Location Code",ProcUnit."Location Code");
+      ForecastEntry.SETRANGE("Item No.",ProcUnit."Item No.");
+      ForecastEntry.SETRANGE("Variant Code",ProcUnit."Variant Code");
+      ForecastEntry.SETRANGE(Released,TRUE);
+      ForecastEntry.CALCSUMS(Quantity);
+      IF ForecastEntry.Quantity <> 0 THEN
+        EXIT(TRUE);
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE CreateSuggTransferLine@1240030003(CurrInvNeed@1240030001 : Record 14000596);
+    VAR
+      LocProcUnit@1240030000 : Record 14000555;
+    BEGIN
+      SugTransferHdr.RESET;
+      SugTransferHdr.SETCURRENTKEY(SugTransferHdr."Transfer-to Code");
+      SugTransferHdr.SETRANGE("Document Type",SugTransferHdr."Document Type"::"Inv. Balancing");
+      SugTransferHdr.SETRANGE("Transfer-to Code",CurrInvNeed."To Location Code");
+      SugTransferHdr.SETRANGE("Transfer-from Code",CurrInvNeed."From Location Code");
+      IF NOT SugTransferHdr.FIND('-') THEN BEGIN
+        SugTransferHdr.INIT;
+        SugTransferHdr."Document Type" := SugTransferHdr."Document Type"::"Inv. Balancing";
+        SugTransferHdr."No." := '';
+        SugTransferHdr.INSERT(TRUE);
+        SugTransferHdr."Transfer-from Code" := CurrInvNeed."From Location Code";
+        SugTransferHdr."Transfer-to Code" := CurrInvNeed."To Location Code";
+        SugTransferHdr."In-Transit Code" := InvMgtSetup."In-Transit Code";
+        SugTransferHdr."Transfer To Priority" := CurrInvNeed."To Priority";
+        SugTransferHdr."Transfer From Priority" := CurrInvNeed."From Priority";
+        SugTransferHdr."Creation Date" := TODAY;
+        SugTransferHdr."Transfer Date" := WORKDATE;
+        LocationTransferRule.GET(SugTransferHdr."Transfer-from Code",SugTransferHdr."Transfer-to Code");
+        SugTransferHdr.MODIFY;
+      END;
+
+      SugTransferLine.RESET;
+      SugTransferLine.SETRANGE("Document Type",SugTransferHdr."Document Type");
+      SugTransferLine.SETRANGE("Suggested Transfer No.",SugTransferHdr."No.");
+      IF SugTransferLine.FIND('+') THEN
+        LineNo := SugTransferLine."Line No.";
+      LineNo := LineNo + 10000;
+      SugTransferLine.INIT;
+      SugTransferLine."Document Type" := SugTransferHdr."Document Type";
+      SugTransferLine."Suggested Transfer No." := SugTransferHdr."No.";
+      SugTransferLine."Line No." := LineNo;
+      SugTransferLine.VALIDATE("Item No.",CurrInvNeed."Item No.");
+      SugTransferLine.VALIDATE("Variant Code",CurrInvNeed."Variant Code");
+      SugTransferLine."Transfer-from Code" := SugTransferHdr."Transfer-from Code";
+      SugTransferLine."Transfer-to Code" := SugTransferHdr."Transfer-to Code";
+      SugTransferLine."In-Transit Code" := SugTransferHdr."In-Transit Code";
+
+      Item.GET(InvNeed."Item No.");
+      TransferUOM := Item."Base Unit of Measure";
+      ProcUnit.GET(CurrInvNeed."To Location Code",CurrInvNeed."Item No.",CurrInvNeed."Variant Code");
+      IF ProcUnit."Purchase Unit of Measure" <> '' THEN
+        TransferUOM := ProcUnit."Purchase Unit of Measure";
+      SugTransferLine.VALIDATE("Unit of Measure Code",TransferUOM);
+      ItemUOM.GET(ProcUnit."Item No.",TransferUOM);
+      TransferQty := InvNeed."Transfer Quantity";
+      SugTransferLine."Need Quantity (Base)" := TransferQty;
+      TransferQty := ROUND(TransferQty / ItemUOM."Qty. per Unit of Measure",1.0,'>');
+      SugTransferLine.VALIDATE("Suggested Quantity",TransferQty);
+      SugTransferLine."Remaining Need (Base)" := CurrInvNeed."Remaining Need";
+      SugTransferLine.VALIDATE("Transfer Quantity",TransferQty);
+      SugTransferLine.Reason := SugTransferLine.Reason::"Inv. Balancing";
+      SugTransferLine."Transfer To Priority" := SugTransferHdr."Transfer To Priority";
+      SugTransferLine."Transfer From Priority" := SugTransferHdr."Transfer From Priority";
+      SugTransferLine."Order Multiple" := ProcUnit."Order Multiple";
+
+      SugTransferLine."To Item Class Ranking" := ProcUnit."Item Class Ranking";
+      SugTransferLine."To Ranking Code" := ProcUnit."Ranking Code";
+      IF LocProcUnit.GET(SugTransferLine."Transfer-from Code",SugTransferLine."Item No.",SugTransferLine."Variant Code") THEN BEGIN
+        SugTransferLine."From Item Class Ranking" := LocProcUnit."Item Class Ranking";
+        SugTransferLine."From Ranking Code" := LocProcUnit."Ranking Code";
+      END;
+
+      SugTransferLine.INSERT;
+    END;
+
+    PROCEDURE LoadFromLocArray@1240030005(CurrLocation@1240030000 : Code[10]);
+    VAR
+      LocLocationTransferRule@1240030001 : Record 14000595;
+    BEGIN
+      CLEAR(FromLocationArray);
+      CLEAR(FromPriorityArray);
+      i := 0;
+      LocLocationTransferRule.RESET;
+      LocLocationTransferRule.SETCURRENTKEY("To Location","From Priority");
+      LocLocationTransferRule.SETRANGE("To Location",CurrLocation);
+      IF LocLocationTransferRule.FIND('-') THEN
+        REPEAT
+          i := i + 1;
+          FromLocationArray[i] := LocLocationTransferRule."From Location";
+          FromPriorityArray[i] := LocLocationTransferRule."From Priority";
+        UNTIL LocLocationTransferRule.NEXT = 0;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

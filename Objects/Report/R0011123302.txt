@@ -1,0 +1,373 @@
+OBJECT Report 11123302 SC - Updating Visiblity
+{
+  OBJECT-PROPERTIES
+  {
+    Date=04/18/17;
+    Time=[ 1:00:00 PM];
+    Version List=SCW19.2.0,SCW18.3.1;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Updating Visiblity in Webshop;
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   SetVisibilityTo := SetVisibilityTo::Yes;
+                   CheckOrderability := TRUE;
+                 END;
+
+    OnPostReport=VAR
+                   CacheMgt@11123302 : Codeunit 11123323;
+                 BEGIN
+                   CacheMgt.ClearCache;
+                 END;
+
+  }
+  DATASET
+  {
+    { 11123305;;DataItem;                    ;
+               DataItemTable=Table27;
+               DataItemTableView=SORTING(No.);
+               OnPreDataItem=BEGIN
+                               Window.OPEN(Text11123304 + Text11123305 + Text11123306 + Text11123307 + Text11123308 +
+                                 Text11123309 + Text11123310 + Text11123311 + Text11123312);
+
+                               ItemTotalRecNo := Item.COUNT;
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  CatalogHelper@11123302 : Codeunit 11123318;
+                                  DummyErrorText@11123306 : Text[250];
+                                  Modified@11123304 : Boolean;
+                                  Orderable@11123305 : Boolean;
+                                  CategoryEmpty@11123303 : Boolean;
+                                BEGIN
+                                  ItemRecNo := ItemRecNo + 1;
+                                  Window.UPDATE(2,Item."No.");
+                                  Window.UPDATE(3,ROUND(ItemRecNo / ItemTotalRecNo * 10000,1));
+
+                                  Modified := FALSE;
+                                  CASE SetVisibilityTo OF
+                                    SetVisibilityTo::Yes :
+                                      IF CheckOrderability THEN BEGIN
+                                        Orderable := CatalogHelper.TestItem(Item,DummyErrorText,FALSE);
+                                        IF Orderable AND NOT "Visible in Webshop" THEN BEGIN
+                                          "Visible in Webshop" := TRUE;
+                                          Modified := TRUE;
+                                          UpdateItemCategoryAndGroup(Item,TRUE);
+                                        END;
+                                        IF NOT Orderable AND "Visible in Webshop" THEN BEGIN
+                                          "Visible in Webshop" := FALSE;
+                                          Modified := TRUE;
+                                          CategoryEmpty := CatalogHelper.IsCategoryEmpty("Item Category Code",TRUE);
+                                          IF CategoryEmpty THEN
+                                            UpdateItemCategoryAndGroup(Item,FALSE);
+                                        END;
+                                      END ELSE BEGIN
+                                        IF NOT "Visible in Webshop" THEN BEGIN
+                                          "Visible in Webshop" := TRUE;
+                                          Modified := TRUE;
+                                          UpdateItemCategoryAndGroup(Item,TRUE);
+                                        END;
+                                      END;
+                                    SetVisibilityTo::No :
+                                      IF "Visible in Webshop" THEN BEGIN
+                                        "Visible in Webshop" := FALSE;
+                                        Modified := TRUE;
+                                        UpdateItemCategoryAndGroup(Item,FALSE);
+                                      END;
+                                  END;
+                                  IF Modified THEN
+                                    UpdateItem;
+                                END;
+
+               ReqFilterFields=No.,Blocked,Visible in Webshop }
+
+    { 11123304;1;DataItem;                   ;
+               DataItemTable=Table5401;
+               DataItemTableView=SORTING(Item No.,Code);
+               OnPreDataItem=BEGIN
+                               AtLeastOneVariantOrderable := FALSE;
+                               AtLeastOneVariantModified := FALSE;
+
+                               VariantRecNo := 0;
+                               VariantTotalRecNo := "Item Variant".COUNT;
+
+                               Window.UPDATE(4,'');
+                               Window.UPDATE(5,0);
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  Params@11123302 : TEMPORARY Record 11123310;
+                                  CatalogHelper@11123303 : Codeunit 11123318;
+                                  Action@11123309 : 'Read,Insert,Modify,Delete,Rename';
+                                  DummyErrorText@11123307 : Text[250];
+                                  Modified@11123305 : Boolean;
+                                  Orderable@11123304 : Boolean;
+                                BEGIN
+                                  VariantRecNo := VariantRecNo + 1;
+                                  Window.UPDATE(4,Code);
+                                  Window.UPDATE(5,ROUND(VariantRecNo / VariantTotalRecNo * 10000,1));
+
+                                  Modified := FALSE;
+                                  IF Item."Visible in Webshop" THEN BEGIN
+                                    CASE SetVisibilityTo OF
+                                      SetVisibilityTo::Yes :
+                                        IF CheckOrderability THEN BEGIN
+                                          Orderable := CatalogHelper.TestVariant("Item Variant",DummyErrorText,FALSE);
+                                          IF Orderable THEN BEGIN
+                                            AtLeastOneVariantOrderable := TRUE;
+                                            IF NOT "Visible in Webshop" THEN BEGIN
+                                              "Visible in Webshop" := TRUE;
+                                              Modified := TRUE;
+                                            END;
+                                          END ELSE
+                                            IF "Visible in Webshop" THEN BEGIN
+                                              "Visible in Webshop" := FALSE;
+                                              Modified := TRUE;
+                                            END;
+                                        END ELSE BEGIN
+                                          AtLeastOneVariantOrderable := TRUE;
+                                          IF NOT "Visible in Webshop" THEN BEGIN
+                                            "Visible in Webshop" := TRUE;
+                                            Modified := TRUE;
+                                          END;
+                                        END;
+                                      SetVisibilityTo::No :
+                                        IF "Visible in Webshop" THEN BEGIN
+                                          "Visible in Webshop" := FALSE;
+                                          Modified := TRUE;
+                                        END;
+                                    END;
+                                  END ELSE
+                                    IF "Visible in Webshop" THEN BEGIN
+                                      "Visible in Webshop" := FALSE;
+                                      Modified := TRUE;
+                                    END;
+
+                                  IF Modified THEN BEGIN
+                                    AtLeastOneVariantModified := TRUE;
+                                    MODIFY;
+                                    CatalogHelper.RefreshVariantInfo("Item Variant",Action::Modify,FALSE,Params);
+                                  END;
+                                END;
+
+               OnPostDataItem=BEGIN
+                                IF (VariantRecNo > 0) AND
+                                  NOT AtLeastOneVariantOrderable AND
+                                  Item."Visible in Webshop"
+                                THEN BEGIN
+                                  AtLeastOneVariantModified := TRUE;
+                                  Item."Visible in Webshop" := FALSE;
+                                END;
+                                IF AtLeastOneVariantModified THEN
+                                  UpdateItem;
+                              END;
+
+               ReqFilterFields=Code,Visible in Webshop;
+               DataItemLink=Item No.=FIELD(No.) }
+
+    { 11123303;1;DataItem;                   ;
+               DataItemTable=Table90;
+               DataItemTableView=SORTING(Parent Item No.,Line No.)
+                                 WHERE(Type=FILTER(Item));
+               OnPreDataItem=BEGIN
+                               AtLeastOneComponentOrderable := FALSE;
+
+                               ComponentRecNo := 0;
+                               ComponentTotalRecNo := "BOM Component".COUNT;
+
+                               Window.UPDATE(6,'');
+                               Window.UPDATE(7,0);
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  Modified@11123303 : Boolean;
+                                BEGIN
+                                  ComponentRecNo := ComponentRecNo + 1;
+                                  Window.UPDATE(6,"No.");
+                                  Window.UPDATE(7,ROUND(ComponentRecNo / ComponentTotalRecNo * 10000,1));
+
+                                  Modified := FALSE;
+                                  IF Item."Visible in Webshop" THEN BEGIN
+                                    CASE SetVisibilityTo OF
+                                      SetVisibilityTo::Yes :
+                                        BEGIN
+                                          IF NOT "Visible in Webshop" THEN BEGIN
+                                            "Visible in Webshop" := TRUE;
+                                            Modified := TRUE;
+                                          END;
+                                        END;
+                                      SetVisibilityTo::No :
+                                        IF "Visible in Webshop" THEN BEGIN
+                                          "Visible in Webshop" := FALSE;
+                                          Modified := TRUE;
+                                        END;
+                                    END;
+                                  END ELSE
+                                    IF "Visible in Webshop" THEN BEGIN
+                                      "Visible in Webshop" := FALSE;
+                                      Modified := TRUE;
+                                    END;
+
+                                  IF Modified THEN
+                                    MODIFY;
+                                END;
+
+               ReqFilterFields=No.,Visible in Webshop;
+               DataItemLink=Parent Item No.=FIELD(No.) }
+
+    { 11123302;1;DataItem;                   ;
+               DataItemTable=Table5404;
+               DataItemTableView=SORTING(Item No.,Code);
+               OnPreDataItem=BEGIN
+                               AtLeastOneComponentOrderable := FALSE;
+
+                               ItemUOMRecNo := 0;
+                               ItemUOMTotalRecNo := "Item Unit of Measure".COUNT;
+
+                               Window.UPDATE(8,'');
+                               Window.UPDATE(9,0);
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  Modified@11123303 : Boolean;
+                                BEGIN
+                                  ItemUOMRecNo := ItemUOMRecNo + 1;
+                                  Window.UPDATE(8,Code);
+                                  Window.UPDATE(9,ROUND(ItemUOMRecNo / ItemUOMTotalRecNo * 10000,1));
+
+                                  Modified := FALSE;
+                                  IF Item."Visible in Webshop" THEN BEGIN
+                                    CASE SetVisibilityTo OF
+                                      SetVisibilityTo::Yes :
+                                        BEGIN
+                                          IF NOT "Visible in Webshop" THEN BEGIN
+                                            "Visible in Webshop" := TRUE;
+                                            Modified := TRUE;
+                                          END;
+                                        END;
+                                      SetVisibilityTo::No :
+                                        IF "Visible in Webshop" THEN BEGIN
+                                          "Visible in Webshop" := FALSE;
+                                          Modified := TRUE;
+                                        END;
+                                    END;
+                                  END ELSE
+                                    IF "Visible in Webshop" THEN BEGIN
+                                      "Visible in Webshop" := FALSE;
+                                      Modified := TRUE;
+                                    END;
+
+                                  IF Modified THEN
+                                    MODIFY;
+                                END;
+
+               ReqFilterFields=Item No.,Visible in Webshop;
+               DataItemLink=Item No.=FIELD(No.) }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=ENU=Options }
+
+      { 11123304;2;Field    ;
+                  CaptionML=ENU=Set Visibility to;
+                  SourceExpr=SetVisibilityTo;
+                  OnValidate=BEGIN
+                               IF SetVisibilityTo = SetVisibilityTo::No THEN
+                                 CheckOrderability := FALSE;
+
+                               IF SetVisibilityTo = SetVisibilityTo::Yes THEN
+                                 CheckOrderability := TRUE;
+                             END;
+                              }
+
+      { 11123310;2;Field    ;
+                  CaptionML=ENU=Check Orderability;
+                  SourceExpr=CheckOrderability;
+                  OnValidate=BEGIN
+                               IF (SetVisibilityTo = SetVisibilityTo::No) AND CheckOrderability THEN BEGIN
+                                 CheckOrderability := NOT CheckOrderability;
+                                 ERROR(Text11123303);
+                               END;
+                             END;
+                              }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      Window@11123312 : Dialog;
+      SetVisibilityTo@11123302 : 'Yes,No';
+      CheckOrderability@11123304 : Boolean;
+      Text11123303@11123306 : TextConst 'ENU=You should not check orderability, if you are going to set visibility to No.';
+      AtLeastOneVariantOrderable@11123307 : Boolean;
+      AtLeastOneVariantModified@11123303 : Boolean;
+      Text11123304@11123311 : TextConst 'ENU=Sana Commerce - Updating products visibility...\\';
+      Text11123305@11123310 : TextConst 'ENU=Processing items        #2####################\';
+      Text11123306@11123309 : TextConst 'ENU=Progress                @3@@@@@@@@@@@@@@@@@@@@\';
+      AtLeastOneComponentOrderable@11123305 : Boolean;
+      ItemRecNo@11123313 : Integer;
+      ItemTotalRecNo@11123314 : Integer;
+      Text11123307@11123315 : TextConst 'ENU=Processing variants     #4####################\';
+      Text11123308@11123308 : TextConst 'ENU=Progress                @5@@@@@@@@@@@@@@@@@@@@\';
+      VariantRecNo@11123317 : Integer;
+      VariantTotalRecNo@11123316 : Integer;
+      ComponentRecNo@11123319 : Integer;
+      ComponentTotalRecNo@11123320 : Integer;
+      Text11123309@11123322 : TextConst 'ENU=Processing components   #6####################\';
+      Text11123310@11123321 : TextConst 'ENU=Progress                @7@@@@@@@@@@@@@@@@@@@@\';
+      Text11123311@11123324 : TextConst 'ENU=Processing item UOM     #8####################\';
+      Text11123312@11123323 : TextConst 'ENU=Progress                @9@@@@@@@@@@@@@@@@@@@@\';
+      ItemUOMRecNo@11123325 : Integer;
+      ItemUOMTotalRecNo@11123326 : Integer;
+
+    LOCAL PROCEDURE UpdateItem@11123304();
+    VAR
+      Params@11123305 : TEMPORARY Record 11123310;
+      CatalogHelper@11123303 : Codeunit 11123318;
+      Action@11123304 : 'Read,Insert,Modify,Delete,Rename';
+    BEGIN
+      Item.MODIFY;
+      CatalogHelper.RefreshProductInfo(Item,Action::Modify,FALSE,Params);
+    END;
+
+    PROCEDURE UpdateItemCategoryAndGroup@11123303(Item@11123302 : Record 27;Visible@11123303 : Boolean);
+    VAR
+      ItemCategory@11123305 : Record 5722;
+      ProductGroup@11123306 : Record 5723;
+    BEGIN
+      IF ItemCategory.GET(Item."Item Category Code") THEN
+        IF ItemCategory."Visible in Webshop" <> Visible THEN BEGIN
+          ItemCategory."Visible in Webshop" := Visible;
+          ItemCategory.MODIFY;
+        END;
+
+      IF ProductGroup.GET(Item."Item Category Code",Item."Product Group Code") THEN
+        IF ProductGroup."Visible in Webshop" <> Visible THEN BEGIN
+          ProductGroup."Visible in Webshop" := Visible;
+          ProductGroup.MODIFY;
+        END;
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

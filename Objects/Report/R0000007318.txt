@@ -1,0 +1,491 @@
+OBJECT Report 7318 Whse.-Shipment - Create Pick
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/24/21;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=NAVW111.00.00.24742,RF1.50.10,002;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Whse.-Shipment - Create Pick;
+               ESM=Alm.-Env¡o - Crear picking;
+               FRC=Livraison mag.-Cr‚er pr‚lŠv.;
+               ENC=Whse.-Shipment - Create Pick];
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  CLEAR(CreatePick);
+                  EverythingHandled := TRUE;
+                END;
+
+    OnPostReport=VAR
+                   WhseActivHeader@1000 : Record 5766;
+                   TempWhseItemTrkgLine@1001 : TEMPORARY Record 6550;
+                   ItemTrackingMgt@1002 : Codeunit 6500;
+                   WhseRequest@1000000000 : Record 5765;
+                   OutWhseReqMgt@1000000001 : Codeunit 14002863;
+                   WhseActivLine@1000000002 : Record 5767;
+                   ShippingAgent@1000000005 : Record 291;
+                   SalesHeader@1000000004 : Record 36;
+                   LabelMgt@1000000003 : Codeunit 14000841;
+                 BEGIN
+                   CreatePick.CreateWhseDocument(FirstActivityNo,LastActivityNo,TRUE);
+
+                   CreatePick.ReturnTempItemTrkgLines(TempWhseItemTrkgLine);
+                   ItemTrackingMgt.UpdateWhseItemTrkgLines(TempWhseItemTrkgLine);
+
+                   WhseActivHeader.SETRANGE(Type,WhseActivHeader.Type::Pick);
+                   WhseActivHeader.SETRANGE("No.",FirstActivityNo,LastActivityNo);
+                   IF WhseActivHeader.FIND('-') THEN BEGIN
+                     REPEAT
+                       IF SortActivity > 0 THEN
+                         WhseActivHeader.SortWhseDoc;
+                       //>>TPZ2830
+                       Report7318EventPublisher.RT7318_OnPostReport(WhseActivHeader,WhseRequest);
+                       //<<TPZ2830
+                       WhseActivHeader.MODIFY;
+                     UNTIL WhseActivHeader.NEXT = 0;
+
+                     // >> RF
+                     RFSetup.GetRFSetup;
+                     IF RFSetup."Auto Post Break-Bulk" THEN BEGIN
+                       WhseActivHeader.FIND('-');
+                       REPEAT
+                         IF RFSetup."Auto Post Break-Bulk" THEN
+                           AutoPostBreakBulkMgt.RUN(WhseActivHeader);
+                       UNTIL WhseActivHeader.NEXT = 0;
+                     END;
+                     IF WarehouseEmployeeGroup <> '' THEN
+                       IF WhseActivHeader.FINDFIRST THEN
+                         REPEAT
+                           WhseActivHeader."Warehouse Employee Group" :=
+                             WarehouseEmployeeGroup;
+                           WhseActivHeader.MODIFY;
+                         UNTIL WhseActivHeader.NEXT = 0;
+                     // << RF
+
+                     IF PrintDoc THEN
+                       //<TPZ2034>
+                       //REPORT.RUN(REPORT::"Picking List",FALSE,FALSE,WhseActivHeader);
+                       REPORT.RUN(51055,FALSE,FALSE,WhseActivHeader);
+                       //</TPZ2034>
+                       //<TPZ3214>
+                       GetPackingStation;
+                       IF ShippingAgent.GET(WhseRequest."Shipping Agent Code") THEN;
+                       IF (ShippingAgent."Shipper Type" <> ShippingAgent."Shipper Type"::UPS) AND
+                           PackingStation."Auto Print address label" THEN BEGIN
+                         SalesHeader.RESET;
+                         SalesHeader.SETRANGE("Document Type",WhseRequest."Source Subtype");
+                         SalesHeader.SETRANGE("No.",WhseRequest."Source No.");
+                         IF SalesHeader.FINDFIRST THEN BEGIN
+                           IF PackingStation."Label Printer Type" = PackingStation."Label Printer Type"::"Eltron Orion" THEN
+                             LabelMgt.PrintLTLSOLabel(SalesHeader,'LTLGEN_EL',1)
+                           ELSE
+                             LabelMgt.PrintLTLSOLabel(SalesHeader,'LTLGEN',1);
+                         END;
+                       END;
+                       //</TPZ3214>
+
+
+                   END ELSE
+                     ERROR(NothingToHandleErr);
+                 END;
+
+  }
+  DATASET
+  {
+    { 6896;    ;DataItem;                    ;
+               DataItemTable=Table7321;
+               DataItemTableView=SORTING(No.,Line No.);
+               OnPreDataItem=BEGIN
+                               // >> RF
+                               CASE SortActivity OF
+                                 18:
+                                   SortActivity := 8;
+                               END;
+
+                               //CreatePick.SetValues(
+                               //  AssignedID,1,SortActivity,1,0,0,FALSE,DoNotFillQtytoHandle,BreakbulkFilter,FALSE);
+                               CreatePick.SetValues(
+                                 AssignedID,1,SortActivity,1,0,0,PerZone,DoNotFillQtytoHandle,BreakbulkFilter,FALSE);
+                               CreatePick.SetPickFromFilter(PickFromZoneFilter,PickFromBinFilter);
+                               // << RF
+
+                               COPYFILTERS(WhseShptLine);
+                               SETFILTER("Qty. (Base)",'>0');
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  QtyToPick@1002 : Decimal;
+                                  QtyToPickBase@1001 : Decimal;
+                                BEGIN
+                                  IF Location."Directed Put-away and Pick" THEN
+                                    CheckBin(0,0);
+
+                                  WhseWkshLine.RESET;
+                                  WhseWkshLine.SETCURRENTKEY(
+                                    "Whse. Document Type","Whse. Document No.","Whse. Document Line No.");
+                                  WhseWkshLine.SETRANGE(
+                                    "Whse. Document Type",WhseWkshLine."Whse. Document Type"::Shipment);
+                                  WhseWkshLine.SETRANGE("Whse. Document No.",WhseShptHeader."No.");
+
+                                  WhseWkshLine.SETRANGE("Whse. Document Line No.","Line No.");
+                                  IF NOT WhseWkshLine.FINDFIRST THEN BEGIN
+                                    TESTFIELD("Qty. per Unit of Measure");
+                                    CALCFIELDS("Pick Qty. (Base)","Pick Qty.");
+                                    QtyToPickBase := "Qty. (Base)" - ("Qty. Picked (Base)" + "Pick Qty. (Base)");
+                                    QtyToPick := Quantity - ("Qty. Picked" + "Pick Qty.");
+                                    IF QtyToPick > 0 THEN BEGIN
+                                      IF "Destination Type" = "Destination Type"::Customer THEN BEGIN
+                                        TESTFIELD("Destination No.");
+                                        Cust.GET("Destination No.");
+                                        Cust.CheckBlockedCustOnDocs(Cust,"Source Document",FALSE,FALSE);
+                                      END;
+
+                                      CreatePick.SetWhseShipment(
+                                        "Warehouse Shipment Line",1,WhseShptHeader."Shipping Agent Code",
+                                        WhseShptHeader."Shipping Agent Service Code",WhseShptHeader."Shipment Method Code");
+                                      IF NOT "Assemble to Order" THEN BEGIN
+                                        CreatePick.SetTempWhseItemTrkgLine(
+                                          "No.",DATABASE::"Warehouse Shipment Line",
+                                          '',0,"Line No.","Location Code");
+                                        CreatePick.CreateTempLine(
+                                          "Location Code","Item No.","Variant Code","Unit of Measure Code",
+                                          '',"Bin Code","Qty. per Unit of Measure",QtyToPick,QtyToPickBase);
+                                      END;
+                                    END;
+                                  END ELSE
+                                    WhseWkshLineFound := TRUE;
+                                END;
+
+               OnPostDataItem=VAR
+                                TempWhseItemTrkgLine@1000 : TEMPORARY Record 6550;
+                                ItemTrackingMgt@1001 : Codeunit 6500;
+                              BEGIN
+                                CreatePick.ReturnTempItemTrkgLines(TempWhseItemTrkgLine);
+                                IF TempWhseItemTrkgLine.FIND('-') THEN
+                                  REPEAT
+                                    ItemTrackingMgt.CalcWhseItemTrkgLine(TempWhseItemTrkgLine);
+                                  UNTIL TempWhseItemTrkgLine.NEXT = 0;
+                              END;
+                               }
+
+    { 3252;1   ;DataItem;                    ;
+               DataItemTable=Table900;
+               DataItemTableView=SORTING(Document Type,No.);
+               OnPreDataItem=VAR
+                               SalesLine@1000 : Record 37;
+                             BEGIN
+                               IF NOT "Warehouse Shipment Line"."Assemble to Order" THEN
+                                 CurrReport.BREAK;
+
+                               SalesLine.GET("Warehouse Shipment Line"."Source Subtype",
+                                 "Warehouse Shipment Line"."Source No.",
+                                 "Warehouse Shipment Line"."Source Line No.");
+                               SalesLine.AsmToOrderExists("Assembly Header");
+                               SETRANGE("Document Type","Document Type");
+                               SETRANGE("No.","No.");
+                             END;
+                              }
+
+    { 6911;2   ;DataItem;                    ;
+               DataItemTable=Table901;
+               DataItemTableView=SORTING(Document Type,Document No.,Line No.);
+               OnPreDataItem=BEGIN
+                               SETRANGE(Type,Type::Item);
+                               SETFILTER("Remaining Quantity (Base)",'>0');
+
+                               WhseWkshLine.SETCURRENTKEY(
+                                 "Source Type","Source Subtype","Source No.","Source Line No.","Source Subline No.");
+                               WhseWkshLine.SETRANGE("Source Type",DATABASE::"Assembly Line");
+                               WhseWkshLine.SETRANGE("Source Subtype","Assembly Header"."Document Type");
+                               WhseWkshLine.SETRANGE("Source No.","Assembly Header"."No.");
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  WMSMgt@1001 : Codeunit 7302;
+                                BEGIN
+                                  WMSMgt.CheckInboundBlockedBin("Location Code","Bin Code","No.","Variant Code","Unit of Measure Code");
+
+                                  WhseWkshLine.SETRANGE("Source Line No.","Line No.");
+                                  IF NOT WhseWkshLine.FINDFIRST THEN
+                                    CreatePick.CreateAssemblyPickLine("Assembly Line")
+                                  ELSE
+                                    WhseWkshLineFound := TRUE;
+                                END;
+
+               DataItemLink=Document Type=FIELD(Document Type), Document No.=FIELD(No.) }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      OnOpenPage=BEGIN
+                   IF Location."Use ADCS" THEN
+                     DoNotFillQtytoHandle := TRUE;
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1900000002;1;Group  ;
+                  CaptionML=[ENU=Options;
+                             ESM=Opciones;
+                             FRC=Options;
+                             ENC=Options] }
+
+      { 1   ;2   ;Field     ;
+                  CaptionML=[ENU=Assigned User ID;
+                             ESM=Id. usuario asignado;
+                             FRC=Code utilisateur affect‚;
+                             ENC=Assigned User ID];
+                  ToolTipML=[ENU=Specifies the ID of the assigned user to perform the pick instruction.;
+                             ESM=Especifica el id. del usuario asignado para realizar la instrucci¢n de picking.;
+                             FRC=Sp‚cifie le code de l'utilisateur affect‚ pour ex‚cuter l'instruction pr‚lŠvement.;
+                             ENC=Specifies the ID of the assigned user to perform the pick instruction.];
+                  ApplicationArea=#Warehouse;
+                  SourceExpr=AssignedID;
+                  TableRelation="Warehouse Employee";
+                  OnValidate=VAR
+                               WhseEmployee@1000 : Record 7301;
+                             BEGIN
+                               IF AssignedID <> '' THEN
+                                 WhseEmployee.GET(AssignedID,Location.Code);
+                             END;
+
+                  OnLookup=VAR
+                             WhseEmployee@1001 : Record 7301;
+                             LookupWhseEmployee@1000 : Page 7348;
+                           BEGIN
+                             WhseEmployee.SETCURRENTKEY("Location Code");
+                             WhseEmployee.SETRANGE("Location Code",Location.Code);
+                             LookupWhseEmployee.LOOKUPMODE(TRUE);
+                             LookupWhseEmployee.SETTABLEVIEW(WhseEmployee);
+                             IF LookupWhseEmployee.RUNMODAL = ACTION::LookupOK THEN BEGIN
+                               LookupWhseEmployee.GETRECORD(WhseEmployee);
+                               AssignedID := WhseEmployee."User ID";
+                             END;
+                           END;
+                            }
+
+      { 2   ;2   ;Field     ;
+                  Name=SortingMethodForActivityLines;
+                  CaptionML=[ENU=Sorting Method for Activity Lines;
+                             ESM=M‚todo clasif. para l¡ns. act.;
+                             FRC=M‚thode de tri pour lignes activit‚;
+                             ENC=Sorting Method for Activity Lines];
+                  ToolTipML=[ENU=Specifies the method by which the lines in the instruction will be sorted. The options are by item, document, shelf or bin (if the location uses bins, this functions as the bin code), due date, bin ranking, or action type.;
+                             ESM=Especifica el m‚todo por el que se ordenar n las l¡neas de la instrucci¢n. Las opciones son: por producto, documento, estante o ubicaci¢n (si el almac‚n utiliza ubicaciones, funciona como c¢digo de ubicaci¢n), fecha de vencimiento, ranking de ubicaci¢n o tipo de acci¢n.;
+                             FRC=Sp‚cifie la m‚thode de tri des lignes dans l'instruction. Les options propos‚es sont les suivantesÿ: par article, document, tablette ou zone (si l'emplacement utilise des zones, cela fonctionne comme le code de zone), date d'‚ch‚ance, classement de zone ou type d'action.;
+                             ENC=Specifies the method by which the lines in the instruction will be sorted. The options are by item, document, shelf or bin (if the location uses bins, this functions as the bin code), due date, bin ranking, or action type.];
+                  OptionCaptionML=[ENU=" ,Item,Document,Shelf or Bin,Due Date,Destination,Bin Ranking,Action Type";
+                                   ESM=" ,Prod.,Doc.,Estanter¡a o ubic.,Fecha vto.,Destino,Ranking ubic.,Tipo acci¢n";
+                                   FRC=" ,Article,Document,Tablette ou Zone,Date d'‚ch‚ance,Destination,Classement de zone,Type de tƒche";
+                                   ENC=" ,Item,Document,Shelf or Bin,Due Date,Destination,Bin Ranking,Action Type"];
+                  ApplicationArea=#Warehouse;
+                  SourceExpr=SortActivity;
+                  MultiLine=Yes }
+
+      { 9   ;2   ;Field     ;
+                  CaptionML=[ENU=Set Breakbulk Filter;
+                             ESM=Define filtro div. bulto;
+                             FRC=R‚gler le filtre de rupture de charge;
+                             ENC=Set Breakbulk Filter];
+                  ToolTipML=[ENU=Specifies if you want the program to hide intermediate break-bulk lines when an entire larger unit of measure is converted to a smaller unit of measure and picked completely.;
+                             ESM=Especifica si desea que el sistema oculte las l¡neas de divisi¢n de bulto intermedias al convertir una unidad de medida grande completa en unidades de medida m s peque¤as y realizar el picking completamente.;
+                             FRC=Sp‚cifie si vous souhaitez que le programme masque les lignes d‚conditionnement interm‚diaires lorsqu'une unit‚ de mesure entiŠre plus grande est convertie dans une unit‚ de mesure plus petite, et pr‚lev‚e dans son int‚gralit‚.;
+                             ENC=Specifies if you want the program to hide intermediate break-bulk lines when an entire larger unit of measure is converted to a smaller unit of measure and picked completely.];
+                  ApplicationArea=#Warehouse;
+                  SourceExpr=BreakbulkFilter }
+
+      { 11  ;2   ;Field     ;
+                  CaptionML=[ENU=Do Not Fill Qty. to Handle;
+                             ESM=No rellene cdad. a manipular;
+                             FRC=Ne pas remplir qt‚ … traiter;
+                             ENC=Do Not Fill Qty. to Handle];
+                  ToolTipML=[ENU=Specifies if you want to manually fill in the Quantity to Handle field on each line.;
+                             ESM=Especifica si desea rellenar manualmente el campo Cantidad a manipular en cada l¡nea.;
+                             FRC=Sp‚cifie si vous souhaitez remplir manuellement le champ Quantit‚ … traiter de chaque ligne.;
+                             ENC=Specifies if you want to manually fill in the Quantity to Handle field on each line.];
+                  ApplicationArea=#Warehouse;
+                  SourceExpr=DoNotFillQtytoHandle }
+
+      { 3   ;2   ;Field     ;
+                  CaptionML=[ENU=Print Document;
+                             ESM=Imprime documento;
+                             FRC=Imprimer document;
+                             ENC=Print Document];
+                  ToolTipML=[ENU=Specifies if you want the pick document to be printed. Otherwise, you can print it later from the Whse. Pick window.;
+                             ESM=Especifica si desea imprimir el documento de picking. En caso contrario, puede imprimirlo m s tarde desde la ventana Picking alm.;
+                             FRC=Sp‚cifie si vous souhaitez que le document de pr‚lŠvement soit imprim‚. Sinon, vous pourrez l'imprimer ult‚rieurement … partir de la fenˆtre des instructions entrep“t.;
+                             ENC=Specifies if you want the pick document to be printed. Otherwise, you can print it later from the Whse. Pick window.];
+                  ApplicationArea=#Warehouse;
+                  SourceExpr=PrintDoc }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      Location@1027 : Record 14;
+      WhseShptHeader@1007 : Record 7320;
+      WhseShptLine@1012 : Record 7321;
+      WhseWkshLine@1019 : Record 7326;
+      Cust@1006 : Record 18;
+      RFSetup@14002803 : Record 14002801;
+      AutoPostBreakBulkMgt@14002804 : Codeunit 14002962;
+      CreatePick@1003 : Codeunit 7312;
+      FirstActivityNo@1002 : Code[20];
+      LastActivityNo@1001 : Code[20];
+      AssignedID@1008 : Code[50];
+      SortActivity@1005 : ' ,Item,Document,Shelf or Bin,Due Date,Destination,Bin Ranking,Action Type';
+      PrintDoc@1004 : Boolean;
+      EverythingHandled@1017 : Boolean;
+      WhseWkshLineFound@1020 : Boolean;
+      HideValidationDialog@1022 : Boolean;
+      DoNotFillQtytoHandle@1014 : Boolean;
+      BreakbulkFilter@1029 : Boolean;
+      SingleActivCreatedMsg@1011 : TextConst '@@@="%1=WhseActivHeader.Type;%2=Whse. Activity No.;%3=Concatenates ExpiredItemMessageText";ENU=%1 activity no. %2 has been created.%3;ESM=Se ha creado la actividad de %1 n§ %2 .%3;FRC=L''activit‚ %1 nø %2 a ‚t‚ cr‚‚e.%3;ENC=%1 activity no. %2 has been created.%3';
+      SingleActivAndWhseShptCreatedMsg@1021 : TextConst '@@@="%1=WhseActivHeader.Type;%2=Whse. Activity No.;%3=WhseActivHeader.Type;%4=Concatenates ExpiredItemMessageText";ENU=%1 activity no. %2 has been created.\For Warehouse Shipment lines that have existing Pick Worksheet lines, no %3 lines have been created.%4;ESM=Se ha creado la actividad de %1 n§ %2.\No se han creado l¡neas de env¡o de almac‚n n§ %3 con l¡neas de hoja de almac‚n existentes.%4;FRC=L''activit‚ %1 nø %2 a ‚t‚ cr‚‚e.\Pour les lignes livraison entrep“t avec des lignes feuille pr‚lŠvement existantes, aucune ligne %3 n''a ‚t‚ cr‚‚e.%4;ENC=%1 activity no. %2 has been created.\For Warehouse Shipment lines that have existing Pick Worksheet lines, no %3 lines have been created.%4';
+      MultipleActivCreatedMsg@1010 : TextConst '@@@="%1=WhseActivHeader.Type;%2=First Whse. Activity No.;%3=Last Whse. Activity No.;%4=Concatenates ExpiredItemMessageText";ENU=%1 activities no. %2 to %3 have been created.%4;ESM=Se han creado las actividades de %1 n§%2 a %3.%4;FRC=Les activit‚s %1 nø %2 … %3 ont ‚t‚ cr‚‚es.%4;ENC=%1 activities no. %2 to %3 have been created.%4';
+      MultipleActivAndWhseShptCreatedMsg@1024 : TextConst '@@@="%1=WhseActivHeader.Type;%2=First Whse. Activity No.;%3=Last Whse. Activity No.;%4=WhseActivHeader.Type;%5=Concatenates ExpiredItemMessageText";ENU=%1 activities no. %2 to %3 have been created.\For Warehouse Shipment lines that have existing Pick Worksheet lines, no %4 lines have been created.%5;ESM=Se han creado las actividades de %1 n§ %2 a %3.\No se han creado l¡neas de env¡o de almac‚n n§ %4 con l¡neas de hoja de almac‚n existentes.%5;FRC=Les activit‚s %1 nø %2 … %3 ont ‚t‚ cr‚‚es.\Pour les lignes livraison entrep“t avec des lignes feuille pr‚lŠvement existantes, aucune ligne %4 n''a ‚t‚ cr‚‚e.%5;ENC=%1 activities no. %2 to %3 have been created.\For Warehouse Shipment lines that have existing Pick Worksheet lines, no %4 lines have been created.%5';
+      NothingToHandleErr@1023 : TextConst 'ENU=There is nothing to handle.;ESM=No hay nada que manipular.;FRC=Il n''y a rien … traiter.;ENC=There is nothing to handle.';
+      PerZone@14002801 : Boolean;
+      PickFromZoneFilter@14002802 : Code[250];
+      PickFromBinFilter@14002805 : Code[250];
+      WarehouseEmployeeGroup@14002806 : Code[20];
+      Report7318EventPublisher@1000000000 : Codeunit 51933;
+      PackingStation@1000000001 : Record 14000709;
+
+    [External]
+    PROCEDURE SetWhseShipmentLine@1(VAR WhseShptLine2@1000 : Record 7321;WhseShptHeader2@1001 : Record 7320);
+    BEGIN
+      WhseShptLine.COPY(WhseShptLine2);
+      WhseShptHeader := WhseShptHeader2;
+      AssignedID := WhseShptHeader2."Assigned User ID";
+      GetLocation(WhseShptLine."Location Code");
+    END;
+
+    [External]
+    PROCEDURE GetResultMessage@3() : Boolean;
+    VAR
+      WhseActivHeader@1000 : Record 5766;
+      CannotBeHandledReason@1001 : Text;
+    BEGIN
+      CannotBeHandledReason := CreatePick.GetCannotBeHandledReason;
+      IF FirstActivityNo = '' THEN
+        EXIT(FALSE);
+
+      IF NOT HideValidationDialog THEN BEGIN
+        WhseActivHeader.Type := WhseActivHeader.Type::Pick;
+        IF WhseWkshLineFound THEN BEGIN
+          IF FirstActivityNo = LastActivityNo THEN
+            MESSAGE(
+              STRSUBSTNO(
+                SingleActivAndWhseShptCreatedMsg,FORMAT(WhseActivHeader.Type),FirstActivityNo,
+                FORMAT(WhseActivHeader.Type),CannotBeHandledReason))
+          ELSE
+            MESSAGE(
+              STRSUBSTNO(
+                MultipleActivAndWhseShptCreatedMsg,FORMAT(WhseActivHeader.Type),FirstActivityNo,LastActivityNo,
+                FORMAT(WhseActivHeader.Type),CannotBeHandledReason));
+        END ELSE BEGIN
+          IF FirstActivityNo = LastActivityNo THEN
+            MESSAGE(
+              STRSUBSTNO(SingleActivCreatedMsg,FORMAT(WhseActivHeader.Type),FirstActivityNo,CannotBeHandledReason))
+          ELSE
+            MESSAGE(
+              STRSUBSTNO(MultipleActivCreatedMsg,FORMAT(WhseActivHeader.Type),
+                FirstActivityNo,LastActivityNo,CannotBeHandledReason));
+        END;
+      END;
+      EXIT(EverythingHandled);
+    END;
+
+    [External]
+    PROCEDURE SetHideValidationDialog@14(NewHideValidationDialog@1000 : Boolean);
+    BEGIN
+      HideValidationDialog := NewHideValidationDialog;
+    END;
+
+    LOCAL PROCEDURE GetLocation@7(LocationCode@1000 : Code[10]);
+    BEGIN
+      IF Location.Code <> LocationCode THEN BEGIN
+        IF LocationCode = '' THEN
+          CLEAR(Location)
+        ELSE
+          Location.GET(LocationCode);
+      END;
+    END;
+
+    [External]
+    PROCEDURE Initialize@9(AssignedID2@1004 : Code[50];SortActivity2@1002 : ' ,Item,Document,Shelf/Bin No.,Due Date,Ship-To,Bin Ranking,Action Type';PrintDoc2@1001 : Boolean;DoNotFillQtytoHandle2@1000 : Boolean;BreakbulkFilter2@1003 : Boolean;PerZone2@14002801 : Boolean);
+    BEGIN
+      AssignedID := AssignedID2;
+      SortActivity := SortActivity2;
+      PrintDoc := PrintDoc2;
+      DoNotFillQtytoHandle := DoNotFillQtytoHandle2;
+      BreakbulkFilter := BreakbulkFilter2;
+    END;
+
+    PROCEDURE SetPerZone@14002810(PerZone2@14002801 : Boolean);
+    BEGIN
+      // >> RF
+      PerZone := PerZone2;
+      // << RF
+    END;
+
+    PROCEDURE SetPickFromFilter@14002801(NewPickFromZoneFilter@14002801 : Code[250];NewPickFromBinFilter@14002802 : Code[250]);
+    BEGIN
+      // >> RF
+      PickFromZoneFilter := NewPickFromZoneFilter;
+      PickFromBinFilter := NewPickFromBinFilter;
+      // << RF
+    END;
+
+    PROCEDURE SetWhseEmployeeGroupNo@14002807(WarehouseEmployeeGroup2@1240020000 : Code[20]);
+    BEGIN
+      // >> RF
+      WarehouseEmployeeGroup := WarehouseEmployeeGroup2;
+      // << RF
+    END;
+
+    PROCEDURE GetPackingStation@1000000001();
+    VAR
+      UserSetup@1000000000 : Record 91;
+    BEGIN
+      //<TPZ3214>
+      IF PackingStation.Code <> '' THEN
+        EXIT;
+
+      UserSetup.GET(USERID);
+      UserSetup.TESTFIELD("Packing Station");
+      PackingStation.GET(UserSetup."Packing Station");
+      //</TPZ3214>
+    END;
+
+    BEGIN
+    {
+      2017-01-11 TPZ1774 TMEI
+        Update Whse. Activity Status after pick is created.
+      2017-12-12 TPZ2034 TMEI
+        Print Topaz pick ticket report instead of out of box one.
+      TPZ2781  PSHUKLA added code to flow pick type
+      001 TPZ2830 PKS Event created
+      002 TPZ3214 GKG 09242021 Code added for 'Enable auto print on LTL Labels'
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

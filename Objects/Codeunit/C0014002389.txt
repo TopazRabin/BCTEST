@@ -1,0 +1,381 @@
+OBJECT Codeunit 14002389 E.D.I. File Processing
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/07/17;
+    Time=12:00:00 PM;
+    Version List=SE0.60.14;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      FileCount@1240020001 : Integer;
+      TotalErrorFileCount@1240020000 : Integer;
+      FileName@1240020002 : Text[250];
+
+    PROCEDURE ProcessFileSplit@1240020000(JobQueue@1240020008 : Boolean) ErrorCount : Integer;
+    VAR
+      EDISetup@1240020009 : Record 14002367;
+      EDIDocument@1240020007 : Record 14002353;
+      EDILog@1240020010 : Record 14050302;
+      EDIFileSplit@1240020005 : Codeunit 14002353;
+      EDIManagement@1240020004 : Codeunit 14002379;
+      FileList@1240020014 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.IList";
+      Directory@1240020013 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+      List@1240020011 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      FileInfo@1240020016 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo";
+      LogDescription@1240020003 : Text[250];
+      ErrorText@1240020002 : Text[250];
+      DeleteLog@1240020001 : Boolean;
+      LogEntryNo@1240020000 : Integer;
+      NumFiles@1240020015 : Integer;
+    BEGIN
+      EDISetup.GET;
+
+      EDIDocument.INIT;
+      ErrorCount := 0;
+
+      IF (EDISetup."Bypass File(s) with Error"= TRUE AND JobQueue = FALSE) OR (JobQueue) THEN BEGIN
+        FileList := Directory.EnumerateFiles(EDISetup."Common Receive Path");
+        List := List.List;
+        List.AddRange(FileList);
+        IF List.Count > 0 THEN BEGIN
+          EDILog.RESET;
+          EDILog.SETRANGE(Process,'Process Common Receive');
+          EDILog.SETRANGE(Error,TRUE);
+          EDILog.DELETEALL;
+          FOR NumFiles := 0 TO List.Count - 1 DO BEGIN
+            CLEAR(FileInfo);
+            FileInfo := FileInfo.FileInfo(FORMAT(List.Item(NumFiles)));
+            CLEARLASTERROR;
+            CLEAR(EDIFileSplit);
+            EDIFileSplit.GetFile(List,NumFiles);
+            LogDescription := 'Process Common Receive';
+            EDIManagement.CreateLogEntry(LogDescription,LogEntryNo,FileInfo,FALSE,EDIDocument);
+            COMMIT;
+            CLEARLASTERROR;
+            IF EDIFileSplit.RUN THEN
+              DeleteLog := TRUE
+            ELSE
+              DeleteLog := FALSE;
+            IF DeleteLog THEN
+              EDIManagement.DeleteLogEntry(LogEntryNo)
+            ELSE BEGIN
+              ErrorText := '';
+              ErrorText := COPYSTR(GETLASTERRORTEXT,1,250);
+              EDIManagement.CloseLogEntry(LogEntryNo,ErrorText);
+              ErrorCount := ErrorCount + 1
+            END;
+            COMMIT;
+          END;
+          EXIT(ErrorCount);
+        END;
+      END ELSE
+        EDIFileSplit.RUN;
+
+      COMMIT;
+    END;
+
+    PROCEDURE ProcessEDIFile@1240020002(EDIDocument@1240020001 : Record 14002353;JobQueue@1240020000 : Boolean) : Integer;
+    VAR
+      EDISetup@1240020027 : Record 14002367;
+      EDITemplate@1240020024 : Record 14002350;
+      EDIImport@1240020022 : Codeunit 14002354;
+      EDIManagement@1240020019 : Codeunit 14002379;
+      FileList@1240020020 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.IList";
+      Directory@1240020018 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.Directory";
+      List@1240020003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Generic.List`1";
+      FileInfo@1240020023 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.FileInfo";
+      NewTP@1240020017 : Boolean;
+      PrevTradePtnr@1240020016 : Code[20];
+      TotalFileCount@1240020014 : Integer;
+      LogDescription@1240020013 : Text[250];
+      LogEntryNo@1240020012 : Integer;
+      DeleteLog@1240020011 : Boolean;
+      InterfaceFile@1240020010 : Text[100];
+      ImportFilePath@1240020009 : Text[100];
+      EDIFileName@1240020008 : Text[250];
+      InterfaceFileLen@1240020007 : Integer;
+      EndPosition@1240020006 : Integer;
+      Processed@1240020005 : Boolean;
+      FilesWithErrors@1240020004 : Boolean;
+      ErrorText@1240020002 : Text[250];
+      NumFiles@1240020021 : Integer;
+      Text001@1240020025 : TextConst 'ENU=Could not find interface file path %1 listed on %2 trade partner %3 %4 document card..';
+    BEGIN
+      TotalFileCount := 0;
+      FileCount := 0;
+
+      EDISetup.GET;
+      IF (EDISetup."Bypass File(s) with Error" = TRUE AND JobQueue = FALSE) OR (JobQueue) THEN BEGIN
+        FileCount := 0;
+        Processed := FALSE;
+        IF EDITemplate.GET(EDIDocument."EDI Template Code") THEN BEGIN
+          IF (EDITemplate."Interface File Type" =
+              EDITemplate."Interface File Type"::"X12 Delimited") OR
+             (EDITemplate."Interface File Type" =
+              EDITemplate."Interface File Type"::"EDIFACT Delimited") OR
+             (EDITemplate."Interface File Type" =
+               EDITemplate."Interface File Type"::cXML) OR
+             (EDITemplate."Interface File Type" =
+               EDITemplate."Interface File Type"::XML)
+          THEN BEGIN
+            ImportFilePath := EDITemplate."Interface File Path" + 'Inbox\';
+            InterfaceFile := EDIDocument."Interface File";
+            InterfaceFileLen := STRLEN(InterfaceFile);
+            CASE EDITemplate."Interface File Type" OF
+              EDITemplate."Interface File Type"::"X12 Delimited":
+                InterfaceFileLen := InterfaceFileLen + 4;
+              EDITemplate."Interface File Type"::"EDIFACT Delimited":
+                InterfaceFileLen := InterfaceFileLen + 7;
+              EDITemplate."Interface File Type"::cXML,EDITemplate."Interface File Type"::XML:
+                InterfaceFileLen :=
+                  InterfaceFileLen + STRLEN(DELCHR(EDIDocument."EDI Document No.",'=',':')) + 1;
+            END;
+
+            FileList := Directory.EnumerateFiles(ImportFilePath);
+            List := List.List;
+            List.AddRange(FileList);
+            IF List.Count > 0 THEN BEGIN
+              FOR NumFiles := 0 TO List.Count - 1 DO BEGIN
+                CLEAR(FileInfo);
+                FileInfo := FileInfo.FileInfo(FORMAT(List.Item(NumFiles)));
+                FileName := FileInfo.Name;
+                IF COPYSTR(FileName,1,InterfaceFileLen) =
+                  InterfaceFile + '-' + DELCHR(EDIDocument."EDI Document No.",'=',':')
+                THEN BEGIN
+                  CLEARLASTERROR;
+                  CLEAR(EDIImport);
+                  EDIImport.GetFile(List,NumFiles);
+                  LogDescription := 'Process Inbox File';
+                  EDIManagement.CreateLogEntry(
+                    LogDescription,LogEntryNo,FileInfo,FALSE,EDIDocument);
+                  COMMIT;
+
+                  IF (PrevTradePtnr = EDIDocument."Trade Partner No.") THEN
+                    NewTP := FALSE;
+                  IF EDIImport.RUN(EDIDocument) THEN BEGIN
+                    DeleteLog := TRUE;
+                    Processed := EDIImport.GetFileCount;
+                    IF Processed THEN BEGIN
+                      FileCount := FileCount + 1;
+                      TotalFileCount := TotalFileCount + 1;
+                    END;
+                  END ELSE BEGIN
+                    DeleteLog := FALSE;
+                    FilesWithErrors := TRUE;
+                    TotalErrorFileCount := TotalErrorFileCount + 1;
+                  END;
+                  IF DeleteLog THEN
+                    EDIManagement.DeleteLogEntry(LogEntryNo)
+                  ELSE BEGIN
+                    ErrorText := '';
+                    ErrorText := COPYSTR(GETLASTERRORTEXT,1,250);
+                    EDIManagement.CloseLogEntry(LogEntryNo,ErrorText);
+                  END;
+                  COMMIT;
+                END;
+              END;
+              IF FileCount >= 1 THEN BEGIN
+                IF (PrevTradePtnr <> EDIDocument."Trade Partner No.") THEN BEGIN
+                  PrevTradePtnr := EDIDocument."Trade Partner No.";
+                  NewTP := TRUE;
+                END;
+              END;
+            END;
+          END ELSE
+            IF (EDITemplate."Interface File Type" =
+                EDITemplate."Interface File Type"::None)
+            THEN BEGIN
+              EDIFileName := EDIDocument."Interface File";
+              EndPosition := 0;
+              WHILE STRPOS(COPYSTR(EDIFileName,EndPosition + 1),'\') > 0 DO
+                EndPosition := EndPosition + STRPOS(COPYSTR(EDIFileName,EndPosition + 1),'\');
+              ImportFilePath := COPYSTR(EDIFileName,1,EndPosition - 1);
+              IF Directory.Exists(ImportFilePath) THEN BEGIN
+                FileList := Directory.EnumerateFiles(ImportFilePath);
+                List := List.List;
+                List.AddRange(FileList);
+                IF List.Count > 0 THEN
+                  FOR NumFiles := 0 TO List.Count - 1 DO BEGIN
+                    DeleteLog := FALSE;
+                    IF (PrevTradePtnr = EDIDocument."Trade Partner No.") THEN
+                      NewTP := FALSE;
+                    CLEARLASTERROR;
+                    CLEAR(EDIImport);
+                    EDIImport.GetFile(List,NumFiles);
+                    LogDescription := 'Process Inbound File';
+                    CLEAR(FileInfo);
+                    FileInfo := FileInfo.FileInfo(FORMAT(List.Item(NumFiles)));
+                    EDIManagement.ByDocumentFileName(FileInfo);
+                    EDIManagement.CreateLogEntryByEDIDocument(
+                      LogDescription,LogEntryNo,EDIDocument,FALSE,EDIDocument."EDI Template Code");
+                    COMMIT;
+
+                    IF EDIImport.RUN(EDIDocument) THEN BEGIN
+                      DeleteLog := TRUE;
+                      Processed := EDIImport.GetFileCount;
+                      IF Processed THEN BEGIN
+                        FileCount := FileCount + 1;
+                        TotalFileCount := TotalFileCount + 1;
+                      END;
+                    END ELSE BEGIN
+                      DeleteLog := FALSE;
+                      FilesWithErrors := TRUE;
+                      TotalErrorFileCount := TotalErrorFileCount + 1;
+                    END;
+                    IF DeleteLog THEN
+                      EDIManagement.DeleteLogEntry(LogEntryNo)
+                    ELSE BEGIN
+                      EDIManagement.CreateLogEntryByEDIDocument(
+                      LogDescription,LogEntryNo,EDIDocument,FALSE,EDIDocument."EDI Template Code");
+                      ErrorText := '';
+                      ErrorText := COPYSTR(GETLASTERRORTEXT,1,250);
+                      EDIManagement.CloseLogEntry(LogEntryNo,ErrorText);
+                    END;
+                    COMMIT;
+                  END;
+              END ELSE BEGIN
+                ErrorText := Text001;
+                ErrorText := STRSUBSTNO(
+                  ErrorText,EDIDocument."Interface File",EDIDocument."Trade Partner No.",
+                  EDIDocument."Navision Document",EDIDocument."EDI Document No.");
+                EDIManagement.CreateLogEntryByEDIDocument(
+                  LogDescription,LogEntryNo,EDIDocument,FALSE,EDIDocument."EDI Template Code");
+                EDIManagement.CloseLogEntry(LogEntryNo,ErrorText);
+              END;
+              IF FileCount >= 1 THEN BEGIN
+                IF (PrevTradePtnr <> EDIDocument."Trade Partner No.") THEN BEGIN
+                   NewTP := TRUE;
+                 END;
+              END;
+            END ELSE BEGIN
+              IF (PrevTradePtnr = EDIDocument."Trade Partner No.") THEN
+                NewTP := FALSE;
+              LogDescription := 'Process Inbound File';
+              EDIManagement.CreateLogEntryByEDIDocument(
+                LogDescription,LogEntryNo,EDIDocument,FALSE,EDIDocument."EDI Template Code");
+              COMMIT;
+              CLEARLASTERROR;
+              CLEAR(EDIImport);
+              IF EDIImport.RUN(EDIDocument) THEN BEGIN
+                DeleteLog := TRUE;
+                Processed := EDIImport.GetFileCount;
+                IF Processed THEN BEGIN
+                  FileCount := FileCount + 1;
+                  TotalFileCount := TotalFileCount + 1;
+                END;
+              END ELSE
+                DeleteLog := FALSE;
+              IF DeleteLog THEN
+                EDIManagement.DeleteLogEntry(LogEntryNo)
+              ELSE BEGIN
+                ErrorText := '';
+                ErrorText := COPYSTR(GETLASTERRORTEXT,1,250);
+                EDIManagement.CloseLogEntry(LogEntryNo,ErrorText);
+              END;
+              COMMIT;
+              IF FileCount >= 1 THEN BEGIN
+                IF (PrevTradePtnr <> EDIDocument."Trade Partner No.") THEN BEGIN
+                   PrevTradePtnr := EDIDocument."Trade Partner No.";
+                   NewTP := TRUE;
+                 END;
+              END;
+            END;
+        END ELSE BEGIN
+          CLEARLASTERROR;
+          CLEAR(EDIImport);
+          LogDescription := 'Template Verification';
+          CLEAR(FileInfo);
+          EDIManagement.CreateLogEntry(
+            LogDescription,LogEntryNo,FileInfo,FALSE,EDIDocument);
+          COMMIT;
+
+          IF EDIImport.RUN(EDIDocument) THEN
+            DeleteLog := TRUE
+          ELSE
+            DeleteLog := FALSE;
+          IF DeleteLog THEN
+            EDIManagement.DeleteLogEntry(LogEntryNo)
+          ELSE BEGIN
+            ErrorText := '';
+            ErrorText := COPYSTR(GETLASTERRORTEXT,1,250);
+            EDIManagement.CloseLogEntry(LogEntryNo,ErrorText);
+          END;
+          COMMIT;
+        END;
+      END ELSE BEGIN
+        IF (PrevTradePtnr = EDIDocument."Trade Partner No.") THEN
+          NewTP := FALSE;
+
+        CLEAR(EDIImport);
+        FileCount := EDIImport.ImportDocument(EDIDocument,EDIDocument."Navision Document");
+        IF FileCount >= 1 THEN BEGIN
+          IF (PrevTradePtnr <> EDIDocument."Trade Partner No.") THEN BEGIN
+            PrevTradePtnr := EDIDocument."Trade Partner No.";
+            NewTP := TRUE;
+          END;
+          TotalFileCount := TotalFileCount + FileCount
+        END;
+
+        COMMIT;
+      END;
+      EXIT(TotalFileCount);
+    END;
+
+    PROCEDURE SendAcknowledgement@1240020004(EDIDocument@1240020000 : Record 14002353);
+    VAR
+      EDIManagement@1240020001 : Codeunit 14002379;
+      EDIFunctAckSendAll@1240020002 : Codeunit 14002366;
+      EDISetup@1240020005 : Record 14002367;
+      LogDescription@1240020004 : Text[250];
+      ErrorText@1240020008 : Text[250];
+      LogEntryNo@1240020006 : Integer;
+      DeleteLog@1240020007 : Boolean;
+    BEGIN
+      EDISetup.GET;
+      LogDescription := 'Send Functional Acknowledgement';
+      WITH EDIDocument DO BEGIN
+        EDIManagement.CreateOutboundLogEntry(LogDescription,LogEntryNo,'SEND DOCUMENT',' ',
+        "Trade Partner No.","Navision Document","EDI Document No.");
+        COMMIT;
+      END;
+        CLEARLASTERROR;
+        CLEAR(EDIFunctAckSendAll);
+        IF EDIFunctAckSendAll.RUN THEN
+          DeleteLog := TRUE
+        ELSE
+          DeleteLog := FALSE;
+        COMMIT;
+
+        IF DeleteLog THEN
+          EDIManagement.DeleteOutboundLogEntry(LogEntryNo)
+        ELSE BEGIN
+          ErrorText := '';
+          ErrorText := COPYSTR(GETLASTERRORTEXT,1,250);
+          EDIManagement.CloseOutboundLogEntry(LogEntryNo,ErrorText);
+        END;
+        COMMIT;
+    END;
+
+    PROCEDURE GetFileCount@1240020003() : Integer;
+    BEGIN
+      EXIT(FileCount);
+    END;
+
+    PROCEDURE GetErrorCount@1240020001() : Integer;
+    BEGIN
+      EXIT(TotalErrorFileCount);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,1106 @@
+OBJECT Page 14097473 Forecast Customer Item RTC
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Forecast Customer Item;
+    LinksAllowed=No;
+    SourceTable=Table14002602;
+    DelayedInsert=Yes;
+    PageType=ListPart;
+    OnInit=VAR
+             PeriodLength@1240020000 : Code[10];
+             LocInvPeriod@1240020001 : Record 14000553;
+             LastClosedPeriodDate@1240020002 : Date;
+           BEGIN
+             CollaborativeFCSetup.GET;
+             InvMgtSetup.GET;
+             ForcInvPeriod.RESET;
+             LocInvPeriod.RESET;
+
+             IF FORMAT(InvMgtSetup."Calculation Period Length") <> '' THEN BEGIN
+               PeriodLength := COPYSTR(FORMAT(InvMgtSetup."Calculation Period Length"), 2);
+             END ELSE BEGIN
+               IF FORMAT(InvMgtSetup."Forecast Period Length") <> '' THEN
+                 PeriodLength := COPYSTR(FORMAT(InvMgtSetup."Forecast Period Length"), 2);
+             END;
+
+             IF PeriodLength = '' THEN
+               PeriodLength := 'M';
+
+             LocInvPeriod.SETRANGE("Period End Closed",TRUE);
+             LocInvPeriod.SETRANGE("Starting Date", CALCDATE('<-6' + PeriodLength + '>', WORKDATE), WORKDATE);
+             IF LocInvPeriod.FINDSET THEN BEGIN
+               REPEAT
+                 IF LocInvPeriod."Starting Date" > LastClosedPeriodDate THEN
+                   LastClosedPeriodDate := LocInvPeriod."Ending Date";
+               UNTIL LocInvPeriod.NEXT = 0;
+             END;
+
+             IF LastClosedPeriodDate = 0D THEN
+               LastClosedPeriodDate := WORKDATE;
+
+             ForcInvPeriod.SETRANGE(Type,ForcInvPeriod.Type::Calculate);
+             IF (CollaborativeFCSetup."Forecast Customer Start Period" > 0) THEN
+               ForcInvPeriod.SETFILTER("Starting Date",'%1..',CALCDATE('<-' + FORMAT(CollaborativeFCSetup."Forecast Customer Start Period") + PeriodLength + '>', LastClosedPeriodDate))
+              ELSE
+               ForcInvPeriod.SETFILTER("Starting Date",'%1..',CALCDATE('<-C' + PeriodLength + '>', LastClosedPeriodDate));
+
+             ForcInvPeriod.FIND('-');
+
+             CLEAR(PeriodStartDateArray);
+             i := 0;
+             REPEAT
+               i := i + 1;
+               PeriodStartDateArray[i] := ForcInvPeriod."Starting Date";
+               IF i < 52 THEN
+                 ForcInvPeriod.NEXT;
+             UNTIL i = 52;
+           END;
+
+    OnAfterGetRecord=BEGIN
+                       OnAfterRecord;
+                     END;
+
+    OnNewRecord=BEGIN
+                  OnAfterRecord;
+                END;
+
+    ActionList=ACTIONS
+    {
+      { 1900000004;0 ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 1240020002;1 ;ActionGroup;
+                      Name=Line }
+      { 1900066404;2 ;Action    ;
+                      CaptionML=ENU=Location Inventory &Roll UP;
+                      ApplicationArea=#All;
+                      Image=BOMVersions;
+                      OnAction=BEGIN
+                                 ShowRollUp;
+                               END;
+                                }
+      { 1901512804;2 ;Action    ;
+                      CaptionML=ENU=View &Forecast;
+                      ToolTipML=ENU=Demand and supply plan;
+                      ApplicationArea=#All;
+                      Image=CalculateRegenerativePlan;
+                      OnAction=BEGIN
+                                 ViewForecast;
+                               END;
+                                }
+      { 1900834404;2 ;Action    ;
+                      CaptionML=ENU=&Procurement Unit;
+                      ToolTipML=ENU=Procurement unit card;
+                      ApplicationArea=#All;
+                      Image=BankAccountRec;
+                      OnAction=BEGIN
+                                 ShowProcUnit;
+                               END;
+                                }
+      { 1240020001;2 ;Action    ;
+                      CaptionML=ENU=Item &Usage;
+                      ApplicationArea=#All;
+                      Image=ItemTrackingLedger;
+                      OnAction=VAR
+                                 ItemUsage@1240020000 : Record 14000557;
+                               BEGIN
+                                 ItemUsage.RESET;
+                                 ItemUsage.SETCURRENTKEY(
+                                   "Location Code","Item No.","Variant Code","Starting Date","Ending Date");
+                                 ItemUsage.SETRANGE("Location Code","Location Code");
+                                 ItemUsage.SETRANGE("Item No.","Item No.");
+                                 ItemUsage.SETRANGE("Variant Code","Variant Code");
+                                 ItemUsage.SETRANGE("Location Filter","Location Code");
+                                 PAGE.RUNMODAL(PAGE::"Item Usage List",ItemUsage);
+                               END;
+                                }
+      { 1240020003;2 ;Action    ;
+                      ShortCutKey=Ctrl+F7;
+                      CaptionML=ENU=&Usage Ledger Entries;
+                      ApplicationArea=#All;
+                      Promoted=No;
+                      Image=ItemLedger;
+                      OnAction=VAR
+                                 UsageLedgEntry@1240020000 : Record 14000556;
+                               BEGIN
+                                 UsageLedgEntry.SETCURRENTKEY(
+                                   "Location Code","Item No.","Variant Code","Entry Type","Exclude from Usage",
+                                   "Drop Shipment",Nonstock,"Usage Date");
+                                 UsageLedgEntry.SETRANGE("Location Code","Location Code");
+                                 UsageLedgEntry.SETRANGE("Item No.","Item No.");
+                                 UsageLedgEntry.SETRANGE("Variant Code","Variant Code");
+                                 UsageLedgEntry.SETRANGE("Source No.", "Customer No.");
+                                 PAGE.RUNMODAL(PAGE::"Usage Ledger Entries",UsageLedgEntry);
+                               END;
+                                }
+      { 1902280804;2 ;Action    ;
+                      CaptionML=ENU=&Item;
+                      ApplicationArea=#All;
+                      Image=NewItem;
+                      OnAction=BEGIN
+                                 ShowItem;
+                               END;
+                                }
+      { 1240020000;2 ;Action    ;
+                      Name=TogglePeriods;
+                      CaptionML=ENU=Toggle View Columns;
+                      ApplicationArea=#All;
+                      OnAction=BEGIN
+                                 ToggleColumns;
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1900000001;0;Container;
+                ContainerType=ContentArea }
+
+    { 1240030000;1;Group  ;
+                GroupType=Repeater }
+
+    { 1240030003;2;Field  ;
+                ToolTipML=ENU=Item number;
+                ApplicationArea=#All;
+                SourceExpr="Item No." }
+
+    { 1240030001;2;Field  ;
+                ToolTipML=ENU=Specifies a location code for the warehouse or distribution center where your items are handled and stored before being sold.;
+                ApplicationArea=#All;
+                SourceExpr="Location Code" }
+
+    { 1240030005;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Variant Code";
+                Visible=FALSE }
+
+    { 1240030007;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr=Description }
+
+    { 1240030009;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Forecast Type" }
+
+    { 1240030011;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 1";
+                CaptionClass=FORMAT(PeriodStartDateArray[1]);
+                OnValidate=BEGIN
+                             ValidateField(1,xRec."Period 1","Period 1");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(1);
+                            END;
+                             }
+
+    { 1240030013;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 2";
+                CaptionClass=FORMAT(PeriodStartDateArray[2]);
+                OnValidate=BEGIN
+                             ValidateField(2,xRec."Period 2","Period 2");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(2);
+                            END;
+                             }
+
+    { 1240030015;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 3";
+                CaptionClass=FORMAT(PeriodStartDateArray[3]);
+                OnValidate=BEGIN
+                             ValidateField(3,xRec."Period 3","Period 3");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(3);
+                            END;
+                             }
+
+    { 1240030017;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 4";
+                CaptionClass=FORMAT(PeriodStartDateArray[4]);
+                OnValidate=BEGIN
+                             ValidateField(4,xRec."Period 4","Period 4");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(4);
+                            END;
+                             }
+
+    { 1240030019;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 5";
+                CaptionClass=FORMAT(PeriodStartDateArray[5]);
+                OnValidate=BEGIN
+                             ValidateField(5,xRec."Period 5","Period 5");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(5);
+                            END;
+                             }
+
+    { 1240030021;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 6";
+                CaptionClass=FORMAT(PeriodStartDateArray[6]);
+                OnValidate=BEGIN
+                             ValidateField(6,xRec."Period 6","Period 6");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(6);
+                            END;
+                             }
+
+    { 1240030023;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 7";
+                CaptionClass=FORMAT(PeriodStartDateArray[7]);
+                OnValidate=BEGIN
+                             ValidateField(7,xRec."Period 7","Period 7");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(7);
+                            END;
+                             }
+
+    { 1240030025;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 8";
+                CaptionClass=FORMAT(PeriodStartDateArray[8]);
+                OnValidate=BEGIN
+                             ValidateField(8,xRec."Period 8","Period 8");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(8);
+                            END;
+                             }
+
+    { 1240030027;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 9";
+                CaptionClass=FORMAT(PeriodStartDateArray[9]);
+                OnValidate=BEGIN
+                             ValidateField(9,xRec."Period 9","Period 9");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(9);
+                            END;
+                             }
+
+    { 1240030029;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 10";
+                CaptionClass=FORMAT(PeriodStartDateArray[10]);
+                OnValidate=BEGIN
+                             ValidateField(10,xRec."Period 10","Period 10");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(10);
+                            END;
+                             }
+
+    { 1240030031;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 11";
+                CaptionClass=FORMAT(PeriodStartDateArray[11]);
+                OnValidate=BEGIN
+                             ValidateField(11,xRec."Period 11","Period 11");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(11);
+                            END;
+                             }
+
+    { 1240030033;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 12";
+                CaptionClass=FORMAT(PeriodStartDateArray[12]);
+                OnValidate=BEGIN
+                             ValidateField(12,xRec."Period 12","Period 12");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(12);
+                            END;
+                             }
+
+    { 1240030035;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 13";
+                CaptionClass=FORMAT(PeriodStartDateArray[13]);
+                OnValidate=BEGIN
+                             ValidateField(13,xRec."Period 13","Period 13");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(13);
+                            END;
+                             }
+
+    { 1240030037;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 14";
+                CaptionClass=FORMAT(PeriodStartDateArray[14]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(14,xRec."Period 14","Period 14");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(14);
+                            END;
+                             }
+
+    { 1240030039;2;Field  ;
+                ApplicationArea=#All;
+                SourceExpr="Period 15";
+                CaptionClass=FORMAT(PeriodStartDateArray[15]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(15,xRec."Period 15","Period 15");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(15);
+                            END;
+                             }
+
+    { 1240030047;2;Field  ;
+                Name=Period 16;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 16";
+                CaptionClass=FORMAT(PeriodStartDateArray[16]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(16,xRec."Period 16","Period 16");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(16);
+                            END;
+                             }
+
+    { 1240030049;2;Field  ;
+                Name=Period 17;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 17";
+                CaptionClass=FORMAT(PeriodStartDateArray[17]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(17,xRec."Period 17","Period 17");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(17);
+                            END;
+                             }
+
+    { 1240030063;2;Field  ;
+                Name=Period 18;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 18";
+                CaptionClass=FORMAT(PeriodStartDateArray[18]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(18,xRec."Period 18","Period 18");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(18);
+                            END;
+                             }
+
+    { 1240030061;2;Field  ;
+                Name=Period 19;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 19";
+                CaptionClass=FORMAT(PeriodStartDateArray[19]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(19,xRec."Period 19","Period 19");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(19);
+                            END;
+                             }
+
+    { 1240030059;2;Field  ;
+                Name=Period 20;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 20";
+                CaptionClass=FORMAT(PeriodStartDateArray[20]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(20,xRec."Period 20","Period 20");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(20);
+                            END;
+                             }
+
+    { 1240030057;2;Field  ;
+                Name=Period 21;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 21";
+                CaptionClass=FORMAT(PeriodStartDateArray[21]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(21,xRec."Period 21","Period 21");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(21);
+                            END;
+                             }
+
+    { 1240030055;2;Field  ;
+                Name=Period 22;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 22";
+                CaptionClass=FORMAT(PeriodStartDateArray[22]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(22,xRec."Period 22","Period 22");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(22);
+                            END;
+                             }
+
+    { 1240030045;2;Field  ;
+                Name=Period 23;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 23";
+                CaptionClass=FORMAT(PeriodStartDateArray[23]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(23,xRec."Period 23","Period 23");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(23);
+                            END;
+                             }
+
+    { 1240030067;2;Field  ;
+                Name=Period 24;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 24";
+                CaptionClass=FORMAT(PeriodStartDateArray[24]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(24,xRec."Period 24","Period 24");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(24);
+                            END;
+                             }
+
+    { 1240030053;2;Field  ;
+                Name=Period 25;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 25";
+                CaptionClass=FORMAT(PeriodStartDateArray[25]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(25,xRec."Period 25","Period 25");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(25);
+                            END;
+                             }
+
+    { 1240030073;2;Field  ;
+                Name=Period 26;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 26";
+                CaptionClass=FORMAT(PeriodStartDateArray[26]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(26,xRec."Period 26","Period 26");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(26);
+                            END;
+                             }
+
+    { 1240030075;2;Field  ;
+                Name=Period 27;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 27";
+                CaptionClass=FORMAT(PeriodStartDateArray[27]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(27,xRec."Period 27","Period 27");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(27);
+                            END;
+                             }
+
+    { 1240030065;2;Field  ;
+                Name=Period 28;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 28";
+                CaptionClass=FORMAT(PeriodStartDateArray[28]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(28,xRec."Period 28","Period 28");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(28);
+                            END;
+                             }
+
+    { 1240030081;2;Field  ;
+                Name=Period 29;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 29";
+                CaptionClass=FORMAT(PeriodStartDateArray[29]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(29,xRec."Period 29","Period 29");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(29);
+                            END;
+                             }
+
+    { 1240030079;2;Field  ;
+                Name=Period 30;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 30";
+                CaptionClass=FORMAT(PeriodStartDateArray[30]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(30,xRec."Period 30","Period 30");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(30);
+                            END;
+                             }
+
+    { 1240030107;2;Field  ;
+                Name=Period 31;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 31";
+                CaptionClass=FORMAT(PeriodStartDateArray[31]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(31,xRec."Period 31","Period 31");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(31);
+                            END;
+                             }
+
+    { 1240030041;2;Field  ;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 32";
+                CaptionClass=FORMAT(PeriodStartDateArray[32]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(32,xRec."Period 32","Period 32");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(32);
+                            END;
+                             }
+
+    { 1240030105;2;Field  ;
+                Name=Period 33;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 33";
+                CaptionClass=FORMAT(PeriodStartDateArray[33]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(33,xRec."Period 33","Period 33");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(33);
+                            END;
+                             }
+
+    { 1240030103;2;Field  ;
+                Name=Period 34;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 34";
+                CaptionClass=FORMAT(PeriodStartDateArray[34]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(34,xRec."Period 34","Period 34");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(34);
+                            END;
+                             }
+
+    { 1240030101;2;Field  ;
+                Name=Period 35;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 35";
+                CaptionClass=FORMAT(PeriodStartDateArray[35]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(35,xRec."Period 35","Period 35");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(35);
+                            END;
+                             }
+
+    { 1240030099;2;Field  ;
+                Name=Period 36;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 36";
+                CaptionClass=FORMAT(PeriodStartDateArray[36]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(36,xRec."Period 36","Period 36");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(36);
+                            END;
+                             }
+
+    { 1240030097;2;Field  ;
+                Name=Period 37;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 37";
+                CaptionClass=FORMAT(PeriodStartDateArray[37]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(37,xRec."Period 37","Period 37");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(37);
+                            END;
+                             }
+
+    { 1240030095;2;Field  ;
+                Name=Period 38;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 38";
+                CaptionClass=FORMAT(PeriodStartDateArray[38]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(38,xRec."Period 38","Period 38");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(38);
+                            END;
+                             }
+
+    { 1240030093;2;Field  ;
+                Name=Period 39;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 39";
+                CaptionClass=FORMAT(PeriodStartDateArray[39]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(39,xRec."Period 39","Period 39");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(39);
+                            END;
+                             }
+
+    { 1240030091;2;Field  ;
+                Name=Period 40;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 40";
+                CaptionClass=FORMAT(PeriodStartDateArray[40]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(40,xRec."Period 40","Period 40");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(40);
+                            END;
+                             }
+
+    { 1240030089;2;Field  ;
+                Name=Period 41;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 41";
+                CaptionClass=FORMAT(PeriodStartDateArray[41]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(41,xRec."Period 41","Period 41");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(41);
+                            END;
+                             }
+
+    { 1240030087;2;Field  ;
+                Name=Period 42;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 42";
+                CaptionClass=FORMAT(PeriodStartDateArray[42]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(42,xRec."Period 42","Period 42");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(42);
+                            END;
+                             }
+
+    { 1240030085;2;Field  ;
+                Name=Period 43;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 43";
+                CaptionClass=FORMAT(PeriodStartDateArray[43]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(43,xRec."Period 43","Period 43");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(43);
+                            END;
+                             }
+
+    { 1240030117;2;Field  ;
+                Name=Period 44;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 44";
+                CaptionClass=FORMAT(PeriodStartDateArray[44]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(44,xRec."Period 44","Period 44");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(44);
+                            END;
+                             }
+
+    { 1240030115;2;Field  ;
+                Name=Period 45;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 45";
+                CaptionClass=FORMAT(PeriodStartDateArray[45]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(45,xRec."Period 45","Period 45");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(45);
+                            END;
+                             }
+
+    { 1240030113;2;Field  ;
+                Name=Period 46;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 46";
+                CaptionClass=FORMAT(PeriodStartDateArray[46]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(46,xRec."Period 46","Period 46");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(46);
+                            END;
+                             }
+
+    { 1240030111;2;Field  ;
+                Name=Period 47;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 47";
+                CaptionClass=FORMAT(PeriodStartDateArray[47]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(47,xRec."Period 47","Period 47");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(47);
+                            END;
+                             }
+
+    { 1240030069;2;Field  ;
+                Name=Period 48;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 48";
+                CaptionClass=FORMAT(PeriodStartDateArray[48]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(48,xRec."Period 48","Period 48");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(48);
+                            END;
+                             }
+
+    { 1240030071;2;Field  ;
+                Name=Period 49;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 49";
+                CaptionClass=FORMAT(PeriodStartDateArray[49]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(49,xRec."Period 49","Period 49");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(49);
+                            END;
+                             }
+
+    { 1240030121;2;Field  ;
+                Name=Period 50;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 50";
+                CaptionClass=FORMAT(PeriodStartDateArray[50]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(50,xRec."Period 50","Period 50");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(50);
+                            END;
+                             }
+
+    { 1240030109;2;Field  ;
+                Name=Period 51;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 51";
+                CaptionClass=FORMAT(PeriodStartDateArray[51]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(51,xRec."Period 51","Period 51");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(51);
+                            END;
+                             }
+
+    { 1240030119;2;Field  ;
+                Name=Period 52;
+                ApplicationArea=#All;
+                DecimalPlaces=0:2;
+                SourceExpr="Period 52";
+                CaptionClass=FORMAT(PeriodStartDateArray[52]);
+                Visible=TogglePeriods;
+                OnValidate=BEGIN
+                             ValidateField(52,xRec."Period 52","Period 52");
+                           END;
+
+                OnDrillDown=BEGIN
+                              DrillDown(52);
+                            END;
+                             }
+
+  }
+  CODE
+  {
+    VAR
+      CollaborativeFCSetup@1240020000 : Record 14002607;
+      InvMgtSetup@1240030004 : Record 14000551;
+      ForcEntry@1240030006 : Record 14002603;
+      ForcInvPeriod@1240030001 : Record 14000552;
+      FirstPeriodDate@1240030005 : Date;
+      PeriodStartDateArray@1240030000 : ARRAY [52] OF Date;
+      FirstItem@1240030002 : Boolean;
+      i@1240030003 : Integer;
+      PeriodDays@1240030007 : Integer;
+      TogglePeriods@1240020001 : Boolean;
+
+    PROCEDURE DrillDown@1240030000(PeriodNo@1240030000 : Integer);
+    BEGIN
+      ForcEntry.RESET;
+      ForcEntry.SETCURRENTKEY(
+        "Customer No.","Location Code","Item No.","Variant Code","Starting Date");
+      ForcEntry.SETRANGE("Customer No.","Customer No.");
+      ForcEntry.SETRANGE("Location Code","Location Code");
+      ForcEntry.SETRANGE("Item No.","Item No.");
+      ForcEntry.SETRANGE("Variant Code","Variant Code");
+      ForcEntry.SETRANGE("Starting Date",PeriodStartDateArray[PeriodNo]);
+      PAGE.RUNMODAL(PAGE::"Forecast Entries",ForcEntry);
+    END;
+
+    PROCEDURE ValidateField@1240030001(PeriodNo@1240030000 : Integer;OrigQty@1240030001 : Decimal;NewQty@1240030002 : Decimal);
+    VAR
+      EntryNo@1240030003 : Integer;
+    BEGIN
+      IF OrigQty <> NewQty THEN BEGIN
+        ForcEntry.RESET;
+        ForcEntry.LOCKTABLE;
+        IF ForcEntry.FIND('+') THEN
+          EntryNo := ForcEntry."Entry No." + 1
+        ELSE
+          EntryNo := 1;
+        ForcEntry.INIT;
+        ForcEntry."Entry No." := EntryNo;
+        ForcEntry."Customer No." := "Customer No.";
+        ForcEntry."Location Code" := "Location Code";
+        ForcEntry."Item No." := "Item No.";
+        ForcEntry."Variant Code" := "Variant Code";
+        ForcEntry."Starting Date" := PeriodStartDateArray[PeriodNo];
+        ForcEntry.Quantity := NewQty - OrigQty;
+        ForcEntry.INSERT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE OnAfterRecord@19077479();
+    BEGIN
+      i := 0;
+      REPEAT
+        i := i + 1;
+        IF i > (CollaborativeFCSetup."Forecast Periods") THEN
+          EXIT;
+        SETRANGE("Date Filter",PeriodStartDateArray[i]);
+        CALCFIELDS("Forecast Quantity");
+        CASE i OF
+          1: "Period 1" := "Forecast Quantity";
+          2: "Period 2" := "Forecast Quantity";
+          3: "Period 3" := "Forecast Quantity";
+          4: "Period 4" := "Forecast Quantity";
+          5: "Period 5" := "Forecast Quantity";
+          6: "Period 6" := "Forecast Quantity";
+          7: "Period 7" := "Forecast Quantity";
+          8: "Period 8" := "Forecast Quantity";
+          9: "Period 9" := "Forecast Quantity";
+          10: "Period 10" := "Forecast Quantity";
+          11: "Period 11" := "Forecast Quantity";
+          12: "Period 12" := "Forecast Quantity";
+          13: "Period 13" := "Forecast Quantity";
+          14: "Period 14" := "Forecast Quantity";
+          15: "Period 15" := "Forecast Quantity";
+          16: "Period 16" := "Forecast Quantity";
+          17: "Period 17" := "Forecast Quantity";
+          18: "Period 18" := "Forecast Quantity";
+          19: "Period 19" := "Forecast Quantity";
+          20: "Period 20" := "Forecast Quantity";
+          21: "Period 21" := "Forecast Quantity";
+          22: "Period 22" := "Forecast Quantity";
+          23: "Period 23" := "Forecast Quantity";
+          24: "Period 24" := "Forecast Quantity";
+          25: "Period 25" := "Forecast Quantity";
+          26: "Period 26" := "Forecast Quantity";
+          27: "Period 27" := "Forecast Quantity";
+          28: "Period 28" := "Forecast Quantity";
+          29: "Period 29" := "Forecast Quantity";
+          30: "Period 30" := "Forecast Quantity";
+          31: "Period 31" := "Forecast Quantity";
+          32: "Period 32" := "Forecast Quantity";
+          33: "Period 33" := "Forecast Quantity";
+          34: "Period 34" := "Forecast Quantity";
+          35: "Period 35" := "Forecast Quantity";
+          36: "Period 36" := "Forecast Quantity";
+          37: "Period 37" := "Forecast Quantity";
+          38: "Period 38" := "Forecast Quantity";
+          39: "Period 39" := "Forecast Quantity";
+          40: "Period 40" := "Forecast Quantity";
+          41: "Period 41" := "Forecast Quantity";
+          42: "Period 42" := "Forecast Quantity";
+          43: "Period 43" := "Forecast Quantity";
+          44: "Period 44" := "Forecast Quantity";
+          45: "Period 45" := "Forecast Quantity";
+          46: "Period 46" := "Forecast Quantity";
+          47: "Period 47" := "Forecast Quantity";
+          48: "Period 48" := "Forecast Quantity";
+          49: "Period 49" := "Forecast Quantity";
+          50: "Period 50" := "Forecast Quantity";
+          51: "Period 51" := "Forecast Quantity";
+          52: "Period 52" := "Forecast Quantity";
+        END;
+      UNTIL i = 52;
+    END;
+
+    LOCAL PROCEDURE ToggleColumns@1240020000();
+    BEGIN
+      TogglePeriods := NOT TogglePeriods;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

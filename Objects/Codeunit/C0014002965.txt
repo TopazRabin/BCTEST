@@ -1,0 +1,156 @@
+OBJECT Codeunit 14002965 Extra Pick Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/04/20;
+    Time=[ 6:18:46 AM];
+    Modified=Yes;
+    Version List=RF1.50.13;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1240030017 : TextConst 'ENU=No Lines Found';
+      Text002@1240030005 : TextConst 'ENU=No Warehouse Requests found.';
+      Text003@1240030004 : TextConst 'ENU=Must be same Location.';
+      Text004@1240030000 : TextConst 'ENU=Nothing Available';
+
+    [External]
+    PROCEDURE CreateExtraPick@1240030002(VAR CurrentWarehouseRequest@1240030000 : Record 5765;OutboundWhseRequestFilter@1240030001 : Record 14002863;AssignedID@1240030014 : Code[50];GiveError@1240030016 : Boolean) : Boolean;
+    VAR
+      WarehouseShipmentHeader@1240030006 : Record 7320;
+      WarehouseShipmentLine@1240030005 : Record 7321;
+      WhseShipmentCreatePick@1240030003 : Report 7318;
+      WarehouseStreamlineMgt@1240030030 : Codeunit 14002809;
+      OWRSingleInstance@1240020000 : Codeunit 14002864;
+      WarehouseRequestTmp@1240030031 : TEMPORARY Record 5765;
+      RFStatEntryTotal@1240030029 : Record 14002804;
+      NoOfWarehouseRequest@1240030027 : Integer;
+      FirstLocationCode@1240030026 : Code[10];
+      CalculatedCorrectly@1240030025 : Boolean;
+      StatusText@1240030024 : Text[250];
+    BEGIN
+      IF NOT CurrentWarehouseRequest.FIND('-') THEN
+        IF GiveError THEN
+          ERROR(Text002)
+        ELSE
+          EXIT(FALSE);
+
+      WarehouseRequestTmp.RESET;
+      WarehouseRequestTmp.DELETEALL;
+      NoOfWarehouseRequest := 0;
+      FirstLocationCode := CurrentWarehouseRequest."Location Code";
+      REPEAT
+        CurrentWarehouseRequest.CALCFIELDS("Warehouse Shipment No.");
+        IF CurrentWarehouseRequest."Warehouse Shipment No." <> '' THEN BEGIN
+          NoOfWarehouseRequest := NoOfWarehouseRequest + 1;
+
+          WarehouseRequestTmp := CurrentWarehouseRequest;
+          WarehouseRequestTmp.INSERT;
+
+          CurrentWarehouseRequest.TESTFIELD(Type,CurrentWarehouseRequest.Type::Outbound);
+          IF CurrentWarehouseRequest."Location Code" <> FirstLocationCode THEN
+            IF GiveError THEN
+              ERROR(Text003)
+            ELSE
+              EXIT(FALSE);
+        END;
+      UNTIL CurrentWarehouseRequest.NEXT = 0;
+
+      IF NoOfWarehouseRequest = 0 THEN
+        IF GiveError THEN
+          ERROR(Text001)
+        ELSE
+          EXIT(FALSE);
+
+      WarehouseRequestTmp.FIND('-');
+      WarehouseStreamlineMgt.AddWarehouseRequest(WarehouseRequestTmp,TRUE);
+      IF WarehouseRequestTmp.NEXT <> 0 THEN
+        REPEAT
+          WarehouseStreamlineMgt.AddWarehouseRequest(WarehouseRequestTmp,FALSE);
+        UNTIL WarehouseRequestTmp.NEXT = 0;
+
+      CalculatedCorrectly :=
+        WarehouseStreamlineMgt.CalculateStatisticsMultiple(
+          RFStatEntryTotal,OutboundWhseRequestFilter);
+      IF CalculatedCorrectly THEN
+        StatusText :=
+          WarehouseStreamlineMgt.UpdateStatusText(WarehouseRequestTmp,RFStatEntryTotal)
+      ELSE
+        StatusText := '';
+
+      IF RFStatEntryTotal."Available Qty. (Base)" = 0 THEN BEGIN
+        OWRSingleInstance.ResetOWRProcessing;
+        IF GiveError THEN
+          ERROR(Text004)
+        ELSE
+          EXIT(FALSE);
+      END;
+
+      WarehouseRequestTmp.FIND('-');
+      REPEAT
+        CLEAR(RFStatEntryTotal);
+        CLEAR(WarehouseStreamlineMgt);
+        WarehouseStreamlineMgt.AddWarehouseRequest(WarehouseRequestTmp,TRUE);
+        CalculatedCorrectly :=
+          WarehouseStreamlineMgt.CalculateStatisticsMultiple(
+            RFStatEntryTotal,OutboundWhseRequestFilter);
+        IF CalculatedCorrectly THEN
+          StatusText :=
+            WarehouseStreamlineMgt.UpdateStatusText(WarehouseRequestTmp,RFStatEntryTotal)
+        ELSE
+          StatusText := '';
+
+        IF RFStatEntryTotal."Available Qty. (Base)" > 0 THEN BEGIN
+          WarehouseShipmentLine.RESET;
+          WarehouseShipmentLine.SETCURRENTKEY(
+            "Source Type","Source Subtype","Source No.","Source Line No.");
+          WarehouseShipmentLine.SETRANGE("Source Type",WarehouseRequestTmp."Source Type");
+          WarehouseShipmentLine.SETRANGE("Source Subtype",WarehouseRequestTmp."Source Subtype");
+          WarehouseShipmentLine.SETRANGE("Source No.",WarehouseRequestTmp."Source No.");
+          WarehouseShipmentLine.SETRANGE("Location Code",WarehouseRequestTmp."Location Code");
+          IF WarehouseShipmentLine.FIND('-') THEN BEGIN
+            WarehouseShipmentHeader.GET(WarehouseShipmentLine."No.");
+            IF AssignedID <> '' THEN
+              WarehouseShipmentHeader.VALIDATE("Assigned User ID",AssignedID);
+            IF OutboundWhseRequestFilter."Sorting Method for Act. Lines" > 0 THEN
+              WarehouseShipmentHeader.VALIDATE(
+                "Sorting Method",OutboundWhseRequestFilter."Sorting Method for Act. Lines");
+            WarehouseShipmentHeader.MODIFY;
+
+            CLEAR(WhseShipmentCreatePick);
+            WhseShipmentCreatePick.SETTABLEVIEW(WarehouseShipmentLine);
+            WhseShipmentCreatePick.Initialize(
+              AssignedID,OutboundWhseRequestFilter."Sorting Method for Act. Lines",
+              OutboundWhseRequestFilter."Print Document",
+              OutboundWhseRequestFilter."Do Not Fill Qty. to Handle",
+              OutboundWhseRequestFilter."Set Breakbulk Filter",FALSE);
+            WhseShipmentCreatePick.SetPerZone(OutboundWhseRequestFilter."Per Zone");
+            WhseShipmentCreatePick.SetPickFromFilter(
+              OutboundWhseRequestFilter."Pick-from Zone Filter",
+              OutboundWhseRequestFilter."Pick-from Bin Filter");
+            WhseShipmentCreatePick.SetWhseShipmentLine(WarehouseShipmentLine,WarehouseShipmentHeader);
+            WhseShipmentCreatePick.SetHideValidationDialog(TRUE);
+            WhseShipmentCreatePick.USEREQUESTPAGE(FALSE);
+            WhseShipmentCreatePick.RUNMODAL;
+            WhseShipmentCreatePick.GetResultMessage;
+          END;
+        END;
+      UNTIL WarehouseRequestTmp.NEXT = 0;
+
+      OWRSingleInstance.ResetOWRProcessing;
+
+      EXIT(TRUE);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

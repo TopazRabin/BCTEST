@@ -1,0 +1,137 @@
+OBJECT Codeunit 51981 Codeunit225EventSubscriber
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/13/20;
+    Time=[ 6:48:11 AM];
+    Modified=Yes;
+    Version List=001;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    [EventSubscriber(Codeunit,225,OnAfterRun)]
+    LOCAL PROCEDURE CU225_OnRun@1000000000(VAR GenJnlLine@1000000000 : Record 81);
+    VAR
+      CustLedgerEntry@1000000001 : Record 21;
+      ApplyToID@1000000002 : Code[20];
+      DivAmt@1000000003 : Decimal;
+      AmtArray@1000000004 : ARRAY [5] OF Decimal;
+      AppIDArray@1000000005 : ARRAY [5] OF Code[20];
+      i@1000000006 : Integer;
+      j@1000000007 : Integer;
+      DivGenJnlLine@1000000008 : Record 81;
+      DivFilter@1000000009 : Text;
+      LineNo@1000000010 : Integer;
+      PaymentToleranceMgt@1000000011 : Codeunit 426;
+      CustLedgerEntryDiv@1000000012 : Record 21;
+      DivCode@1000000013 : Code[10];
+      MultiDivFound@1000000014 : Boolean;
+    BEGIN
+      IF GenJnlLine."Journal Template Name" IN ['DEPOSITS', 'CASH RECEI'] THEN BEGIN
+        // Check if entries with multi div exists
+        CustLedgerEntryDiv.RESET;
+        CustLedgerEntryDiv.SETRANGE("Applies-to ID",GenJnlLine."Document No.");
+        CustLedgerEntryDiv.SETRANGE("Customer No.",GenJnlLine."Account No.");
+        CustLedgerEntryDiv.SETRANGE(Open,TRUE);
+        CustLedgerEntryDiv.SETFILTER("Shortcut Dimension 5 Code",'<>%1','');
+        IF CustLedgerEntryDiv.FINDSET THEN
+          REPEAT
+            IF DivCode = '' THEN
+              DivCode := CustLedgerEntryDiv."Shortcut Dimension 5 Code";
+            IF DivCode <> CustLedgerEntryDiv."Shortcut Dimension 5 Code" THEN
+              MultiDivFound := TRUE;
+          UNTIL CustLedgerEntryDiv.NEXT=0;
+
+        CustLedgerEntry.RESET;
+        //CustLedgerEntry.SETCURRENTKEY("Customer No.","Applies-to ID",Open,Positive,"Due Date");
+        CustLedgerEntry.SETRANGE("Applies-to ID",GenJnlLine."Document No.");
+        CustLedgerEntry.SETRANGE("Customer No.",GenJnlLine."Account No.");
+        CustLedgerEntry.SETRANGE(Open,TRUE);
+        IF CustLedgerEntry.FINDSET AND MultiDivFound THEN //add div to applies to ID only in case of multi div
+          REPEAT
+            //CustLedgerEntry.LOCKTABLE;
+            IF CustLedgerEntry."Applies-to ID" <> '' THEN
+              CustLedgerEntry."Applies-to ID" := CustLedgerEntry."Applies-to ID"+CustLedgerEntry."Shortcut Dimension 5 Code";
+            DivFilter := DivFilter+CustLedgerEntry."Applies-to ID"+'|';
+            CustLedgerEntry.MODIFY;
+          UNTIL CustLedgerEntry.NEXT=0
+        ELSE DivFilter := GenJnlLine."Document No."+'|';
+
+
+        CustLedgerEntry.RESET;
+        CustLedgerEntry.SETCURRENTKEY("Customer No.","Applies-to ID",Open,Positive,"Due Date");
+        CustLedgerEntry.SETFILTER("Applies-to ID",COPYSTR(DivFilter,1,STRLEN(DivFilter)-1));
+        CustLedgerEntry.SETRANGE("Customer No.",GenJnlLine."Account No.");
+        CustLedgerEntry.SETRANGE(Open,TRUE);
+        IF CustLedgerEntry.FIND('-') THEN
+          REPEAT
+            BEGIN
+              IF CustLedgerEntry."Applies-to ID" = ApplyToID THEN BEGIN
+                //>> VA
+                IF PaymentToleranceMgt.CheckCalcPmtDiscGenJnlCust(GenJnlLine,CustLedgerEntry,0,FALSE)
+                     //<TPZ1582> EB COMMNET OUT //TPZ1662
+                     AND
+                       (ABS(CustLedgerEntry."Amount to Apply") >=
+                        ABS(CustLedgerEntry."Remaining Amount" - CustLedgerEntry."Remaining Pmt. Disc. Possible"))
+                THEN AmtArray[i] -= (CustLedgerEntry."Amount to Apply" - CustLedgerEntry."Remaining Pmt. Disc. Possible")
+                ELSE AmtArray[i] -= CustLedgerEntry."Amount to Apply";
+                //<<VA
+                AppIDArray[i] := CustLedgerEntry."Applies-to ID";
+              END ELSE BEGIN
+                ApplyToID := CustLedgerEntry."Applies-to ID";
+                i += 1;
+                //>> VA
+                IF PaymentToleranceMgt.CheckCalcPmtDiscGenJnlCust(GenJnlLine,CustLedgerEntry,0,FALSE)
+                     //<TPZ1582> EB COMMNET OUT //TPZ1662
+                     AND
+                       (ABS(CustLedgerEntry."Amount to Apply") >=
+                        ABS(CustLedgerEntry."Remaining Amount" - CustLedgerEntry."Remaining Pmt. Disc. Possible"))
+                THEN AmtArray[i] -= (CustLedgerEntry."Amount to Apply" - CustLedgerEntry."Remaining Pmt. Disc. Possible")
+                ELSE AmtArray[i] -= CustLedgerEntry."Amount to Apply";
+                //<<VA
+                //AmtArray[i] -= (CustLedgerEntry."Amount to Apply" - CustLedgerEntry."Remaining Pmt. Disc. Possible");
+                AppIDArray[i] := CustLedgerEntry."Applies-to ID";
+              END;
+            END;
+          UNTIL CustLedgerEntry.NEXT=0;
+          LineNo := GenJnlLine."Line No.";
+          FOR j := 1 TO i DO BEGIN
+              IF j <> i THEN BEGIN
+                LineNo := LineNo + 10000;
+                DivGenJnlLine.INIT;
+                DivGenJnlLine.TRANSFERFIELDS(GenJnlLine);
+                IF MultiDivFound THEN // copy last char from applied to id in case of multi div entries
+                  DivGenJnlLine.VALIDATE("Shortcut Dimension 5 Code",COPYSTR(AppIDArray[j],STRLEN(AppIDArray[j]),1))
+                ELSE DivGenJnlLine.VALIDATE("Shortcut Dimension 5 Code",DivCode);
+                DivGenJnlLine.VALIDATE(Amount,AmtArray[j]);
+                DivGenJnlLine.VALIDATE("Document No.",AppIDArray[j]);
+                DivGenJnlLine.VALIDATE("Applies-to ID",AppIDArray[j]);
+                DivGenJnlLine."Line No." := LineNo;
+                DivGenJnlLine.INSERT(TRUE);
+              END ELSE BEGIN
+                GenJnlLine.VALIDATE("Document No.",AppIDArray[j]);
+                GenJnlLine.VALIDATE("Applies-to ID",AppIDArray[j]);
+                IF MultiDivFound  THEN // copy last char from applied to id in case of multi div entries
+                  GenJnlLine.VALIDATE("Shortcut Dimension 5 Code",COPYSTR(AppIDArray[j],STRLEN(AppIDArray[j]),1))
+                ELSE GenJnlLine.VALIDATE("Shortcut Dimension 5 Code",DivCode);
+                GenJnlLine.VALIDATE(Amount,AmtArray[j]);
+              END;
+          END;
+      END;
+    END;
+
+    BEGIN
+    {
+      001 TPZ2890 VAS 08122020 function CU225_OnRun added for auto split by div
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,199 @@
+OBJECT Codeunit 50045 TPZ Sales Post via Job Queue
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/09/21;
+    Time=[ 8:44:44 AM];
+    Modified=Yes;
+    Version List=TPZ000.00.00,NAVEVT1.0.0;
+  }
+  PROPERTIES
+  {
+    TableNo=472;
+    OnRun=VAR
+            SalesHeader@1000 : Record 36;
+            SalesPostPrint@1002 : Codeunit 82;
+            RecRef@1001 : RecordRef;
+          BEGIN
+            TESTFIELD("Record ID to Process");
+            RecRef.GET("Record ID to Process");
+            RecRef.SETTABLE(SalesHeader);
+            SalesHeader.FIND;
+
+            SetJobQueueStatus(SalesHeader,SalesHeader."Job Queue Status"::Posting);
+            //IF SalesHeader."Shortcut Dimension 5 Code" <> 'I' THEN //<TPZ2378>
+             SalesPost.SetPostingFlag1(SalesHeader);//<TPZ2378>
+            IF NOT SalesPost.RUN(SalesHeader) THEN BEGIN
+              SetJobQueueStatus(SalesHeader,SalesHeader."Job Queue Status"::Error);
+              ERROR(GETLASTERRORTEXT);
+            END;
+            IF SalesHeader."Print Posted Documents" THEN
+              SalesPostPrint.GetReport(SalesHeader);
+            SetJobQueueStatus(SalesHeader,SalesHeader."Job Queue Status"::" ");
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      PostDescription@1000 : TextConst '@@@="%1 = document type, %2 = document number. Example: Post Sales Order 1234.";ENU=Post Sales %1 %2.;ESM=Registrar ventas %1 %2.;FRC=Reportez les ventes %1 %2.;ENC=Post Sales %1 %2.';
+      PostAndPrintDescription@1002 : TextConst '@@@="%1 = document type, %2 = document number. Example: Post Sales Order 1234.";ENU=Post and Print Sales %1 %2.;ESM=Registrar e imprimir %1 ventas %2.;FRC=Reporter et imprimer les ventes %1 %2.;ENC=Post and Print Sales %1 %2.';
+      Confirmation@1001 : TextConst '@@@="%1=document type, %2=number, e.g. Order 123  or Invoice 234.";ENU=%1 %2 has been scheduled for posting.;ESM=%1 %2 se ha programado para el registro.;FRC=%1 %2 a ‚t‚ planifi‚ pour report.;ENC=%1 %2 has been scheduled for posting.';
+      WrongJobQueueStatus@1003 : TextConst '@@@="%1 = document type, %2 = document number. Example: Sales Order 1234 or Invoice 1234.";ENU=%1 %2 cannot be posted because it has already been scheduled for posting. Choose the Remove from Job Queue action to reset the job queue status and then post again.;ESM=%1 %2 no se puede registrar porque ya se ha programado para el registro. Elija la acci¢n Quitar de cola de proyecto para restablecer el estado de la cola de proyecto y vuelva a registrarlo.;FRC=Impossible de reporter %1 %2, car ce document a d‚j… ‚t‚ programm‚ pour report. Choisissez l''action Supprimer de la file d''attente des travaux pour r‚initialiser l''‚tat de la file des travaux, puis recommencez le report.;ENC=%1 %2 cannot be posted because it has already been scheduled for posting. Choose the Remove from Job Queue action to reset the job queue status and then post again.';
+      Text50000@1000000000 : TextConst 'ENU=There are no Warehouse Lines exists for %1 %2.';
+      SalesPost@1000000001 : Codeunit 80;
+      NoSeriesMgt@1000000002 : Codeunit 396;
+
+    LOCAL PROCEDURE SetJobQueueStatus@5(VAR SalesHeader@1001 : Record 36;NewStatus@1000 : Option);
+    BEGIN
+      SalesHeader.LOCKTABLE;
+      IF SalesHeader.FIND THEN BEGIN
+        SalesHeader."Job Queue Status" := NewStatus;
+        SalesHeader.MODIFY;
+        COMMIT;
+      END;
+    END;
+
+    PROCEDURE EnqueueSalesDoc@1(VAR SalesHeader@1000 : Record 36);
+    VAR
+      SalesSetup@1003 : Record 311;
+      JobQueueEntry@1002 : Record 472;
+      RecRef@1001 : RecordRef;
+      TempInvoice@1006 : Boolean;
+      TempRcpt@1005 : Boolean;
+      TempShip@1004 : Boolean;
+      Location@1000000000 : Record 14;
+      Division@1000000001 : Record 51001;
+    BEGIN
+      SalesSetup.GET;
+
+      //TPZ1956>>>
+      IF NOT SalesSetup."Post from Whse. with Job Q." THEN
+        EXIT;
+
+      //TPZ1957>>>
+      //IF Division.GET(SalesHeader."Shortcut Dimension 5 Code") AND
+      //   NOT Division."Enable Post with Job Queue"
+      //THEN
+      //  EXIT;
+      //TPZ1957<<<
+
+      RecRef.GETTABLE(SalesHeader);
+      JobQueueEntry.SETRANGE(Status, JobQueueEntry.Status::Ready);
+      JobQueueEntry.SETRANGE("Object Type to Run", JobQueueEntry."Object Type to Run"::Codeunit);
+      JobQueueEntry.SETRANGE("Object ID to Run", CODEUNIT::"TPZ Sales Post via Job Queue");
+      JobQueueEntry.SETRANGE("Record ID to Process", RecRef.RECORDID);
+      IF JobQueueEntry.ISEMPTY() = FALSE THEN
+        EXIT;
+
+      JobQueueEntry.RESET;
+      //TPZ1956<<<
+
+      WITH SalesHeader DO BEGIN
+        IF NOT ("Job Queue Status" IN ["Job Queue Status"::" ","Job Queue Status"::Error]) THEN
+          ERROR(WrongJobQueueStatus,"Document Type","No.");
+        TempInvoice := Invoice;
+        TempRcpt := Receive;
+        TempShip := Ship;
+        IF Status = Status::Open THEN
+          CODEUNIT.RUN(CODEUNIT::"Release Sales Document",SalesHeader);
+        Invoice := TempInvoice;
+        Receive := TempRcpt;
+        Ship := TempShip;
+        "Job Queue Status" := "Job Queue Status"::"Scheduled for Posting";
+        "Job Queue Entry ID" := CREATEGUID;
+        GenerateInvoiceNo(SalesHeader);
+        MODIFY;
+        RecRef.GETTABLE(SalesHeader);
+        JobQueueEntry.INIT;
+        JobQueueEntry.ID := "Job Queue Entry ID";
+        JobQueueEntry."Object Type to Run" := JobQueueEntry."Object Type to Run"::Codeunit;
+        JobQueueEntry."Object ID to Run" := CODEUNIT::"TPZ Sales Post via Job Queue"; //TPZ1956
+        JobQueueEntry."Record ID to Process" := RecRef.RECORDID;
+        JobQueueEntry.VALIDATE(JobQueueEntry."User ID",USERID);//NAVEVENT
+        JobQueueEntry."Job Queue Category Code" := SalesSetup."Job Queue Category Code";
+        // Set Timeout to prevent the Job Queue from hanging (eg. as a result of a printer dialog).
+        JobQueueEntry."Timeout (sec.)" := 7200;
+
+        //TPZ1956>>>
+        IF SalesSetup."Post from Whse. Start Time" <> 0T THEN
+          JobQueueEntry."Earliest Start Date/Time" := CREATEDATETIME(CALCDATE('+1D',TODAY),SalesSetup."Post from Whse. Start Time");
+          //JobQueueEntry."Earliest Start Date/Time" := CREATEDATETIME(TODAY,SalesSetup."Post from Whse. Start Time");
+
+        JobQueueEntry.Priority := SalesSetup."Job Q. Prio. for P. from Whse.";
+        IF Location.GET("Location Code") THEN BEGIN
+          IF Location."Post from Whse. Start Time" <> 0T THEN
+            JobQueueEntry."Earliest Start Date/Time" := CREATEDATETIME(CALCDATE('+1D',TODAY),Location."Post from Whse. Start Time");
+        END;
+        //TPZ1956<<<
+      //<TPZ2071>
+        IF "Shortcut Dimension 5 Code" = 'I' THEN
+          JobQueueEntry."Run in User Session" := TRUE;
+      //<//TPZ2071>
+        IF "Print Posted Documents" THEN BEGIN
+          JobQueueEntry.Priority := SalesSetup."Job Q. Prio. for Post & Print";
+          JobQueueEntry.Description :=
+            COPYSTR(STRSUBSTNO(PostAndPrintDescription,"Document Type","No."),1,MAXSTRLEN(JobQueueEntry.Description));
+        END ELSE BEGIN
+          JobQueueEntry.Priority := SalesSetup."Job Queue Priority for Post";
+          JobQueueEntry.Description :=
+            COPYSTR(STRSUBSTNO(PostDescription,"Document Type","No."),1,MAXSTRLEN(JobQueueEntry.Description));
+        END;
+
+        JobQueueEntry."Notify On Success" := SalesSetup."Notify On Success";
+        JobQueueEntry.INSERT;
+        CODEUNIT.RUN(CODEUNIT::"Job Queue - Enqueue",JobQueueEntry);
+        MESSAGE(Confirmation,"Document Type","No.");
+
+      END;
+    END;
+
+    PROCEDURE CancelQueueEntry@2(VAR SalesHeader@1000 : Record 36);
+    VAR
+      JobQueueEntry@1002 : Record 472;
+      RecRef@1001 : RecordRef;
+    BEGIN
+      WITH SalesHeader DO BEGIN
+        IF "Job Queue Status" = "Job Queue Status"::" " THEN
+          EXIT;
+        RecRef.GETTABLE(SalesHeader);
+        IF NOT ISNULLGUID("Job Queue Entry ID") THEN
+          JobQueueEntry.SETRANGE(ID,"Job Queue Entry ID");
+        JobQueueEntry.SETRANGE("Record ID to Process",RecRef.RECORDID);
+        IF NOT JobQueueEntry.ISEMPTY THEN
+          JobQueueEntry.DELETEALL;
+        "Job Queue Status" := "Job Queue Status"::" ";
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE GenerateInvoiceNo@1000000018(VAR SalesHeader@1000000000 : Record 36);
+    BEGIN
+      //TPZ1956>>>
+      WITH SalesHeader DO BEGIN
+        IF "Posting No." = '' THEN BEGIN
+          IF ("No. Series" <> '') OR
+             ("Document Type" IN ["Document Type"::Order,"Document Type"::"Return Order"])
+          THEN
+            TESTFIELD("Posting No. Series");
+          IF ("No. Series" <> "Posting No. Series") OR
+             ("Document Type" IN ["Document Type"::Order,"Document Type"::"Return Order"])
+          THEN BEGIN
+            "Posting No." := NoSeriesMgt.GetNextNo("Posting No. Series","Posting Date",TRUE);
+          END;
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      20170824 TPZ1956 CJOSIC - Schedule International Orders for Overnight Posting (20170717)
+      20170908 TPZ1957 CJOSIC - Schedule Non International Order for Overnight Posting (20170717)
+      20171102 TPZ2071 DKUMAR -  Code Blocking Run in User Session
+      2018-05-09 TPZ2378 UCHOUHAN
+        Added code for the orders on the job queue for overnight posting in manual ship process.
+    }
+    END.
+  }
+}
+

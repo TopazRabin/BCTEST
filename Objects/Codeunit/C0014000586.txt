@@ -1,0 +1,170 @@
+OBJECT Codeunit 14000586 Create Transfer from S.T.O.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.02;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@1240030008 : TextConst 'ENU=Create Transfer Order';
+      Text001@1240030010 : TextConst 'ENU=Creating Transfer Order';
+      Text002@1240030011 : TextConst 'ENU=Location';
+      Text003@1240030012 : TextConst 'ENU=Item';
+
+    PROCEDURE BySuggestedTransferOrder@1240030000(VAR CurrSugTransHdr@1240030000 : Record 14000592);
+    BEGIN
+      IF NOT CONFIRM(Text000,FALSE) THEN
+        EXIT;
+      CreateTransferOrderFromSugTransferOrder(CurrSugTransHdr);
+    END;
+
+    PROCEDURE SilentBySuggestedTransferOrder@1240020000(VAR CurrSugTransHdr@1240020000 : Record 14000592);
+    BEGIN
+      CreateTransferOrderFromSugTransferOrder(CurrSugTransHdr);
+    END;
+
+    LOCAL PROCEDURE CreateTransferOrderFromSugTransferOrder@1240020001(VAR CurrSugTransHdr@1240020000 : Record 14000592);
+    VAR
+      InvMgtSetup@1240020012 : Record 14000551;
+      PostedSTOHdr@1240020011 : Record 14000598;
+      PostedSTOLine@1240020010 : Record 14000599;
+      PostedSTOCalcLine@1240020009 : Record 14000600;
+      SugTransHdr@1240020008 : Record 14000592;
+      SugTransLine@1240020007 : Record 14000593;
+      SugTransCalcLine@1240020006 : Record 14000594;
+      TransHdr@1240020005 : Record 5740;
+      TransLine@1240020004 : Record 5741;
+      SurplusInvValue@1240020003 : Record 14000584;
+      ReleaseTransDoc@1240020002 : Codeunit 5708;
+      ProgWindow@1240020001 : Dialog;
+    BEGIN
+      IF GUIALLOWED THEN
+      ProgWindow.OPEN(
+        Text001 + '\' +
+        PADSTR(Text002,10) + '#1########\' +
+        PADSTR(Text003,10) + '#2##################');
+
+      SugTransHdr.GET(CurrSugTransHdr."Document Type",CurrSugTransHdr."No.");
+
+      IF GUIALLOWED THEN
+      ProgWindow.UPDATE(1,SugTransHdr."Transfer-to Code");
+      TransHdr.INIT;
+      TransHdr."No." := '';
+      TransHdr.INSERT(TRUE);
+      TransHdr.VALIDATE("Transfer-from Code",SugTransHdr."Transfer-from Code");
+      TransHdr.VALIDATE("Transfer-to Code",SugTransHdr."Transfer-to Code");
+      TransHdr.VALIDATE("In-Transit Code",SugTransHdr."In-Transit Code");
+      TransHdr."Posting Date" := WORKDATE;
+      TransHdr."Suggested Transfer No." := SugTransHdr."No.";
+      TransHdr."Created by Loc. Repl." := TRUE;
+      TransHdr."Created By" := USERID;
+      TransHdr."Creation Date" := TODAY;
+      TransHdr.MODIFY(TRUE);
+      OnAfterCreateTransferOrderHeader(SugTransHdr, TransHdr);
+
+      SugTransLine.RESET;
+      SugTransLine.SETRANGE("Document Type",SugTransHdr."Document Type");
+      SugTransLine.SETRANGE("Suggested Transfer No.",SugTransHdr."No.");
+      SugTransLine.SETFILTER("Transfer Quantity",'<>%1',0);
+      TransLine."Line No." := 10000;
+      IF SugTransLine.FINDSET THEN
+        REPEAT
+          IF GUIALLOWED THEN
+          ProgWindow.UPDATE(2,SugTransLine."Item No.");
+          TransLine.INIT;
+          TransLine."Document No." := TransHdr."No.";
+          TransLine.INSERT(TRUE);
+          TransLine.VALIDATE("Item No.",SugTransLine."Item No.");
+          TransLine.VALIDATE("Variant Code",SugTransLine."Variant Code");
+          TransLine.VALIDATE("Unit of Measure Code",SugTransLine."Unit of Measure Code");
+          TransLine.VALIDATE(Quantity,SugTransLine."Transfer Quantity");
+          TransLine.MODIFY(TRUE);
+          OnAfterCreateTransferOrderLine(SugTransHdr, SugTransLine, TransHdr, TransLine);
+        UNTIL SugTransLine.NEXT = 0;
+
+      // For AV
+      InvMgtSetup.GET;
+      IF InvMgtSetup."Enable AV Interface" THEN BEGIN
+        TransHdr.RESET;
+        TransHdr.SETRANGE("Suggested Transfer No.",SugTransHdr."No.");
+        IF TransHdr.FINDSET THEN
+          REPEAT
+            CLEAR(ReleaseTransDoc);
+            ReleaseTransDoc.RUN(TransHdr);
+          UNTIL TransHdr.NEXT = 0;
+      END;
+      // For AV
+
+      SugTransHdr.GET(CurrSugTransHdr."Document Type",CurrSugTransHdr."No.");
+      OnAfterCreateTransferOrderBeforeArchive(SugTransHdr, TransHdr);
+      PostedSTOHdr.INIT;
+      PostedSTOHdr.TRANSFERFIELDS(SugTransHdr);
+      PostedSTOHdr.INSERT;
+
+      SugTransLine.RESET;
+      SugTransLine.SETRANGE("Document Type",SugTransHdr."Document Type");
+      SugTransLine.SETRANGE("Suggested Transfer No.",SugTransHdr."No.");
+      IF SugTransLine.FINDSET THEN
+        REPEAT
+          IF GUIALLOWED THEN
+          ProgWindow.UPDATE(2,SugTransLine."Item No.");
+          PostedSTOLine.INIT;
+          PostedSTOLine.TRANSFERFIELDS(SugTransLine);
+          PostedSTOLine.INSERT(TRUE);
+        UNTIL SugTransLine.NEXT = 0;
+
+
+      SugTransCalcLine.RESET;
+      SugTransCalcLine.SETRANGE("Document Type",SugTransHdr."Document Type");
+      SugTransCalcLine.SETRANGE("Suggested Transfer No.",SugTransHdr."No.");
+      IF SugTransCalcLine.FINDSET THEN
+        REPEAT
+          PostedSTOCalcLine.INIT;
+          PostedSTOCalcLine.TRANSFERFIELDS(SugTransCalcLine);
+          PostedSTOCalcLine.INSERT(TRUE);
+        UNTIL SugTransCalcLine.NEXT = 0;
+
+      OnAfterCreateTransferOrderAfterArchiveBeforeDelete(SugTransHdr, TransHdr);
+      SugTransLine.DELETEALL;
+      SugTransCalcLine.DELETEALL;
+
+      SugTransHdr.DELETE;
+
+      IF GUIALLOWED THEN
+      ProgWindow.CLOSE;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCreateTransferOrderHeader@1240020015(VAR CurrSugTransferOrderHeader@1240020003 : Record 14000592;VAR CurrTransferOrderHeader@1240020002 : Record 5740);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCreateTransferOrderLine@1240020014(VAR CurrSugTransferOrderHeader@1240020003 : Record 14000592;VAR CurrSugTransferOrderLine@1240020002 : Record 14000593;VAR CurrTransferOrderHeader@1240020004 : Record 5740;VAR CurrTransferOrderLine@1240020000 : Record 5741);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCreateTransferOrderBeforeArchive@1240020012(VAR CurrSugTransferOrderHeader@1240020001 : Record 14000592;VAR CurrTransferOrderHeader@1240020000 : Record 5740);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCreateTransferOrderAfterArchiveBeforeDelete@1240020006(VAR CurrSugTransferOrderHeader@1240020001 : Record 14000592;VAR CurrTransferOrderHeader@1240020000 : Record 5740);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

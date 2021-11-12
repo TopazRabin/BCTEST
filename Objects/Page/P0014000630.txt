@@ -1,0 +1,974 @@
+OBJECT Page 14000630 Fast Receive Order
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/28/17;
+    Time=12:00:00 PM;
+    Version List=SE0.60;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Fast Receive Order;
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    SourceTable=Table14000609;
+    DataCaptionExpr=CaptionText;
+    PageType=Worksheet;
+    TimerUpdate=1;
+    OnOpenPage=VAR
+                 Receive2@1240030000 : Record 14000601;
+               BEGIN
+                 IF (GETFILTER("Source Type") = '') OR (GETFILTER("Source Subtype") = '') OR
+                    (GETFILTER("Source ID") = '')
+                 THEN
+                   ERROR(Text001);
+
+                 ReceiveSetup.GET;
+                 ReceiveStation.GetReceiveStation;
+                 ReceiveMgt.Initialize(ReceiveStation,ReceiveSetup);
+
+                 CLEAR(ReceiveControl);
+                 IF NOT EVALUATE(ReceiveControl."Source Type",GETFILTER("Source Type")) THEN
+                   ERROR(Text002);
+                 IF NOT EVALUATE(ReceiveControl."Source Subtype",GETFILTER("Source Subtype")) THEN
+                   ERROR(Text002);
+                 ReceiveControl."Source ID" := GETFILTER("Source ID");
+                 ReceiveControl.TransferFromSource2;
+                 CaptionText := ReceiveControl.FormatSource2 + ReceiveControl."Ship-from Name";
+
+                 ReceiveSetup.TestReceiveAllowed(ReceiveControl."Source Type",ReceiveControl."Source Subtype");
+
+                 ReceiveControl.TestReleased2(TRUE);
+
+                 ReceiveControl."Multi Document No." := ReceiveControl."Source ID";
+                 ReceiveControl."Multi Document Receive" := FALSE;
+                 UpdateReceiveLines(ReceiveControl);
+
+                 Receive2.RESET;
+                 Receive2.SETCURRENTKEY("Source Type","Source Subtype","Source ID");
+                 Receive2.SETRANGE("Source Type",ReceiveControl."Source Type");
+                 Receive2.SETRANGE("Source Subtype",ReceiveControl."Source Subtype");
+                 Receive2.SETRANGE("Source ID",ReceiveControl."Source ID");
+                 IF ReceiveSetup."Location Receiving" THEN
+                   Receive2.SETRANGE("Location Code",ReceiveStation."Location Code");
+                 OrderClosed := NOT FastReceiveLineTmp.FIND('-') AND NOT Receive2.FIND('-');
+
+                 IF ReceiveStation."Scale Inferface Code" <> '' THEN
+                   ScaleInterface.GET(ReceiveStation."Scale Inferface Code");
+                 IF (ReceiveStation."Scale Update Interval (second)" <> 0) AND
+                    (ReceiveStation."Show What During Receive" =
+                     ReceiveStation."Show What During Receive"::"Scale Weight")
+                 THEN
+                   UpdateScaleWeight;
+                 DisplayCaption := FORMAT(ReceiveStation."Show What During Receive");
+
+                 CLEAR(ShippingAgent);
+
+                 IF ReceiveStation."Show Order Comments if Exists" THEN
+                   ReceiveMgt.ViewDocumentComments(ReceiveControl,TRUE);
+
+                 IF ReceiveStation."Select Receive Bin" THEN
+                   ReceiveMgt.SelectReceiveBin(ReceiveControl);
+
+                 ReceiveMgt.CheckReceiveOpen(Receive,ReceiveControl);
+                 IF ReceiveControl."Multi Document Receive" THEN
+                   UpdateReceiveLines(ReceiveControl);
+
+                 IF ReceiveControl."Receive Open" THEN
+                   MESSAGE(Text003);
+               END;
+
+    OnClosePage=VAR
+                  Selection@1240030000 : Integer;
+                  SelectionString@1240030001 : Text[250];
+                BEGIN
+                  UpdateReceiveLines(ReceiveControl);
+
+                  IF NOT OrderClosed OR FastReceiveLineTmp.FIND('-') THEN BEGIN
+                    Selection := 0;
+                    SelectionString := '';
+                    IF ReceiveStation."Close Order Command" THEN BEGIN
+                      SelectionString := SelectionString + Text004;
+                      Selection := 1;
+                    END;
+                    IF ReceiveStation."Close Order Print Command" THEN BEGIN
+                      SelectionString := SelectionString + Text005;
+                      IF Selection = 0 THEN
+                        Selection := 2;
+                    END ELSE
+                      SelectionString := SelectionString + ',';
+
+                    IF (FastReceiveLineTmp.FIND('-') OR ReceiveSetup."Location Receiving") AND
+                       (((ReceiveControl."Source Type" = DATABASE::"Sales Header") AND
+                         (ReceiveControl."Source Subtype" = 5)) OR
+                        ((ReceiveControl."Source Type" = DATABASE::"Purchase Header") AND
+                         (ReceiveControl."Source Subtype" = 1)) OR
+                        (ReceiveControl."Source Type" = DATABASE::"Transfer Header"))
+                    THEN BEGIN
+                      Selection := 3;
+                      IF ReceiveStation."Close Order Force Command" THEN
+                        SelectionString := SelectionString + Text006
+                      ELSE
+                        SelectionString := SelectionString + ',';
+                      IF ReceiveStation."Close Order Print Force Cmd." THEN BEGIN
+                        SelectionString := SelectionString + Text007;
+                        IF Selection < 3 THEN
+                          Selection := 4;
+                      END ELSE
+                        SelectionString := SelectionString + ',';
+                    END ELSE
+                      SelectionString := SelectionString + ',,';
+
+                    Selection := STRMENU(SelectionString,Selection);
+
+                    CASE Selection OF
+                      1:
+                        BEGIN
+                          ReceiveStation.TESTFIELD("Close Order Command");
+                          CloseOrder(FALSE,FALSE);
+                        END;
+                      2:
+                        BEGIN
+                          ReceiveStation.TESTFIELD("Close Order Print Command");
+                          CloseOrder(TRUE,FALSE);
+                        END;
+                      3:
+                        BEGIN
+                          ReceiveStation.TESTFIELD("Close Order Force Command");
+                          CloseOrder(FALSE,TRUE);
+                        END;
+                      4:
+                        BEGIN
+                          ReceiveStation.TESTFIELD("Close Order Print Force Cmd.");
+                          CloseOrder(TRUE,TRUE);
+                        END;
+                    END;
+                  END;
+                END;
+
+    OnFindRecord=BEGIN
+                   FastReceiveLineTmp := Rec;
+                   IF NOT FastReceiveLineTmp.FIND(Which) THEN
+                     EXIT(FALSE);
+                   Rec := FastReceiveLineTmp;
+                   EXIT(TRUE);
+                 END;
+
+    OnNextRecord=VAR
+                   CurrentSteps@1240030001 : Integer;
+                 BEGIN
+                   FastReceiveLineTmp := Rec;
+                   CurrentSteps := FastReceiveLineTmp.NEXT(Steps);
+                   IF CurrentSteps <> 0 THEN
+                     Rec := FastReceiveLineTmp;
+                   EXIT(CurrentSteps);
+                 END;
+
+    OnModifyRecord=BEGIN
+                     IF "Qty. to Receive (Base)" <> xRec."Qty. to Receive (Base)" THEN BEGIN
+                       TotalNetWeight :=
+                         TotalNetWeight + "Net Weight" * ("Qty. to Receive (Base)" - xRec."Qty. to Receive (Base)");
+                       TotalGrossWeight :=
+                         TotalGrossWeight + "Gross Weight" * ("Qty. to Receive (Base)" - xRec."Qty. to Receive (Base)");
+                       TotalDimWeight :=
+                         TotalDimWeight + "Dimmed Weight" * ("Qty. to Receive (Base)" - xRec."Qty. to Receive (Base)");
+                       TotalVolume :=
+                         TotalVolume + "Unit Volume" * ("Qty. to Receive (Base)" - xRec."Qty. to Receive (Base)");
+
+                       UpdateDisplayValue;
+                     END;
+
+                     FastReceiveLineTmp := Rec;
+                     FastReceiveLineTmp.MODIFY;
+                     EXIT(FALSE);
+                   END;
+
+    ActionList=ACTIONS
+    {
+      { 1900000003;0 ;ActionContainer;
+                      ActionContainerType=RelatedInformation }
+      { 20      ;1   ;ActionGroup;
+                      CaptionML=ENU=O&rder }
+      { 61      ;2   ;Action    ;
+                      ShortCutKey=Shift+F7;
+                      CaptionML=ENU=Card;
+                      Image=EditLines;
+                      OnAction=BEGIN
+                                 ReceiveControl.ViewSourceDocument2;
+
+                                 UpdateReceiveLines(ReceiveControl);
+                               END;
+                                }
+      { 21      ;2   ;Action    ;
+                      ShortCutKey=Ctrl+F7;
+                      CaptionML=ENU=&Receives;
+                      Promoted=Yes;
+                      Image=ItemTracing;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 Receive2@1240030001 : Record 14000601;
+                               BEGIN
+                                 Receive2.RESET;
+                                 Receive2.SETCURRENTKEY("Source Type","Source Subtype","Source ID");
+                                 Receive2.SETRANGE("Source Type",ReceiveControl."Source Type");
+                                 Receive2.SETRANGE("Source Subtype",ReceiveControl."Source Subtype");
+                                 IF ReceiveControl."Multi Document Receive" THEN
+                                   Receive2.SETFILTER("Source ID",ReceiveControl."Multi Document No.")
+                                 ELSE
+                                   Receive2.SETRANGE("Source ID",ReceiveControl."Source ID");
+                                 PAGE.RUNMODAL(0,Receive2);
+
+                                 UpdateReceiveLines(ReceiveControl);
+                               END;
+                                }
+      { 1900000004;0 ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 16      ;1   ;ActionGroup;
+                      CaptionML=ENU=F&unctions }
+      { 17      ;2   ;Action    ;
+                      CaptionML=ENU=Update;
+                      OnAction=BEGIN
+                                 UpdateReceiveLines(ReceiveControl);
+                               END;
+                                }
+      { 22      ;2   ;Action    ;
+                      CaptionML=ENU=Receiving &Status;
+                      Promoted=Yes;
+                      Image=Status;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ReceiveMgt.ReceiveStatus(ReceiveControl);
+                               END;
+                                }
+      { 46      ;2   ;ActionGroup;
+                      CaptionML=ENU=&Print }
+      { 47      ;3   ;Action    ;
+                      CaptionML=ENU=&Std. Receive Label;
+                      OnAction=VAR
+                                 Receive2@1240030001 : Record 14000601;
+                               BEGIN
+                                 ReceiveStation.TESTFIELD("Print Std. Receive Labels Cmd.");
+
+                                 Receive2.RESET;
+                                 Receive2.SETCURRENTKEY("Source Type","Source Subtype","Source ID");
+                                 Receive2.SETRANGE("Source Type",ReceiveControl."Source Type");
+                                 Receive2.SETRANGE("Source Subtype",ReceiveControl."Source Subtype");
+                                 IF ReceiveControl."Multi Document Receive" THEN
+                                   Receive2.SETFILTER("Source ID",ReceiveControl."Multi Document No.")
+                                 ELSE
+                                   Receive2.SETRANGE("Source ID",ReceiveControl."Source ID");
+                                 IF NOT Receive2.FIND('+') THEN
+                                   ERROR(Text008);
+
+                                 ReceiveMgt.PrintStdReceiveLabel(Receive2);
+                               END;
+                                }
+      { 1240030001;3 ;Action    ;
+                      CaptionML=ENU=Print &Item Label;
+                      OnAction=VAR
+                                 ReceiveLine@1240030000 : Record 14000602;
+                               BEGIN
+                                 ReceiveStation.TESTFIELD("Print Item Label Command");
+
+                                 Receive.TESTFIELD("No.");
+                                 ReceiveLine.RESET;
+                                 ReceiveLine.SETRANGE("Receive No.",Receive."No.");
+                                 IF ReceiveLine.FIND('-') THEN
+                                   REPEAT
+                                     ReceiveMgt.PrintItemLabel(ReceiveLine);
+                                   UNTIL ReceiveLine.NEXT = 0;
+                               END;
+                                }
+      { 35      ;2   ;ActionGroup;
+                      CaptionML=ENU=R&eceive }
+      { 18      ;3   ;Action    ;
+                      CaptionML=ENU=Create Receive;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Close Receive Command");
+
+                                 CreateReceive(FALSE);
+                               END;
+                                }
+      { 19      ;3   ;Action    ;
+                      CaptionML=ENU=Create Receive Print;
+                      Promoted=Yes;
+                      Image=Print;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Close Receive Print Command");
+
+                                 CreateReceive(TRUE);
+                               END;
+                                }
+      { 50      ;3   ;Action    ;
+                      CaptionML=ENU=Receive &All;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Receive All Command");
+                                 ReceiveStation.TESTFIELD("Close Receive Command");
+
+                                 ReceiveAll(FALSE);
+                               END;
+                                }
+      { 51      ;3   ;Action    ;
+                      CaptionML=ENU=Receive &All Print;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Receive All Command");
+                                 ReceiveStation.TESTFIELD("Close Receive Print Command");
+
+                                 ReceiveAll(TRUE);
+                               END;
+                                }
+      { 38      ;3   ;Action    ;
+                      CaptionML=ENU=&Delete All Receives;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Delete All Receives Command");
+
+                                 ReceiveMgt.DeleteAllReceives(ReceiveControl);
+
+                                 OrderClosed := FALSE;
+
+                                 UpdateReceiveLines(ReceiveControl);
+
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 40      ;3   ;Action    ;
+                      CaptionML=ENU=Set &Total Receives;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Total Receive Count Command");
+
+                                 ReceiveMgt.ChangeTotalReceiveCount(Receive,ReceiveControl);
+                               END;
+                                }
+      { 1240030002;3 ;Action    ;
+                      CaptionML=ENU=Receive &Package;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Receive Package Command");
+                                 ReceiveStation.TESTFIELD("Close Receive Command");
+
+                                 ReceivePackage(FALSE);
+                               END;
+                                }
+      { 1240030003;3 ;Action    ;
+                      CaptionML=ENU=Receive &Package Print;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Receive Package Command");
+                                 ReceiveStation.TESTFIELD("Close Receive Print Command");
+
+                                 ReceivePackage(TRUE);
+                               END;
+                                }
+      { 43      ;3   ;Action    ;
+                      CaptionML=ENU=Copy Last Receive;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Copy Last Receive Command");
+
+                                 CopyLastReceive(FALSE);
+                               END;
+                                }
+      { 44      ;3   ;Action    ;
+                      CaptionML=ENU=Copy Last Receive Print;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Copy Last Receive Print Cmd.");
+
+                                 CopyLastReceive(TRUE);
+                               END;
+                                }
+      { 80      ;3   ;Action    ;
+                      CaptionML=ENU=Receive &remaining;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Receive Remaining Command");
+                                 ReceiveStation.TESTFIELD("Close Receive Command");
+
+                                 ReceiveRemaining(FALSE);
+                               END;
+                                }
+      { 81      ;3   ;Action    ;
+                      CaptionML=ENU=Receive &remaining Print;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Receive Remaining Command");
+                                 ReceiveStation.TESTFIELD("Close Receive Print Command");
+
+                                 ReceiveRemaining(TRUE);
+                               END;
+                                }
+      { 69      ;2   ;ActionGroup;
+                      CaptionML=ENU=A&dd Receives }
+      { 73      ;3   ;Action    ;
+                      CaptionML=ENU=&All Receives;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Add All Receives Command");
+                                 ReceiveStation.TESTFIELD("Close Receive Command");
+
+                                 AddAllReceive(FALSE);
+                               END;
+                                }
+      { 70      ;3   ;Action    ;
+                      CaptionML=ENU=&All Receives Print;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Add All Receives Command");
+                                 ReceiveStation.TESTFIELD("Close Receive Print Command");
+
+                                 AddAllReceive(TRUE);
+                               END;
+                                }
+      { 71      ;3   ;Action    ;
+                      CaptionML=ENU=&Multiple Receives;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Add Multiple Receives Command");
+                                 ReceiveStation.TESTFIELD("Close Receive Command");
+
+                                 AddMultipleReceives(FALSE);
+                               END;
+                                }
+      { 74      ;3   ;Action    ;
+                      CaptionML=ENU=&Multiple Receives Print;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Add Multiple Receives Command");
+                                 ReceiveStation.TESTFIELD("Close Receive Print Command");
+
+                                 AddMultipleReceives(TRUE);
+                               END;
+                                }
+      { 72      ;3   ;Action    ;
+                      CaptionML=ENU=&Selected Receives;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Add Selected Receives Command");
+                                 ReceiveStation.TESTFIELD("Close Receive Command");
+
+                                 AddSelectedReceives(FALSE);
+                               END;
+                                }
+      { 75      ;3   ;Action    ;
+                      CaptionML=ENU=&Selected Receives Print;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Add Selected Receives Command");
+                                 ReceiveStation.TESTFIELD("Close Receive Print Command");
+
+                                 AddSelectedReceives(TRUE);
+                               END;
+                                }
+      { 24      ;2   ;ActionGroup;
+                      CaptionML=ENU=De&fault }
+      { 39      ;3   ;Action    ;
+                      CaptionML=ENU=Option;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Default F3 Option");
+
+                                 DefaultOption(ReceiveStation."Default F3 Option");
+                               END;
+                                }
+      { 45      ;3   ;Action    ;
+                      ShortCutKey=Shift+F3;
+                      CaptionML=ENU=Shift Option;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Default Shift+F3 Option");
+
+                                 DefaultOption(ReceiveStation."Default Shift+F3 Option");
+                               END;
+                                }
+      { 48      ;3   ;Action    ;
+                      ShortCutKey=Ctrl+F11;
+                      CaptionML=ENU=Ctrl Otion;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Default Ctrl+F3 Option");
+
+                                 DefaultOption(ReceiveStation."Default Ctrl+F3 Option");
+                               END;
+                                }
+      { 49      ;3   ;Action    ;
+                      ShortCutKey=Alt+F3;
+                      CaptionML=ENU=Alt Option;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Default Alt+F3 Option");
+
+                                 DefaultOption(ReceiveStation."Default Alt+F3 Option");
+                               END;
+                                }
+      { 34      ;2   ;ActionGroup;
+                      CaptionML=ENU=O&rder }
+      { 63      ;3   ;Action    ;
+                      CaptionML=ENU=Multi Document;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Multi Document Command");
+
+                                 IF NOT ReceiveMgt.MultiDocReceive(ReceiveControl,FALSE) THEN
+                                   ERROR(ReceiveControl."Error Message");
+
+                                 UpdateReceiveLines(ReceiveControl);
+
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 23      ;3   ;Action    ;
+                      CaptionML=ENU=Multi Document &Lookup;
+                      Promoted=Yes;
+                      Image=View;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Multi Document Lookup Cmd");
+
+                                 IF NOT ReceiveMgt.MultiDocReceive(ReceiveControl,TRUE) THEN
+                                   ERROR(ReceiveControl."Error Message");
+
+                                 UpdateReceiveLines(ReceiveControl);
+
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 25      ;3   ;Action    ;
+                      CaptionML=ENU=Close Order;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Close Order Command");
+
+                                 CloseOrder(FALSE,FALSE);
+                               END;
+                                }
+      { 33      ;3   ;Action    ;
+                      CaptionML=ENU=Close Order Print;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Close Order Print Command");
+
+                                 CloseOrder(TRUE,FALSE);
+                               END;
+                                }
+      { 36      ;3   ;Action    ;
+                      CaptionML=ENU=Close Order Force;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Close Order Force Command");
+
+                                 CloseOrder(FALSE,TRUE);
+                               END;
+                                }
+      { 37      ;3   ;Action    ;
+                      CaptionML=ENU=Close Order Print Force;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Close Order Print Force Cmd.");
+
+                                 CloseOrder(TRUE,TRUE);
+                               END;
+                                }
+      { 82      ;3   ;Action    ;
+                      CaptionML=ENU=Reset Qty. to Receive;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Reset Order Quantity Command");
+
+                                 ResetPurchOrderQuantity;
+                               END;
+                                }
+      { 1240030005;3 ;Action    ;
+                      CaptionML=ENU=Select Receive &Bin;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("Select Receive Bin");
+
+                                 IF NOT ReceiveMgt.SelectReceiveBin(ReceiveControl) THEN
+                                   ERROR(ReceiveControl."Error Message");
+                               END;
+                                }
+      { 1240030000;3 ;Action    ;
+                      CaptionML=ENU=View &Warehouse Receipt Lines;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("View Whse. Receipt Lines Cmd.");
+
+                                 IF NOT ReceiveMgt.ViewWarehouseReceiptLines(ReceiveControl) THEN
+                                   ERROR(ReceiveControl."Error Message");
+
+                                 UpdateReceiveLines(ReceiveControl);
+                               END;
+                                }
+      { 1240030004;3 ;Action    ;
+                      CaptionML=ENU=View All Item Actions;
+                      OnAction=BEGIN
+                                 ReceiveStation.TESTFIELD("View All Item Actions Command");
+
+                                 IF NOT ReceiveMgt.ViewAllItemActions(ReceiveControl) THEN
+                                   ERROR(ReceiveControl."Error Message");
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1900000001;0;Container;
+                ContainerType=ContentArea }
+
+    { 65  ;1   ;Field     ;
+                CaptionML=ENU=No.;
+                SourceExpr=ReceiveControl."Multi Document No.";
+                Editable=FALSE }
+
+    { 59  ;1   ;Field     ;
+                CaptionML=ENU=Buy-from Vendor No.;
+                SourceExpr=ReceiveControl."Ship-from No.";
+                Editable=FALSE }
+
+    { 57  ;1   ;Field     ;
+                CaptionML=ENU=Buy-from Vendor Name;
+                SourceExpr=ReceiveControl."Ship-from Name";
+                Editable=FALSE }
+
+    { 64  ;1   ;Field     ;
+                Name=DisplayValue;
+                CaptionML=ENU=Scale Weight;
+                SourceExpr=DisplayValue;
+                CaptionClass=FORMAT (DisplayCaption);
+                Editable=FALSE }
+
+    { 41  ;1   ;Field     ;
+                CaptionML=ENU=Receive Status;
+                SourceExpr=ReceiveControl.ReceiveStatus;
+                Editable=FALSE }
+
+    { 1   ;1   ;Group     ;
+                GroupType=Repeater }
+
+    { 2   ;2   ;Field     ;
+                SourceExpr=Type }
+
+    { 4   ;2   ;Field     ;
+                SourceExpr="No." }
+
+    { 6   ;2   ;Field     ;
+                SourceExpr="Variant Code";
+                Visible=FALSE }
+
+    { 8   ;2   ;Field     ;
+                SourceExpr=Description }
+
+    { 10  ;2   ;Field     ;
+                SourceExpr="Qty. on Order" }
+
+    { 31  ;2   ;Field     ;
+                SourceExpr="Remaining Qty. to Receive" }
+
+    { 12  ;2   ;Field     ;
+                SourceExpr="Unit of Measure Code" }
+
+    { 29  ;2   ;Field     ;
+                SourceExpr="Qty. to Receive" }
+
+    { 14  ;2   ;Field     ;
+                SourceExpr="Qty. to Rec. Unit of Meas Code" }
+
+  }
+  CODE
+  {
+    VAR
+      FastReceiveLineTmp@1240030000 : TEMPORARY Record 14000609;
+      Receive@1240030003 : Record 14000601;
+      ReceiveSetup@1240030004 : Record 14000607;
+      ReceiveStation@1240030005 : Record 14000608;
+      ScaleInterface@1240030006 : Record 14000746;
+      ShippingAgent@1240030007 : Record 291;
+      ReceiveControl@1240030009 : Record 14000611;
+      Receiving@1240030010 : Codeunit 14000601;
+      ReceiveMgt@1240030011 : Codeunit 14000602;
+      ScalesComm@1240030012 : Codeunit 37031002;
+      OrderClosed@1240030013 : Boolean;
+      TimerCount@1240030014 : Integer;
+      CaptionText@1240030015 : Text[100];
+      TotalNetWeight@1240030016 : Decimal;
+      TotalGrossWeight@1240030017 : Decimal;
+      TotalDimWeight@1240030018 : Decimal;
+      TotalVolume@1240030019 : Decimal;
+      DisplayValue@1240030020 : Decimal;
+      DisplayCaption@1240030021 : Text[30];
+      Text001@1001 : TextConst 'ENU=Document must be filtered.';
+      Text002@1002 : TextConst 'ENU=Docuement must be filtered.';
+      Text003@1003 : TextConst 'ENU=Receive(s) are already open, please close those Receive(s) before receiving new.';
+      Text004@1004 : TextConst 'ENU=Close Order';
+      Text005@1005 : TextConst 'ENU=,Close Order and Print';
+      Text006@1006 : TextConst 'ENU=,Close Order Force';
+      Text007@1007 : TextConst 'ENU=,Close Order Force and Print';
+      Text008@1008 : TextConst 'ENU=No Last Receive.';
+      Text009@1009 : TextConst 'ENU=Nothing to Receive.';
+      Text010@1010 : TextConst 'ENU=No Receives added.';
+      Text011@1011 : TextConst 'ENU=Required code missing.';
+      Text012@1012 : TextConst 'ENU=Wrong Default Option';
+
+    PROCEDURE UpdateReceiveLines@1(VAR ReceiveControl@1240030000 : Record 14000611);
+    BEGIN
+      TotalNetWeight := 0;
+      TotalGrossWeight := 0;
+      TotalDimWeight := 0;
+      TotalVolume := 0;
+      UpdateDisplayValue;
+
+      ReceiveMgt.UpdateFastReceiveLines(ReceiveControl,FastReceiveLineTmp,FALSE,FALSE,FALSE,0,'','');
+
+      CurrPage.UPDATE(FALSE);
+    END;
+
+    PROCEDURE CreateReceive@2(PrintLabel@1240030000 : Boolean);
+    VAR
+      FastReceiveLine@1240030001 : Record 14000609;
+    BEGIN
+      FastReceiveLineTmp.RESET;
+      FastReceiveLineTmp.SETFILTER("Qty. to Receive",'<>0');
+      IF NOT FastReceiveLineTmp.FIND('-') THEN
+        ERROR(Text009);
+
+      IF NOT ReceiveControl."Receive Open" THEN
+        IF NOT ReceiveMgt.CreateReceive(Receive,ReceiveControl) THEN
+          ERROR(ReceiveControl."Error Message");
+
+      REPEAT
+        ReceiveControl."Input Type" := FastReceiveLineTmp.Type;
+        ReceiveControl."Input No." := FastReceiveLineTmp."No.";
+        ReceiveControl."Input Serial Number" := '';
+        ReceiveControl."Input Unit of Measure Code" :=
+          FastReceiveLineTmp."Qty. to Rec. Unit of Meas Code";
+        ReceiveControl."Input Variant Code" := FastReceiveLineTmp."Variant Code";
+        ReceiveControl."Receive Serial Number" := FastReceiveLineTmp."Receive Serial Number";
+        ReceiveControl."Receive Serial Number Late" := FALSE;
+        ReceiveControl."Input Lot Number" := '';
+        ReceiveControl."Receive Lot Number" := FastReceiveLineTmp."Receive Lot Number";
+        ReceiveControl."Receive Lot Number Late" := FALSE;
+        ReceiveControl."Show Serial No. Info. Card" := FastReceiveLineTmp."Show Serial No. Info. Card";
+        ReceiveControl."Show Lot No. Info. Card" := FastReceiveLineTmp."Show Lot No. Info. Card";
+        ReceiveControl."Auto Create Serial No." := FastReceiveLineTmp."Auto Create Serial No.";
+        ReceiveControl."Auto Create Lot No." := FastReceiveLineTmp."Auto Create Lot No.";
+
+        // This code is required to solve a problem with forms using Temporary tables
+        // The OnFindRec run after returning from the function call if not using the debugger
+        FastReceiveLine := FastReceiveLineTmp;
+        IF NOT ReceiveMgt.CreateReceiveLine(
+                 Receive,ReceiveControl,
+                 FastReceiveLineTmp."Unit of Measure Code",FastReceiveLineTmp.Quantity,
+                 FastReceiveLineTmp."Qty. to Receive")
+        THEN
+          ERROR(ReceiveControl."Error Message");
+        FastReceiveLineTmp := FastReceiveLine;
+      UNTIL FastReceiveLineTmp.NEXT = 0;
+
+      COMMIT;
+
+      IF NOT ReceiveMgt.CloseReceive(Receive,ShippingAgent,ScaleInterface,ReceiveControl,PrintLabel)
+      THEN
+        ERROR(ReceiveControl."Error Message");
+
+      UpdateReceiveLines(ReceiveControl);
+
+      CurrPage.UPDATE(FALSE);
+    END;
+
+    PROCEDURE CopyLastReceive@3(PrintLabel@1240030000 : Boolean);
+    BEGIN
+      IF NOT ReceiveMgt.CopyLastReceive(Receive,ReceiveControl,PrintLabel)
+      THEN
+        ERROR(ReceiveControl."Error Message");
+
+      UpdateReceiveLines(ReceiveControl);
+
+      CurrPage.UPDATE(FALSE);
+    END;
+
+    PROCEDURE ReceiveAll@5(PrintLabel@1240030000 : Boolean);
+    BEGIN
+      IF NOT ReceiveMgt.CreateShipComplete(Receive,ReceiveControl) THEN
+        ERROR(ReceiveControl."Error Message");
+
+
+      IF NOT ReceiveMgt.CloseReceive(
+               Receive,ShippingAgent,ScaleInterface,ReceiveControl,PrintLabel)
+      THEN
+        ERROR(ReceiveControl."Error Message");
+
+      UpdateReceiveLines(ReceiveControl);
+
+      CurrPage.UPDATE(FALSE);
+    END;
+
+    PROCEDURE ReceiveRemaining@11(PrintLabel@1240030000 : Boolean);
+    BEGIN
+      IF NOT ReceiveMgt.ReceiveRemaining(Receive,ReceiveControl) THEN
+        ERROR(ReceiveControl."Error Message");
+
+      IF NOT ReceiveMgt.CloseReceive(
+               Receive,ShippingAgent,ScaleInterface,ReceiveControl,PrintLabel)
+      THEN
+        ERROR(ReceiveControl."Error Message");
+
+      UpdateReceiveLines(ReceiveControl);
+
+      CurrPage.UPDATE(FALSE);
+    END;
+
+    PROCEDURE CloseOrder@4(Print@1240030000 : Boolean;Force@1240030001 : Boolean);
+    BEGIN
+      IF NOT ReceiveMgt.CloseOrder(ShippingAgent,ReceiveControl,Print,Force) THEN
+        ERROR(ReceiveControl."Error Message");
+
+      OrderClosed := TRUE;
+
+      CurrPage.CLOSE;
+    END;
+
+    PROCEDURE UpdateScaleWeight@7();
+    BEGIN
+      IF ReceiveStation."Scale Inferface Code" <> '' THEN
+        IF ScalesComm.GetScaleWeight(ScaleInterface,ReceiveControl."Scale Weight",TRUE) THEN
+          UpdateDisplayValue;
+    END;
+
+    PROCEDURE UpdateDisplayValue@41();
+    BEGIN
+      CASE ReceiveStation."Show What During Receive" OF
+        ReceiveStation."Show What During Receive"::"Net Weight":
+          DisplayValue := TotalNetWeight;
+        ReceiveStation."Show What During Receive"::"Gross Weight":
+          DisplayValue := TotalGrossWeight;
+        ReceiveStation."Show What During Receive"::"Dimmed Weight":
+          DisplayValue := TotalDimWeight;
+        ReceiveStation."Show What During Receive"::Volume:
+          DisplayValue := TotalVolume;
+        ReceiveStation."Show What During Receive"::"Scale Weight":
+          DisplayValue := ReceiveControl."Scale Weight";
+      END;
+    END;
+
+    PROCEDURE AddAllReceive@8(PrintLabel@1240030000 : Boolean);
+    BEGIN
+      ReceiveMgt.AddAllReceivesToReceive(Receive,ReceiveControl);
+
+      IF ReceiveControl."Receive Open" THEN BEGIN
+        IF NOT ReceiveMgt.CloseReceive(
+                 Receive,ShippingAgent,ScaleInterface,ReceiveControl,PrintLabel)
+        THEN
+          ERROR(ReceiveControl."Error Message");
+      END ELSE
+        ERROR(Text010);
+    END;
+
+    PROCEDURE AddMultipleReceives@9(PrintLabel@1240030000 : Boolean);
+    BEGIN
+      IF NOT ReceiveMgt.AddMultipleReceivesToReceive(Receive,ReceiveControl) THEN
+        ERROR(ReceiveControl."Error Message");
+
+      IF ReceiveControl."Receive Open" THEN BEGIN
+        IF NOT ReceiveMgt.CloseReceive(
+                 Receive,ShippingAgent,ScaleInterface,ReceiveControl,PrintLabel)
+        THEN
+          ERROR(ReceiveControl."Error Message");
+      END ELSE
+        ERROR(Text010);
+    END;
+
+    PROCEDURE AddSelectedReceives@10(PrintLabel@1240030000 : Boolean);
+    BEGIN
+      ReceiveMgt.AddSelectedReceivesToReceive(Receive,ReceiveControl);
+
+      IF ReceiveControl."Receive Open" THEN BEGIN
+        IF NOT ReceiveMgt.CloseReceive(
+                 Receive,ShippingAgent,ScaleInterface,ReceiveControl,PrintLabel)
+        THEN
+          ERROR(ReceiveControl."Error Message");
+      END ELSE
+        ERROR(Text010);
+    END;
+
+    PROCEDURE ResetPurchOrderQuantity@12();
+    BEGIN
+      ReceiveMgt.ResetQtyToReceive(ReceiveControl);
+
+      UpdateReceiveLines(ReceiveControl);
+
+      CurrPage.UPDATE(FALSE);
+    END;
+
+    PROCEDURE DefaultOption@14(DefaultOption@1240030000 : Integer);
+    BEGIN
+      CASE DefaultOption OF
+        ReceiveStation."Default F3 Option"::"Create Receive":
+          BEGIN
+            ReceiveStation.TESTFIELD("Close Receive Command");
+            CreateReceive(FALSE);
+          END;
+        ReceiveStation."Default F3 Option"::"Create Receive Print":
+          BEGIN
+            ReceiveStation.TESTFIELD("Close Receive Print Command");
+            CreateReceive(TRUE);
+          END;
+        ReceiveStation."Default F3 Option"::"Receive All":
+          BEGIN
+            ReceiveStation.TESTFIELD("Receive All Command");
+            ReceiveStation.TESTFIELD("Close Receive Command");
+
+            ReceiveAll(FALSE);
+          END;
+        ReceiveStation."Default F3 Option"::"Receive All Print":
+          BEGIN
+            ReceiveStation.TESTFIELD("Receive All Command");
+            ReceiveStation.TESTFIELD("Close Receive Print Command");
+
+            ReceiveAll(TRUE);
+          END;
+        ReceiveStation."Default F3 Option"::"Receive Remaining":
+          BEGIN
+            ReceiveStation.TESTFIELD("Receive Remaining Command");
+            ReceiveStation.TESTFIELD("Close Receive Command");
+
+            ReceiveRemaining(FALSE);
+          END;
+        ReceiveStation."Default F3 Option"::"Receive Remaining Print":
+          BEGIN
+            ReceiveStation.TESTFIELD("Receive Remaining Command");
+            ReceiveStation.TESTFIELD("Close Receive Print Command");
+
+            ReceiveRemaining(TRUE);
+          END;
+        ReceiveStation."Default F3 Option"::"Custom 1":
+          BEGIN
+            ERROR(Text011);
+          END;
+        ReceiveStation."Default F3 Option"::"Custom 2":
+          BEGIN
+            ERROR(Text011);
+          END;
+        ReceiveStation."Default F3 Option"::"Custom 3":
+          BEGIN
+            ERROR(Text011);
+          END;
+        ELSE
+          ERROR(Text012);
+      END;
+    END;
+
+    PROCEDURE ReceivePackage@1240030000(PrintLabel@1240030000 : Boolean);
+    BEGIN
+      IF NOT ReceiveMgt.ReceivePackage(Receive,ReceiveControl,'') THEN
+        ERROR(ReceiveControl."Error Message");
+
+      IF ReceiveControl."Receive Open" THEN BEGIN
+        IF NOT ReceiveMgt.CloseReceive(
+                 Receive,ShippingAgent,ScaleInterface,ReceiveControl,PrintLabel)
+        THEN
+          ERROR(ReceiveControl."Error Message");
+      END ELSE
+        ERROR(Text010);
+
+      UpdateReceiveLines(ReceiveControl);
+
+      CurrPage.UPDATE(FALSE);
+    END;
+
+    LOCAL PROCEDURE OnTimer@19019642();
+    BEGIN
+      IF (ReceiveStation."Scale Update Interval (second)" = 0) OR
+         (ReceiveStation."Show What During Receive" <>
+          ReceiveStation."Show What During Receive"::"Scale Weight")
+      THEN
+        EXIT;
+
+      TimerCount := TimerCount + 1;
+      IF TimerCount > ReceiveStation."Scale Update Interval (second)" THEN BEGIN
+        UpdateScaleWeight;
+        TimerCount := 0;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

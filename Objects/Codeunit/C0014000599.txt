@@ -1,0 +1,942 @@
+OBJECT Codeunit 14000599 DP Event Subscribers
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/24/21;
+    Time=[ 7:56:12 AM];
+    Modified=Yes;
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 32=rm,
+                TableData 37=rm,
+                TableData 39=rm,
+                TableData 83=rm,
+                TableData 110=rm,
+                TableData 111=rm,
+                TableData 112=rm,
+                TableData 113=rm,
+                TableData 115=rm,
+                TableData 120=rm,
+                TableData 121=rm,
+                TableData 122=rm,
+                TableData 123=rm,
+                TableData 242=r,
+                TableData 14000551=r,
+                TableData 14000591=rimd;
+    SingleInstance=Yes;
+    Subtype=Normal;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InvMgtSetup@1001 : Record 14000551;
+      OldProdOrder@1240020000 : TEMPORARY Record 5405;
+
+    [EventSubscriber(Codeunit,22,OnAfterInitItemLedgEntry,"",Skip,Skip)]
+    LOCAL PROCEDURE CodeUnit22_OnAfterInitItemLedgerEntry@1240020006(VAR NewItemLedgEntry@1240020000 : Record 32;ItemJournalLine@1240020001 : Record 83);
+    VAR
+      SourceCodeSetup@1240020002 : Record 242;
+      Bypass@1240020003 : Boolean;
+    BEGIN
+      IF ItemJournalLine.Correction THEN
+        EXIT;
+
+      CheckUserPermission;
+
+      IF NOT InvMgtSetup.GET() THEN
+        EXIT;
+
+      IF ItemJournalLine."Item No." = '' THEN
+        EXIT;
+
+      NewItemLedgEntry."Ship-to Code" := ItemJournalLine."Ship-to Code";
+      NewItemLedgEntry."Posted at Date" := WORKDATE;
+      IF ItemJournalLine."Requested Delivery Date" <> 0D THEN
+        NewItemLedgEntry."Requested Delivery Date" := ItemJournalLine."Requested Delivery Date"
+      ELSE
+        NewItemLedgEntry."Requested Delivery Date" := ItemJournalLine."Posting Date";
+      IF ItemJournalLine."Shipment Date" <> 0D THEN
+        NewItemLedgEntry."Shipment Date" := ItemJournalLine."Shipment Date"
+      ELSE
+        NewItemLedgEntry."Shipment Date" := ItemJournalLine."Posting Date";
+      NewItemLedgEntry."First Shipment" := ItemJournalLine."First Shipment";
+      NewItemLedgEntry."Exclude from Usage" := ItemJournalLine."Exclude from Usage";
+      IF NOT NewItemLedgEntry.Positive THEN
+        IF ItemJournalLine."First Shipment" THEN
+          NewItemLedgEntry."Usage Hit" := 1;
+      //NewItemLedgEntry."Orig. Order Qty. (Base)" := ItemJournalLine."Orig. Order Qty. (Base)";
+      //NewItemLedgEntry."Sales Order No." := ItemJournalLine."Sales Order No.";
+      //NewItemLedgEntry."Sales Order Line No." := ItemJournalLine."Sales Order Line No.";
+
+      // if not setup we cannot post due to the consumption entries
+      CASE ItemJournalLine."Entry Type" OF
+        ItemJournalLine."Entry Type"::Sale:
+        BEGIN
+          // Sales journals
+          SourceCodeSetup.GET;
+          IF (ItemJournalLine."Source Code" = SourceCodeSetup."Item Journal") THEN BEGIN
+            IF NOT NewItemLedgEntry.Positive THEN BEGIN
+              NewItemLedgEntry."First Shipment" := TRUE;
+              NewItemLedgEntry."Usage Hit" := 1;
+            END;
+          END;
+        END;
+        ItemJournalLine."Entry Type"::Consumption, ItemJournalLine."Entry Type"::"Assembly Consumption":
+        BEGIN
+          IF InvMgtSetup."Consider Comp. Cons. as Usage" THEN BEGIN
+            IF NOT NewItemLedgEntry.Positive THEN BEGIN
+              NewItemLedgEntry."First Shipment" := TRUE;
+              NewItemLedgEntry."Usage Hit" := 1;
+            END;
+          END ELSE BEGIN
+            IF InvMgtSetup."Include Comp. Cons. at BOM" THEN BEGIN
+              Bypass := FALSE;
+              OnInitItemLedgerEntryIncludeAsSalesForConsumption(InvMgtSetup, NewItemLedgEntry, ItemJournalLine, Bypass);
+              IF NOT Bypass THEN BEGIN
+                IF (ItemJournalLine."Entry Type" = ItemJournalLine."Entry Type"::Consumption) THEN BEGIN
+                  NewItemLedgEntry."Include in Sales Usage" := GetIncludeAsSalesForProduction(NewItemLedgEntry, ItemJournalLine);
+                END;
+                IF (ItemJournalLine."Entry Type" = ItemJournalLine."Entry Type"::"Assembly Consumption") THEN BEGIN
+                  NewItemLedgEntry."Include in Sales Usage" := GetIncludeAsSalesForAssembly(NewItemLedgEntry, ItemJournalLine);
+                END;
+              END;
+            END;
+          END;
+        END;
+        ItemJournalLine."Entry Type"::"Negative Adjmt.":
+        BEGIN
+          IF InvMgtSetup."Consider Neg. Adj. as Usage" THEN BEGIN
+            OnInitItemLedgerEntryIncludeAsSalesForNegativeAdjustments(NewItemLedgEntry, ItemJournalLine);
+            IF NewItemLedgEntry."Include in Sales Usage" THEN BEGIN
+              NewItemLedgEntry."First Shipment" := TRUE;
+              NewItemLedgEntry."Usage Hit" := 1;
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,80,OnBeforePostCommitSalesDoc,"",Skip,Skip)]
+    LOCAL PROCEDURE Codeunit80_OnBeforePostCommitSalesDoc@29(VAR SalesHeader@1000 : Record 36;VAR GenJnlPostLine@1001 : Codeunit 12;PreviewMode@1002 : Boolean;ModifyHeader@1003 : Boolean);
+    VAR
+      AFPSalesRecord@1004 : Record 14000591;
+      SalesLine@1005 : Record 37;
+      PostedDate@1006 : Date;
+      PostedTime@1007 : Time;
+    BEGIN
+      CheckUserPermission;
+      // Shipments from orders only.  Table may be backfilled historically
+      IF (SalesHeader."Document Type" <> SalesHeader."Document Type"::Order) OR
+         (NOT SalesHeader.Ship) OR
+         (NOT InvMgtSetup.GET)
+         THEN
+        EXIT;
+
+      // sales performance
+      IF NOT InvMgtSetup."Record Sales Performance" THEN
+        EXIT;
+
+      IF NOT AFPSalesRecord.WRITEPERMISSION THEN BEGIN
+        EXIT;
+      END;
+
+      SalesLine.SETRANGE("Document Type", SalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.", SalesHeader."No.");
+      SalesLine.SETRANGE(Type, SalesLine.Type::Item);
+      SalesLine.SETFILTER("No.", '<>%1', '');
+      SalesLine.SETFILTER(Quantity, '<>%1', 0);
+      IF SalesLine.FINDSET THEN BEGIN
+        PostedDate := TODAY;
+        PostedTime := TIME;
+        REPEAT
+          AFPSalesRecord.INIT;
+          AFPSalesRecord."Entry No." := 0;
+          AFPSalesRecord.TRANSFERFIELDS(SalesLine,FALSE);
+          AFPSalesRecord."Document Type" := SalesHeader."Document Type";
+          AFPSalesRecord."Document No." := SalesHeader."No.";
+          AFPSalesRecord."Line No." := SalesLine."Line No.";
+          AFPSalesRecord."Shipment No." := SalesHeader."Shipping No.";
+          AFPSalesRecord."Quantity Shipped" := SalesLine."Qty. to Ship";
+          AFPSalesRecord."Qty. Shipped (Base)" := SalesLine."Qty. to Ship (Base)";
+          AFPSalesRecord."Posted at Date" := PostedDate;
+          AFPSalesRecord."Posted at Time" := PostedTime;
+          AFPSalesRecord."Ship-to Code" := SalesHeader."Ship-to Code";
+          IF SalesLine."Quantity Shipped" <> 0 THEN
+            AFPSalesRecord."First Shipment" := FALSE
+          ELSE
+            AFPSalesRecord."First Shipment" := TRUE;
+          AFPSalesRecord."Previous Quantity Shipped" := SalesLine."Quantity Shipped";
+          AFPSalesRecord."Previous Qty. Shipped (Base)" := SalesLine."Qty. Shipped (Base)";
+          AFPSalesRecord.Status := AFPSalesRecord.Status::Shipped;
+          IF AFPSalesRecord."Quantity Shipped" > 0 THEN BEGIN
+            AFPSalesRecord."Fill Rate %" := 0;
+            IF AFPSalesRecord."First Shipment" THEN BEGIN
+              IF (AFPSalesRecord."Quantity (Base)" = AFPSalesRecord."Qty. Shipped (Base)") THEN BEGIN
+                AFPSalesRecord."First Shipment Complete" := TRUE;
+                AFPSalesRecord."Fill Rate %" := 100;
+              END ELSE
+                AFPSalesRecord."Fill Rate %" := ROUND(AFPSalesRecord."Quantity Shipped"/AFPSalesRecord.Quantity,0.01) * 100;
+            END;
+            IF (AFPSalesRecord."Shipment Date" > AFPSalesRecord."Requested Delivery Date") AND (AFPSalesRecord."Requested Delivery Date" > 0D) THEN BEGIN
+              AFPSalesRecord."Late Delivery" := TRUE;
+              AFPSalesRecord."Service Credit" := FALSE;
+            END ELSE BEGIN
+              AFPSalesRecord."Late Delivery" := FALSE;
+              AFPSalesRecord."Service Credit" := TRUE;
+            END;
+          END;
+          IF AFPSalesRecord.INSERT(TRUE) THEN;
+        UNTIL SalesLine.NEXT = 0;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,90,OnBeforePurchRcptLineInsert,"",Skip,Error)]
+    LOCAL PROCEDURE CodeUnit90_OnAfterPostPurchaseDoc@2(VAR PurchRcptLine@1240020000 : Record 121;VAR PurchRcptHeader@1240020001 : Record 120;VAR PurchLine@1240020002 : Record 39);
+    BEGIN
+      // Replaces code From Codeunit 90
+      PurchRcptLine."Posted at Date" :=  WORKDATE;
+      PurchRcptLine."Posted at Time" := TIME;
+    END;
+
+    [EventSubscriber(Codeunit,414,OnBeforeReleaseSalesDoc,"",Skip,Skip)]
+    PROCEDURE Codeunit414_OnBeforeReleaseSalesDoc@22(VAR SalesHeader@1000 : Record 36);
+    VAR
+      InvMgtSetup@1002 : Record 14000551;
+      SalesLine@1001 : Record 37;
+      Text14000551@1003 : TextConst 'ENU=Requested Shipment Date can not be blank for any sales line.';
+    BEGIN
+      CheckUserPermission;
+      IF (SalesHeader."Document Type" = SalesHeader."Document Type"::Order) AND
+         (InvMgtSetup.GET) AND
+         (InvMgtSetup."Usage Date to Use" = InvMgtSetup."Usage Date to Use"::"Demand Date") AND
+         (InvMgtSetup."Requested Delivery Date Req.")
+      THEN BEGIN
+        SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+        SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+        SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+        SalesLine.SETFILTER("No.",'<>%1', '');
+        SalesLine.SETFILTER(Quantity,'<>0');
+        SalesLine.SETRANGE("Requested Delivery Date",0D);
+        IF NOT SalesLine.ISEMPTY THEN
+          ERROR(Text14000551);
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,415,OnAfterReleasePurchaseDoc,"",Skip,Skip)]
+    LOCAL PROCEDURE Codeunit415_OnAfterReleasePurchaseDoc@24(VAR PurchaseHeader@1000 : Record 38);
+    VAR
+      InvMgtSetup@1002 : Record 14000551;
+      AFPDocSynch@1001 : Codeunit 14000572;
+    BEGIN
+      CheckUserPermission;
+      IF InvMgtSetup.GET THEN BEGIN
+        IF InvMgtSetup."Synch. Purch. and Transfer" THEN
+          AFPDocSynch.PurchLinesToTransferLines(PurchaseHeader);
+      END;
+    END;
+
+    LOCAL PROCEDURE Codeunit5704_OnAfterPostTransferShipment@25();
+    BEGIN
+      // no transfer integration events
+      // code removed from CU5704 - no event to subscribe however this is not used
+      // when roll-up is active - safely removed.
+      //TransShptLine."Posted at Date" := WORKDATE;
+      //TransShptLine."Posted at Time" := TIME;
+    END;
+
+    [EventSubscriber(Codeunit,5407,OnBeforeChangeStatusOnProdOrder,"",Skip,Skip)]
+    LOCAL PROCEDURE Codeunit5407_OnBeforeChangeStatusOnProdOrder@1240020000(VAR ProductionOrder@1240020000 : Record 5405;NewStatus@1240020001 : 'Quote,Planned,Firm Planned,Released,Finished');
+    BEGIN
+      // To fix the bug with status change management this codeunit was marked as single instance to keep the above variable as the old prod order
+      OldProdOrder := ProductionOrder;
+    END;
+
+    [EventSubscriber(Codeunit,5407,OnAfterChangeStatusOnProdOrder,"",Skip,Skip)]
+    LOCAL PROCEDURE Codeunit5407_OnAfterChangeStatusOnProdOrder@1240020003(VAR ProdOrder@1240020000 : Record 5405;VAR ToProdOrder@1240020001 : Record 5405);
+    VAR
+      ProdPlanLine@1240020002 : Record 14002679;
+    BEGIN
+      // To fix the bug with status change management this codeunit was marked as single instance to keep the above variable as the old prod order
+      // the On After Change Status On Prod ORder would be the only necessary change subscriber if NAV was fixed
+      IF (OldProdOrder."No." <> '') AND (ToProdOrder.Status < ToProdOrder.Status::Finished) THEN BEGIN
+        ProdPlanLine.SETRANGE("Prod. Order No.", OldProdOrder."No.");
+        ProdPlanLine.SETRANGE("Prod. Order Status", OldProdOrder.Status);
+        IF (NOT ProdPlanLine.ISEMPTY) AND (ProdPlanLine.COUNT = 1) THEN BEGIN
+          IF ProdPlanLine.FINDSET THEN BEGIN
+            REPEAT
+              ProdPlanLine."Prod. Order No." := ToProdOrder."No.";
+              ProdPlanLine."Prod. Order Status" := ToProdOrder.Status;
+              ProdPlanLine.MODIFY(FALSE);
+            UNTIL ProdPlanLine.NEXT = 0;
+          END;
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,83,OnAfterCopyItemJnlLineFromSalesHeader,"",Skip,Skip)]
+    LOCAL PROCEDURE Table83_OnAfterCopyItemJnlLineFromSalesHeader@1240020007(VAR ItemJnlLine@1240020000 : Record 83;SalesHeader@1240020001 : Record 36);
+    BEGIN
+      ItemJnlLine."Ship-to Code" := SalesHeader."Ship-to Code";
+    END;
+
+    [EventSubscriber(Table,83,OnAfterCopyItemJnlLineFromSalesLine,"",Skip,Skip)]
+    LOCAL PROCEDURE Table83_OnAfterCopyItemJnlLineFromSalesLine@1240020002(VAR ItemJnlLine@1240020000 : Record 83;SalesLine@1240020001 : Record 37);
+    VAR
+      SalesSetup@1240020003 : Record 311;
+    BEGIN
+      ItemJnlLine."Requested Delivery Date" := SalesLine."Requested Delivery Date";
+      ItemJnlLine."Shipment Date" := WORKDATE;
+      ItemJnlLine."Exclude from Usage" := SalesLine."Exclude from Usage";
+      //ItemJnlLine."Orig. Order Qty. (Base)" := SalesLine."Quantity (Base)";
+      //ItemJnlLine."Sales Order No." := SalesLine."Document No.";
+      //ItemJnlLine."Sales Order Line No." := SalesLine."Line No.";
+      IF (SalesLine."Document Type" = SalesLine."Document Type"::Order) OR
+          (SalesLine."Document Type" = SalesLine."Document Type"::Invoice)
+        THEN BEGIN
+        IF SalesLine."Quantity Shipped" <> 0 THEN
+          ItemJnlLine."First Shipment" := FALSE
+        ELSE
+          ItemJnlLine."First Shipment" := TRUE;
+      END;
+    END;
+
+    [EventSubscriber(Table,83,OnAfterCopyItemJnlLineFromServHeader,"",Skip,Skip)]
+    LOCAL PROCEDURE Table83_OnAfterCopyItemJnlLineFromServiceHeader@1240020009(VAR ItemJnlLine@1240020000 : Record 83;ServHeader@1240020001 : Record 5900);
+    BEGIN
+      ItemJnlLine."Ship-to Code" := ServHeader."Ship-to Code";
+    END;
+
+    [EventSubscriber(Table,83,OnAfterCopyItemJnlLineFromServLine,"",Skip,Skip)]
+    LOCAL PROCEDURE Table83_OnAfterCopyItemJnlLineFromServiceLine@1240020008(VAR ItemJnlLine@1240020000 : Record 83;ServLine@1240020001 : Record 5902);
+    VAR
+      SalesSetup@1240020003 : Record 311;
+    BEGIN
+      ItemJnlLine."Requested Delivery Date" := ServLine."Requested Delivery Date";
+      ItemJnlLine."Shipment Date" := WORKDATE;
+      //ItemJnlLine."Orig. Order Qty. (Base)" := ServLine."Quantity (Base)";
+      //ItemJnlLine."Sales Order No." := ServLine."Document No.";
+      //ItemJnlLine."Sales Order Line No." := ServLine."Line No.";
+      IF (ServLine."Document Type" = ServLine."Document Type"::Order) THEN BEGIN
+        IF ServLine."Quantity Shipped" <> 0 THEN
+          ItemJnlLine."First Shipment" := FALSE
+        ELSE
+          ItemJnlLine."First Shipment" := TRUE;
+      END;
+    END;
+
+    [EventSubscriber(Page,30,OnAfterActionEvent,"14000555",Skip,Skip)]
+    LOCAL PROCEDURE Page30_OnCreateProcUnitAction@32(VAR Rec@1000 : Record 27);
+    VAR
+      Item@1001 : Record 27;
+    BEGIN
+      Item.SETFILTER("No.",Rec."No.");
+      REPORT.RUNMODAL(REPORT::"Create Procurement Units",TRUE,FALSE,Item);
+    END;
+
+    [EventSubscriber(Page,30,OnAfterActionEvent,"14000556",Skip,Skip)]
+    LOCAL PROCEDURE Page30_OnRedirectUsageAction@33(VAR Rec@1000 : Record 27);
+    VAR
+      Item@1001 : Record 27;
+    BEGIN
+      Item.SETRANGE("No.",Rec."No.");
+      REPORT.RUNMODAL(REPORT::"Redirect Item Usage",TRUE,FALSE,Item);
+    END;
+
+    [EventSubscriber(Page,30,OnAfterActionEvent,"14000557",Skip,Skip)]
+    LOCAL PROCEDURE Page30_OnCloneUsageAction@34(VAR Rec@1000 : Record 27);
+    VAR
+      ProcUnit@1001 : Record 14000555;
+    BEGIN
+      ProcUnit.SETRANGE("Item No.", Rec."No.");
+      REPORT.RUNMODAL(REPORT::"Clone Usage",TRUE,FALSE,ProcUnit);
+    END;
+
+    [EventSubscriber(Page,31,OnAfterActionEvent,"14000554",Skip,Skip)]
+    LOCAL PROCEDURE Page31_OnCreateProcUnitAction@1240020012(VAR Rec@1240020000 : Record 27);
+    VAR
+      Item@1001 : Record 27;
+    BEGIN
+      Item.SETFILTER("No.",Rec."No.");
+      REPORT.RUNMODAL(REPORT::"Create Procurement Units",TRUE,FALSE,Item);
+    END;
+
+    [EventSubscriber(Page,31,OnAfterActionEvent,"14000555",Skip,Skip)]
+    LOCAL PROCEDURE Page31_OnRedirectUsageAction@1240020011(VAR Rec@1240020000 : Record 27);
+    VAR
+      Item@1001 : Record 27;
+    BEGIN
+      Item.SETRANGE("No.",Rec."No.");
+      REPORT.RUNMODAL(REPORT::"Redirect Item Usage",TRUE,FALSE,Item);
+    END;
+
+    [EventSubscriber(Page,31,OnAfterActionEvent,"14000556",Skip,Skip)]
+    LOCAL PROCEDURE Page31_OnCloneUsageAction@1240020010(VAR Rec@1240020000 : Record 27);
+    VAR
+      ProcUnit@1001 : Record 14000555;
+    BEGIN
+      ProcUnit.SETRANGE("Item No.", Rec."No.");
+      REPORT.RUNMODAL(REPORT::"Clone Usage",TRUE,FALSE,ProcUnit);
+    END;
+
+    [EventSubscriber(Page,5407,OnAfterActionEvent,"14000551",Skip,Skip)]
+    LOCAL PROCEDURE Page5407_OnViewFinishedItemAction@35(VAR Rec@1000 : Record 5407);
+    VAR
+      ProdOrder@1002 : Record 5405;
+      Item@1001 : Record 27;
+    BEGIN
+      ProdOrder.SETRANGE("No.", Rec."Prod. Order No.");
+      IF ProdOrder.FINDFIRST THEN BEGIN
+        Item.SETRANGE("No.",ProdOrder."Source No.");
+        IF Item.FINDSET THEN BEGIN
+          PAGE.RUNMODAL(PAGE::"Item Card",Item);
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Page,5407,OnAfterActionEvent,"14000552",Skip,Skip)]
+    LOCAL PROCEDURE Page5407_OnViewFinishedProcUnitAction@36(VAR Rec@1000 : Record 5407);
+    VAR
+      ProdOrder@1001 : Record 5405;
+      ProcUnit@1002 : Record 14000555;
+    BEGIN
+      ProdOrder.SETRANGE("No.", Rec."Prod. Order No.");
+      IF ProdOrder.FINDFIRST THEN BEGIN
+        ProcUnit.SETRANGE("Location Code",ProdOrder."Location Code");
+        ProcUnit.SETRANGE("Item No.",ProdOrder."Source No.");
+        IF ProcUnit.FINDFIRST THEN BEGIN
+          PAGE.RUNMODAL(PAGE::"Procurement Unit Card",ProcUnit);
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,1808,OnRegisterAssistedSetup,"",Skip,Skip)]
+    LOCAL PROCEDURE Table1808_OnRegisterAssistedSetup@1240020004(VAR TempAggregatedAssistedSetup@1240020000 : TEMPORARY Record 1808);
+    VAR
+      SetupDemandPlanTxt@1240020001 : TextConst 'ENU=Setup Lanham Demand Planning';
+      DemandPlanningSetupProcessEntry@1240020002 : Record 14097491;
+      DPSetupMgt@1240020003 : Codeunit 14098053;
+      SetupDemandPlanTxt2@1240020004 : TextConst 'ENU=Manual Setup Demand Planning';
+    BEGIN
+      TempAggregatedAssistedSetup.AddExtensionAssistedSetup(PAGE::"DP Setup Wizard",
+                                                            SetupDemandPlanTxt,
+                                                            TRUE,
+                                                            DemandPlanningSetupProcessEntry.RECORDID,
+                                                            DPSetupMgt.CheckDPSetupStatus(TempAggregatedAssistedSetup),
+                                                            ''); // icon code
+      // TempAggregatedAssistedSetup.AddExtensionAssistedSetup(PAGE::"DP Manual Setup",
+      //                                                      SetupDemandPlanTxt2,
+      //                                                      TRUE,
+      //                                                      DemandPlanningSetupProcessEntry.RECORDID,
+      //                                                      DPSetupMgt.CheckDPSetupStatus(TempAggregatedAssistedSetup),
+      //                                                      ''); // icon code
+    END;
+
+    [EventSubscriber(Table,1875,OnRegisterBusinessSetup,"",Skip,Skip)]
+    LOCAL PROCEDURE Table1875_OnRegisterBusinessSetup@1240020013(VAR TempBusinessSetup@1240020000 : TEMPORARY Record 1875);
+    VAR
+      DemandPlanningSetupProcessEntry@1240020002 : Record 14097491;
+      DPSetupMgt@1240020003 : Codeunit 14098053;
+      DemandPlanTxt@1240020001 : TextConst 'ENU=Lanham Demand Planning';
+      SetupDemandPlanTxt@1240020004 : TextConst 'ENU=Manual Setup Lanham Demand Planning';
+    BEGIN
+      //IF ApplicationAreaMgmtFacade.IsFoundationEnabled OR ApplicationAreaMgmtFacade.IsAllDisabled THEN BEGIN
+      TempBusinessSetup.InsertExtensionBusinessSetup(TempBusinessSetup, DemandPlanTxt, SetupDemandPlanTxt,
+                                                     'Purchase,Forecast,Plan,Demand,Procurement,Lanham', TempBusinessSetup.Area::Purchasing,
+                                                      PAGE::"DP Manual Setup",'');
+      //END;
+    END;
+
+    [EventSubscriber(Table,38,OnAfterValidateEvent,"Exclude From Performance",Skip,Skip)]
+    LOCAL PROCEDURE PurchaseHeaderOnAfterValidateExcludeFromPerformance@11(VAR Rec@1000 : Record 38;VAR xRec@1001 : Record 38;CurrFieldNo@1002 : Integer);
+    VAR
+      PurchLine@1003 : Record 39;
+    BEGIN
+      PurchLine.SETRANGE("Document Type",Rec."Document Type");
+      PurchLine.SETRANGE("Document No.",Rec."No.");
+      PurchLine.SETRANGE(Type, PurchLine.Type::Item);
+      PurchLine.SETFILTER("No.", '<>%1', '');
+      PurchLine.MODIFYALL("Exclude From Performance",Rec."Exclude From Performance");
+    END;
+
+    [EventSubscriber(Table,39,OnAfterValidateEvent,"No.",Skip,Skip)]
+    LOCAL PROCEDURE PurchaseLineOnAfterValidateNo@3(VAR Rec@1000 : Record 39;VAR xRec@1001 : Record 39;CurrFieldNo@1002 : Integer);
+    VAR
+      PurchHeader@1003 : Record 38;
+      UBP@1240020000 : Codeunit 14000564;
+      OrdDate@1240020001 : Date;
+    BEGIN
+      // function adds over head for a feature rarely if ever used.
+      //IF THEN to handle temp table validation if the standard NAV code allowed temp purchase lines.  A PurchHeader.GET statement in the No. field
+      // instead of GetPurchHeader prevents it.
+      IF NOT (Rec."Document Type" IN [Rec."Document Type"::Order, Rec."Document Type"::Invoice, Rec."Document Type"::"Blanket Order"]) THEN
+        EXIT;
+
+      IF (Rec."Promised Receipt Date" <> 0D) OR (Rec."Requested Receipt Date" <> 0D) THEN
+        EXIT;
+
+      IF (Rec.Type = Rec.Type::Item) AND (Rec."No." <> '') THEN BEGIN
+        PurchHeader.GET(Rec."Document Type", Rec."Document No.");
+        Rec."Exclude From Performance" := PurchHeader."Exclude From Performance";
+        IF UBP.EnableAFPRecDateMgt THEN BEGIN
+          OrdDate := PurchHeader."Order Date";
+          IF (OrdDate = 0D) THEN
+            OrdDate := WORKDATE;
+          Rec.VALIDATE("Planned Receipt Date", UBP.CalcExpRecDate(Rec."Location Code", Rec."No.", Rec."Variant Code", OrdDate));
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Exclude from Usage",Skip,Skip)]
+    LOCAL PROCEDURE SalesHeaderOnAfterValidateExcludeFromUsage@9(VAR Rec@1000 : Record 36;VAR xRec@1001 : Record 36;CurrFieldNo@1002 : Integer);
+    VAR
+      SalesLine@1003 : Record 37;
+    BEGIN
+      SalesLine.SETRANGE("Document Type",Rec."Document Type");
+      SalesLine.SETRANGE("Document No.",Rec."No.");
+      SalesLine.SETRANGE(Type, SalesLine.Type::Item);
+      SalesLine.SETFILTER("No.", '<>%1', '');
+      SalesLine.MODIFYALL("Exclude from Usage",Rec."Exclude from Usage");
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Sell-to Customer No.",Skip,Skip)]
+    LOCAL PROCEDURE SalesHeaderOnAfterValidateSelltoCustomerNo@1240020014(VAR Rec@1240020000 : Record 36;VAR xRec@1240020001 : Record 36;CurrFieldNo@1240020002 : Integer);
+    VAR
+      Customer@1240020003 : Record 18;
+    BEGIN
+      IF Customer.GET(Rec."Sell-to Customer No.") THEN
+          Rec."Exclude from Usage" := Customer."Exclude From Usage"
+      ELSE
+          Rec."Exclude from Usage" := FALSE;
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Ship-to Code",Skip,Skip)]
+    LOCAL PROCEDURE SalesHeaderOnAfterValidateShipToAddress@1240020015(VAR Rec@1240020000 : Record 36;VAR xRec@1240020001 : Record 36;CurrFieldNo@1240020002 : Integer);
+    VAR
+      ShipToAddress@1240020003 : Record 222;
+    BEGIN
+      IF ShipToAddress.GET(Rec."Sell-to Customer No.", Rec."Ship-to Code") THEN
+          Rec."Exclude from Usage" := ShipToAddress."Exclude From Usage"
+      ELSE
+          Rec."Exclude from Usage" := FALSE;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"No.",Skip,Skip)]
+    LOCAL PROCEDURE SalesLineOnAfterValidateNo@10(VAR Rec@1000 : Record 37;VAR xRec@1001 : Record 37;CurrFieldNo@1002 : Integer);
+    VAR
+      SalesHeader@1003 : Record 36;
+    BEGIN
+      // function adds over head for a feature rarely if ever used.
+      //IF THEN to handle temp table validation for temp sales header calls
+      IF SalesHeader.GET(Rec."Document Type", Rec."Document No.") THEN
+        Rec."Exclude from Usage" := SalesHeader."Exclude from Usage";
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"Requested Delivery Date",Skip,Skip)]
+    LOCAL PROCEDURE SalesLineOnAfterValidateRequestedDeliveryDate@23(VAR Rec@1000 : Record 37;VAR xRec@1001 : Record 37;CurrFieldNo@1002 : Integer);
+    VAR
+      SalesHeader@1003 : Record 36;
+    BEGIN
+      IF Rec."Requested Delivery Date" <> 0D THEN BEGIN
+        Rec.VALIDATE("Planned Delivery Date", Rec."Requested Delivery Date");
+        Rec."Demand Date" := Rec."Planned Delivery Date";
+      END;
+    END;
+
+    [EventSubscriber(Table,5740,OnAfterValidateEvent,"Exclude From Usage",Skip,Skip)]
+    LOCAL PROCEDURE TransferHeaderOnAfterValidateExcludeFromUsage@8(VAR Rec@1000 : Record 5740;VAR xRec@1001 : Record 5740;CurrFieldNo@1002 : Integer);
+    VAR
+      TransferLine@1003 : Record 5741;
+    BEGIN
+      TransferLine.SETRANGE("Document No.",Rec."No.");
+      TransferLine.SETFILTER("Item No.", '<>%1', '');
+      TransferLine.MODIFYALL("Exclude From Usage",Rec."Exclude From Usage");
+    END;
+
+    [EventSubscriber(Table,14,OnAfterInsertEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE LocationOnAfterInsert@1240020001(VAR Rec@1240020000 : Record 14;RunTrigger@1240020001 : Boolean);
+    BEGIN
+      Rec."Last Item Rcpt. Entry No." := 0;
+    END;
+
+    [EventSubscriber(Table,14,OnAfterValidateEvent,"Def. Repl. Source Type",Skip,Skip)]
+    LOCAL PROCEDURE LocationOnAfterValidateDefReplSourceType@19(VAR Rec@1000 : Record 14;VAR xRec@1001 : Record 14;CurrFieldNo@1002 : Integer);
+    BEGIN
+      IF Rec."Def. Repl. Source Type" <> xRec."Def. Repl. Source Type" THEN
+        Rec."Def. Repl. Source Code" := '';
+    END;
+
+    [EventSubscriber(Table,14,OnAfterValidateEvent,"Def. Safety Stock Calc. Method",Skip,Skip)]
+    LOCAL PROCEDURE LocationOnAfterValidateDefSafetyStockCalcMethod@20(VAR Rec@1000 : Record 14;VAR xRec@1001 : Record 14;CurrFieldNo@1002 : Integer);
+    BEGIN
+      IF Rec."Def. Safety Stock Calc. Method" = Rec."Def. Safety Stock Calc. Method"::Fixed THEN
+        Rec."Def. Target Cust. Service Lvl." := '';
+    END;
+
+    [EventSubscriber(Table,18,OnAfterInsertEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE CustomerOnAfterInsert@12(VAR Rec@1000 : Record 18;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      // this is used in the original triggers and only makes sense if the customer was not inserted while all fields specified
+      //UBPSetCustRedirect(Rec);
+    END;
+
+    [EventSubscriber(Table,18,OnAfterModifyEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE CustomerOnAfterModify@13(VAR Rec@1000 : Record 18;VAR xRec@1001 : Record 18;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      UBPSetCustRedirect(Rec,xRec);
+    END;
+
+    [EventSubscriber(Table,18,OnAfterDeleteEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE CustomerOnAfterDelete@5(VAR Rec@1000 : Record 18;RunTrigger@1001 : Boolean);
+    VAR
+      CustomerUsageRedirect@1003 : Record 14000580;
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      CustomerUsageRedirect.SETRANGE("Customer No.", Rec."No.");
+      IF CustomerUsageRedirect.FINDSET THEN BEGIN
+        REPEAT
+          CustomerUsageRedirect."Change Pending" := FALSE;
+          CustomerUsageRedirect.VALIDATE("Delete Redirect",TRUE);
+          CustomerUsageRedirect.MODIFY(TRUE);
+        UNTIL CustomerUsageRedirect.NEXT = 0;
+      END;
+    END;
+
+    [EventSubscriber(Table,18,OnAfterValidateEvent,"Redirect Usage",Skip,Skip)]
+    LOCAL PROCEDURE CustomerOnAfterValidateRedirectUsage@21(VAR Rec@1000 : Record 18;VAR xRec@1001 : Record 18;CurrFieldNo@1002 : Integer);
+    VAR
+      ShipToUsageRedirect@14000553 : Record 14097460;
+      CustomerUsageRedirect@1003 : Record 14000580;
+      Text14000561@1007 : TextConst 'ENU=A Ship-to Usage Redirect exists.  You can use either Customer or Ship-to Redirect, not both. %1 %2';
+      Text14000562@1006 : TextConst 'ENU=A Customer Usage Redirect exists.  You can use either Customer or Ship-to Redirect. %1';
+      Text14000563@1005 : TextConst 'ENU=A Customer Usage Redirect exists.  You can not change the option to Never until all Customer redirects are removed. %1';
+      Text14000564@1004 : TextConst 'ENU=A Ship-to Usage Redirect exists.  You can not change the option to Never until all Ship-to redirects are removed. %1 %2';
+    BEGIN
+      CASE Rec."Redirect Usage" OF
+        Rec."Redirect Usage"::Never:
+          BEGIN
+            ShipToUsageRedirect.SETRANGE("Customer No.", Rec."No.");
+            IF ShipToUsageRedirect.FIND('-') THEN
+              ERROR(Text14000564, Rec."No.");
+            CustomerUsageRedirect.SETRANGE("Customer No.", Rec."No.");
+            IF CustomerUsageRedirect.FIND('-') THEN
+              ERROR(Text14000563,ShipToUsageRedirect."Customer No.",ShipToUsageRedirect."Ship-to Code");
+          END;
+        Rec."Redirect Usage"::"Customer Location":
+          BEGIN
+            ShipToUsageRedirect.SETRANGE("Customer No.", Rec."No.");
+            IF ShipToUsageRedirect.FIND('-') THEN
+              ERROR(Text14000561,ShipToUsageRedirect."Customer No.",ShipToUsageRedirect."Ship-to Code");
+          END;
+        Rec."Redirect Usage"::"Ship-to Location":
+          BEGIN
+            CustomerUsageRedirect.SETRANGE("Customer No.", Rec."No.");
+            IF CustomerUsageRedirect.FIND('-') THEN
+              ERROR(Text14000562, Rec."No.");
+          END;
+      END;
+    END;
+
+    [EventSubscriber(Table,222,OnAfterInsertEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE ShipToAddressOnAfterInsert@16(VAR Rec@1000 : Record 222;RunTrigger@1001 : Boolean);
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      // this is used in the original triggers and only makes sense if the customer was not inserted while all fields specified
+      //UBPSetCustRedirect(Rec);
+    END;
+
+    [EventSubscriber(Table,222,OnAfterModifyEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE ShipToAddressOnAfterModify@15(VAR Rec@1000 : Record 222;VAR xRec@1001 : Record 222;RunTrigger@1002 : Boolean);
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      UBPSetShipToRedirect(Rec,xRec);
+    END;
+
+    [EventSubscriber(Table,222,OnAfterDeleteEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE ShipToAddressOnAfterDelete@14(VAR Rec@1000 : Record 222;RunTrigger@1001 : Boolean);
+    VAR
+      ShipToUsageRedirect@1003 : Record 14097460;
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      ShipToUsageRedirect.SETRANGE("Customer No.", Rec."Customer No.");
+      ShipToUsageRedirect.SETRANGE("Ship-to Code", Rec.Code);
+      IF ShipToUsageRedirect.FINDSET THEN BEGIN
+        REPEAT
+          ShipToUsageRedirect."Change Pending" := FALSE;
+          ShipToUsageRedirect.VALIDATE("Delete Redirect",TRUE);
+          ShipToUsageRedirect.MODIFY(TRUE);
+        UNTIL ShipToUsageRedirect.NEXT = 0;
+      END;
+    END;
+
+    [EventSubscriber(Table,23,OnAfterDeleteEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE VendorOnAfterDelete@6(VAR Rec@1000 : Record 23;RunTrigger@1001 : Boolean);
+    VAR
+      AFPAlertSetup@1006 : Record 14002703;
+      ProcUnit@1005 : Record 14000555;
+      VendorBuyingCalendar@1004 : Record 14000563;
+      SuggOrderHeader@1003 : Record 14000565;
+      ForecastVendor@1002 : Record 14002705;
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      VendorBuyingCalendar.SETRANGE("Vendor No.", Rec."No.");
+      VendorBuyingCalendar.DELETEALL(TRUE);
+
+      ProcUnit.SETRANGE("Replenishment Source Type", ProcUnit."Replenishment Source Type"::Vendor);
+      ProcUnit.SETRANGE("Replenishment Source Code", Rec."No.");
+      IF AFPAlertSetup.READPERMISSION THEN BEGIN
+        IF AFPAlertSetup.GET THEN
+          ProcUnit.MODIFYALL("Replenishment Source Code", AFPAlertSetup."Repl. Path Repair Vendor")
+        ELSE
+          ProcUnit.MODIFYALL("Replenishment Source Code", '');
+      END ELSE
+        ProcUnit.MODIFYALL("Replenishment Source Code", '');
+
+      SuggOrderHeader.SETRANGE("Buy-from Vendor No.", Rec."No.");
+      SuggOrderHeader.DELETEALL(TRUE);
+
+      ForecastVendor.SETRANGE("Vendor No.", Rec."No.");
+      ForecastVendor.DELETEALL(TRUE);
+    END;
+
+    [EventSubscriber(Table,27,OnAfterDeleteEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE ItemOnAfterDelete@7(VAR Rec@1000 : Record 27;RunTrigger@1001 : Boolean);
+    VAR
+      ItemUsage@1005 : Record 14000557;
+      ProcUnit@1004 : Record 14000555;
+      UsageLedgerEntry@1003 : Record 14000556;
+      UsageRedirect@1002 : Record 14000575;
+      Text14000551@1006 : TextConst 'ENU=AFP Item Usage Redirects must be removed before deleting this item.';
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      ProcUnit.SETRANGE("Item No.", Rec."No.");
+      ProcUnit.DELETEALL(TRUE);
+
+      ItemUsage.SETCURRENTKEY("Location Code","Item No.","Variant Code","Starting Date","Ending Date");
+      ItemUsage.SETRANGE("Item No.", Rec."No.");
+      ItemUsage.DELETEALL(TRUE);
+
+      UsageLedgerEntry.SETCURRENTKEY("Original Location Code","Original Item No.","Original Variant Code");
+      UsageLedgerEntry.SETRANGE("Original Item No.", Rec."No.");
+      UsageLedgerEntry.DELETEALL(TRUE);
+
+      UsageRedirect.SETRANGE("Item No.", Rec."No.");
+      IF NOT UsageRedirect.ISEMPTY THEN
+        ERROR(Text14000551);
+
+      UsageRedirect.RESET;
+      UsageRedirect.SETCURRENTKEY("Redirect Location Code","Redirect Item No.","Redirect Variant Code");
+      UsageRedirect.SETRANGE("Redirect Item No.", Rec."No.");
+      IF NOT UsageRedirect.ISEMPTY THEN
+        ERROR(Text14000551);
+    END;
+
+    [EventSubscriber(Table,5401,OnAfterDeleteEvent,"",Skip,Skip)]
+    LOCAL PROCEDURE ItemVariantOnAfterDelete@1(VAR Rec@1000 : Record 5401;RunTrigger@1001 : Boolean);
+    VAR
+      ItemUsage@1005 : Record 14000557;
+      ProcUnit@1004 : Record 14000555;
+      UsageLedgerEntry@1003 : Record 14000556;
+      UsageRedirect@1002 : Record 14000575;
+      Text14000551@1006 : TextConst 'ENU=AFP Item Usage Redirects must be removed before deleting this item.';
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      ProcUnit.SETRANGE("Item No.", Rec."Item No.");
+      ProcUnit.SETRANGE("Variant Code", Rec.Code);
+      ProcUnit.DELETEALL(TRUE);
+
+      ItemUsage.SETCURRENTKEY("Location Code","Item No.","Variant Code","Starting Date","Ending Date");
+      ItemUsage.SETRANGE("Item No.", Rec."Item No.");
+      ItemUsage.SETRANGE("Variant Code", Rec.Code);
+      ItemUsage.DELETEALL(TRUE);
+
+      UsageLedgerEntry.SETCURRENTKEY("Original Location Code","Original Item No.","Original Variant Code");
+      UsageLedgerEntry.SETRANGE("Original Item No.", Rec."Item No.");
+      UsageLedgerEntry.SETRANGE("Original Variant Code", Rec.Code);
+      UsageLedgerEntry.DELETEALL(TRUE);
+
+      UsageRedirect.SETRANGE("Item No.", Rec."Item No.");
+      UsageRedirect.SETRANGE("Variant Code", Rec.Code);
+      IF NOT UsageRedirect.ISEMPTY THEN
+        ERROR(Text14000551);
+
+      UsageRedirect.RESET;
+      UsageRedirect.SETCURRENTKEY("Redirect Location Code","Redirect Item No.","Redirect Variant Code");
+      UsageRedirect.SETRANGE("Redirect Item No.", Rec."Item No.");
+      UsageRedirect.SETRANGE("Variant Code", Rec.Code);
+      IF NOT UsageRedirect.ISEMPTY THEN
+        ERROR(Text14000551);
+    END;
+
+    LOCAL PROCEDURE UBPSetCustRedirect@14000553(VAR Rec@1001 : Record 18;VAR xRec@1000 : Record 18);
+    VAR
+      InvMgtSetup@14000552 : Record 14000551;
+      CustomerUsageRedirect@1002 : Record 14000580;
+    BEGIN
+      IF NOT InvMgtSetup.GET THEN
+        EXIT;
+
+      IF NOT InvMgtSetup."Redirect Usage to Cust. Loc." THEN
+        EXIT;
+
+      IF (xRec."Location Code" <> Rec."Location Code") THEN BEGIN
+        IF Rec."Location Code" <> '' THEN BEGIN
+          IF CustomerUsageRedirect.GET(Rec."No.",'') THEN BEGIN
+            IF CustomerUsageRedirect."To Location Code" <> Rec."Location Code" THEN BEGIN
+              CustomerUsageRedirect."To Location Code" := Rec."Location Code";
+              CustomerUsageRedirect."Change Pending" := TRUE;
+              CustomerUsageRedirect."Delete Pending" := FALSE;
+              CustomerUsageRedirect."Delete Redirect" := FALSE;
+              CustomerUsageRedirect.MODIFY;
+            END;
+          END ELSE BEGIN
+            CustomerUsageRedirect.INIT;
+            CustomerUsageRedirect."Customer No." := Rec."No.";
+            CustomerUsageRedirect."To Location Code" := Rec."Location Code";
+            CustomerUsageRedirect."Change Pending" := TRUE;
+            CustomerUsageRedirect.INSERT;
+          END;
+        END ELSE BEGIN
+          IF CustomerUsageRedirect.GET(Rec."No.",'') THEN BEGIN
+            CustomerUsageRedirect."Change Pending" := FALSE;
+            CustomerUsageRedirect.VALIDATE("Delete Redirect",TRUE);
+            CustomerUsageRedirect.MODIFY;
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE UBPSetShipToRedirect@17(VAR Rec@1001 : Record 222;VAR xRec@1000 : Record 222);
+    VAR
+      ShipToUsageRedirect@1002 : Record 14097460;
+      Cust@1003 : Record 18;
+    BEGIN
+      Cust.GET(Rec."Customer No.");
+      IF Cust."Redirect Usage" = Cust."Redirect Usage"::"Ship-to Location" THEN BEGIN
+        IF (xRec."Location Code" <> Rec."Location Code") THEN BEGIN
+          IF Rec."Location Code" <> '' THEN BEGIN
+            ShipToUsageRedirect.SETRANGE("Customer No.",Rec."Customer No.");
+            ShipToUsageRedirect.SETRANGE("Ship-to Code",Rec.Code);
+            IF ShipToUsageRedirect.FIND('-') THEN BEGIN
+              IF ShipToUsageRedirect."To Location Code" <> Rec."Location Code" THEN BEGIN
+                ShipToUsageRedirect."To Location Code" := Rec."Location Code";
+                ShipToUsageRedirect."Change Pending" := TRUE;
+                ShipToUsageRedirect."Delete Pending" := FALSE;
+                ShipToUsageRedirect."Delete Redirect" := FALSE;
+                ShipToUsageRedirect.MODIFY;
+              END;
+            END ELSE BEGIN
+              ShipToUsageRedirect.INIT;
+              ShipToUsageRedirect."Customer No." := Rec."Customer No.";
+              ShipToUsageRedirect."Ship-to Code" := Rec.Code;
+              ShipToUsageRedirect."To Location Code" := Rec."Location Code";
+              ShipToUsageRedirect."Change Pending" := TRUE;
+              ShipToUsageRedirect.INSERT;
+            END;
+          END ELSE BEGIN
+            ShipToUsageRedirect.SETRANGE("Customer No.",Rec."Customer No.");
+            ShipToUsageRedirect.SETRANGE("Ship-to Code",Rec.Code);
+            IF ShipToUsageRedirect.FIND('-') THEN BEGIN
+              ShipToUsageRedirect."Change Pending" := FALSE;
+              ShipToUsageRedirect.VALIDATE("Delete Redirect",TRUE);
+              ShipToUsageRedirect.MODIFY;
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckUserPermission@1240020005();
+    BEGIN
+      IF NOT InvMgtSetup.READPERMISSION THEN BEGIN
+        EXIT;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetIncludeAsSalesForProduction@1240020035(VAR NewItemLedgEntry@1240020001 : Record 32;ItemJournalLine@1240020000 : Record 83) IncludeAsUsage : Boolean;
+    VAR
+      ProdOrder@1240020002 : Record 5405;
+      ProdOrderLine@1240020006 : Record 5406;
+      ProdBOM@1240020004 : Record 99000771;
+      ProdBOMLine@1240020005 : Record 99000772;
+      ProdBOMVersion@1240020003 : Record 99000779;
+    BEGIN
+      // check if consumption entry exists on the Production BOM
+      IncludeAsUsage := FALSE;
+      IF (NewItemLedgEntry."Order Type" = NewItemLedgEntry."Order Type"::Production) THEN BEGIN
+        IF ProdOrder.GET(ProdOrder.Status::Released, NewItemLedgEntry."Order No.") THEN BEGIN
+          IF ProdOrderLine.GET(ProdOrder.Status, ProdOrder."No.", NewItemLedgEntry."Order Line No.") THEN BEGIN
+            ProdBOMLine.SETRANGE("Production BOM No.", ProdOrderLine."Production BOM No.");
+            ProdBOMLine.SETRANGE(Type, ProdBOMLine.Type::Item);
+            ProdBOMLine.SETRANGE("No.", ItemJournalLine."Item No.");
+            IF ProdOrderLine."Production BOM Version Code" = '' THEN BEGIN
+              IF ProdBOMVersion.GET(ProdOrderLine."Production BOM No.", ProdOrderLine."Production BOM Version Code") THEN BEGIN
+                ProdBOMLine.SETRANGE("Version Code", ProdOrderLine."Production BOM Version Code");
+              END;
+            END;
+            IF ProdBOMLine.ISEMPTY THEN
+              IncludeAsUsage := TRUE;
+          END;
+        END;
+      END;
+      EXIT(IncludeAsUsage);
+    END;
+
+    LOCAL PROCEDURE GetIncludeAsSalesForAssembly@1240020036(VAR NewItemLedgEntry@1240020001 : Record 32;ItemJournalLine@1240020000 : Record 83) IncludeAsUsage : Boolean;
+    VAR
+      AssemblyHeader@1240020003 : Record 900;
+      BOMComponent@1240020002 : Record 90;
+    BEGIN
+      // check if consumption entry exists on the standard BOM
+      IncludeAsUsage := FALSE;
+      IF (NewItemLedgEntry."Order Type" = NewItemLedgEntry."Order Type"::Assembly) THEN BEGIN
+        IF AssemblyHeader.GET(AssemblyHeader."Document Type"::Order, NewItemLedgEntry."Order No.") THEN BEGIN
+          BOMComponent.SETRANGE("Parent Item No.", AssemblyHeader."Item No.");
+          BOMComponent.SETRANGE(Type, BOMComponent.Type::Item);
+          BOMComponent.SETRANGE("No.", NewItemLedgEntry."Item No.");
+          IF BOMComponent.ISEMPTY THEN
+            IncludeAsUsage := TRUE;
+        END;
+      END;
+      EXIT(IncludeAsUsage);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnInitItemLedgerEntryIncludeAsSalesForNegativeAdjustments@1240020025(VAR NewItemLedgEntry@1240020003 : Record 32;ItemJournalLine@1240020002 : Record 83);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnInitItemLedgerEntryIncludeAsSalesForConsumption@1240020028(VAR InvMgtSetup@1240020000 : Record 14000551;VAR NewItemLedgEntry@1240020003 : Record 32;ItemJournalLine@1240020002 : Record 83;VAR Bypass@1240020001 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

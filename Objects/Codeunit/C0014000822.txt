@@ -1,0 +1,2033 @@
+OBJECT Codeunit 14000822 Bill of Lading Worksheet Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/13/20;
+    Time=12:00:00 PM;
+    Version List=SE0.62;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 36=rm;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1001 : TextConst 'ENU=%1 %2 is already on Bill of Lading %3.';
+      Text002@1002 : TextConst 'ENU=%1 or %2 are wrong on %3 %4.';
+      Text003@1003 : TextConst 'ENU=%1 or %2 are wrong on Shipment %3.';
+      Text004@1004 : TextConst 'ENU=%1 is already on Bill of Lading %2.';
+      Text005@1005 : TextConst 'ENU=%1 or %2 are wrong on %3.';
+      Text006@1006 : TextConst 'ENU=%1 is wrong on %2.';
+      Text007@1007 : TextConst 'ENU=%1 is wrong on Shipment %2.';
+      Text008@1008 : TextConst 'ENU=%1 or %2 are wrong on Package %3.';
+      Text009@1009 : TextConst 'ENU=Cannot add the blank %1.';
+      Text010@1010 : TextConst 'ENU=Cannot add the blank transfer.';
+      Text011@1011 : TextConst 'ENU=Wrong Type %1 %2.';
+      Text012@1240030000 : TextConst 'ENU=Cyclic Reference in Bill of Lading %1.';
+      "-----"@1000000001 : TextConst;
+      Text50000@1000000000 : TextConst 'ENU=BOL Ship to Address and Sales order Ship to Address are different, Do you want to update Bill of Lading Ship-to Address?';
+
+    PROCEDURE UpdateBOLWorkSheetLines@1(CurrentBillOfLading@1240030000 : Record 14000822;VAR BillOfLadingStatDetailTmp@1240030001 : TEMPORARY Record 14000826;ShippingSetup@1240030002 : Record 14000707;VAR CalculatedWeight@1240030003 : ARRAY [5] OF Decimal;VAR CalculatedVolume@1240030004 : ARRAY [5] OF Decimal;VAR CalculatedValue@1240030005 : ARRAY [5] OF Decimal);
+    VAR
+      BillOfLadingLine@1240030006 : Record 14000823;
+      SalesHeader@1240030007 : Record 36;
+      PurchHeader@1240030010 : Record 38;
+      TransferHeader@1240030013 : Record 5740;
+      SalesShipmentHeader@1240030008 : Record 110;
+      PurchCrMemoHeader@1240030011 : Record 124;
+      ReturnShipmentHeader@1240030012 : Record 6650;
+      TransferShipmentHeader@1240030014 : Record 5744;
+      PostedPackage@1240030009 : Record 14000704;
+      BillOfLading2@1240030015 : Record 14000822;
+      BillOfLadingStatDetailTmp2@1240030016 : TEMPORARY Record 14000826;
+      CalculatedWeight2@1240030019 : ARRAY [5] OF Decimal;
+      CalculatedVolume2@1240030018 : ARRAY [5] OF Decimal;
+      CalculatedValue2@1240030017 : ARRAY [5] OF Decimal;
+      i@1240030020 : Integer;
+    BEGIN
+      BillOfLadingStatDetailTmp.DELETEALL;
+
+      CLEAR(CalculatedWeight);
+      CLEAR(CalculatedVolume);
+      CLEAR(CalculatedValue);
+
+      IF CurrentBillOfLading."No." = '' THEN
+        EXIT;
+
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETRANGE("Bill of Lading No.",CurrentBillOfLading."No.");
+      IF BillOfLadingLine.FIND('-') THEN
+        REPEAT
+          BillOfLadingStatDetailTmp.INIT;
+          BillOfLadingStatDetailTmp.Type := BillOfLadingLine.Type;
+          BillOfLadingStatDetailTmp."No." := BillOfLadingLine."No.";
+          BillOfLadingStatDetailTmp."Source Type" := BillOfLadingLine."Source Type";
+          BillOfLadingStatDetailTmp."Source Subtype" := BillOfLadingLine."Source Subtype";
+          BillOfLadingStatDetailTmp."Source ID" := BillOfLadingLine."Source ID";
+          BillOfLadingStatDetailTmp."Posted Source ID" := BillOfLadingLine."Posted Source ID";
+          CASE BillOfLadingLine.Type OF
+            BillOfLadingLine.Type::Order:
+              CASE BillOfLadingLine."Source Type" OF
+                DATABASE::"Sales Header":
+                  BEGIN
+                    IF SalesHeader.GET(BillOfLadingLine."Source Subtype",BillOfLadingLine."No.")
+                    THEN BEGIN
+                      CASE SalesHeader."Document Type" OF
+                        SalesHeader."Document Type"::Order:
+                          BillOfLadingStatDetailTmp.Type :=
+                            BillOfLadingStatDetailTmp.Type::"Sales Order";
+                        SalesHeader."Document Type"::Invoice:
+                          BillOfLadingStatDetailTmp.Type :=
+                            BillOfLadingStatDetailTmp.Type::"Sales Invoice";
+                      END;
+                      BillOfLadingStatDetailTmp."No." := SalesHeader."No.";
+                      BillOfLadingStatDetailTmp."Ship-to No." := SalesHeader."Sell-to Customer No.";
+                      BillOfLadingStatDetailTmp."Ship-to Code" := SalesHeader."Ship-to Code";
+                      BillOfLadingStatDetailTmp."External Document No." :=
+                        SalesHeader."External Document No.";
+                      BillOfLadingStatDetailTmp."Ship-for Code" := SalesHeader."Ship-for Code";
+                      //<TPZ2301>
+                      IF CheckEDITradePartner(SalesHeader."EDI Trade Partner") THEN
+                        BillOfLadingStatDetailTmp."EDI ASN" := SalesHeader."EDI Order";
+                      //</TPZ2301>
+                      UpdateSalesHeader(
+                        CurrentBillOfLading,BillOfLadingStatDetailTmp,SalesHeader,ShippingSetup,
+                        CalculatedWeight,CalculatedVolume,CalculatedValue);
+
+                      BillOfLadingStatDetailTmp.INSERT;
+                    END;
+                  END;
+                DATABASE::"Purchase Header":
+                  BEGIN
+                    IF PurchHeader.GET(BillOfLadingLine."Source Subtype",BillOfLadingLine."No.")
+                    THEN BEGIN
+                      CASE PurchHeader."Document Type" OF
+                        PurchHeader."Document Type"::"Credit Memo":
+                          BillOfLadingStatDetailTmp.Type :=
+                            BillOfLadingStatDetailTmp.Type::"Purchase Credit Memo";
+                        PurchHeader."Document Type"::"Return Order":
+                          BillOfLadingStatDetailTmp.Type :=
+                            BillOfLadingStatDetailTmp.Type::"Return Order";
+                      END;
+                      BillOfLadingStatDetailTmp."No." := PurchHeader."No.";
+                      BillOfLadingStatDetailTmp."Ship-to No." := PurchHeader."Buy-from Vendor No.";
+                      BillOfLadingStatDetailTmp."Ship-to Code" := PurchHeader."Order Address Code";
+                      BillOfLadingStatDetailTmp."External Document No." :=
+                        PurchHeader."Vendor Cr. Memo No.";
+                      BillOfLadingStatDetailTmp."Ship-for Code" := '';
+
+                      UpdatePurchHeader(
+                        CurrentBillOfLading,BillOfLadingStatDetailTmp,PurchHeader,ShippingSetup,
+                        CalculatedWeight,CalculatedVolume,CalculatedValue);
+
+                      BillOfLadingStatDetailTmp.INSERT;
+                    END;
+                  END;
+                DATABASE::"Transfer Header":
+                  BEGIN
+                    IF TransferHeader.GET(BillOfLadingLine."No.")
+                    THEN BEGIN
+                      BillOfLadingStatDetailTmp.Type := BillOfLadingStatDetailTmp.Type::"Transfer Order";
+                      BillOfLadingStatDetailTmp."No." := TransferHeader."No.";
+                      BillOfLadingStatDetailTmp."Ship-to No." := TransferHeader."Transfer-to Code";
+                      BillOfLadingStatDetailTmp."Ship-to Code" := '';
+                      BillOfLadingStatDetailTmp."External Document No." := '';
+                      BillOfLadingStatDetailTmp."Ship-for Code" := '';
+
+                      UpdateTransferHeader(
+                        CurrentBillOfLading,BillOfLadingStatDetailTmp,TransferHeader,ShippingSetup,
+                        CalculatedWeight,CalculatedVolume,CalculatedValue);
+
+                      BillOfLadingStatDetailTmp.INSERT;
+                    END;
+                  END;
+              END;
+            BillOfLadingLine.Type::"Sales Shipment (Posted)":
+              IF SalesShipmentHeader.GET(BillOfLadingLine."No.") THEN BEGIN
+                BillOfLadingStatDetailTmp."Ship-to Type" :=
+                  BillOfLadingStatDetailTmp."Ship-to Type"::Customer;
+                BillOfLadingStatDetailTmp."Ship-to No." := SalesShipmentHeader."Sell-to Customer No.";
+                BillOfLadingStatDetailTmp."Ship-to Code" := SalesShipmentHeader."Ship-to Code";
+                BillOfLadingStatDetailTmp."External Document No." :=
+                  SalesShipmentHeader."External Document No.";
+                BillOfLadingStatDetailTmp."Ship-for Code" :=  SalesShipmentHeader."Ship-for Code";
+                BillOfLadingStatDetailTmp."Shipment Invoice No." :=
+                  SalesShipmentHeader."Shipment Invoice No.";
+
+                BillOfLadingStatDetailTmp."Weight (Packages)" := BillOfLadingLine.Weight;
+                BillOfLadingStatDetailTmp."Volume (Packages)" := BillOfLadingLine.Volume;
+                BillOfLadingStatDetailTmp."Value (Packages)" := BillOfLadingLine.Value;
+                //<TPZ2301>
+                IF CheckEDITradePartner(SalesShipmentHeader."EDI Trade Partner") THEN
+                  BillOfLadingStatDetailTmp."EDI ASN" := SalesShipmentHeader."EDI Order";
+                //</TPZ2301>
+                BillOfLadingStatDetailTmp.INSERT;
+              END;
+            BillOfLadingLine.Type::"Purchase Credit Memo (Posted)":
+              IF PurchCrMemoHeader.GET(BillOfLadingLine."No.") THEN BEGIN
+                BillOfLadingStatDetailTmp."Ship-to Type" :=
+                  BillOfLadingStatDetailTmp."Ship-to Type"::Vendor;
+                BillOfLadingStatDetailTmp."Ship-to No." := PurchCrMemoHeader."Buy-from Vendor No.";
+                BillOfLadingStatDetailTmp."Ship-to Code" := PurchCrMemoHeader."Order Address Code";
+                BillOfLadingStatDetailTmp."External Document No." :=
+                  PurchCrMemoHeader."Vendor Cr. Memo No.";
+                BillOfLadingStatDetailTmp."Ship-for Code" := '';
+
+                BillOfLadingStatDetailTmp."Weight (Packages)" := BillOfLadingLine.Weight;
+                BillOfLadingStatDetailTmp."Volume (Packages)" := BillOfLadingLine.Volume;
+                BillOfLadingStatDetailTmp."Value (Packages)" := BillOfLadingLine.Value;
+
+                BillOfLadingStatDetailTmp.INSERT;
+              END;
+            BillOfLadingLine.Type::"Return Shipment (Posted)":
+              IF ReturnShipmentHeader.GET(BillOfLadingLine."No.") THEN BEGIN
+                BillOfLadingStatDetailTmp."Ship-to Type" :=
+                  BillOfLadingStatDetailTmp."Ship-to Type"::Vendor;
+                BillOfLadingStatDetailTmp."Ship-to No." := ReturnShipmentHeader."Buy-from Vendor No.";
+                BillOfLadingStatDetailTmp."Ship-to Code" := ReturnShipmentHeader."Order Address Code";
+                BillOfLadingStatDetailTmp."External Document No." :=
+                  ReturnShipmentHeader."Vendor Authorization No.";
+                BillOfLadingStatDetailTmp."Ship-for Code" := '';
+
+                BillOfLadingStatDetailTmp."Weight (Packages)" := BillOfLadingLine.Weight;
+                BillOfLadingStatDetailTmp."Volume (Packages)" := BillOfLadingLine.Volume;
+                BillOfLadingStatDetailTmp."Value (Packages)" := BillOfLadingLine.Value;
+
+                BillOfLadingStatDetailTmp.INSERT;
+              END;
+            BillOfLadingLine.Type::"Transfer Shipment (Posted)":
+              IF TransferShipmentHeader.GET(BillOfLadingLine."No.") THEN BEGIN
+                BillOfLadingStatDetailTmp."Ship-to Type" :=
+                  BillOfLadingStatDetailTmp."Ship-to Type"::Vendor;
+                BillOfLadingStatDetailTmp."Ship-to No." := TransferShipmentHeader."Transfer-to Code";
+                BillOfLadingStatDetailTmp."Ship-to Code" := '';
+                BillOfLadingStatDetailTmp."External Document No." := '';
+                BillOfLadingStatDetailTmp."Ship-for Code" := '';
+
+                BillOfLadingStatDetailTmp."Weight (Packages)" := BillOfLadingLine.Weight;
+                BillOfLadingStatDetailTmp."Volume (Packages)" := BillOfLadingLine.Volume;
+                BillOfLadingStatDetailTmp."Value (Packages)" := BillOfLadingLine.Value;
+
+                BillOfLadingStatDetailTmp.INSERT;
+              END;
+            BillOfLadingLine.Type::Package:
+              IF PostedPackage.GET(BillOfLadingLine."No.") THEN BEGIN
+                BillOfLadingStatDetailTmp."Ship-to No." := PostedPackage."Ship-to No.";
+                BillOfLadingStatDetailTmp."Ship-to Code" := PostedPackage."Ship-to Code";
+                BillOfLadingStatDetailTmp."External Document No." :=
+                  PostedPackage."External Document No.";
+
+                BillOfLadingStatDetailTmp."Weight (Packages)" := BillOfLadingLine.Weight;
+                BillOfLadingStatDetailTmp."Volume (Packages)" := BillOfLadingLine.Volume;
+                BillOfLadingStatDetailTmp."Value (Packages)" := BillOfLadingLine.Value;
+
+                BillOfLadingStatDetailTmp.INSERT;
+              END;
+            BillOfLadingLine.Type::"Bill of Lading",
+            BillOfLadingLine.Type::"Bill of Lading (Released)":
+              IF BillOfLading2.GET(BillOfLadingLine."No.") THEN BEGIN
+                BillOfLadingStatDetailTmp."Ship-to Type" := BillOfLading2."Ship-to Type";
+                BillOfLadingStatDetailTmp."Ship-to No." := BillOfLading2."Ship-to No.";
+                BillOfLadingStatDetailTmp."Ship-to Code" := BillOfLading2."Ship-to Code";
+                BillOfLadingStatDetailTmp."External Document No." :=
+                  BillOfLading2."External Tracking No.";
+
+                UpdateBOLWorkSheetLines(
+                  BillOfLading2,BillOfLadingStatDetailTmp2,ShippingSetup,
+                  CalculatedWeight2,CalculatedVolume2,CalculatedValue2);
+                FOR i := 1 TO ARRAYLEN(CalculatedWeight2) DO BEGIN
+                  CalculatedWeight[i] := CalculatedWeight[i] + CalculatedWeight2[i];
+                  CalculatedVolume[i] := CalculatedVolume[i] + CalculatedVolume2[i];
+                  CalculatedValue[i] := CalculatedValue[i] + CalculatedValue2[i];
+                END;
+
+                IF BillOfLadingStatDetailTmp2.FIND('-') THEN
+                  REPEAT
+                    BillOfLadingStatDetailTmp.AddBillOfLadingStatDetail(BillOfLadingStatDetailTmp2);
+                  UNTIL BillOfLadingStatDetailTmp2.NEXT = 0;
+
+                // BillOfLading2.CALCFIELDS("Posted Weight","Posted Volume","Posted Value");
+                // BillOfLadingStatDetailTmp."Weight (Packages)" := BillOfLading2."Posted Weight";
+                // BillOfLadingStatDetailTmp."Volume (Packages)" := BillOfLading2."Posted Volume";
+                // BillOfLadingStatDetailTmp."Value (Packages)" := BillOfLading2."Posted Value";
+
+                BillOfLadingStatDetailTmp.INSERT;
+              END;
+          END;
+        UNTIL BillOfLadingLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE UpdateSalesHeader@2(CurrentBillOfLading@1240030000 : Record 14000822;VAR CurrentBillOfLadingStatDetail@1240030001 : Record 14000826;CurrentSalesHeader@1240030002 : Record 36;ShippingSetup@1240030003 : Record 14000707;VAR CalculatedWeight@1240030004 : ARRAY [5] OF Decimal;VAR CalculatedVolume@1240030005 : ARRAY [5] OF Decimal;VAR CalculatedValue@1240030006 : ARRAY [5] OF Decimal);
+    VAR
+      SalesLine@1240030007 : Record 37;
+      Package@1240030008 : Record 14000701;
+      UnitPriceLCY@1240030009 : Decimal;
+      SalesLineQtyToShip@1240030010 : Decimal;
+    BEGIN
+      IF CurrentSalesHeader."Currency Factor" = 0 THEN
+        CurrentSalesHeader."Currency Factor" := 1;
+
+      SalesLine.RESET;
+      SalesLine.SETRANGE("Document Type",CurrentSalesHeader."Document Type");
+      SalesLine.SETRANGE("Document No.",CurrentSalesHeader."No.");
+      SalesLine.SETFILTER("Outstanding Quantity",'<>0');
+      SalesLine.SETRANGE("Drop Shipment",FALSE);
+      IF SalesLine.FIND('-') THEN
+        REPEAT
+          IF SalesLine.Quantity <> 0 THEN BEGIN
+            UnitPriceLCY :=
+              ROUND(SalesLine."Amount Including VAT" / CurrentSalesHeader."Currency Factor") /
+              SalesLine.Quantity;
+            UpdateFromSalesLine(
+              SalesLine,
+              CurrentBillOfLadingStatDetail."Net Weight (Total)",
+              CurrentBillOfLadingStatDetail."Gross Weight (Total)",
+              CurrentBillOfLadingStatDetail."Dimmed Weight (Total)",
+              CurrentBillOfLadingStatDetail."Volume (Total)",
+              CurrentBillOfLadingStatDetail."Value (Cost) (Total)",
+              CurrentBillOfLadingStatDetail."Value (Price) (Total)",
+              SalesLine.Quantity,UnitPriceLCY);
+            UpdateFromSalesLine(
+              SalesLine,
+              CurrentBillOfLadingStatDetail."Net Weight (Qty. Outstanding)",
+              CurrentBillOfLadingStatDetail."Gross Weight (Qty.Outstanding)",
+              CurrentBillOfLadingStatDetail."Dimmed Weight (Qty. Outstnd.)",
+              CurrentBillOfLadingStatDetail."Volume (Qty. Outstanding)",
+              CurrentBillOfLadingStatDetail."Value (Cost) (Qty.Outstnd.)",
+              CurrentBillOfLadingStatDetail."Value (Price) (Qty. Outstnd.)",
+              SalesLine."Outstanding Quantity",UnitPriceLCY);
+
+            // Additional code required in Attain
+            SalesLineQtyToShip := SalesLine."Qty. to Ship";
+
+            UpdateFromSalesLine(
+              SalesLine,
+              CurrentBillOfLadingStatDetail."Net Weight (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Gross Weight (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Dimmed Weight (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Volume (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Value (Cost) (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Value (Price) (Qty. to Ship)",
+              SalesLineQtyToShip,UnitPriceLCY);
+
+            IF SalesLine."Rate Quoted" THEN BEGIN
+              CurrentBillOfLadingStatDetail."Quoted Shipping Charge" :=
+                CurrentBillOfLadingStatDetail."Quoted Shipping Charge" +
+                SalesLine."Outstanding Quantity" *
+                ROUND(SalesLine."Unit Price" / CurrentSalesHeader."Currency Factor");
+              CurrentBillOfLadingStatDetail."Quoted Shipping Cost" :=
+                CurrentBillOfLadingStatDetail."Quoted Shipping Cost" +
+                SalesLine."Outstanding Quantity" * SalesLine."Unit Cost (LCY)";
+            END;
+
+            IF SalesLine."Shipping Charge" AND
+               (SalesLine."Shipping Charge BOL No." = CurrentBillOfLading."No.")
+            THEN BEGIN
+              CurrentBillOfLadingStatDetail."Distributed Shipping Charge" :=
+                CurrentBillOfLadingStatDetail."Distributed Shipping Charge" +
+                SalesLine."Outstanding Quantity" *
+                ROUND(SalesLine."Unit Price" / CurrentSalesHeader."Currency Factor");
+              CurrentBillOfLadingStatDetail."Distributed Shipping Cost" :=
+                CurrentBillOfLadingStatDetail."Distributed Shipping Cost" +
+                SalesLine."Outstanding Quantity" * SalesLine."Unit Cost (LCY)";
+            END;
+          END;
+        UNTIL SalesLine.NEXT = 0;
+
+      Package.RESET;
+      Package.SETCURRENTKEY("Source Type","Source Subtype","Source ID");
+      Package.SETRANGE("Source Type",DATABASE::"Sales Header");
+      Package.SETRANGE("Source Subtype",CurrentSalesHeader."Document Type");
+      Package.SETRANGE("Source ID",CurrentSalesHeader."No.");
+      IF Package.FIND('-') THEN
+        REPEAT
+          Package.CALCFIELDS("Exist in Other Package");
+          IF NOT Package."Exist in Other Package" THEN
+            UpdateFromPackage(CurrentBillOfLadingStatDetail,Package);
+        UNTIL Package.NEXT = 0;
+
+      CASE ShippingSetup."Actual Weight as" OF
+        ShippingSetup."Actual Weight as"::"Net Weight":
+          BEGIN
+            CalculatedWeight[1] :=
+              CalculatedWeight[1] + CurrentBillOfLadingStatDetail."Net Weight (Total)";
+            CalculatedWeight[2] :=
+              CalculatedWeight[2] + CurrentBillOfLadingStatDetail."Net Weight (Qty. Outstanding)";
+            CalculatedWeight[3] :=
+              CalculatedWeight[3] + CurrentBillOfLadingStatDetail."Net Weight (Qty. to Ship)";
+            CalculatedWeight[4] :=
+              CalculatedWeight[4] + CurrentBillOfLadingStatDetail."Net Weight (Packed)";
+          END;
+        ShippingSetup."Actual Weight as"::"Gross Weight":
+          BEGIN
+            CalculatedWeight[1] :=
+              CalculatedWeight[1] + CurrentBillOfLadingStatDetail."Gross Weight (Total)";
+            CalculatedWeight[2] :=
+              CalculatedWeight[2] + CurrentBillOfLadingStatDetail."Gross Weight (Qty.Outstanding)";
+            CalculatedWeight[3] :=
+              CalculatedWeight[3] + CurrentBillOfLadingStatDetail."Gross Weight (Qty. to Ship)";
+            CalculatedWeight[4] :=
+              CalculatedWeight[4] + CurrentBillOfLadingStatDetail."Gross Weight (Packed)";
+          END;
+        ShippingSetup."Actual Weight as"::"Dimmed Weight":
+          BEGIN
+            CalculatedWeight[1] :=
+              CalculatedWeight[1] + CurrentBillOfLadingStatDetail."Dimmed Weight (Total)";
+            CalculatedWeight[2] :=
+              CalculatedWeight[2] + CurrentBillOfLadingStatDetail."Dimmed Weight (Qty. Outstnd.)";
+            CalculatedWeight[3] :=
+              CalculatedWeight[3] + CurrentBillOfLadingStatDetail."Dimmed Weight (Qty. to Ship)";
+            CalculatedWeight[4] :=
+              CalculatedWeight[4] + CurrentBillOfLadingStatDetail."Dimmed Weight (Packed)";
+          END;
+      END;
+
+      CalculatedVolume[1] :=
+        CalculatedVolume[1] + CurrentBillOfLadingStatDetail."Volume (Total)";
+      CalculatedVolume[2] :=
+        CalculatedVolume[2] + CurrentBillOfLadingStatDetail."Volume (Qty. Outstanding)";
+      CalculatedVolume[3] :=
+        CalculatedVolume[3] + CurrentBillOfLadingStatDetail."Volume (Qty. to Ship)";
+      CalculatedVolume[4] :=
+        CalculatedVolume[4] + CurrentBillOfLadingStatDetail."Volume (Packed)";
+
+      CASE ShippingSetup."Declare Value As" OF
+        ShippingSetup."Declare Value As"::Cost:
+          BEGIN
+            CalculatedValue[1] :=
+              CalculatedValue[1] + CurrentBillOfLadingStatDetail."Value (Cost) (Total)";
+            CalculatedValue[2] :=
+              CalculatedValue[2] + CurrentBillOfLadingStatDetail."Value (Cost) (Qty.Outstnd.)";
+            CalculatedValue[3] :=
+              CalculatedValue[3] + CurrentBillOfLadingStatDetail."Value (Cost) (Qty. to Ship)";
+            CalculatedValue[4] :=
+              CalculatedValue[4] + CurrentBillOfLadingStatDetail."Value (Cost) (Packed)";
+          END;
+        ShippingSetup."Declare Value As"::Price:
+          BEGIN
+            CalculatedValue[1] :=
+              CalculatedValue[1] + CurrentBillOfLadingStatDetail."Value (Price) (Total)";
+            CalculatedValue[2] :=
+              CalculatedValue[2] + CurrentBillOfLadingStatDetail."Value (Price) (Qty. Outstnd.)";
+            CalculatedValue[3] :=
+              CalculatedValue[3] + CurrentBillOfLadingStatDetail."Value (Price) (Qty. to Ship)";
+            CalculatedValue[4] :=
+              CalculatedValue[4] + CurrentBillOfLadingStatDetail."Value (Price) (Packed)";
+          END;
+      END;
+
+      CASE ShippingSetup."Rate Shop Quantity" OF
+        ShippingSetup."Rate Shop Quantity"::"Outstanding Quantity":
+          BEGIN
+            CalculatedWeight[5] := CalculatedWeight[2];
+            CalculatedVolume[5] := CalculatedVolume[2];
+            CalculatedValue[5] := CalculatedValue[2];
+          END;
+        ShippingSetup."Rate Shop Quantity"::"Quantity to Ship":
+          BEGIN
+            CalculatedWeight[5] := CalculatedWeight[3];
+            CalculatedVolume[5] := CalculatedVolume[3];
+            CalculatedValue[5] := CalculatedValue[3];
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateFromSalesLine@3(CurrentSalesLine@1240030000 : Record 37;VAR NetWeight@1240030001 : Decimal;VAR GrossWeight@1240030002 : Decimal;VAR DimmedWeight@1240030003 : Decimal;VAR Volume@1240030004 : Decimal;VAR ValueCost@1240030005 : Decimal;VAR ValuePrice@1240030006 : Decimal;Quantity@1240030007 : Decimal;UnitPriceLCY@1240030008 : Decimal);
+    BEGIN
+      IF Quantity <> 0 THEN BEGIN
+        NetWeight := NetWeight + Quantity * CurrentSalesLine."Net Weight";
+        GrossWeight := GrossWeight + Quantity * CurrentSalesLine."Gross Weight";
+        DimmedWeight := DimmedWeight + Quantity * CurrentSalesLine."Dimmed Weight";
+        Volume := Volume + Quantity * CurrentSalesLine."Unit Volume";
+        ValueCost := ValueCost + Quantity * CurrentSalesLine."Unit Cost (LCY)";
+        ValuePrice := ValuePrice + Quantity * UnitPriceLCY;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdatePurchHeader@16(CurrentBillOfLading@1240030000 : Record 14000822;VAR CurrentBillOfLadingStatDetail@1240030001 : Record 14000826;CurrentPurchHeader@1240030002 : Record 38;ShippingSetup@1240030003 : Record 14000707;VAR CalculatedWeight@1240030004 : ARRAY [5] OF Decimal;VAR CalculatedVolume@1240030005 : ARRAY [5] OF Decimal;VAR CalculatedValue@1240030006 : ARRAY [5] OF Decimal);
+    VAR
+      PurchLine@1240030007 : Record 39;
+      Package@1240030008 : Record 14000701;
+      UnitPriceLCY@1240030009 : Decimal;
+      LineQtyToShip@1240030010 : Decimal;
+    BEGIN
+      IF CurrentPurchHeader."Currency Factor" = 0 THEN
+        CurrentPurchHeader."Currency Factor" := 1;
+
+      PurchLine.RESET;
+      PurchLine.SETRANGE("Document Type",CurrentPurchHeader."Document Type");
+      PurchLine.SETRANGE("Document No.",CurrentPurchHeader."No.");
+      PurchLine.SETFILTER("Outstanding Quantity",'<>0');
+      PurchLine.SETRANGE("Drop Shipment",FALSE);
+      IF PurchLine.FIND('-') THEN
+        REPEAT
+          IF PurchLine.Quantity <> 0 THEN BEGIN
+            UnitPriceLCY :=
+              ROUND(PurchLine."Amount Including VAT" / CurrentPurchHeader."Currency Factor") /
+              PurchLine.Quantity;
+            UpdateFromPurchLine(
+              PurchLine,
+              CurrentBillOfLadingStatDetail."Net Weight (Total)",
+              CurrentBillOfLadingStatDetail."Gross Weight (Total)",
+              CurrentBillOfLadingStatDetail."Dimmed Weight (Total)",
+              CurrentBillOfLadingStatDetail."Volume (Total)",
+              CurrentBillOfLadingStatDetail."Value (Cost) (Total)",
+              CurrentBillOfLadingStatDetail."Value (Price) (Total)",
+              PurchLine.Quantity,UnitPriceLCY);
+            UpdateFromPurchLine(
+              PurchLine,
+              CurrentBillOfLadingStatDetail."Net Weight (Qty. Outstanding)",
+              CurrentBillOfLadingStatDetail."Gross Weight (Qty.Outstanding)",
+              CurrentBillOfLadingStatDetail."Dimmed Weight (Qty. Outstnd.)",
+              CurrentBillOfLadingStatDetail."Volume (Qty. Outstanding)",
+              CurrentBillOfLadingStatDetail."Value (Cost) (Qty.Outstnd.)",
+              CurrentBillOfLadingStatDetail."Value (Price) (Qty. Outstnd.)",
+              PurchLine."Outstanding Quantity",UnitPriceLCY);
+
+            // Additional code required in Attain
+            IF PurchLine."Document Type" = PurchLine."Document Type"::"Return Order" THEN
+              LineQtyToShip := PurchLine."Return Qty. to Ship"
+            ELSE
+              LineQtyToShip := PurchLine."Qty. to Receive";
+
+            UpdateFromPurchLine(
+              PurchLine,
+              CurrentBillOfLadingStatDetail."Net Weight (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Gross Weight (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Dimmed Weight (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Volume (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Value (Cost) (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Value (Price) (Qty. to Ship)",
+              LineQtyToShip,UnitPriceLCY);
+          END;
+        UNTIL PurchLine.NEXT = 0;
+
+      Package.RESET;
+      Package.SETCURRENTKEY("Source Type","Source Subtype","Source ID");
+      Package.SETRANGE("Source Type",DATABASE::"Purchase Header");
+      Package.SETRANGE("Source Subtype",CurrentPurchHeader."Document Type");
+      Package.SETRANGE("Source ID",CurrentPurchHeader."No.");
+      IF Package.FIND('-') THEN
+        REPEAT
+          Package.CALCFIELDS("Exist in Other Package");
+          IF NOT Package."Exist in Other Package" THEN
+            UpdateFromPackage(CurrentBillOfLadingStatDetail,Package);
+        UNTIL Package.NEXT = 0;
+
+      CASE ShippingSetup."Actual Weight as" OF
+        ShippingSetup."Actual Weight as"::"Net Weight":
+          BEGIN
+            CalculatedWeight[1] :=
+              CalculatedWeight[1] + CurrentBillOfLadingStatDetail."Net Weight (Total)";
+            CalculatedWeight[2] :=
+              CalculatedWeight[2] + CurrentBillOfLadingStatDetail."Net Weight (Qty. Outstanding)";
+            CalculatedWeight[3] :=
+              CalculatedWeight[3] + CurrentBillOfLadingStatDetail."Net Weight (Qty. to Ship)";
+            CalculatedWeight[4] :=
+              CalculatedWeight[4] + CurrentBillOfLadingStatDetail."Net Weight (Packed)";
+          END;
+        ShippingSetup."Actual Weight as"::"Gross Weight":
+          BEGIN
+            CalculatedWeight[1] :=
+              CalculatedWeight[1] + CurrentBillOfLadingStatDetail."Gross Weight (Total)";
+            CalculatedWeight[2] :=
+              CalculatedWeight[2] + CurrentBillOfLadingStatDetail."Gross Weight (Qty.Outstanding)";
+            CalculatedWeight[3] :=
+              CalculatedWeight[3] + CurrentBillOfLadingStatDetail."Gross Weight (Qty. to Ship)";
+            CalculatedWeight[4] :=
+              CalculatedWeight[4] + CurrentBillOfLadingStatDetail."Gross Weight (Packed)";
+          END;
+        ShippingSetup."Actual Weight as"::"Dimmed Weight":
+          BEGIN
+            CalculatedWeight[1] :=
+              CalculatedWeight[1] + CurrentBillOfLadingStatDetail."Dimmed Weight (Total)";
+            CalculatedWeight[2] :=
+              CalculatedWeight[2] + CurrentBillOfLadingStatDetail."Dimmed Weight (Qty. Outstnd.)";
+            CalculatedWeight[3] :=
+              CalculatedWeight[3] + CurrentBillOfLadingStatDetail."Dimmed Weight (Qty. to Ship)";
+            CalculatedWeight[4] :=
+              CalculatedWeight[4] + CurrentBillOfLadingStatDetail."Dimmed Weight (Packed)";
+          END;
+      END;
+
+      CalculatedVolume[1] :=
+        CalculatedVolume[1] + CurrentBillOfLadingStatDetail."Volume (Total)";
+      CalculatedVolume[2] :=
+        CalculatedVolume[2] + CurrentBillOfLadingStatDetail."Volume (Qty. Outstanding)";
+      CalculatedVolume[3] :=
+        CalculatedVolume[3] + CurrentBillOfLadingStatDetail."Volume (Qty. to Ship)";
+      CalculatedVolume[4] :=
+        CalculatedVolume[4] + CurrentBillOfLadingStatDetail."Volume (Packed)";
+
+      CASE ShippingSetup."Declare Value As" OF
+        ShippingSetup."Declare Value As"::Cost:
+          BEGIN
+            CalculatedValue[1] :=
+              CalculatedValue[1] + CurrentBillOfLadingStatDetail."Value (Cost) (Total)";
+            CalculatedValue[2] :=
+              CalculatedValue[2] + CurrentBillOfLadingStatDetail."Value (Cost) (Qty.Outstnd.)";
+            CalculatedValue[3] :=
+              CalculatedValue[3] + CurrentBillOfLadingStatDetail."Value (Cost) (Qty. to Ship)";
+            CalculatedValue[4] :=
+              CalculatedValue[4] + CurrentBillOfLadingStatDetail."Value (Cost) (Packed)";
+          END;
+        ShippingSetup."Declare Value As"::Price:
+          BEGIN
+            CalculatedValue[1] :=
+              CalculatedValue[1] + CurrentBillOfLadingStatDetail."Value (Price) (Total)";
+            CalculatedValue[2] :=
+              CalculatedValue[2] + CurrentBillOfLadingStatDetail."Value (Price) (Qty. Outstnd.)";
+            CalculatedValue[3] :=
+              CalculatedValue[3] + CurrentBillOfLadingStatDetail."Value (Price) (Qty. to Ship)";
+            CalculatedValue[4] :=
+              CalculatedValue[4] + CurrentBillOfLadingStatDetail."Value (Price) (Packed)";
+          END;
+      END;
+
+      CASE ShippingSetup."Rate Shop Quantity" OF
+        ShippingSetup."Rate Shop Quantity"::"Outstanding Quantity":
+          BEGIN
+            CalculatedWeight[5] := CalculatedWeight[2];
+            CalculatedVolume[5] := CalculatedVolume[2];
+            CalculatedValue[5] := CalculatedValue[2];
+          END;
+        ShippingSetup."Rate Shop Quantity"::"Quantity to Ship":
+          BEGIN
+            CalculatedWeight[5] := CalculatedWeight[3];
+            CalculatedVolume[5] := CalculatedVolume[3];
+            CalculatedValue[5] := CalculatedValue[3];
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateFromPurchLine@17(CurrentPurchLine@1240030000 : Record 39;VAR NetWeight@1240030001 : Decimal;VAR GrossWeight@1240030002 : Decimal;VAR DimmedWeight@1240030003 : Decimal;VAR Volume@1240030004 : Decimal;VAR ValueCost@1240030005 : Decimal;VAR ValuePrice@1240030006 : Decimal;Quantity@1240030007 : Decimal;UnitPriceLCY@1240030008 : Decimal);
+    BEGIN
+      IF Quantity <> 0 THEN BEGIN
+        NetWeight := NetWeight + Quantity * CurrentPurchLine."Net Weight";
+        GrossWeight := GrossWeight + Quantity * CurrentPurchLine."Gross Weight";
+        // PM XXX
+        // DimmedWeight := DimmedWeight + Quantity * CurrentPurchLine."Dimmed Weight";
+        Volume := Volume + Quantity * CurrentPurchLine."Unit Volume";
+        ValueCost := ValueCost + Quantity * CurrentPurchLine."Unit Cost (LCY)";
+        ValuePrice := ValuePrice + Quantity * UnitPriceLCY;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateTransferHeader@1240030002(CurrentBillOfLading@1240030000 : Record 14000822;VAR CurrentBillOfLadingStatDetail@1240030001 : Record 14000826;CurrentTransferHeader@1240030002 : Record 5740;ShippingSetup@1240030003 : Record 14000707;VAR CalculatedWeight@1240030004 : ARRAY [5] OF Decimal;VAR CalculatedVolume@1240030005 : ARRAY [5] OF Decimal;VAR CalculatedValue@1240030006 : ARRAY [5] OF Decimal);
+    VAR
+      TransferLine@1240030007 : Record 5741;
+      Package@1240030008 : Record 14000701;
+      Item@1240030011 : Record 27;
+      LineQtyToShip@1240030010 : Decimal;
+    BEGIN
+      TransferLine.RESET;
+      TransferLine.SETRANGE("Document No.",CurrentTransferHeader."No.");
+      TransferLine.SETFILTER("Outstanding Quantity",'<>0');
+      IF TransferLine.FIND('-') THEN
+        REPEAT
+          IF TransferLine.Quantity <> 0 THEN BEGIN
+            IF Item."No." <> TransferLine."Item No." THEN
+              IF NOT Item.GET(TransferLine."Item No.") THEN
+                CLEAR(Item);
+
+            UpdateFromTransferLine(
+              TransferLine,
+              CurrentBillOfLadingStatDetail."Net Weight (Total)",
+              CurrentBillOfLadingStatDetail."Gross Weight (Total)",
+              CurrentBillOfLadingStatDetail."Dimmed Weight (Total)",
+              CurrentBillOfLadingStatDetail."Volume (Total)",
+              CurrentBillOfLadingStatDetail."Value (Cost) (Total)",
+              CurrentBillOfLadingStatDetail."Value (Price) (Total)",
+              TransferLine.Quantity,Item."Unit Cost",Item."Unit Price");
+            UpdateFromTransferLine(
+              TransferLine,
+              CurrentBillOfLadingStatDetail."Net Weight (Qty. Outstanding)",
+              CurrentBillOfLadingStatDetail."Gross Weight (Qty.Outstanding)",
+              CurrentBillOfLadingStatDetail."Dimmed Weight (Qty. Outstnd.)",
+              CurrentBillOfLadingStatDetail."Volume (Qty. Outstanding)",
+              CurrentBillOfLadingStatDetail."Value (Cost) (Qty.Outstnd.)",
+              CurrentBillOfLadingStatDetail."Value (Price) (Qty. Outstnd.)",
+              TransferLine."Outstanding Quantity",Item."Unit Cost",Item."Unit Price");
+
+            // Additional code required in Attain
+            LineQtyToShip := TransferLine."Qty. to Ship";
+
+            UpdateFromTransferLine(
+              TransferLine,
+              CurrentBillOfLadingStatDetail."Net Weight (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Gross Weight (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Dimmed Weight (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Volume (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Value (Cost) (Qty. to Ship)",
+              CurrentBillOfLadingStatDetail."Value (Price) (Qty. to Ship)",
+              LineQtyToShip,Item."Unit Cost",Item."Unit Price");
+          END;
+        UNTIL TransferLine.NEXT = 0;
+
+      Package.RESET;
+      Package.SETCURRENTKEY("Source Type","Source Subtype","Source ID");
+      Package.SETRANGE("Source Type",DATABASE::"Transfer Header");
+      Package.SETRANGE("Source Subtype",0);
+      Package.SETRANGE("Source ID",CurrentTransferHeader."No.");
+      IF Package.FIND('-') THEN
+        REPEAT
+          Package.CALCFIELDS("Exist in Other Package");
+          IF NOT Package."Exist in Other Package" THEN
+            UpdateFromPackage(CurrentBillOfLadingStatDetail,Package);
+        UNTIL Package.NEXT = 0;
+
+      CASE ShippingSetup."Actual Weight as" OF
+        ShippingSetup."Actual Weight as"::"Net Weight":
+          BEGIN
+            CalculatedWeight[1] :=
+              CalculatedWeight[1] + CurrentBillOfLadingStatDetail."Net Weight (Total)";
+            CalculatedWeight[2] :=
+              CalculatedWeight[2] + CurrentBillOfLadingStatDetail."Net Weight (Qty. Outstanding)";
+            CalculatedWeight[3] :=
+              CalculatedWeight[3] + CurrentBillOfLadingStatDetail."Net Weight (Qty. to Ship)";
+            CalculatedWeight[4] :=
+              CalculatedWeight[4] + CurrentBillOfLadingStatDetail."Net Weight (Packed)";
+          END;
+        ShippingSetup."Actual Weight as"::"Gross Weight":
+          BEGIN
+            CalculatedWeight[1] :=
+              CalculatedWeight[1] + CurrentBillOfLadingStatDetail."Gross Weight (Total)";
+            CalculatedWeight[2] :=
+              CalculatedWeight[2] + CurrentBillOfLadingStatDetail."Gross Weight (Qty.Outstanding)";
+            CalculatedWeight[3] :=
+              CalculatedWeight[3] + CurrentBillOfLadingStatDetail."Gross Weight (Qty. to Ship)";
+            CalculatedWeight[4] :=
+              CalculatedWeight[4] + CurrentBillOfLadingStatDetail."Gross Weight (Packed)";
+          END;
+        ShippingSetup."Actual Weight as"::"Dimmed Weight":
+          BEGIN
+            CalculatedWeight[1] :=
+              CalculatedWeight[1] + CurrentBillOfLadingStatDetail."Dimmed Weight (Total)";
+            CalculatedWeight[2] :=
+              CalculatedWeight[2] + CurrentBillOfLadingStatDetail."Dimmed Weight (Qty. Outstnd.)";
+            CalculatedWeight[3] :=
+              CalculatedWeight[3] + CurrentBillOfLadingStatDetail."Dimmed Weight (Qty. to Ship)";
+            CalculatedWeight[4] :=
+              CalculatedWeight[4] + CurrentBillOfLadingStatDetail."Dimmed Weight (Packed)";
+          END;
+      END;
+
+      CalculatedVolume[1] :=
+        CalculatedVolume[1] + CurrentBillOfLadingStatDetail."Volume (Total)";
+      CalculatedVolume[2] :=
+        CalculatedVolume[2] + CurrentBillOfLadingStatDetail."Volume (Qty. Outstanding)";
+      CalculatedVolume[3] :=
+        CalculatedVolume[3] + CurrentBillOfLadingStatDetail."Volume (Qty. to Ship)";
+      CalculatedVolume[4] :=
+        CalculatedVolume[4] + CurrentBillOfLadingStatDetail."Volume (Packed)";
+
+      CASE ShippingSetup."Declare Value As" OF
+        ShippingSetup."Declare Value As"::Cost:
+          BEGIN
+            CalculatedValue[1] :=
+              CalculatedValue[1] + CurrentBillOfLadingStatDetail."Value (Cost) (Total)";
+            CalculatedValue[2] :=
+              CalculatedValue[2] + CurrentBillOfLadingStatDetail."Value (Cost) (Qty.Outstnd.)";
+            CalculatedValue[3] :=
+              CalculatedValue[3] + CurrentBillOfLadingStatDetail."Value (Cost) (Qty. to Ship)";
+            CalculatedValue[4] :=
+              CalculatedValue[4] + CurrentBillOfLadingStatDetail."Value (Cost) (Packed)";
+          END;
+        ShippingSetup."Declare Value As"::Price:
+          BEGIN
+            CalculatedValue[1] :=
+              CalculatedValue[1] + CurrentBillOfLadingStatDetail."Value (Price) (Total)";
+            CalculatedValue[2] :=
+              CalculatedValue[2] + CurrentBillOfLadingStatDetail."Value (Price) (Qty. Outstnd.)";
+            CalculatedValue[3] :=
+              CalculatedValue[3] + CurrentBillOfLadingStatDetail."Value (Price) (Qty. to Ship)";
+            CalculatedValue[4] :=
+              CalculatedValue[4] + CurrentBillOfLadingStatDetail."Value (Price) (Packed)";
+          END;
+      END;
+
+      CASE ShippingSetup."Rate Shop Quantity" OF
+        ShippingSetup."Rate Shop Quantity"::"Outstanding Quantity":
+          BEGIN
+            CalculatedWeight[5] := CalculatedWeight[2];
+            CalculatedVolume[5] := CalculatedVolume[2];
+            CalculatedValue[5] := CalculatedValue[2];
+          END;
+        ShippingSetup."Rate Shop Quantity"::"Quantity to Ship":
+          BEGIN
+            CalculatedWeight[5] := CalculatedWeight[3];
+            CalculatedVolume[5] := CalculatedVolume[3];
+            CalculatedValue[5] := CalculatedValue[3];
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateFromTransferLine@1240030001(CurrentTransferLine@1240030000 : Record 5741;VAR NetWeight@1240030001 : Decimal;VAR GrossWeight@1240030002 : Decimal;VAR DimmedWeight@1240030003 : Decimal;VAR Volume@1240030004 : Decimal;VAR ValueCost@1240030005 : Decimal;VAR ValuePrice@1240030006 : Decimal;Quantity@1240030007 : Decimal;UnitCostLCY@1240030009 : Decimal;UnitPriceLCY@1240030008 : Decimal);
+    BEGIN
+      IF Quantity <> 0 THEN BEGIN
+        NetWeight := NetWeight + Quantity * CurrentTransferLine."Net Weight";
+        GrossWeight := GrossWeight + Quantity * CurrentTransferLine."Gross Weight";
+        // PM XXX
+        // DimmedWeight := DimmedWeight + Quantity * CurrentTransferLine."Dimmed Weight";
+        Volume := Volume + Quantity * CurrentTransferLine."Unit Volume";
+        ValueCost := ValueCost + Quantity * UnitCostLCY;
+        ValuePrice := ValuePrice + Quantity * UnitPriceLCY;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateFromPackage@7(VAR CurrentBillOfLadingStatDetail@1240030000 : Record 14000826;Package@1240030001 : Record 14000701);
+    BEGIN
+      Package.CALCFIELDS("Net Weight","Gross Weight","Dim. Weight",Volume,"Value (Cost)","Value (Price)");
+      CurrentBillOfLadingStatDetail."Net Weight (Packed)" :=
+        CurrentBillOfLadingStatDetail."Net Weight (Packed)" + Package."Net Weight";
+      CurrentBillOfLadingStatDetail."Gross Weight (Packed)" :=
+        CurrentBillOfLadingStatDetail."Gross Weight (Packed)" + Package."Gross Weight";
+      CurrentBillOfLadingStatDetail."Dimmed Weight (Packed)" :=
+        CurrentBillOfLadingStatDetail."Dimmed Weight (Packed)" + Package."Dim. Weight";
+      CurrentBillOfLadingStatDetail."Volume (Packed)" :=
+        CurrentBillOfLadingStatDetail."Volume (Packed)" + Package.Volume;
+      CurrentBillOfLadingStatDetail."Value (Cost) (Packed)" :=
+        CurrentBillOfLadingStatDetail."Value (Cost) (Packed)" + Package."Value (Cost)";
+      CurrentBillOfLadingStatDetail."Value (Price) (Packed)" :=
+        CurrentBillOfLadingStatDetail."Value (Price) (Packed)" + Package."Value (Price)";
+      CurrentBillOfLadingStatDetail."Weight (Packages)" :=
+        CurrentBillOfLadingStatDetail."Weight (Packages)" + Package."Calculation Weight";
+      CurrentBillOfLadingStatDetail."Volume (Packages)" :=
+        CurrentBillOfLadingStatDetail."Volume (Packages)" + Package."Calculation Volume";
+      CurrentBillOfLadingStatDetail."Value (Packages)" :=
+        CurrentBillOfLadingStatDetail."Value (Packages)" + Package."Calculation Value";
+    END;
+
+    PROCEDURE AddSalesHeader@4(BillOfLading@1240030000 : Record 14000822;SalesHeader@1240030001 : Record 36;PackingStation@1240030002 : Record 14000709;ShippingSetup@1240030003 : Record 14000707;DisplayWarning@1240030004 : Boolean);
+    VAR
+      BillOfLadingLine@1240030005 : Record 14000823;
+      Package@1000000000 : Record 14000701;
+      BOLMgt@1000000002 : Codeunit 14000821;
+      BOLHeaderModified@1000000001 : Boolean;
+    BEGIN
+      BillOfLading.TESTFIELD(Released,FALSE);
+
+      //TM BEG 070915
+      SalesHeader.TESTFIELD(Status, SalesHeader.Status::Released);
+      BillOfLading.TESTFIELD("External Tracking No.");
+      //TM END 070915
+
+      IF NOT (SalesHeader."Document Type" IN
+              [SalesHeader."Document Type"::Order,SalesHeader."Document Type"::Invoice])
+      THEN
+        SalesHeader.TESTFIELD("Document Type",SalesHeader."Document Type"::Order);
+
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETCURRENTKEY(Type,"No.",Closed,"Location Code");
+      BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::Order);
+      BillOfLadingLine.SETRANGE("No.",SalesHeader."No.");
+      BillOfLadingLine.SETRANGE(Closed,FALSE);
+      BillOfLadingLine.SETRANGE("Source Type",DATABASE::"Sales Header");
+      BillOfLadingLine.SETRANGE("Source Subtype",SalesHeader."Document Type");
+      BillOfLadingLine.SETRANGE("Source ID",SalesHeader."No.");
+      IF ShippingSetup."Location Packing" THEN BEGIN
+        BillOfLadingLine.SETRANGE("Location Code",PackingStation."Location Code");
+      END;
+      IF BillOfLadingLine.FIND('-') THEN
+        ERROR(
+          Text001,
+          SalesHeader."Document Type",SalesHeader."No.",BillOfLadingLine."Bill of Lading No.");
+
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+      IF NOT BillOfLadingLine.FIND('+') THEN BEGIN
+        BillOfLadingLine."Bill of Lading No." := BillOfLading."No.";
+        BillOfLadingLine."Line No." := 10000;
+      END ELSE
+        BillOfLadingLine."Line No." := BillOfLadingLine."Line No." + 10000;
+      BillOfLadingLine.INIT;
+      BillOfLadingLine.INSERT(TRUE);
+      BillOfLadingLine.VALIDATE("Source Type",DATABASE::"Sales Header");
+      BillOfLadingLine.VALIDATE("Source Subtype",SalesHeader."Document Type");
+      BillOfLadingLine.VALIDATE("Source ID",SalesHeader."No.");
+      BillOfLadingLine.VALIDATE(Type,BillOfLadingLine.Type::Order);
+      BillOfLadingLine.VALIDATE("No.",SalesHeader."No.");
+
+      //TM BEG 070915
+      BillOfLadingLine."External Document No." := SalesHeader."External Document No.";
+      Package.SETCURRENTKEY("Source Type","Source Subtype","Source ID","Location Code");
+      Package.SETRANGE("Source Type", DATABASE::"Sales Header");
+      Package.SETRANGE("Source Subtype", SalesHeader."Document Type");
+      Package.SETRANGE("Source ID", SalesHeader."No.");
+      IF Package.FIND('-') THEN
+      REPEAT
+        IF Package."External Tracking No." = '' THEN BEGIN
+          Package."External Tracking No." := BillOfLading."External Tracking No.";
+          Package.MODIFY;
+        END;
+        BillOfLadingLine."Packages (Top Level)" := BillOfLadingLine."Packages (Top Level)" + 1;
+        BillOfLadingLine.Weight := BillOfLadingLine.Weight + Package."Override Weight";
+        BillOfLadingLine.Value := BillOfLadingLine.Value + Package."Calculation Value";
+        BillOfLadingLine.Volume := BillOfLadingLine.Volume + Package."Calculation Volume";
+      UNTIL Package.NEXT = 0;
+      //TM END 070915
+      //<TPZ2301>
+      IF CheckEDITradePartner(SalesHeader."EDI Trade Partner") THEN
+        BillOfLadingLine."EDI ASN" := SalesHeader."EDI Order";
+      //</TPZ2301>
+      BillOfLadingLine.MODIFY(TRUE);
+
+
+      //TM BEG 070915
+      BOLMgt.UpdateBillOfLadingInfoLines(BillOfLading,TRUE);
+      //TM END 070915
+
+      IF ((SalesHeader."Shipping Agent Code" <> BillOfLading."Shipping Agent Code") OR
+          (SalesHeader."E-Ship Agent Service" <> BillOfLading."Shipping Agent Service")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text002,
+          SalesHeader.FIELDNAME("Shipping Agent Code"),
+          SalesHeader.FIELDNAME("E-Ship Agent Service"),
+          SalesHeader."Document Type",SalesHeader."No.");
+
+      IF ((SalesHeader."Sell-to Customer No." <> BillOfLading."Ship-to No.") OR
+          (SalesHeader."Ship-to Code" <> BillOfLading."Ship-to Code")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text002,
+          SalesHeader.FIELDNAME("Sell-to Customer No."),
+          SalesHeader.FIELDNAME("Ship-to Code"),
+          SalesHeader."Document Type",SalesHeader."No.");
+
+      //<TPZ2014>
+      IF (SalesHeader."Ship-to Address" <> BillOfLading."Ship-to Address")
+      THEN BEGIN
+        IF CONFIRM(Text50000) THEN BEGIN
+          BillOfLading."Ship-to Address"  := SalesHeader."Ship-to Address";
+          BillOfLading."Ship-to Address 2":= SalesHeader."Ship-to Address 2";
+          BillOfLading."Ship-to City"     := SalesHeader."Ship-to City";
+          BillOfLading."Ship-to Contact"  := SalesHeader."Ship-to Contact";
+          BillOfLading."Ship-to ZIP Code" := SalesHeader."Ship-to Post Code";
+          BillOfLading."Ship-to State"    := SalesHeader."Ship-to County";
+          BillOfLading."Ship-to Phone No.":= SalesHeader."Ship-to Phone No.";
+          BillOfLading.MODIFY;
+        END;
+      END;
+      //</TPZ2014>
+    END;
+
+    PROCEDURE AddSalesShipment@5(BillOfLading@1240030000 : Record 14000822;SalesShipmentHeader@1240030001 : Record 110;DisplayWarning@1240030002 : Boolean);
+    VAR
+      BillOfLadingLine@1240030003 : Record 14000823;
+      BOLMgt@1000000000 : Codeunit 14000821;
+    BEGIN
+      BillOfLading.TESTFIELD(Released,FALSE);
+
+      BillOfLadingLine.LOCKTABLE;
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+      IF NOT BillOfLadingLine.FIND('+') THEN BEGIN
+        BillOfLadingLine."Bill of Lading No." := BillOfLading."No.";
+        BillOfLadingLine."Line No." := 0;
+      END;
+
+      BillOfLadingLine.INIT;
+      BillOfLadingLine."Line No." := BillOfLadingLine."Line No." + 10000;
+      BillOfLadingLine.INSERT(TRUE);
+      BillOfLadingLine.VALIDATE("Source Type",DATABASE::"Sales Header");
+      IF SalesShipmentHeader."Order No." <> '' THEN
+        BillOfLadingLine.VALIDATE("Source Subtype",1)
+      ELSE
+        BillOfLadingLine.VALIDATE("Source Subtype",2);
+      BillOfLadingLine.VALIDATE("Source ID",SalesShipmentHeader."Order No.");
+      BillOfLadingLine.VALIDATE("Posted Source ID",SalesShipmentHeader."No.");
+      BillOfLadingLine.VALIDATE(Type,BillOfLadingLine.Type::"Sales Shipment (Posted)");
+      BillOfLadingLine.VALIDATE("No.",SalesShipmentHeader."No.");
+      BillOfLadingLine.MODIFY(TRUE);
+      //<TPZ2301>
+      IF CheckEDITradePartner(SalesShipmentHeader."EDI Trade Partner") THEN
+        BillOfLadingLine.VALIDATE("EDI ASN",SalesShipmentHeader."EDI Order");
+      //</TPZ2301>
+      //TM BEG 090815
+      BOLMgt.UpdateBillOfLadingInfoLines(BillOfLading,TRUE);
+      //TM END 090815
+
+
+      IF ((SalesShipmentHeader."Shipping Agent Code" <> BillOfLading."Shipping Agent Code") OR
+          (SalesShipmentHeader."E-Ship Agent Service" <> BillOfLading."Shipping Agent Service")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text003,
+          SalesShipmentHeader.FIELDNAME("Shipping Agent Code"),
+          SalesShipmentHeader.FIELDNAME("E-Ship Agent Service"),
+          SalesShipmentHeader."No.");
+
+      IF ((SalesShipmentHeader."Sell-to Customer No." <> BillOfLading."Ship-to No.") OR
+          (SalesShipmentHeader."Ship-to Code" <> BillOfLading."Ship-to Code")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text003,
+          SalesShipmentHeader.FIELDNAME("Sell-to Customer No."),
+          SalesShipmentHeader.FIELDNAME("Ship-to Code"),
+          SalesShipmentHeader."No.");
+    END;
+
+    PROCEDURE AddPurchHeader@14(BillOfLading@1240030000 : Record 14000822;PurchHeader@1240030001 : Record 38;PackingStation@1240030002 : Record 14000709;ShippingSetup@1240030003 : Record 14000707;DisplayWarning@1240030004 : Boolean);
+    VAR
+      BillOfLadingLine@1240030005 : Record 14000823;
+    BEGIN
+      BillOfLading.TESTFIELD(Released,FALSE);
+
+      IF NOT (PurchHeader."Document Type" IN
+              [PurchHeader."Document Type"::"Credit Memo",
+               PurchHeader."Document Type"::"Return Order"])
+      THEN
+        PurchHeader.TESTFIELD("Document Type",PurchHeader."Document Type"::"Credit Memo");
+
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETCURRENTKEY(Type,"No.",Closed,"Location Code");
+      BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::Order);
+      BillOfLadingLine.SETRANGE("No.",PurchHeader."No.");
+      BillOfLadingLine.SETRANGE(Closed,FALSE);
+      BillOfLadingLine.SETRANGE("Source Type",DATABASE::"Purchase Header");
+      BillOfLadingLine.SETRANGE("Source Subtype",PurchHeader."Document Type");
+      BillOfLadingLine.SETRANGE("Source ID",PurchHeader."No.");
+      IF ShippingSetup."Location Packing" THEN BEGIN
+        BillOfLadingLine.SETRANGE("Location Code",PackingStation."Location Code");
+      END;
+      IF BillOfLadingLine.FIND('-') THEN
+        ERROR(
+          Text001,
+          PurchHeader."Document Type",PurchHeader."No.",BillOfLadingLine."Bill of Lading No.");
+
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+      IF NOT BillOfLadingLine.FIND('+') THEN BEGIN
+        BillOfLadingLine."Bill of Lading No." := BillOfLading."No.";
+        BillOfLadingLine."Line No." := 10000;
+      END ELSE
+        BillOfLadingLine."Line No." := BillOfLadingLine."Line No." + 10000;
+      BillOfLadingLine.INIT;
+      BillOfLadingLine.INSERT(TRUE);
+      BillOfLadingLine.VALIDATE("Source Type",DATABASE::"Purchase Header");
+      BillOfLadingLine.VALIDATE("Source Subtype",PurchHeader."Document Type");
+      BillOfLadingLine.VALIDATE("Source ID",PurchHeader."No.");
+      BillOfLadingLine.VALIDATE(Type,BillOfLadingLine.Type::Order);
+      BillOfLadingLine.VALIDATE("No.",PurchHeader."No.");
+      BillOfLadingLine.MODIFY(TRUE);
+
+      IF ((PurchHeader."E-Ship Agent Code" <> BillOfLading."Shipping Agent Code") OR
+          (PurchHeader."E-Ship Agent Service" <> BillOfLading."Shipping Agent Service")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text002,
+          PurchHeader.FIELDNAME("E-Ship Agent Code"),
+          PurchHeader.FIELDNAME("E-Ship Agent Service"),
+          PurchHeader."Document Type",PurchHeader."No.");
+
+      IF ((PurchHeader."Buy-from Vendor No." <> BillOfLading."Ship-to No.") OR
+          (PurchHeader."Order Address Code" <> BillOfLading."Ship-to Code")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text002,
+          PurchHeader.FIELDNAME("Buy-from Vendor No."),
+          PurchHeader.FIELDNAME("Order Address Code"),
+          PurchHeader."Document Type",PurchHeader."No.");
+    END;
+
+    PROCEDURE AddPurchCrMemo@13(BillOfLading@1240030000 : Record 14000822;PurchCrMemoHeader@1240030001 : Record 124;DisplayWarning@1240030002 : Boolean);
+    VAR
+      BillOfLadingLine@1240030003 : Record 14000823;
+    BEGIN
+      BillOfLading.TESTFIELD(Released,FALSE);
+
+      BillOfLadingLine.LOCKTABLE;
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+      IF NOT BillOfLadingLine.FIND('+') THEN BEGIN
+        BillOfLadingLine."Bill of Lading No." := BillOfLading."No.";
+        BillOfLadingLine."Line No." := 0;
+      END;
+
+      BillOfLadingLine.INIT;
+      BillOfLadingLine."Line No." := BillOfLadingLine."Line No." + 10000;
+      BillOfLadingLine.INSERT(TRUE);
+      BillOfLadingLine.VALIDATE("Source Type",DATABASE::"Purchase Header");
+      BillOfLadingLine.VALIDATE("Source Subtype",3);
+      BillOfLadingLine.VALIDATE("Source ID",PurchCrMemoHeader."Pre-Assigned No.");
+      BillOfLadingLine.VALIDATE("Posted Source ID",PurchCrMemoHeader."No.");
+      BillOfLadingLine.VALIDATE(Type,BillOfLadingLine.Type::"Purchase Credit Memo (Posted)");
+      BillOfLadingLine.VALIDATE("No.",PurchCrMemoHeader."No.");
+      BillOfLadingLine.MODIFY(TRUE);
+
+      IF ((PurchCrMemoHeader."E-Ship Agent Code" <> BillOfLading."Shipping Agent Code") OR
+          (PurchCrMemoHeader."E-Ship Agent Service" <> BillOfLading."Shipping Agent Service")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text003,
+          PurchCrMemoHeader.FIELDNAME("E-Ship Agent Code"),
+          PurchCrMemoHeader.FIELDNAME("E-Ship Agent Service"),
+          PurchCrMemoHeader."No.");
+
+      IF ((PurchCrMemoHeader."Buy-from Vendor No." <> BillOfLading."Ship-to No.") OR
+          (PurchCrMemoHeader."Order Address Code" <> BillOfLading."Ship-to Code")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text003,
+          PurchCrMemoHeader.FIELDNAME("Buy-from Vendor No."),
+          PurchCrMemoHeader.FIELDNAME("Order Address Code"),
+          PurchCrMemoHeader."No.");
+    END;
+
+    PROCEDURE AddPurchReturnOrder@1240030000(BillOfLading@1240030000 : Record 14000822;ReturnShipmentHeader@1240030001 : Record 6650;DisplayWarning@1240030002 : Boolean);
+    VAR
+      BillOfLadingLine@1240030003 : Record 14000823;
+    BEGIN
+      BillOfLading.TESTFIELD(Released,FALSE);
+
+      BillOfLadingLine.LOCKTABLE;
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+      IF NOT BillOfLadingLine.FIND('+') THEN BEGIN
+        BillOfLadingLine."Bill of Lading No." := BillOfLading."No.";
+        BillOfLadingLine."Line No." := 0;
+      END;
+
+      BillOfLadingLine.INIT;
+      BillOfLadingLine."Line No." := BillOfLadingLine."Line No." + 10000;
+      BillOfLadingLine.INSERT(TRUE);
+      BillOfLadingLine.VALIDATE("Source Type",DATABASE::"Purchase Header");
+      BillOfLadingLine.VALIDATE("Source Subtype",3);
+      BillOfLadingLine.VALIDATE("Source ID",ReturnShipmentHeader."Return Order No.");
+      BillOfLadingLine.VALIDATE("Posted Source ID",ReturnShipmentHeader."No.");
+      BillOfLadingLine.VALIDATE(Type,BillOfLadingLine.Type::"Return Shipment (Posted)");
+      BillOfLadingLine.VALIDATE("No.",ReturnShipmentHeader."No.");
+      BillOfLadingLine.MODIFY(TRUE);
+
+      IF ((ReturnShipmentHeader."E-Ship Agent Code" <> BillOfLading."Shipping Agent Code") OR
+          (ReturnShipmentHeader."E-Ship Agent Service" <> BillOfLading."Shipping Agent Service")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text003,
+          ReturnShipmentHeader.FIELDNAME("E-Ship Agent Code"),
+          ReturnShipmentHeader.FIELDNAME("E-Ship Agent Service"),
+          ReturnShipmentHeader."No.");
+
+      IF ((ReturnShipmentHeader."Buy-from Vendor No." <> BillOfLading."Ship-to No.") OR
+          (ReturnShipmentHeader."Order Address Code" <> BillOfLading."Ship-to Code")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text003,
+          ReturnShipmentHeader.FIELDNAME("Buy-from Vendor No."),
+          ReturnShipmentHeader.FIELDNAME("Order Address Code"),
+          ReturnShipmentHeader."No.");
+    END;
+
+    PROCEDURE AddTransferHeader@1240030004(BillOfLading@1240030000 : Record 14000822;TransferHeader@1240030001 : Record 5740;PackingStation@1240030002 : Record 14000709;ShippingSetup@1240030003 : Record 14000707;DisplayWarning@1240030004 : Boolean);
+    VAR
+      BillOfLadingLine@1240030005 : Record 14000823;
+    BEGIN
+      BillOfLading.TESTFIELD(Released,FALSE);
+
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETCURRENTKEY(Type,"No.",Closed,"Location Code");
+      BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::Order);
+      BillOfLadingLine.SETRANGE("No.",TransferHeader."No.");
+      BillOfLadingLine.SETRANGE(Closed,FALSE);
+      BillOfLadingLine.SETRANGE("Source Type",DATABASE::"Transfer Header");
+      BillOfLadingLine.SETRANGE("Source Subtype",0);
+      BillOfLadingLine.SETRANGE("Source ID",TransferHeader."No.");
+      IF ShippingSetup."Location Packing" THEN BEGIN
+        BillOfLadingLine.SETRANGE("Location Code",PackingStation."Location Code");
+      END;
+      IF BillOfLadingLine.FIND('-') THEN
+        ERROR(
+          Text004,
+          TransferHeader."No.",BillOfLadingLine."Bill of Lading No.");
+
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+      IF NOT BillOfLadingLine.FIND('+') THEN BEGIN
+        BillOfLadingLine."Bill of Lading No." := BillOfLading."No.";
+        BillOfLadingLine."Line No." := 10000;
+      END ELSE
+        BillOfLadingLine."Line No." := BillOfLadingLine."Line No." + 10000;
+      BillOfLadingLine.INIT;
+      BillOfLadingLine.INSERT(TRUE);
+      BillOfLadingLine.VALIDATE("Source Type",DATABASE::"Transfer Header");
+      BillOfLadingLine.VALIDATE("Source Subtype",0);
+      BillOfLadingLine.VALIDATE("Source ID",TransferHeader."No.");
+      BillOfLadingLine.VALIDATE(Type,BillOfLadingLine.Type::Order);
+      BillOfLadingLine.VALIDATE("No.",TransferHeader."No.");
+      BillOfLadingLine.MODIFY(TRUE);
+
+      IF ((TransferHeader."Shipping Agent Code" <> BillOfLading."Shipping Agent Code") OR
+          (TransferHeader."E-Ship Agent Service" <> BillOfLading."Shipping Agent Service")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text005,
+          TransferHeader.FIELDNAME("Shipping Agent Code"),
+          TransferHeader.FIELDNAME("E-Ship Agent Service"),
+          TransferHeader."No.");
+
+      IF (TransferHeader."Transfer-to Code" <> BillOfLading."Ship-to No.") AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text006,
+          TransferHeader.FIELDNAME("Transfer-to Code"),
+          TransferHeader."No.");
+    END;
+
+    PROCEDURE AddTransferShipment@1240030003(BillOfLading@1240030000 : Record 14000822;TransferShipmentHeader@1240030001 : Record 5744;DisplayWarning@1240030002 : Boolean);
+    VAR
+      BillOfLadingLine@1240030003 : Record 14000823;
+      PostedPackage@1000000000 : Record 14000704;
+      BOLMgt@1000000001 : Codeunit 14000821;
+    BEGIN
+      BillOfLading.TESTFIELD(Released,FALSE);
+
+      //TM BEG 070915
+      BillOfLading.TESTFIELD("External Tracking No.");
+      //TM END 070915
+
+      BillOfLadingLine.LOCKTABLE;
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+      IF NOT BillOfLadingLine.FIND('+') THEN BEGIN
+        BillOfLadingLine."Bill of Lading No." := BillOfLading."No.";
+        BillOfLadingLine."Line No." := 0;
+      END;
+
+      BillOfLadingLine.INIT;
+      BillOfLadingLine."Line No." := BillOfLadingLine."Line No." + 10000;
+      BillOfLadingLine.INSERT(TRUE);
+      BillOfLadingLine.VALIDATE("Source Type",DATABASE::"Transfer Header");
+      BillOfLadingLine.VALIDATE("Source Subtype",0);
+      BillOfLadingLine.VALIDATE("Source ID",TransferShipmentHeader."Transfer Order No.");
+      BillOfLadingLine.VALIDATE("Posted Source ID",TransferShipmentHeader."No.");
+      BillOfLadingLine.VALIDATE(Type,BillOfLadingLine.Type::"Transfer Shipment (Posted)");
+      BillOfLadingLine.VALIDATE("No.",TransferShipmentHeader."No.");
+
+      //TM BEG 070915
+      PostedPackage.SETCURRENTKEY("Source Type","Source Subtype","Posted Source ID","Bill of Lading No.");
+      PostedPackage.SETRANGE("Source Type", DATABASE::"Transfer Header");
+      PostedPackage.SETRANGE("Source ID", TransferShipmentHeader."Transfer Order No.");
+      PostedPackage.SETRANGE("Posted Source ID", TransferShipmentHeader."No.");
+      IF PostedPackage.FIND('-') THEN
+      REPEAT
+        IF PostedPackage."External Tracking No." = '' THEN BEGIN
+          PostedPackage."External Tracking No." := BillOfLading."External Tracking No.";
+          PostedPackage.MODIFY;
+        END;
+        BillOfLadingLine."Packages (Top Level)" := BillOfLadingLine."Packages (Top Level)" + 1;
+        BillOfLadingLine.Weight := BillOfLadingLine.Weight + PostedPackage."Override Weight";
+        BillOfLadingLine.Value := BillOfLadingLine.Value + PostedPackage."Calculation Value";
+        BillOfLadingLine.Volume := BillOfLadingLine.Volume + PostedPackage."Calculation Volume";
+      UNTIL PostedPackage.NEXT = 0;
+      //TM END 070915
+
+      BillOfLadingLine.MODIFY(TRUE);
+
+      //TM BEG 070915
+      BOLMgt.UpdateBillOfLadingInfoLines(BillOfLading,TRUE);
+      //TM END 070915
+
+
+      IF ((TransferShipmentHeader."Shipping Agent Code" <> BillOfLading."Shipping Agent Code") OR
+          (TransferShipmentHeader."E-Ship Agent Service" <> BillOfLading."Shipping Agent Service")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text003,
+          TransferShipmentHeader.FIELDNAME("Shipping Agent Code"),
+          TransferShipmentHeader.FIELDNAME("E-Ship Agent Service"),
+          TransferShipmentHeader."No.");
+
+      IF (TransferShipmentHeader."Transfer-to Code" <> BillOfLading."Ship-to No.") AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text007,
+          TransferShipmentHeader.FIELDNAME("Transfer-to Code"),
+          TransferShipmentHeader."No.");
+    END;
+
+    PROCEDURE AddPostedPackage@6(BillOfLading@1240030000 : Record 14000822;PostedPackage@1240030001 : Record 14000704;DisplayWarning@1240030002 : Boolean);
+    VAR
+      BillOfLadingLine@1240030003 : Record 14000823;
+    BEGIN
+      BillOfLading.TESTFIELD(Released,FALSE);
+
+      BillOfLadingLine.LOCKTABLE;
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+      IF NOT BillOfLadingLine.FIND('+') THEN BEGIN
+        BillOfLadingLine."Bill of Lading No." := BillOfLading."No.";
+        BillOfLadingLine."Line No." := 0;
+      END;
+
+      BillOfLadingLine.INIT;
+      BillOfLadingLine."Line No." := BillOfLadingLine."Line No." + 10000;
+      BillOfLadingLine.INSERT(TRUE);
+      BillOfLadingLine.VALIDATE(Type,BillOfLadingLine.Type::Package);
+      BillOfLadingLine.VALIDATE("No.",PostedPackage."No.");
+      BillOfLadingLine.MODIFY(TRUE);
+
+      IF ((PostedPackage."Shipping Agent Code" <> BillOfLading."Shipping Agent Code") OR
+          (PostedPackage."Shipping Agent Service" <> BillOfLading."Shipping Agent Service")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text008,
+          PostedPackage.FIELDNAME("Shipping Agent Code"),
+          PostedPackage.FIELDNAME("Shipping Agent Service"),
+          PostedPackage."No.");
+
+      IF ((PostedPackage."Ship-to No." <> BillOfLading."Ship-to No.") OR
+          (PostedPackage."Ship-to Code" <> BillOfLading."Ship-to Code")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text008,
+          PostedPackage.FIELDNAME("Ship-to No."),
+          PostedPackage.FIELDNAME("Ship-to Code"),
+          PostedPackage."No.");
+    END;
+
+    PROCEDURE AddBillOfLading@1240030007(BillOfLading@1240030000 : Record 14000822;NewBillOfLading@1240030001 : Record 14000822;PackingStation@1240030005 : Record 14000709;ShippingSetup@1240030004 : Record 14000707;DisplayWarning@1240030002 : Boolean);
+    VAR
+      BillOfLadingLine@1240030003 : Record 14000823;
+    BEGIN
+      BillOfLading.TESTFIELD(Released,FALSE);
+      CheckCyclicReferenceBOL(NewBillOfLading."No.",BillOfLading."No.",NewBillOfLading."No.");
+
+      BillOfLadingLine.LOCKTABLE;
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+      IF NOT BillOfLadingLine.FIND('+') THEN BEGIN
+        BillOfLadingLine."Bill of Lading No." := BillOfLading."No.";
+        BillOfLadingLine."Line No." := 0;
+      END;
+
+      BillOfLadingLine.INIT;
+      BillOfLadingLine."Line No." := BillOfLadingLine."Line No." + 10000;
+      BillOfLadingLine.INSERT(TRUE);
+      BillOfLadingLine.VALIDATE("Source Type",DATABASE::"Bill of Lading");
+      BillOfLadingLine.VALIDATE("Source Subtype",0);
+      BillOfLadingLine.VALIDATE("Source ID",NewBillOfLading."No.");
+      BillOfLadingLine.VALIDATE("Posted Source ID",NewBillOfLading."No.");
+      IF NewBillOfLading.Released THEN
+        BillOfLadingLine.VALIDATE(Type,BillOfLadingLine.Type::"Bill of Lading (Released)")
+      ELSE
+        BillOfLadingLine.VALIDATE(Type,BillOfLadingLine.Type::"Bill of Lading");
+      BillOfLadingLine.VALIDATE("No.",NewBillOfLading."No.");
+      BillOfLadingLine.MODIFY(TRUE);
+
+      IF ((NewBillOfLading."Shipping Agent Code" <> BillOfLading."Shipping Agent Code") OR
+          (NewBillOfLading."Shipping Agent Service" <> BillOfLading."Shipping Agent Service")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text003,
+          NewBillOfLading.FIELDNAME("Shipping Agent Code"),
+          NewBillOfLading.FIELDNAME("Shipping Agent Service"),
+          NewBillOfLading."No.");
+
+      IF ((NewBillOfLading."Ship-to No." <> BillOfLading."Ship-to No.") OR
+          (NewBillOfLading."Ship-to Code" <> BillOfLading."Ship-to Code")) AND
+         DisplayWarning
+      THEN
+        MESSAGE(
+          Text008,
+          NewBillOfLading.FIELDNAME("Ship-to No."),
+          NewBillOfLading.FIELDNAME("Ship-to Code"),
+          NewBillOfLading."No.");
+    END;
+
+    PROCEDURE CheckCyclicReferenceBOL@1240030006(BillOfLadingNo@1240030001 : Code[20];AddtoBillOfLadingNo@1240030002 : Code[20];BillOfLadingNoToAdd@1240030003 : Code[20]);
+    VAR
+      BillOfLadingLine@1240030000 : Record 14000823;
+    BEGIN
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLadingNo);
+      BillOfLadingLine.SETFILTER(
+        Type,'%1|%2',
+        BillOfLadingLine.Type::"Bill of Lading",BillOfLadingLine.Type::"Bill of Lading (Released)");
+      IF BillOfLadingLine.FIND('-') THEN
+        REPEAT
+          IF (BillOfLadingLine."No." = AddtoBillOfLadingNo) OR
+             (BillOfLadingLine."No." = BillOfLadingNoToAdd)
+          THEN
+            ERROR(Text012,BillOfLadingLine."Bill of Lading No.")
+          ELSE
+            CheckCyclicReferenceBOL(
+              BillOfLadingLine."No.",AddtoBillOfLadingNo,BillOfLadingNoToAdd);
+        UNTIL BillOfLadingLine.NEXT = 0;
+    END;
+
+    PROCEDURE OpenAddSalesOrders@10(BillOfLading@1240030000 : Record 14000822;PackingStation@1240030003 : Record 14000709;ShippingSetup@1240030004 : Record 14000707);
+    VAR
+      Salesheader@1240030001 : Record 36;
+      SalesOrdersBOL@1240030002 : Page 14000830;
+    BEGIN
+      Salesheader.RESET;
+      Salesheader.FILTERGROUP(2);
+      IF ShippingSetup."Location Packing" THEN
+        Salesheader.SETRANGE("Location Filter",PackingStation."Location Code");
+      Salesheader.SETRANGE("Document Type",Salesheader."Document Type"::Order);
+      Salesheader.FILTERGROUP(0);
+      Salesheader.SETRANGE("Exists on Bill of Lading",TRUE);
+      IF BillOfLading."Ship-to Type" = BillOfLading."Ship-to Type"::Customer THEN BEGIN
+        IF BillOfLading."Ship-to No." <> '' THEN
+          Salesheader.SETRANGE("Sell-to Customer No.",BillOfLading."Ship-to No.");
+        IF BillOfLading."Ship-to Code" <> '' THEN
+          Salesheader.SETRANGE("Ship-to Code",BillOfLading."Ship-to Code");
+      END;
+
+      CLEAR(SalesOrdersBOL);
+      SalesOrdersBOL.SetBillOfLadingCode(BillOfLading."No.");
+      SalesOrdersBOL.SETTABLEVIEW(Salesheader);
+      SalesOrdersBOL.RUNMODAL;
+    END;
+
+    PROCEDURE OpenAddSalesShipments@9(BillOfLading@1240030000 : Record 14000822);
+    VAR
+      SalesShipmentHeader@1240030001 : Record 110;
+      PostedSalesShipmentBOL@1240030002 : Page 14000831;
+    BEGIN
+      SalesShipmentHeader.RESET;
+      SalesShipmentHeader.SETCURRENTKEY("Bill of Lading No.");
+      SalesShipmentHeader.SETRANGE("Bill of Lading No.",'');
+      IF BillOfLading."Ship-to Type" = BillOfLading."Ship-to Type"::Customer THEN BEGIN
+        IF BillOfLading."Ship-to No." <> ''THEN
+          SalesShipmentHeader.SETRANGE("Sell-to Customer No.",BillOfLading."Ship-to No.");
+        IF BillOfLading."Ship-to Code" <> '' THEN
+          SalesShipmentHeader.SETRANGE("Ship-to Code",BillOfLading."Ship-to Code");
+      END;
+
+      CLEAR(PostedSalesShipmentBOL);
+      PostedSalesShipmentBOL.SetBillOfLadingCode(BillOfLading."No.");
+      PostedSalesShipmentBOL.SETTABLEVIEW(SalesShipmentHeader);
+      PostedSalesShipmentBOL.RUNMODAL;
+    END;
+
+    PROCEDURE OpenAddPostedPackages@8(BillOfLading@1240030000 : Record 14000822);
+    VAR
+      PostedPackage@1240030001 : Record 14000704;
+      PostedPackageBOL@1240030002 : Page 14000835;
+    BEGIN
+      PostedPackage.RESET;
+      PostedPackage.SETCURRENTKEY("Bill of Lading No.");
+      PostedPackage.SETRANGE("Bill of Lading No.",'');
+      PostedPackage.SETRANGE("Original Package No.",'');
+      IF BillOfLading."Ship-to Type" = BillOfLading."Ship-to Type"::Customer THEN BEGIN
+        IF BillOfLading."Ship-to No." <> ''THEN
+          PostedPackage.SETRANGE("Ship-to No.",BillOfLading."Ship-to No.");
+        IF BillOfLading."Ship-to Code" <> '' THEN
+          PostedPackage.SETRANGE("Ship-to Code",BillOfLading."Ship-to Code");
+      END;
+
+      CLEAR(PostedPackageBOL);
+      PostedPackageBOL.SetBillOfLadingCode(BillOfLading."No.");
+      PostedPackageBOL.SETTABLEVIEW(PostedPackage);
+      PostedPackageBOL.RUNMODAL;
+    END;
+
+    PROCEDURE NewBillOfLadingSalesHeader@11(VAR BillOfLading@1240030000 : Record 14000822;SalesHeader@1240030001 : Record 36;PackingStation@1240030002 : Record 14000709;ShippingSetup@1240030003 : Record 14000707;AddCurrent@1240030009 : Boolean;OpenScanning@1240030010 : Boolean;MultiDoc@1240030012 : Boolean;MultiDocNo@1240030013 : Code[250]) : Boolean;
+    VAR
+      Customer@1240030005 : Record 18;
+      ShipToAddress@1240030006 : Record 222;
+      ShippingAgent@1240030007 : Record 291;
+      ShippingAgentService@1240030008 : Record 14000708;
+      SalesHeader2@1240030011 : Record 36;
+      BillOfLadingLine@1240030014 : Record 14000823;
+      PackingRule@1240020000 : Record 14000715;
+      BillOfLadingWorksheetScan@1240020002 : Page 14000837;
+      UseShipToInfo@1240020001 : Boolean;
+    BEGIN
+      BillOfLading.TESTFIELD("No.",'');
+
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETCURRENTKEY(Type,"No.",Closed,"Location Code");
+      BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::Order);
+      BillOfLadingLine.SETRANGE("No.",SalesHeader."No.");
+      BillOfLadingLine.SETRANGE(Closed,FALSE);
+      IF ShippingSetup."Location Packing" THEN BEGIN
+        BillOfLadingLine.SETRANGE("Location Code",PackingStation."Location Code");
+      END;
+      IF NOT BillOfLadingLine.FIND('-') THEN
+        CLEAR(BillOfLadingLine);
+      IF (BillOfLadingLine."Bill of Lading No." <> '') AND AddCurrent THEN
+        ERROR(
+          Text001,
+          SalesHeader."Document Type",SalesHeader."No.",BillOfLadingLine."Bill of Lading No.");
+
+      IF SalesHeader."No." = '' THEN BEGIN
+        IF AddCurrent THEN
+          ERROR(Text009,SalesHeader."Document Type");
+
+        IF PAGE.RUNMODAL(0,Customer) <> ACTION::LookupOK THEN
+          EXIT(FALSE);
+
+        CLEAR(SalesHeader);
+        SalesHeader."Sell-to Customer No." := Customer."No.";
+
+        ShipToAddress.RESET;
+        ShipToAddress.SETRANGE("Customer No.",Customer."No.");
+        IF ShipToAddress.FIND('-') THEN
+          IF PAGE.RUNMODAL(0,ShipToAddress) = ACTION::LookupOK THEN
+            SalesHeader."Ship-to Code" := ShipToAddress.Code;
+
+        IF PAGE.RUNMODAL(0,ShippingAgent) = ACTION::LookupOK THEN BEGIN
+          SalesHeader."Shipping Agent Code" := ShippingAgent.Code;
+          ShippingAgentService.RESET;
+          ShippingAgentService.SETRANGE("Shipping Agent Code",ShippingAgent.Code);
+          IF ShippingAgentService.FIND('-') THEN
+            IF ShippingAgentService.NEXT = 0 THEN
+              SalesHeader."E-Ship Agent Service" := ShippingAgentService.Code
+            ELSE
+              IF PAGE.RUNMODAL(0,ShippingAgentService) = ACTION::LookupOK THEN
+                SalesHeader."E-Ship Agent Service" := ShippingAgentService.Code;
+        END;
+      END;
+
+      BillOfLading.INSERT(TRUE);
+      BillOfLading.VALIDATE("Ship-to Type",BillOfLading."Ship-to Type"::Customer);
+      IF SalesHeader."Sell-to Customer No." <> '' THEN BEGIN
+        BillOfLading.VALIDATE("Ship-to No.",SalesHeader."Sell-to Customer No.");
+        IF SalesHeader."Residential Delivery" THEN
+          BillOfLading."Residential Delivery" := SalesHeader."Residential Delivery";
+        UseShipToInfo := FALSE;
+        IF SalesHeader."Ship-to Code" <> '' THEN BEGIN
+          IF ShipToAddress.GET(SalesHeader."Sell-to Customer No.",SalesHeader."Ship-to Code") THEN
+            IF ShipToAddress."Packing Rule Code" <> '' THEN BEGIN
+              PackingRule.GET(ShipToAddress."Packing Rule Code");
+              IF PackingRule."Use Ship-To Address from Doc." THEN
+                UseShipToInfo := TRUE
+              ELSE BEGIN
+                BillOfLading.VALIDATE("Ship-to Code",SalesHeader."Ship-to Code");
+              END;
+            END;
+        END ELSE BEGIN
+          IF Customer.GET(SalesHeader."Sell-to Customer No.") THEN BEGIN
+            IF Customer."Packing Rule Code" <> '' THEN BEGIN
+              PackingRule.GET(Customer."Packing Rule Code");
+              IF PackingRule."Use Ship-To Address from Doc." THEN
+                UseShipToInfo := TRUE;
+            END;
+          END;
+        END;
+
+        IF ShippingSetup."Default Packing Rule Code" <> '' THEN BEGIN
+          PackingRule.GET(ShippingSetup."Default Packing Rule Code");
+          IF PackingRule."Use Ship-To Address from Doc." THEN
+            UseShipToInfo := TRUE;
+        END;
+
+        IF NOT UseShipToInfo THEN
+          IF ShippingSetup."Use Ship-To Address from Doc." THEN
+            UseShipToInfo := TRUE;
+
+        IF UseShipToInfo THEN BEGIN
+          BillOfLading."Ship-to Code" := SalesHeader."Ship-to Code";
+          BillOfLading."Ship-to Name" := SalesHeader."Ship-to Name";
+          BillOfLading."Ship-to Name 2" := SalesHeader."Ship-to Name 2";
+          BillOfLading."Ship-to Address" := SalesHeader."Ship-to Address";
+          BillOfLading."Ship-to Address 2" := SalesHeader."Ship-to Address 2";
+          BillOfLading."Ship-to City" := SalesHeader."Ship-to City";
+          BillOfLading."Ship-to Contact" := SalesHeader."Ship-to Contact";
+          BillOfLading."Ship-to ZIP Code" :=
+            ShippingSetup.AdjustZIPCode(SalesHeader."Ship-to Post Code");
+          BillOfLading."Ship-to State" := SalesHeader."Ship-to County";
+          BillOfLading."Ship-to Country Code" := SalesHeader."Ship-to Country/Region Code";
+          ShippingSetup.AdjustZIPStateCityCode(
+            BillOfLading."Ship-to ZIP Code",BillOfLading."Ship-to State",BillOfLading."Ship-to City",
+            BillOfLading."Ship-to Country Code");
+        END;
+      END;
+
+      IF SalesHeader."Shipping Agent Code" <> '' THEN BEGIN
+        BillOfLading.VALIDATE("Shipping Agent Code",SalesHeader."Shipping Agent Code");
+        IF SalesHeader."E-Ship Agent Service" <> '' THEN
+          BillOfLading.VALIDATE("Shipping Agent Service",SalesHeader."E-Ship Agent Service");
+      END;
+
+      BillOfLading.MODIFY(TRUE);
+
+      IF AddCurrent THEN BEGIN
+        IF MultiDoc THEN BEGIN
+          SalesHeader2.RESET;
+          SalesHeader2.SETRANGE("Document Type",SalesHeader."Document Type");
+          SalesHeader2.SETFILTER("No.",MultiDocNo);
+          SalesHeader2.FIND('-');
+          REPEAT
+            BillOfLadingLine.RESET;
+            BillOfLadingLine.SETCURRENTKEY(Type,"No.",Closed,"Location Code");
+            BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::Order);
+            BillOfLadingLine.SETRANGE("No.",SalesHeader2."No.");
+            BillOfLadingLine.SETRANGE(Closed,FALSE);
+            IF ShippingSetup."Location Packing" THEN BEGIN
+              BillOfLadingLine.SETRANGE("Location Code",PackingStation."Location Code");
+            END;
+            IF NOT BillOfLadingLine.FIND('-') THEN
+              CLEAR(BillOfLadingLine);
+            IF (BillOfLadingLine."Bill of Lading No." <> '') AND
+               (BillOfLadingLine."Bill of Lading No." <> BillOfLading."No.")
+            THEN
+              ERROR(
+                Text001,
+                SalesHeader."Document Type",SalesHeader2."No.",BillOfLadingLine."Bill of Lading No.");
+            AddSalesHeader(BillOfLading,SalesHeader2,PackingStation,ShippingSetup,FALSE);
+          UNTIL SalesHeader2.NEXT = 0;
+        END ELSE
+          AddSalesHeader(BillOfLading,SalesHeader,PackingStation,ShippingSetup,FALSE);
+      END;
+
+      IF OpenScanning THEN BEGIN
+        COMMIT;
+
+        CLEAR(BillOfLadingWorksheetScan);
+        BillOfLadingWorksheetScan.OpenWithBillOfLading(BillOfLading."No.",TRUE);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE NewBillOfLadingPurchHeader@15(VAR BillOfLading@1240030000 : Record 14000822;PurchHeader@1240030001 : Record 38;PackingStation@1240030002 : Record 14000709;ShippingSetup@1240030003 : Record 14000707;AddCurrent@1240030004 : Boolean;OpenScanning@1240030005 : Boolean;MultiDoc@1240030006 : Boolean;MultiDocNo@1240030007 : Code[250]) : Boolean;
+    VAR
+      Vendor@1240030009 : Record 23;
+      OrderAddress@1240030010 : Record 224;
+      ShippingAgent@1240030011 : Record 291;
+      ShippingAgentService@1240030012 : Record 14000708;
+      PurchHeader2@1240030013 : Record 38;
+      BillOfLadingLine@1240030014 : Record 14000823;
+      BillOfLadingWorksheetScan@1240020002 : Page 14000837;
+    BEGIN
+      BillOfLading.TESTFIELD("No.",'');
+
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETCURRENTKEY(Type,"No.",Closed,"Location Code");
+      BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::Order);
+      BillOfLadingLine.SETRANGE("No.",PurchHeader."No.");
+      BillOfLadingLine.SETRANGE(Closed,FALSE);
+      IF ShippingSetup."Location Packing" THEN BEGIN
+        BillOfLadingLine.SETRANGE("Location Code",PackingStation."Location Code");
+      END;
+      IF NOT BillOfLadingLine.FIND('-') THEN
+        CLEAR(BillOfLadingLine);
+      IF (BillOfLadingLine."Bill of Lading No." <> '') AND AddCurrent THEN
+        ERROR(
+          Text001,
+          PurchHeader."Document Type",PurchHeader."No.",BillOfLadingLine."Bill of Lading No.");
+
+      IF PurchHeader."No." = '' THEN BEGIN
+        IF AddCurrent THEN
+          ERROR(Text009,PurchHeader."Document Type");
+
+        IF PAGE.RUNMODAL(0,Vendor) <> ACTION::LookupOK THEN
+          EXIT(FALSE);
+
+        CLEAR(PurchHeader);
+        PurchHeader."Buy-from Vendor No." := Vendor."No.";
+
+        OrderAddress.RESET;
+        OrderAddress.SETRANGE("Vendor No.",Vendor."No.");
+        IF OrderAddress.FIND('-') THEN
+          IF PAGE.RUNMODAL(0,OrderAddress) = ACTION::LookupOK THEN
+            PurchHeader."Order Address Code" := OrderAddress.Code;
+
+        IF PAGE.RUNMODAL(0,ShippingAgent) = ACTION::LookupOK THEN BEGIN
+          PurchHeader."E-Ship Agent Code" := ShippingAgent.Code;
+          ShippingAgentService.RESET;
+          ShippingAgentService.SETRANGE("Shipping Agent Code",ShippingAgent.Code);
+          IF ShippingAgentService.FIND('-') THEN
+            IF ShippingAgentService.NEXT = 0 THEN
+              PurchHeader."E-Ship Agent Service" := ShippingAgentService.Code
+            ELSE
+              IF PAGE.RUNMODAL(0,ShippingAgentService) = ACTION::LookupOK THEN
+                PurchHeader."E-Ship Agent Service" := ShippingAgentService.Code;
+        END;
+      END;
+
+      BillOfLading.INSERT(TRUE);
+      BillOfLading.VALIDATE("Ship-to Type",BillOfLading."Ship-to Type"::Vendor);
+      IF PurchHeader."Buy-from Vendor No." <> '' THEN BEGIN
+        BillOfLading.VALIDATE("Ship-to No.",PurchHeader."Buy-from Vendor No.");
+        IF ShippingSetup."Use Ship-To Address from Doc." THEN BEGIN
+          BillOfLading."Ship-to Name" := PurchHeader."Ship-to Name";
+          BillOfLading."Ship-to Name 2" := PurchHeader."Ship-to Name 2";
+          BillOfLading."Ship-to Address" := PurchHeader."Ship-to Address";
+          BillOfLading."Ship-to Address 2" := PurchHeader."Ship-to Address 2";
+          BillOfLading."Ship-to City" := PurchHeader."Ship-to City";
+          BillOfLading."Ship-to Contact" := PurchHeader."Ship-to Contact";
+          BillOfLading."Ship-to ZIP Code" :=
+            ShippingSetup.AdjustZIPCode(PurchHeader."Ship-to Post Code");
+          BillOfLading."Ship-to State" := PurchHeader."Ship-to County";
+          BillOfLading."Ship-to Country Code" := PurchHeader."Ship-to Country/Region Code";
+          ShippingSetup.AdjustZIPStateCityCode(
+            BillOfLading."Ship-to ZIP Code",BillOfLading."Ship-to State",BillOfLading."Ship-to City",
+            BillOfLading."Ship-to Country Code");
+        END ELSE
+          IF PurchHeader."Order Address Code" <> '' THEN
+            BillOfLading.VALIDATE("Ship-to Code",PurchHeader."Order Address Code");
+      END;
+
+      IF PurchHeader."E-Ship Agent Code" <> '' THEN BEGIN
+        BillOfLading.VALIDATE("Shipping Agent Code",PurchHeader."E-Ship Agent Code");
+        IF PurchHeader."E-Ship Agent Service" <> '' THEN
+          BillOfLading.VALIDATE("Shipping Agent Service",PurchHeader."E-Ship Agent Service");
+      END;
+
+      BillOfLading.MODIFY(TRUE);
+
+      IF AddCurrent THEN BEGIN
+        IF MultiDoc THEN BEGIN
+          PurchHeader2.RESET;
+          PurchHeader2.SETRANGE("Document Type",PurchHeader."Document Type");
+          PurchHeader2.SETFILTER("No.",MultiDocNo);
+          PurchHeader2.FIND('-');
+          REPEAT
+            BillOfLadingLine.RESET;
+            BillOfLadingLine.SETCURRENTKEY(Type,"No.",Closed,"Location Code");
+            BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::Order);
+            BillOfLadingLine.SETRANGE("No.",PurchHeader2."No.");
+            BillOfLadingLine.SETRANGE(Closed,FALSE);
+            IF ShippingSetup."Location Packing" THEN BEGIN
+              BillOfLadingLine.SETRANGE("Location Code",PackingStation."Location Code");
+            END;
+            IF NOT BillOfLadingLine.FIND('-') THEN
+              CLEAR(BillOfLadingLine);
+            IF (BillOfLadingLine."Bill of Lading No." <> '') AND
+               (BillOfLadingLine."Bill of Lading No." <> BillOfLading."No.")
+            THEN
+              ERROR(
+                Text001,
+                PurchHeader2."No.",BillOfLadingLine."Bill of Lading No.");
+            AddPurchHeader(BillOfLading,PurchHeader2,PackingStation,ShippingSetup,FALSE);
+          UNTIL PurchHeader2.NEXT = 0;
+        END ELSE
+          AddPurchHeader(BillOfLading,PurchHeader,PackingStation,ShippingSetup,FALSE);
+      END;
+
+      IF OpenScanning THEN BEGIN
+        COMMIT;
+
+        CLEAR(BillOfLadingWorksheetScan);
+        BillOfLadingWorksheetScan.OpenWithBillOfLading(BillOfLading."No.",TRUE);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE NewBillOfLadingTransferHeader@1240030005(VAR BillOfLading@1240030000 : Record 14000822;TransferHeader@1240030001 : Record 5740;PackingStation@1240030002 : Record 14000709;ShippingSetup@1240030003 : Record 14000707;AddCurrent@1240030004 : Boolean;OpenScanning@1240030005 : Boolean;MultiDoc@1240030006 : Boolean;MultiDocNo@1240030007 : Code[250]) : Boolean;
+    VAR
+      BillOfLadingWorksheetScan@1240030008 : Page 14000837;
+      Location@1240030009 : Record 14;
+      ShippingAgent@1240030011 : Record 291;
+      ShippingAgentService@1240030012 : Record 14000708;
+      TransferHeader2@1240030013 : Record 5740;
+      BillOfLadingLine@1240030014 : Record 14000823;
+    BEGIN
+      BillOfLading.TESTFIELD("No.",'');
+
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETCURRENTKEY(Type,"No.",Closed,"Location Code");
+      BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::Order);
+      BillOfLadingLine.SETRANGE("No.",TransferHeader."No.");
+      BillOfLadingLine.SETRANGE(Closed,FALSE);
+      IF ShippingSetup."Location Packing" THEN BEGIN
+        BillOfLadingLine.SETRANGE("Location Code",PackingStation."Location Code");
+      END;
+      IF NOT BillOfLadingLine.FIND('-') THEN
+        CLEAR(BillOfLadingLine);
+      IF (BillOfLadingLine."Bill of Lading No." <> '') AND AddCurrent THEN
+        ERROR(
+          Text004,
+          TransferHeader."No.",BillOfLadingLine."Bill of Lading No.");
+
+      IF TransferHeader."No." = '' THEN BEGIN
+        IF AddCurrent THEN
+          ERROR(Text010);
+
+        IF PAGE.RUNMODAL(0,Location) <> ACTION::LookupOK THEN
+          EXIT(FALSE);
+
+        CLEAR(TransferHeader);
+        TransferHeader."Transfer-to Code" := Location.Code;
+
+        IF PAGE.RUNMODAL(0,ShippingAgent) = ACTION::LookupOK THEN BEGIN
+          TransferHeader."Shipping Agent Code" := ShippingAgent.Code;
+          ShippingAgentService.RESET;
+          ShippingAgentService.SETRANGE("Shipping Agent Code",ShippingAgent.Code);
+          IF ShippingAgentService.FIND('-') THEN
+            IF ShippingAgentService.NEXT = 0 THEN
+              TransferHeader."E-Ship Agent Service" := ShippingAgentService.Code
+            ELSE
+              IF PAGE.RUNMODAL(0,ShippingAgentService) = ACTION::LookupOK THEN
+                TransferHeader."E-Ship Agent Service" := ShippingAgentService.Code;
+        END;
+      END;
+
+      BillOfLading.INSERT(TRUE);
+      BillOfLading.VALIDATE("Ship-to Type",BillOfLading."Ship-to Type"::Location);
+      IF TransferHeader."Transfer-to Code" <> '' THEN BEGIN
+        BillOfLading.VALIDATE("Ship-to No.",TransferHeader."Transfer-to Code");
+        IF ShippingSetup."Use Ship-To Address from Doc." THEN BEGIN
+          BillOfLading."Ship-to Name" := TransferHeader."Transfer-to Name";
+          BillOfLading."Ship-to Name 2" := TransferHeader."Transfer-to Name 2";
+          BillOfLading."Ship-to Address" := TransferHeader."Transfer-to Address";
+          BillOfLading."Ship-to Address 2" := TransferHeader."Transfer-to Address 2";
+          BillOfLading."Ship-to City" := TransferHeader."Transfer-to City";
+          BillOfLading."Ship-to Contact" := TransferHeader."Transfer-to Contact";
+          BillOfLading."Ship-to ZIP Code" :=
+            ShippingSetup.AdjustZIPCode(TransferHeader."Transfer-to Post Code");
+          BillOfLading."Ship-to State" := TransferHeader."Transfer-to County";
+          BillOfLading."Ship-to Country Code" := TransferHeader."Trsf.-to Country/Region Code";
+          ShippingSetup.AdjustZIPStateCityCode(
+            BillOfLading."Ship-to ZIP Code",BillOfLading."Ship-to State",BillOfLading."Ship-to City",
+            BillOfLading."Ship-to Country Code");
+        END ELSE
+          BillOfLading.VALIDATE("Ship-to Code",'');
+      END;
+
+      IF TransferHeader."Shipping Agent Code" <> '' THEN BEGIN
+        BillOfLading.VALIDATE("Shipping Agent Code",TransferHeader."Shipping Agent Code");
+        IF TransferHeader."E-Ship Agent Service" <> '' THEN
+          BillOfLading.VALIDATE("Shipping Agent Service",TransferHeader."E-Ship Agent Service");
+      END;
+
+      BillOfLading.MODIFY(TRUE);
+
+      IF AddCurrent THEN BEGIN
+        IF MultiDoc THEN BEGIN
+          TransferHeader2.RESET;
+          TransferHeader2.SETFILTER("No.",MultiDocNo);
+          TransferHeader2.FIND('-');
+          REPEAT
+            BillOfLadingLine.RESET;
+            BillOfLadingLine.SETCURRENTKEY(Type,"No.",Closed,"Location Code");
+            BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::Order);
+            BillOfLadingLine.SETRANGE("No.",TransferHeader2."No.");
+            BillOfLadingLine.SETRANGE(Closed,FALSE);
+            IF ShippingSetup."Location Packing" THEN BEGIN
+              BillOfLadingLine.SETRANGE("Location Code",PackingStation."Location Code");
+            END;
+            IF NOT BillOfLadingLine.FIND('-') THEN
+              CLEAR(BillOfLadingLine);
+            IF (BillOfLadingLine."Bill of Lading No." <> '') AND
+               (BillOfLadingLine."Bill of Lading No." <> BillOfLading."No.")
+            THEN
+              ERROR(
+                Text001,
+                TransferHeader2."No.",BillOfLadingLine."Bill of Lading No.");
+            AddTransferHeader(BillOfLading,TransferHeader2,PackingStation,ShippingSetup,FALSE);
+          UNTIL TransferHeader2.NEXT = 0;
+        END ELSE
+          AddTransferHeader(BillOfLading,TransferHeader,PackingStation,ShippingSetup,FALSE);
+      END;
+
+      IF OpenScanning THEN BEGIN
+        COMMIT;
+
+        CLEAR(BillOfLadingWorksheetScan);
+        BillOfLadingWorksheetScan.OpenWithBillOfLading(BillOfLading."No.",TRUE);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE ChangeShippingAgent@12(BillOfLading@1240030000 : Record 14000822) : Integer;
+    VAR
+      SalesHeader@1240030001 : Record 36;
+      SalesHeader2@1240030002 : Record 36;
+      BillOfLadingLine@1240030003 : Record 14000823;
+      ChangedSalesOrders@1240030004 : Integer;
+    BEGIN
+      BillOfLading.TESTFIELD("No.");
+      BillOfLading.TESTFIELD("Shipping Agent Code");
+      BillOfLading.TESTFIELD("Shipping Agent Service");
+
+      ChangedSalesOrders := 0;
+
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+      BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::Order);
+      BillOfLadingLine.SETFILTER("No.",'<>%1','');
+      IF BillOfLadingLine.FIND('-') THEN
+        REPEAT
+          SalesHeader.GET(SalesHeader."Document Type"::Order,BillOfLadingLine."No.");
+
+          IF (SalesHeader."Shipping Agent Code" <> BillOfLading."Shipping Agent Code") OR
+             (SalesHeader."E-Ship Agent Service" <> BillOfLading."Shipping Agent Service")
+          THEN BEGIN
+            SalesHeader2 := SalesHeader;
+            IF SalesHeader."Shipping Agent Code" <> BillOfLading."Shipping Agent Code" THEN
+              SalesHeader2.VALIDATE("Shipping Agent Code",BillOfLading."Shipping Agent Code");
+            SalesHeader2.VALIDATE("E-Ship Agent Service",BillOfLading."Shipping Agent Service");
+            SalesHeader2.MODIFY(TRUE);
+
+            ChangedSalesOrders := ChangedSalesOrders + 1;
+          END;
+        UNTIL BillOfLadingLine.NEXT = 0;
+
+      EXIT(ChangedSalesOrders);
+    END;
+
+    PROCEDURE DeleteBillOfLadingStatDetail@18(BillOfLading@1240030000 : Record 14000822;BillOfLadingStatDetail@1240030001 : Record 14000826);
+    VAR
+      BillOfLadingLine@1240030002 : Record 14000823;
+      SalesShipmentHeader@1240030005 : Record 110;
+      PurchCrMemoHeader@1240030006 : Record 124;
+      ReturnShipmentHeader@1240030008 : Record 6650;
+      TransferShipmentHeader@1240030009 : Record 5744;
+    BEGIN
+      WITH BillOfLading DO BEGIN
+        CASE BillOfLadingStatDetail.Type OF
+          BillOfLadingStatDetail.Type::"Sales Order",
+          BillOfLadingStatDetail.Type::"Sales Invoice",
+          BillOfLadingStatDetail.Type::"Purchase Credit Memo",
+          BillOfLadingStatDetail.Type::"Return Order",
+          BillOfLadingStatDetail.Type::"Transfer Order":
+            BEGIN
+              BillOfLadingLine.RESET;
+              BillOfLadingLine.SETRANGE("Bill of Lading No.","No.");
+              BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::Order);
+              BillOfLadingLine.SETRANGE("No.",BillOfLadingStatDetail."No.");
+              BillOfLadingLine.SETRANGE("Source Type",BillOfLadingStatDetail."Source Type");
+              BillOfLadingLine.SETRANGE("Source Subtype",BillOfLadingStatDetail."Source Subtype");
+              BillOfLadingLine.SETRANGE("Source ID",BillOfLadingStatDetail."Source ID");
+              BillOfLadingLine.FIND('-');
+
+              BillOfLadingLine.DELETE(TRUE);
+            END;
+          BillOfLadingStatDetail.Type::"Sales Shipment (Posted)",
+          BillOfLadingStatDetail.Type::"Purchase Credit Memo (Posted)",
+          BillOfLadingStatDetail.Type::"Return Shipment (Posted)",
+          BillOfLadingStatDetail.Type::"Transfer Shipment (Posted)":
+            BEGIN
+              BillOfLadingLine.RESET;
+              BillOfLadingLine.SETRANGE("Bill of Lading No.","No.");
+              BillOfLadingLine.SETRANGE(Type,BillOfLadingStatDetail.Type);
+              BillOfLadingLine.SETRANGE("No.",BillOfLadingStatDetail."No.");
+              BillOfLadingLine.SETRANGE("Source Type",BillOfLadingStatDetail."Source Type");
+              BillOfLadingLine.SETRANGE("Source Subtype",BillOfLadingStatDetail."Source Subtype");
+              BillOfLadingLine.SETRANGE("Source ID",BillOfLadingStatDetail."Source ID");
+              BillOfLadingLine.SETRANGE("Posted Source ID",BillOfLadingStatDetail."Posted Source ID");
+              BillOfLadingLine.FIND('-');
+
+              CASE BillOfLadingStatDetail.Type OF
+                BillOfLadingStatDetail.Type::"Sales Shipment (Posted)":
+                  SalesShipmentHeader.LOCKTABLE;
+                BillOfLadingStatDetail.Type::"Purchase Credit Memo (Posted)":
+                  PurchCrMemoHeader.LOCKTABLE;
+                BillOfLadingStatDetail.Type::"Return Shipment (Posted)":
+                  ReturnShipmentHeader.LOCKTABLE;
+                BillOfLadingStatDetail.Type::"Transfer Shipment (Posted)":
+                  TransferShipmentHeader.LOCKTABLE;
+              END;
+
+              BillOfLadingLine.DELETE(TRUE);
+            END;
+          BillOfLadingStatDetail.Type::Package:
+            BEGIN
+              BillOfLadingLine.RESET;
+              BillOfLadingLine.SETRANGE("Bill of Lading No.","No.");
+              BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::Package);
+              BillOfLadingLine.SETRANGE("No.",BillOfLadingStatDetail."No.");
+              BillOfLadingLine.FIND('-');
+              BillOfLadingLine.DELETE(TRUE);
+            END;
+          BillOfLadingStatDetail.Type::"Bill of Lading",
+          BillOfLadingStatDetail.Type::"Bill of Lading (Released)":
+            BEGIN
+              BillOfLadingLine.RESET;
+              BillOfLadingLine.SETRANGE("Bill of Lading No.","No.");
+              IF BillOfLadingStatDetail.Type = BillOfLadingStatDetail.Type::"Bill of Lading" THEN
+                BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::"Bill of Lading")
+              ELSE
+                BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::"Bill of Lading (Released)");
+              BillOfLadingLine.SETRANGE("No.",BillOfLadingStatDetail."No.");
+              BillOfLadingLine.SETRANGE("Source Type",BillOfLadingStatDetail."Source Type");
+              BillOfLadingLine.SETRANGE("Source Subtype",BillOfLadingStatDetail."Source Subtype");
+              BillOfLadingLine.SETRANGE("Source ID",BillOfLadingStatDetail."Source ID");
+              BillOfLadingLine.FIND('-');
+
+              BillOfLadingLine.DELETE(TRUE);
+            END;
+          ELSE
+            ERROR(Text011,BillOfLadingStatDetail.Type,BillOfLadingStatDetail."No.");
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckEDITradePartner@1000000000(EDITradePartner@1000000001 : Code[30]) : Boolean;
+    VAR
+      EDIDocument@1000000000 : Record 14002353;
+    BEGIN
+      //<TPZ2301>
+      EDIDocument.RESET;
+      EDIDocument.SETRANGE("Trade Partner No.",EDITradePartner);
+      EDIDocument.SETRANGE("EDI Document No.",'856');
+      EDIDocument.SETRANGE(Type,EDIDocument.Type::Export);
+      EDIDocument.SETRANGE(Status,EDIDocument.Status::Production);
+      IF EDIDocument.FINDFIRST THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+      //</TPZ2301>
+    END;
+
+    LOCAL PROCEDURE CheckEDIASNBOL@1000000001(BOLNo@1000000001 : Code[20];EDITradePartner@1000000003 : Code[20];EDIOrder@1000000002 : Boolean) : Boolean;
+    VAR
+      BillofLadingLine@1000000000 : Record 14000823;
+    BEGIN
+      //<TPZ2301>
+      IF CheckEDITradePartner(EDITradePartner) THEN BEGIN
+        IF EDIOrder = FALSE THEN BEGIN
+          BillofLadingLine.RESET;
+          BillofLadingLine.SETRANGE("Bill of Lading No.",BOLNo);
+          BillofLadingLine.SETRANGE("EDI ASN",TRUE);
+          IF BillofLadingLine.FINDFIRST THEN
+            IF  CONFIRM('You are trying to add Non EDI ASN Order for Trade Partner %1',TRUE,EDITradePartner) THEN
+              EXIT(TRUE)
+            ELSE
+              EXIT(FALSE);
+        END;
+        IF EDIOrder = TRUE THEN BEGIN
+          BillofLadingLine.RESET;
+          BillofLadingLine.SETRANGE("Bill of Lading No.",BOLNo);
+          BillofLadingLine.SETRANGE("EDI ASN",FALSE);
+          IF BillofLadingLine.FINDFIRST THEN
+            IF  CONFIRM('You are trying to add EDI ASN Order for Trade Partner %1',TRUE,EDITradePartner) THEN
+              EXIT(TRUE)
+            ELSE
+              EXIT(FALSE);
+        END;
+      END;
+      EXIT(TRUE);
+      //</TPZ2301>
+    END;
+
+    BEGIN
+    {
+      03-06-2018 TPZ2014 UCHOUHAN
+        Update BOL Ship to Address From Sales Order Ship to Address.
+      06-19-2018 TPZ2301 DKUMAR
+       Validate EDI Order Field.
+    }
+    END.
+  }
+}
+

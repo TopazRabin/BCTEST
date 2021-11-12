@@ -1,0 +1,398 @@
+OBJECT Codeunit 51001 Create Pick Management1
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=RF1.50.09,RF1.50.03;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      RFSetup@1240030000 : Record 14002801;
+      RFSetupRetrieved@1240030001 : Boolean;
+      Text001@1240030002 : TextConst 'ENU=Only one location allowed when using Warehouse Groups.';
+
+    PROCEDURE CreateWhseShipAndPick@1240030002(VAR CurrentWarehouseRequest@1240030000 : Record 5765;OutboundWhseRequestFilter@1240030032 : Record 14002863;AssignedID@1240030014 : Code[50];AssignedWhseGroupCode@1240020000 : Code[20];VAR ShipmentNo@1240030008 : Code[20];VAR PickNo@1240030009 : Code[20];VAR NoOfWarehouseRequests@1240030003 : Integer;VAR PicksCreated@1240030002 : Integer) : Boolean;
+    VAR
+      WarehouseRequest@1240030006 : Record 5765;
+      RFStatEntryTotal@1240030012 : Record 14002804;
+      WhseActivityGroupHeader@1240030004 : Record 14002861;
+      WhseActivityGroupHeaderTmp@1240030017 : TEMPORARY Record 14002861;
+      WhseActivityGroupLine@1240030005 : Record 14002862;
+      WhseActivityHeader@1240020001 : Record 5766;
+      Location@1240020002 : Record 14;
+      WarehouseStreamlineMgt1@1240030007 : Codeunit 51000;
+      NoSeriesMgt@1240030011 : Codeunit 396;
+      ExtraPickMgt@1000000002 : Codeunit 14002965;
+      MultipleWarehouseRequests@1240030001 : Boolean;
+      CalculatedCorrectly@1240030010 : Boolean;
+      CreatedDate@1240030013 : Date;
+      CreatedTime@1240030015 : Time;
+      TempFilter@1240030016 : Text[250];
+      NoOfPicks@1000000000 : Integer;
+      WhseReqExtraPick@1000000001 : Record 5765;
+    BEGIN
+      CreatedDate := TODAY;
+      CreatedTime := TIME;
+
+      MultipleWarehouseRequests :=
+        CurrentWarehouseRequest.FIND('-') AND (CurrentWarehouseRequest.NEXT <> 0);
+
+      IF OutboundWhseRequestFilter."Warehouse Activity Group Size" <> 0 THEN BEGIN
+        GetRFSetup;
+        RFSetup.TESTFIELD("Whse. Activity Group Nos.");
+
+        TempFilter := CurrentWarehouseRequest.GETFILTER("Location Code");
+
+        CurrentWarehouseRequest.SETFILTER(
+          "Location Code",'<>%1',CurrentWarehouseRequest."Location Code");
+        IF CurrentWarehouseRequest.FIND('-') THEN
+          ERROR(Text001);
+
+        IF TempFilter <> '' THEN
+          CurrentWarehouseRequest.SETFILTER("Location Code",TempFilter)
+        ELSE
+          CurrentWarehouseRequest.SETRANGE("Location Code");
+      END;
+
+      NoOfWarehouseRequests := 0;
+      PicksCreated := 0;
+      IF CurrentWarehouseRequest.FIND('-') THEN
+        REPEAT
+          WarehouseRequest := CurrentWarehouseRequest;
+          WarehouseRequest.FIND;
+
+          NoOfWarehouseRequests := NoOfWarehouseRequests + 1;
+
+          IF MultipleWarehouseRequests THEN
+            WarehouseRequest.CALCFIELDS(
+              "Put-away / Pick No.","Warehouse Shipment No.","Wave Pick Whse. Request Exists");
+
+          //<TPZ1423>
+          WarehouseRequest.TESTFIELD("Document Status", WarehouseRequest."Document Status"::Released);
+          //</TPZ1423>
+
+          //TM BEG 070615
+          IF MultipleWarehouseRequests = FALSE THEN
+            WarehouseRequest.CALCFIELDS("Put-away / Pick No.", "No. of Picks");
+
+          IF WarehouseRequest."Put-away / Pick No." <> '' THEN BEGIN
+            NoOfPicks := WarehouseRequest."No. of Picks";
+            WhseReqExtraPick.SETRANGE(Type, WarehouseRequest.Type);
+            WhseReqExtraPick.SETRANGE("Location Code", WarehouseRequest."Location Code");
+            WhseReqExtraPick.SETRANGE("Source Type", WarehouseRequest."Source Type");
+            WhseReqExtraPick.SETRANGE("Source Subtype", WarehouseRequest."Source Subtype");
+            WhseReqExtraPick.SETRANGE("Source No.", WarehouseRequest."Source No.");
+            ExtraPickMgt.CreateExtraPick(
+              WhseReqExtraPick,OutboundWhseRequestFilter,AssignedID,TRUE);
+            WarehouseRequest.CALCFIELDS("No. of Picks");
+            PicksCreated := PicksCreated + (WarehouseRequest."No. of Picks" - NoOfPicks);
+          END;
+          //TM END 070615
+          IF (WarehouseRequest."Put-away / Pick No." = '') AND
+             //(WarehouseRequest."Warehouse Shipment No." = '') AND //TM 061715 - Comment out to allow creating recreating pick.
+             NOT WarehouseRequest."Wave Pick Whse. Request Exists"
+          THEN BEGIN
+            IF AvailPerShippingAdviceHandling(WarehouseRequest,OutboundWhseRequestFilter) THEN
+              WarehouseStreamlineMgt1.CreateWhseShipAndPick(
+                WarehouseRequest,OutboundWhseRequestFilter,AssignedID,
+                AssignedWhseGroupCode,ShipmentNo,PickNo,TRUE) //<TPZ2665>
+            ELSE
+              ShipmentNo := '';
+
+            IF ShipmentNo <> '' THEN BEGIN
+              PicksCreated := PicksCreated + 1;
+              IF (OutboundWhseRequestFilter."Warehouse Activity Group Size" <> 0) AND
+                 (NOT WarehouseRequest."ATO Pick Required")
+              THEN BEGIN
+                IF PicksCreated MOD OutboundWhseRequestFilter."Warehouse Activity Group Size" = 1 THEN BEGIN
+                  WhseActivityGroupHeader.INIT;
+                  WhseActivityGroupHeader."No." :=
+                    NoSeriesMgt.GetNextNo(RFSetup."Whse. Activity Group Nos.",WORKDATE,TRUE);
+                  WhseActivityGroupHeader."Location Code" := WarehouseRequest."Location Code";
+                  WhseActivityGroupHeader."Created By" := USERID;
+                  WhseActivityGroupHeader."Created Date" := CreatedDate;
+                  WhseActivityGroupHeader."Created Time" := CreatedTime;
+                  WhseActivityGroupHeader."Assigned User ID" := AssignedID;
+                  WhseActivityGroupHeader."Outbound Whse. Request Filter" :=
+                    OutboundWhseRequestFilter.Code;
+                  WhseActivityGroupHeader.INSERT(TRUE);
+
+                  WhseActivityGroupLine."Warehouse Activity Group No." :=
+                    WhseActivityGroupHeader."No.";
+                  WhseActivityGroupLine."Line No." := 0;
+
+                  WhseActivityGroupHeaderTmp := WhseActivityGroupHeader;
+                  WhseActivityGroupHeaderTmp.INSERT;
+                END;
+
+                WhseActivityGroupLine.INIT;
+                WhseActivityGroupLine."Line No." := WhseActivityGroupLine."Line No." + 1;
+                WhseActivityGroupLine.Type := WarehouseRequest.Type;
+                WhseActivityGroupLine."Location Code" := WarehouseRequest."Location Code";
+                WhseActivityGroupLine."Source Type" := WarehouseRequest."Source Type";
+                WhseActivityGroupLine."Source Subtype" := WarehouseRequest."Source Subtype";
+                WhseActivityGroupLine."Source No." := WarehouseRequest."Source No.";
+                WhseActivityGroupLine."Source Document" := WarehouseRequest."Source Document";
+                WhseActivityGroupLine."Warehouse Shipment No." := ShipmentNo;
+                WhseActivityGroupLine."Warehouse Activity No." := PickNo;
+                WhseActivityGroupLine.INSERT(TRUE);
+
+                COMMIT;
+              END;
+            END;
+          END;
+        UNTIL CurrentWarehouseRequest.NEXT = 0;
+
+      IF OutboundWhseRequestFilter."Combine Shipments WhseActGroup" THEN
+        IF WhseActivityGroupHeaderTmp.FIND('-') THEN
+          REPEAT
+            WhseActivityGroupHeader.GET(WhseActivityGroupHeaderTmp."No.");
+            WhseActivityGroupHeader.MergeWarehouseShipments;
+            COMMIT;
+          UNTIL WhseActivityGroupHeaderTmp.NEXT = 0;
+
+      IF OutboundWhseRequestFilter."Combine Picks Whse. Act. Group" THEN
+        IF WhseActivityGroupHeaderTmp.FIND('-') THEN
+          REPEAT
+            WhseActivityGroupHeader.GET(WhseActivityGroupHeaderTmp."No.");
+            WhseActivityGroupHeader.MergeWarehouseActivities;
+            COMMIT;
+          UNTIL WhseActivityGroupHeaderTmp.NEXT = 0;
+        IF ((OutboundWhseRequestFilter."Print Document") AND
+          (PicksCreated > 0) AND
+          (OutboundWhseRequestFilter."Warehouse Activity Group Size" <> 0))
+        THEN BEGIN
+          IF WhseActivityGroupHeaderTmp.FIND('-') THEN
+            REPEAT
+              IF WhseActivityGroupHeader.GET(WhseActivityGroupHeaderTmp."No.") THEN
+                IF WhseActivityGroupLine.GET(WhseActivityGroupHeaderTmp."No.",1) THEN BEGIN
+                  WhseActivityHeader.SETRANGE(Type,WhseActivityHeader.Type::Pick);
+                  WhseActivityHeader.SETFILTER("No.",WhseActivityGroupLine."Warehouse Activity No.");
+                  //TPZ2034
+                  //REPORT.RUN(REPORT::"Picking List",FALSE,FALSE,WhseActivityHeader);
+                  REPORT.RUN(51055,FALSE,FALSE,WhseActivityHeader);
+                  //TPZ2034
+                END;
+            UNTIL WhseActivityGroupHeaderTmp.NEXT = 0;
+        END;
+    END;
+
+    PROCEDURE CreatePrioritizedPicks@1240040000(OutboundWhseRequestFilter@1240040004 : Record 14002863;LocationCode@1240040000 : Code[10];AssignedID@1240040005 : Code[50];AssignedWarehouseEmployeeGroup@1240020000 : Code[20]) : Integer;
+    VAR
+      WarehouseRequest@1240040003 : Record 5765;
+      Location@1240020002 : Record 14;
+      WarehouseStreamlineMgt1@1240040001 : Codeunit 51000;
+      NoOfPicksCreated@1240040002 : Integer;
+      NoOfPrioritiesSkipped@1240020001 : Integer;
+      ShipmentNo@1240040006 : Code[20];
+      PickNo@1240040007 : Code[20];
+      SinglePriorityPick@1240020003 : Boolean;
+    BEGIN
+      GetRFSetup;
+
+      NoOfPicksCreated := 0;
+      NoOfPrioritiesSkipped := 0;
+      WarehouseRequest.RESET;
+      WarehouseRequest.SETCURRENTKEY(Type,"Location Code","Picking Priority");
+      WarehouseRequest.SETRANGE(Type,WarehouseRequest.Type::Outbound);
+      WarehouseRequest.SETRANGE("Location Code",LocationCode);
+      WarehouseRequest.SETFILTER("Picking Priority",'>0');
+      IF WarehouseRequest.FIND('+') THEN
+        REPEAT
+          WarehouseRequest.CALCFIELDS(
+            "Put-away / Pick No.","Warehouse Shipment No.","Wave Pick Whse. Request Exists");
+
+          IF (WarehouseRequest."Put-away / Pick No." = '') AND
+             (WarehouseRequest."Warehouse Shipment No." = '') AND
+             (WarehouseRequest."Document Status" = WarehouseRequest."Document Status"::Released) AND
+             NOT WarehouseRequest."Wave Pick Whse. Request Exists"
+          THEN BEGIN
+            IF AvailPerShippingAdviceHandling(WarehouseRequest,OutboundWhseRequestFilter) THEN BEGIN
+              Location.GET(WarehouseRequest."Location Code");
+              IF (Location."Require Pick") AND (NOT Location."Require Shipment") THEN BEGIN
+                WarehouseStreamlineMgt1.CreateInventoryPick(
+                  WarehouseRequest,OutboundWhseRequestFilter,AssignedID,
+                  AssignedWarehouseEmployeeGroup,PickNo,TRUE);
+              END ELSE BEGIN
+                WarehouseStreamlineMgt1.CreateWhseShipAndPick(
+                  WarehouseRequest,OutboundWhseRequestFilter,AssignedID,
+                  AssignedWarehouseEmployeeGroup,ShipmentNo,PickNo,TRUE);
+              END;
+
+              IF (PickNo = '') AND (Location."Require Pick") THEN BEGIN
+                IF NOT RFSetup."Skip Priority Pick with Shorts" THEN
+                  NoOfPrioritiesSkipped := NoOfPrioritiesSkipped + 1;
+              END ELSE
+                NoOfPicksCreated := NoOfPicksCreated + 1
+
+            END ELSE
+              NoOfPrioritiesSkipped := NoOfPrioritiesSkipped + 1;
+
+          END;
+
+          IF OutboundWhseRequestFilter."No. of Picks to create" = 0 THEN
+            IF ((RFSetup."Skip Priority Pick with Shorts") AND
+                  (NoOfPicksCreated > 0)) OR
+                ((NOT RFSetup."Skip Priority Pick with Shorts") AND
+                  ((NoOfPicksCreated + NoOfPrioritiesSkipped) > 0))
+            THEN
+              SinglePriorityPick := TRUE;
+
+          IF OutboundWhseRequestFilter."No. of Picks to create" > 0 THEN
+            IF RFSetup."Skip Priority Pick with Shorts" THEN BEGIN
+              IF NoOfPicksCreated >= OutboundWhseRequestFilter."No. of Picks to create" THEN
+                EXIT(NoOfPicksCreated);
+            END ELSE
+              IF (NoOfPicksCreated + NoOfPrioritiesSkipped) >=
+                OutboundWhseRequestFilter."No. of Picks to create"
+              THEN
+                EXIT(NoOfPicksCreated);
+
+        UNTIL (WarehouseRequest.NEXT(-1) = 0) OR
+              (SinglePriorityPick);
+
+      EXIT(NoOfPicksCreated);
+    END;
+
+    PROCEDURE AvailPerShippingAdviceHandling@1240020000(CurrentWarehouseRequest@1240030000 : Record 5765;OutboundWhseRequestFilter@1240030032 : Record 14002863) : Boolean;
+    VAR
+      RFStatEntryTotal@1240030012 : Record 14002804;
+      WarehouseStreamlineMgt@1240020000 : Codeunit 14002809;
+      CalculatedCorrectly@1240030010 : Boolean;
+    BEGIN
+      CASE OutboundWhseRequestFilter."Shipping Advice Handling" OF
+        OutboundWhseRequestFilter."Shipping Advice Handling"::" ":
+          BEGIN
+            CalculatedCorrectly :=
+              WarehouseStreamlineMgt.CalculateStatisticsSingle(
+                CurrentWarehouseRequest,RFStatEntryTotal,OutboundWhseRequestFilter);
+            IF CalculatedCorrectly AND
+                (RFStatEntryTotal."Available Qty. (Base)" > 0)
+            THEN
+              EXIT(TRUE);
+          END;
+        OutboundWhseRequestFilter."Shipping Advice Handling"::"Use Shipping Advice":
+          BEGIN
+            CalculatedCorrectly :=
+              WarehouseStreamlineMgt.CalculateStatisticsSingle(
+                CurrentWarehouseRequest,RFStatEntryTotal,OutboundWhseRequestFilter);
+            IF CalculatedCorrectly AND
+                OutboundWhseRequestFilter.CheckWithinLimits(RFStatEntryTotal) AND
+                (((RFStatEntryTotal."Outstanding Qty. (Base)" =
+                  RFStatEntryTotal."Available Qty. (Base)") AND
+                  (CurrentWarehouseRequest."Shipping Advice" =
+                  CurrentWarehouseRequest."Shipping Advice"::Complete)) OR
+                ((RFStatEntryTotal."Available Qty. (Base)" > 0) AND
+                  (CurrentWarehouseRequest."Shipping Advice" =
+                  CurrentWarehouseRequest."Shipping Advice"::Partial)))
+            THEN
+              EXIT(TRUE);
+          END;
+        OutboundWhseRequestFilter."Shipping Advice Handling"::"Partial on Complete":
+          BEGIN
+            CalculatedCorrectly :=
+              WarehouseStreamlineMgt.CalculateStatisticsSingle(
+                CurrentWarehouseRequest,RFStatEntryTotal,OutboundWhseRequestFilter);
+            IF CalculatedCorrectly AND
+                OutboundWhseRequestFilter.CheckWithinLimits(RFStatEntryTotal) AND
+                (RFStatEntryTotal."Available Qty. (Base)" > 0)
+            THEN
+              EXIT(TRUE);
+          END;
+        OutboundWhseRequestFilter."Shipping Advice Handling"::"All Available":
+          BEGIN
+            CalculatedCorrectly :=
+              WarehouseStreamlineMgt.CalculateStatisticsSingle(
+                CurrentWarehouseRequest,RFStatEntryTotal,OutboundWhseRequestFilter);
+            IF CalculatedCorrectly AND
+                OutboundWhseRequestFilter.CheckWithinLimits(RFStatEntryTotal) AND
+                (RFStatEntryTotal."Available Qty. (Base)" =
+                RFStatEntryTotal."Outstanding Qty. (Base)")
+            THEN
+              EXIT(TRUE);
+          END;
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE CreateInventoryPick@1240020001(VAR CurrentWarehouseRequest@1240030000 : Record 5765;OutboundWhseRequestFilter@1240030032 : Record 14002863;AssignedID@1240030014 : Code[50];AssignedWhseGroupCode@1240020000 : Code[20];VAR ShipmentNo@1240030008 : Code[20];VAR PickNo@1240030009 : Code[20];VAR NoOfWarehouseRequests@1240030003 : Integer;VAR PicksCreated@1240030002 : Integer) : Boolean;
+    VAR
+      WarehouseRequest@1240030006 : Record 5765;
+      RFStatEntryTotal@1240030012 : Record 14002804;
+      WhseActivityGroupHeader@1240030004 : Record 14002861;
+      WhseActivityGroupHeaderTmp@1240030017 : TEMPORARY Record 14002861;
+      WhseActivityGroupLine@1240030005 : Record 14002862;
+      WhseActivityHeader@1240020001 : Record 5766;
+      Location@1240020002 : Record 14;
+      WarehouseStreamlineMgt@1240030007 : Codeunit 14002809;
+      NoSeriesMgt@1240030011 : Codeunit 396;
+      MultipleWarehouseRequests@1240030001 : Boolean;
+      CalculatedCorrectly@1240030010 : Boolean;
+      CreatedDate@1240030013 : Date;
+      CreatedTime@1240030015 : Time;
+      TempFilter@1240030016 : Text[250];
+    BEGIN
+      CreatedDate := TODAY;
+      CreatedTime := TIME;
+
+      MultipleWarehouseRequests :=
+        CurrentWarehouseRequest.FIND('-') AND (CurrentWarehouseRequest.NEXT <> 0);
+
+      NoOfWarehouseRequests := 0;
+      PicksCreated := 0;
+      IF CurrentWarehouseRequest.FIND('-') THEN
+        REPEAT
+          WarehouseRequest := CurrentWarehouseRequest;
+          WarehouseRequest.FIND;
+
+          NoOfWarehouseRequests := NoOfWarehouseRequests + 1;
+
+          IF MultipleWarehouseRequests THEN
+            WarehouseRequest.CALCFIELDS(
+              "Put-away / Pick No.","Warehouse Shipment No.","Wave Pick Whse. Request Exists");
+
+          IF (WarehouseRequest."Put-away / Pick No." = '') AND
+             (WarehouseRequest."Document Status" = WarehouseRequest."Document Status"::Released) AND
+             NOT WarehouseRequest."Wave Pick Whse. Request Exists"
+          THEN BEGIN
+            IF AvailPerShippingAdviceHandling(WarehouseRequest,OutboundWhseRequestFilter) THEN
+              WarehouseStreamlineMgt.CreateInventoryPick(
+                WarehouseRequest,OutboundWhseRequestFilter,AssignedID,
+                AssignedWhseGroupCode,PickNo,TRUE)
+            ELSE
+              PickNo := '';
+
+            IF PickNo <> '' THEN
+              PicksCreated := PicksCreated + 1;
+          END;
+        UNTIL CurrentWarehouseRequest.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE GetRFSetup@1240030000();
+    BEGIN
+      IF RFSetupRetrieved THEN
+        EXIT;
+
+      RFSetup.GET;
+      RFSetupRetrieved := TRUE;
+    END;
+
+    BEGIN
+    {
+      TPZ2034 TMEI 2017-12-12
+        Print new pick ticket report instead of out of box one.
+    }
+    END.
+  }
+}
+

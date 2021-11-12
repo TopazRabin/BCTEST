@@ -1,0 +1,464 @@
+OBJECT Page 2311 BC O365 Sales Inv. Line Subp.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/22/20;
+    Time=[ 4:57:39 AM];
+    Version List=NAVW111.00,NAVNA11.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Invoice Line;
+               ESM=L¡nea de factura;
+               FRC=Ligne facture;
+               ENC=Invoice Line];
+    SaveValues=Yes;
+    LinksAllowed=No;
+    SourceTable=Table37;
+    DelayedInsert=Yes;
+    PageType=ListPart;
+    AutoSplitKey=Yes;
+    RefreshOnActivate=Yes;
+    OnInit=VAR
+             O365SalesInitialSetup@1000 : Record 2110;
+           BEGIN
+             SalesSetup.GET;
+             IF TaxSetup.GET THEN;
+             Currency.InitRoundingPrecision;
+             O365SalesInvoiceMgmt.ConstructCurrencyFormatString(Rec,CurrencyFormat);
+             IsUsingVAT := O365SalesInitialSetup.IsUsingVAT;
+             Taxable := FALSE;
+           END;
+
+    OnOpenPage=BEGIN
+                 ;ESACC_EasySecurity(TRUE);
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       UpdatePriceDescription;
+                       O365SalesInvoiceMgmt.ConstructCurrencyFormatString(Rec,CurrencyFormat);
+                       IF TaxSetup.GET THEN
+                         Taxable := "Tax Group Code" <> TaxSetup."Non-Taxable Tax Group Code";
+                       CALCFIELDS("Posting Date");
+                       LineQuantity := Quantity;
+                       UpdateVATPostingGroupDescription;
+                     END;
+
+    OnNewRecord=VAR
+                  SalesLine@1000 : Record 37;
+                BEGIN
+                  Type := Type::Item;
+                  SalesLine.SETRANGE("Document Type","Document Type");
+                  SalesLine.SETRANGE("Document No.","Document No.");
+                  IF SalesLine.FINDLAST THEN;
+                  "Line No." := SalesLine."Line No." + 10000;
+                  LineQuantity := 1;
+                  CLEAR(VATProductPostingGroupDescription);
+                END;
+
+    OnModifyRecord=BEGIN
+                     UpdatePriceDescription;
+                     MODIFY(TRUE);
+                     CalculateTotals;
+                   END;
+
+    OnAfterGetCurrRecord=BEGIN
+                           DescriptionSelected := Description <> '';
+                         END;
+
+    ActionList=ACTIONS
+    {
+      { 4       ;    ;ActionContainer;
+                      CaptionML=[ENU=New;
+                                 ESM=Nuevo;
+                                 FRC=Nouveau;
+                                 ENC=New];
+                      ActionContainerType=ActionItems }
+      { 15      ;1   ;Action    ;
+                      Name=DeleteLine;
+                      CaptionML=[ENU=Delete Line;
+                                 ESM=Eliminar l¡nea;
+                                 FRC=Supprimer la ligne;
+                                 ENC=Delete Line];
+                      ToolTipML=[ENU=Delete the selected line.;
+                                 ESM=Eliminar la l¡nea seleccionada.;
+                                 FRC=Supprimer la ligne s‚lectionn‚e.;
+                                 ENC=Delete the selected line.];
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Visible=ESACC_C15_Visible;
+                      Enabled=ESACC_C15_Enabled;
+                      Image=Invoicing-Delete;
+                      Scope=Repeater;
+                      OnAction=BEGIN
+                                 IF "No." = '' THEN
+                                   EXIT;
+
+                                 IF NOT CONFIRM(DeleteQst,TRUE) THEN
+                                   EXIT;
+                                 DELETE(TRUE);
+                               END;
+
+                      Gesture=RightSwipe }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 6   ;1   ;Group     ;
+                Name=grpGeneral;
+                GroupType=Repeater }
+
+    { 3   ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies the number of the record.;
+                           ESM=Especifica el n£mero del registro.;
+                           FRC=Sp‚cifie le num‚ro de l'enregistrement.;
+                           ENC=Specifies the number of the record.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="No.";
+                Visible=FALSE;
+                Enabled=ESACC_F6_Editable;
+                Editable=ESACC_F6_Editable;
+                HideValue=ESACC_F6_HideValue;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                            }
+
+    { 22  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies a description of the item or service on the line.;
+                           ESM=Especifica una descripci¢n del producto o del servicio que consta en la l¡nea.;
+                           FRC=Sp‚cifie une description de l'article ou du service sur la ligne.;
+                           ENC=Specifies a description of the item or service on the line.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=Description;
+                Visible=ESACC_F11_Visible;
+                Editable=ESACC_F11_Editable;
+                LookupPageID=BC O365 Item List;
+                HideValue=ESACC_F11_HideValue;
+                OnValidate=BEGIN
+                             IF IsLookupRequested THEN
+                               IF NOT O365SalesInvoiceMgmt.LookupDescription(Rec,Description,DescriptionSelected) THEN
+                                 ERROR('');
+
+                             RedistributeTotalsOnAfterValidate;
+                             DescriptionSelected := Description <> '';
+                           END;
+                            }
+
+    { 5   ;2   ;Field     ;
+                Width=5;
+                CaptionML=[ENU=Quantity;
+                           ESM=Cantidad;
+                           FRC=Quantit‚;
+                           ENC=Quantity];
+                ToolTipML=[ENU=Specifies the quantity of the item or service on the line.;
+                           ESM=Especifica la cantidad del producto o servicio que consta en la l¡nea.;
+                           FRC=Sp‚cifie la quantit‚ de l'article ou le service sur la ligne.;
+                           ENC=Specifies the quantity of the item or service on the line.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                DecimalPlaces=0:5;
+                SourceExpr=LineQuantity;
+                Enabled=DescriptionSelected;
+                OnValidate=BEGIN
+                             VALIDATE(Quantity,LineQuantity);
+                             RedistributeTotalsOnAfterValidate;
+                             ShowInvoiceDiscountNotification;
+                           END;
+                            }
+
+    { 12  ;2   ;Field     ;
+                Width=10;
+                CaptionML=[ENU=Price;
+                           ESM=Precio;
+                           FRC=Prix;
+                           ENC=Price];
+                ToolTipML=[ENU=Specifies the price for one unit on the sales line.;
+                           ESM=Especifica el precio de una unidad en la l¡nea de venta.;
+                           FRC=Sp‚cifie le prix d'une unit‚ de la ligne vente.;
+                           ENC=Specifies the price for one unit on the sales line.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Unit Price";
+                Visible=ESACC_F22_Visible;
+                Enabled=DescriptionSelected;
+                Editable=ESACC_F22_Editable;
+                HideValue=ESACC_F22_HideValue;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                            }
+
+    { 7   ;2   ;Field     ;
+                Width=5;
+                CaptionML=[ENU=Price per;
+                           ESM=Precio por;
+                           FRC=Prix par;
+                           ENC=Price per];
+                ToolTipML=[ENU=Specifies the sales unit of measure for this product or service.;
+                           ESM=Especifica la unidad de medida de ventas para este producto o servicio.;
+                           FRC=Sp‚cifie l'unit‚ de mesure de vente pour ce produit ou service.;
+                           ENC=Specifies the sales unit of measure for this product or service.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Unit of Measure";
+                Visible=ESACC_F13_Visible;
+                Editable=ESACC_F13_Editable;
+                LookupPageID=O365 Units of Measure;
+                HideValue=ESACC_F13_HideValue;
+                OnValidate=VAR
+                             TempUnitOfMeasure@1000 : TEMPORARY Record 204;
+                             Item@1001 : Record 27;
+                           BEGIN
+                             IF "No." = '' THEN
+                               "Unit of Measure" := '';
+                             IF "Unit of Measure" = '' THEN
+                               "Unit of Measure" := xRec."Unit of Measure";
+                             IF "Unit of Measure" = xRec."Unit of Measure" THEN
+                               EXIT;
+
+                             TempUnitOfMeasure.CreateListInCurrentLangauage(TempUnitOfMeasure);
+                             TempUnitOfMeasure.SETFILTER(Description,'@*' + "Unit of Measure" + '*');
+                             IF NOT TempUnitOfMeasure.FINDFIRST THEN
+                               ERROR(UomNotExistErr,"Unit of Measure");
+                             "Unit of Measure" := TempUnitOfMeasure.Description;
+                             IF "Unit of Measure Code" = TempUnitOfMeasure.Code THEN
+                               EXIT;
+                             IF Item.WRITEPERMISSION THEN
+                               IF Item.GET("No.") THEN BEGIN
+                                 IF Item."Base Unit of Measure" <> TempUnitOfMeasure.Code THEN BEGIN
+                                   Item.VALIDATE("Base Unit of Measure",TempUnitOfMeasure.Code);
+                                   Item.MODIFY;
+                                 END;
+                                 VALIDATE("Unit of Measure Code",TempUnitOfMeasure.Code);
+                               END;
+                           END;
+                            }
+
+    { 17  ;2   ;Field     ;
+                Width=5;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Line Discount %";
+                Visible=ESACC_F27_Visible;
+                Enabled=DescriptionSelected;
+                Editable=ESACC_F27_Editable;
+                HideValue=ESACC_F27_HideValue;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                             IF HasShownInvoiceDiscountNotification THEN
+                               InvoiceDiscountNotification.RECALL;
+                           END;
+                            }
+
+    { 1020000;2;Field     ;
+                Name=Taxable;
+                CaptionML=[ENU=Add sales tax;
+                           ESM=Agregar impuesto sobre las ventas;
+                           FRC=Ajouter taxe de vente;
+                           ENC=Add sales tax];
+                ToolTipML=[ENU=Specifies if you want to add sales tax.;
+                           ESM=Especifica si desea agregar el impuesto sobre las ventas.;
+                           FRC=Indique si vous souhaitez ajouter une taxe de vente.;
+                           ENC=Specifies if you want to add sales tax.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=Taxable;
+                Visible=NOT IsUsingVAT;
+                Enabled=DescriptionSelected;
+                OnValidate=VAR
+                             TaxSetup@1020000 : Record 326;
+                             TaxGroup@1020001 : Record 321;
+                           BEGIN
+                             IF TaxSetup.GET AND (TaxSetup."Non-Taxable Tax Group Code" <> '') THEN BEGIN
+                               IF Taxable THEN
+                                 TaxGroup.SETFILTER(Code,'<>%1',TaxSetup."Non-Taxable Tax Group Code")
+                               ELSE
+                                 TaxGroup.SETFILTER(Code,'%1',TaxSetup."Non-Taxable Tax Group Code")
+                             END;
+                             IF TaxGroup.FINDFIRST THEN
+                               VALIDATE("Tax Group Code",TaxGroup.Code);
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                            }
+
+    { 27  ;2   ;Field     ;
+                Width=8;
+                CaptionML=[ENU=Tax;
+                           ESM=IVA;
+                           FRC=TVA;
+                           ENC=Tax];
+                ToolTipML=[ENU=Specifies the Tax group code for this item.;
+                           ESM=Especifica el c¢digo de grupo de IVA de este producto.;
+                           FRC=Sp‚cifie un code groupe TVA pour cet article.;
+                           ENC=Specifies the Tax group code for this item.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                NotBlank=Yes;
+                SourceExpr=VATProductPostingGroupDescription;
+                Visible=IsUsingVAT;
+                Enabled=DescriptionSelected;
+                OnValidate=BEGIN
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+
+                OnLookup=VAR
+                           VATProductPostingGroup@1000 : Record 324;
+                         BEGIN
+                           IF PAGE.RUNMODAL(PAGE::"O365 VAT Product Posting Gr.",VATProductPostingGroup) = ACTION::LookupOK THEN BEGIN
+                             VALIDATE("VAT Prod. Posting Group",VATProductPostingGroup.Code);
+                             VATProductPostingGroupDescription := VATProductPostingGroup.Description;
+                             RedistributeTotalsOnAfterValidate;
+                           END;
+                         END;
+
+                QuickEntry=FALSE }
+
+    { 2   ;2   ;Field     ;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Line Amount";
+                Visible=ESACC_F103_Visible;
+                Editable=ESACC_F103_Editable;
+                HideValue=ESACC_F103_HideValue }
+
+  }
+  CODE
+  {
+    VAR
+      ESACC_ESFLADSMgt@14123801 : Codeunit 14123801;
+      ESACC_C15_Visible@905000150 : Boolean INDATASET;
+      ESACC_C15_Enabled@905000153 : Boolean INDATASET;
+      ESACC_F6_Visible@900000060 : Boolean INDATASET;
+      ESACC_F6_Editable@900000061 : Boolean INDATASET;
+      ESACC_F6_HideValue@900000062 : Boolean INDATASET;
+      ESACC_F11_Visible@900000110 : Boolean INDATASET;
+      ESACC_F11_Editable@900000111 : Boolean INDATASET;
+      ESACC_F11_HideValue@900000112 : Boolean INDATASET;
+      ESACC_F13_Visible@900000130 : Boolean INDATASET;
+      ESACC_F13_Editable@900000131 : Boolean INDATASET;
+      ESACC_F13_HideValue@900000132 : Boolean INDATASET;
+      ESACC_F22_Visible@900000220 : Boolean INDATASET;
+      ESACC_F22_Editable@900000221 : Boolean INDATASET;
+      ESACC_F22_HideValue@900000222 : Boolean INDATASET;
+      ESACC_F27_Visible@900000270 : Boolean INDATASET;
+      ESACC_F27_Editable@900000271 : Boolean INDATASET;
+      ESACC_F27_HideValue@900000272 : Boolean INDATASET;
+      ESACC_F103_Visible@900001030 : Boolean INDATASET;
+      ESACC_F103_Editable@900001031 : Boolean INDATASET;
+      ESACC_F103_HideValue@900001032 : Boolean INDATASET;
+      Currency@1008 : Record 4;
+      SalesSetup@1007 : Record 311;
+      TotalSalesHeader@1006 : Record 36;
+      TotalSalesLine@1005 : Record 37;
+      TaxSetup@1012 : Record 326;
+      O365SalesInvoiceMgmt@1021 : Codeunit 2310;
+      DocumentTotals@1004 : Codeunit 57;
+      InvoiceDiscountNotification@1019 : Notification;
+      CurrencyFormat@1001 : Text;
+      VATProductPostingGroupDescription@1027 : Text[50];
+      VATAmount@1002 : Decimal;
+      LineQuantity@1003 : Decimal;
+      HasShownInvoiceDiscountNotification@1000 : Boolean;
+      DescriptionSelected@1010 : Boolean;
+      DeleteQst@1013 : TextConst 'ENU=Are you sure?;ESM=¨Est  seguro?;FRC=Òtes-vous certainÿ?;ENC=Are you sure?';
+      IsUsingVAT@1017 : Boolean;
+      UomNotExistErr@1009 : TextConst '@@@=%1 is the text that the user entered.;ENU=There is no unit that matches %1. Either create it or select an existing unit.;ESM=No hay ninguna unidad que coincida con %1. Puede crearla o seleccionar una unidad existente.;FRC=Aucune unit‚ ne correspond … %1. Cr‚ez-en une ou s‚lectionnez une unit‚ existante.;ENC=There is no unit that matches %1. Either create it or select an existing unit.';
+      Taxable@1020000 : Boolean;
+
+    LOCAL PROCEDURE ESACC_EasySecurity@14123801(OpenObject@14123801 : Boolean);
+    VAR
+      SetFilters@14123802 : Codeunit 14123812;
+      TempBoolean@14123803 : Boolean;
+    BEGIN
+      IF OpenObject THEN BEGIN
+        SetFilters.Filter37(Rec,8,2311);
+
+        TempBoolean := CurrPage.EDITABLE;
+        IF ESACC_ESFLADSMgt.PageGeneral(37,2311,TempBoolean) THEN
+          CurrPage.EDITABLE := TempBoolean;
+      END;
+
+      ESACC_ESFLADSMgt.PageControl(
+        37,2311,1,15,
+        ESACC_C15_Visible,ESACC_C15_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        37,2311,0,6,
+        ESACC_F6_Visible,ESACC_F6_Editable,ESACC_F6_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        37,2311,0,11,
+        ESACC_F11_Visible,ESACC_F11_Editable,ESACC_F11_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        37,2311,0,13,
+        ESACC_F13_Visible,ESACC_F13_Editable,ESACC_F13_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        37,2311,0,22,
+        ESACC_F22_Visible,ESACC_F22_Editable,ESACC_F22_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        37,2311,0,27,
+        ESACC_F27_Visible,ESACC_F27_Editable,ESACC_F27_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        37,2311,0,103,
+        ESACC_F103_Visible,ESACC_F103_Editable,ESACC_F103_HideValue);
+
+      ESACC_EasySecurityManual(OpenObject);
+    END;
+
+    LOCAL PROCEDURE ESACC_EasySecurityManual@14123811(OpenObject@14123811 : Boolean);
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE CalculateTotals@6();
+    BEGIN
+      GetTotalSalesHeader;
+      IF SalesSetup."Calc. Inv. Discount" AND ("Document No." <> '') AND (TotalSalesHeader."Customer Posting Group" <> '') THEN
+        CODEUNIT.RUN(CODEUNIT::"Sales-Calc. Discount",Rec);
+
+      DocumentTotals.CalculateSalesTotals(TotalSalesLine,VATAmount,Rec);
+    END;
+
+    LOCAL PROCEDURE RedistributeTotalsOnAfterValidate@2();
+    BEGIN
+      CurrPage.SAVERECORD;
+
+      TotalSalesHeader.GET("Document Type","Document No.");
+      DocumentTotals.SalesRedistributeInvoiceDiscountAmounts(Rec,VATAmount,TotalSalesLine);
+      CurrPage.UPDATE;
+    END;
+
+    LOCAL PROCEDURE GetTotalSalesHeader@13();
+    BEGIN
+      IF NOT TotalSalesHeader.GET("Document Type","Document No.") THEN
+        CLEAR(TotalSalesHeader);
+      IF Currency.Code <> TotalSalesHeader."Currency Code" THEN
+        IF NOT Currency.GET(TotalSalesHeader."Currency Code") THEN
+          Currency.InitRoundingPrecision;
+    END;
+
+    LOCAL PROCEDURE ShowInvoiceDiscountNotification@4();
+    BEGIN
+      IF HasShownInvoiceDiscountNotification THEN
+        EXIT;
+      IF "Line Discount %" = xRec."Line Discount %" THEN
+        EXIT;
+      O365SalesInvoiceMgmt.ShowInvoiceDiscountNotification(InvoiceDiscountNotification,RECORDID);
+      HasShownInvoiceDiscountNotification := TRUE;
+    END;
+
+    LOCAL PROCEDURE UpdateVATPostingGroupDescription@10();
+    VAR
+      VATProductPostingGroup@1000 : Record 324;
+    BEGIN
+      IF VATProductPostingGroup.GET("VAT Prod. Posting Group") THEN
+        VATProductPostingGroupDescription := VATProductPostingGroup.Description
+      ELSE
+        CLEAR(VATProductPostingGroup);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

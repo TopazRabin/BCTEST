@@ -1,0 +1,3409 @@
+OBJECT Codeunit 23044511 WHI Whse. Activity Mgmt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/22/21;
+    Time=[ 9:43:30 AM];
+    Modified=Yes;
+    Version List=WHI2.4.7684.0;
+  }
+  PROPERTIES
+  {
+    TableNo=23044511;
+    Permissions=TableData 6550=rimd;
+    OnRun=VAR
+            liEventID@1000000002 : Integer;
+            ltxtOutputText@1000000001 : BigText;
+            losReturnMessage@1000000000 : OutStream;
+          BEGIN
+            codRegionCode := Rec.getValue('device_culture');
+
+            liEventID := Rec.getEvent();
+            //ERROR(FORMAT(liEventID));
+            executeEvent(liEventID, Rec, ltxtOutputText);
+            "Extensibility Blob".CREATEOUTSTREAM( losReturnMessage );
+            ltxtOutputText.WRITE(losReturnMessage);
+            MODIFY();
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      iEventID@1000000029 : Integer;
+      cuCommonFuncs@1000000002 : Codeunit 23044501;
+      cuResMgmt@1000000005 : Codeunit 23044514;
+      txtLastInsertedJournalLine@1000000011 : Text[1024];
+      cuPrintingMgmt@1000000024 : Codeunit 23044525;
+      cuDataset@1000000031 : Codeunit 23044535;
+      cuJournalFunc@1000000034 : Codeunit 23044528;
+      cuActivityLogMgt@1000000036 : Codeunit 23044537;
+      codUOM@1000000039 : Code[10];
+      cuCommonBase@1000000032 : Codeunit 23044519;
+      cuLPManager@1000000001 : Codeunit 23044520;
+      cuLPCommon@1000000030 : Codeunit 23044541;
+      cuTranslationMgmt@1000000040 : Codeunit 23044526;
+      codRegionCode@1000000035 : Code[10];
+
+    PROCEDURE executeEvent@1000000018(piEventID@1000000000 : Integer;VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000002 : BigText);
+    VAR
+      ltxtTestValue@1000000003 : Text[100];
+    BEGIN
+      iEventID := piEventID;
+      // the batch name comes back as Journal Batch Name for some events.
+      ltxtTestValue := ptrecEventParams.getValue('batch');
+      IF ( '' = ltxtTestValue ) THEN BEGIN
+        ltxtTestValue := ptrecEventParams.getValue('Journal Batch Name');
+        IF ( '' <> ltxtTestValue ) THEN BEGIN
+          ptrecEventParams.setValue('batch', ltxtTestValue );
+        END;
+      END;
+
+      CASE piEventID OF
+        20001:  getWarehouseActivityDocument(ptrecEventParams, pbsOutput);
+        20002:  getActivityLineAvailableBins(ptrecEventParams, pbsOutput);
+        20003:  registerActivityDocument(ptrecEventParams, pbsOutput);
+        20004:  changeWhseActivityBin(ptrecEventParams, pbsOutput);
+        20005:  GetTextScanDocBarcode(ptrecEventParams,pbsOutput);
+        20006:  updateWarehouseActivtyLine(ptrecEventParams, pbsOutput);
+        20007:  getPutAwayDocument(ptrecEventParams, pbsOutput);
+        20008:  getDocumentList(ptrecEventParams, pbsOutput);
+        20009:  getReclassJournal(ptrecEventParams, pbsOutput);
+        20010:  getReclassDocList(ptrecEventParams, pbsOutput);
+        20011:  postReclassJournal(ptrecEventParams, pbsOutput);
+        20012:  updateReclassLine(ptrecEventParams, pbsOutput);
+        20013:  createReclassLine(ptrecEventParams, pbsOutput);
+        20014:  updateReclassBin(ptrecEventParams, pbsOutput);
+        20015:  getPurchaseOrderListBySN(ptrecEventParams, pbsOutput);
+        20017:  cuPrintingMgmt.handlePrint( ptrecEventParams, pbsOutput);
+        20018:  cuPrintingMgmt.handlePrint( ptrecEventParams, pbsOutput);
+        20019:  deleteReclassLine(ptrecEventParams, pbsOutput);
+        20020:  GetPickToteAssignement(ptrecEventParams, pbsOutput);
+        20021:  AssignPickTote(ptrecEventParams, pbsOutput);
+        20022:  GetInvtPutCrossRefLines(ptrecEventParams, pbsOutput);
+        20023:  GetIsTotePickingRequired(ptrecEventParams, pbsOutput);
+        20024:  GetListOfAssignedTotes(ptrecEventParams, pbsOutput);
+        20050:  processWhseActivityLPScan(ptrecEventParams, pbsOutput);
+        20051:  processReclassLPScan(ptrecEventParams, pbsOutput);
+        20052:  splitActivityLine(ptrecEventParams, pbsOutput);
+        20053:  copyExistingReclassLine(ptrecEventParams, pbsOutput);
+        20061:  addDocumentToReclassJournal( ptrecEventParams, pbsOutput );
+        // 20066-20069 are reserved:
+        //
+        //  MAXIMUM NUMBER IS 20066
+        //
+
+      END;
+    END;
+
+    PROCEDURE getWarehouseActivityDocument@1000000012(VAR ptrecEventParams@1000000008 : TEMPORARY Record 23044511;VAR pbsOutput2@1000000007 : BigText);
+    VAR
+      lcodLocation@1000000018 : Code[10];
+      lcodActivityNo@1000000020 : Code[20];
+      liActivityType@1000000021 : Integer;
+      lrecActHeader@1000000022 : Record 5766;
+      lrecActLine@1000000023 : Record 5767;
+      liType@1000000028 : Integer;
+      lrecLocation@1000000002 : Record 14;
+      lrecItem@1000000005 : Record 27;
+      lrecItemTrackingCode@1000000006 : Record 6502;
+      lrrefWriter@1000000000 : RecordRef;
+      lrecReservationEntry@1000000001 : Record 337;
+      ldnOutput@1000000003 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lbFastDS@1000000010 : Boolean;
+      lbTakeMode@1000000011 : Boolean;
+    BEGIN
+      // EVENT 20001
+      // This function returns a Warehouse Activity Document (with lines) based
+      // on the No. supplied in the event params.
+      ldnOutput := ldnOutput.StringBuilder();
+
+      lbFastDS := ptrecEventParams.getSupportsFastDataset();
+
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodActivityNo := ptrecEventParams.getDocumentNo();
+      liActivityType := ptrecEventParams.getValueAsInt('document_type');
+      lbTakeMode := ptrecEventParams.getValueAsBool('take_mode');
+
+      lrecActHeader.GET(liActivityType,lcodActivityNo);
+
+      assignWhseActivity(lrecActHeader, ptrecEventParams);
+
+      IF lrecLocation.GET(lcodLocation) THEN ;
+      cuCommonFuncs.checkLocation(lcodLocation, lrecActHeader."Location Code");
+
+      ldnOutput.Append('<DATASET><TABLE id="header"><COLS>');
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.addDSColumnsFromConfigDN( ldnOutput,iEventID,'', DATABASE::"Warehouse Activity Header" );
+      ldnOutput.Append('</COLS><ROWS><R><FIELDS>');
+      liType := lrecActHeader.Type;
+      lrrefWriter.GETTABLE( lrecActHeader );
+      cuCommonFuncs.addDSFieldsForRecordDN(ldnOutput,lrrefWriter,iEventID,'');
+      ldnOutput.Append('</FIELDS></R></ROWS>');
+      ldnOutput.Append('</TABLE>');
+      ldnOutput.Append('<TABLE id="line">');
+      ldnOutput.Append('<COLS>');
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.addDSColumnsFromConfigDN( ldnOutput,iEventID,'', DATABASE::"Warehouse Activity Line" );
+
+
+      // add the item tracking info columns
+      IF ( lbFastDS ) THEN BEGIN
+        cuCommonFuncs.addDSColumnDN(ldnOutput,'',lrecItemTrackingCode.Code,FALSE,0,'','Item Tracking Code');
+      END ELSE BEGIN
+        cuCommonFuncs.addDSTrackingColumnsDN(ldnOutput);
+      END;
+
+
+      ldnOutput.Append('</COLS><ROWS>');
+
+
+      lrecActLine.SETCURRENTKEY("Activity Type","No.","Sorting Sequence No.");
+      lrecActLine.SETRANGE("Activity Type",lrecActHeader.Type);
+      lrecActLine.SETRANGE("No.",lrecActHeader."No.");
+      lrecActLine.SETRANGE("Breakbulk No.", 0);
+
+      IF(lbTakeMode)THEN
+        lrecActLine.SETFILTER("Action Type",'%1|%2',lrecActLine."Action Type"::" ", lrecActLine."Action Type"::Take)
+      ELSE
+        lrecActLine.SETFILTER("Action Type",'%1|%2',lrecActLine."Action Type"::" ", lrecActLine."Action Type"::Place);
+
+      IF( lrecActLine.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          getWarehouseActivityLine(ldnOutput, lrecActLine, lrecActHeader, lbFastDS );
+        UNTIL( lrecActLine.NEXT=0 );
+      END;
+
+      ldnOutput.Append('</ROWS></TABLE>');
+
+      IF ( ptrecEventParams.getNeedsItemTrackingTable() ) THEN BEGIN
+        cuDataset.BuildItemTrackingTable( ldnOutput );
+      END;
+
+      ldnOutput.Append('</DATASET>');
+
+      pbsOutput2.ADDTEXT( ldnOutput.ToString() );
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Warehouse Activity Header"));
+      ptrecEventParams.setValue('Document No.', lcodActivityNo);
+      ptrecEventParams.setValue('Source Document Type', FORMAT(lrecActLine."Source Type"));
+      ptrecEventParams.setValue('Source Document No.', lrecActLine."Source No.");
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE getWarehouseActivityLine@1000000052(VAR pdnOutput@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";precWhseActivityLine@1000000000 : Record 5767;precActHeader@1000000005 : Record 5766;pbFastDS@1000000001 : Boolean);
+    VAR
+      liAction@1000000018 : Integer;
+      liSourceDoc@1000000017 : Integer;
+      liWhseDocType@1000000024 : Integer;
+      lrecItem@1000000004 : Record 27;
+      lrecItemTrackingCode@1000000003 : Record 6502;
+      lrrefWriter@1000000002 : RecordRef;
+      lpositiveFlag@1000000006 : Boolean;
+      liSourceRefNumber@1000000007 : Integer;
+    BEGIN
+      // Generates an xml representation of a warehouse activity line,
+      // including any item tracking lines.
+      liAction := precWhseActivityLine."Action Type";
+      liSourceDoc := precWhseActivityLine."Source Document";
+      liWhseDocType := precWhseActivityLine."Whse. Document Type";
+      lpositiveFlag := FALSE;
+      pdnOutput.Append('<R>');
+      IF ( NOT pbFastDS ) THEN BEGIN
+        pdnOutput.Append('<FIELDS>');
+      END;
+
+
+      cuCommonFuncs.setDSFieldOverrideValue(20001,
+        '',
+        DATABASE::"Warehouse Activity Line",
+        precWhseActivityLine.FIELDNO("Qty. Outstanding"),
+        STRSUBSTNO('%1',(precWhseActivityLine.Quantity
+          - precWhseActivityLine."Qty. Handled"
+          - precWhseActivityLine."Qty. to Handle"))
+        );
+
+      lrrefWriter.GETTABLE( precWhseActivityLine );
+      cuCommonFuncs.addDSFieldsForRecordDN(pdnOutput,lrrefWriter,20001,'');
+      lrecItem.GET(precWhseActivityLine."Item No.");
+
+
+      IF ( pbFastDS ) THEN BEGIN
+        cuCommonFuncs.addDSFieldDN(pdnOutput,lrecItem."Item Tracking Code");
+      END ELSE BEGIN
+        cuCommonFuncs.addDSTrackingFieldsDN(pdnOutput, lrecItem."Item Tracking Code");
+      END;
+
+      IF ( NOT pbFastDS ) THEN BEGIN
+        pdnOutput.Append('</FIELDS>');
+      END;
+
+
+      CASE precActHeader.Type OF
+        precActHeader.Type::"Put-away":
+          BEGIN
+            lpositiveFlag := TRUE;
+          END;
+        precActHeader.Type::"Invt. Put-away":
+          BEGIN
+            lpositiveFlag := TRUE;
+          END;
+        precActHeader.Type::Pick:
+          BEGIN
+            lpositiveFlag := FALSE;
+          END;
+        precActHeader.Type::"Invt. Pick":
+          BEGIN
+            lpositiveFlag := FALSE;
+          END;
+        precActHeader.Type::Movement:
+          BEGIN
+
+          END;
+
+        precActHeader.Type::"Invt. Movement":
+          BEGIN
+
+          END;
+
+
+      END; // end of case
+
+      // when inventory pick from prod consumption
+      // use "Source Subline no."
+      liSourceRefNumber := precWhseActivityLine."Source Line No.";
+      CASE precWhseActivityLine."Source Document" OF
+        precWhseActivityLine."Source Document"::"Prod. Consumption":
+          BEGIN
+            liSourceRefNumber := precWhseActivityLine."Source Subline No.";
+          END;
+      END; // end case
+
+      // add the item tracking lines
+
+      cuCommonFuncs.getReservationEntriesDN(
+        pbFastDS,
+        pdnOutput,
+        precWhseActivityLine."Item No.",
+        precWhseActivityLine."Variant Code",
+        precWhseActivityLine."Location Code",
+        precWhseActivityLine."Source No.",
+        liSourceRefNumber,
+        lpositiveFlag,
+        precWhseActivityLine."Source Type",
+        precWhseActivityLine."Lot No.",
+        precWhseActivityLine."Serial No."
+        );
+
+      pdnOutput.Append('</R>');
+    END;
+
+    PROCEDURE getActivityLineAvailableBins@1000000038(VAR ptrecEventParams@1000000011 : TEMPORARY Record 23044511;VAR pbsOutput@1000000006 : BigText);
+    VAR
+      lcodLocation@1000000001 : Code[10];
+      lcodActivityNo@1000000009 : Code[20];
+      liActivityType@1000000008 : Integer;
+      liLineNumber@1000000007 : Integer;
+      lrecWhseActivityLine@1000000010 : Record 5767;
+      lrecBinContent@1000000004 : Record 7302;
+      lrecBinType@1000000002 : Record 7303;
+      ldAvailQty@1000000003 : Decimal;
+    BEGIN
+      // Returns a list of available bins for a given activity line.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodActivityNo := ptrecEventParams.getDocumentNo();
+      liActivityType := ptrecEventParams.getValueAsInt('document_type');
+      liLineNumber := ptrecEventParams.getLineNo();
+      lrecWhseActivityLine.GET(liActivityType,lcodActivityNo,liLineNumber);
+
+      // get list of bins that have possible content for that line
+      lrecBinContent.SETRANGE("Location Code", lrecWhseActivityLine."Location Code");
+      lrecBinContent.SETRANGE("Item No.", lrecWhseActivityLine."Item No.");
+      lrecBinContent.SETFILTER(Quantity,'>=%1',lrecWhseActivityLine."Qty. Outstanding");
+      IF( lrecWhseActivityLine."Zone Code" <> '' ) THEN
+        lrecBinContent.SETRANGE("Zone Code", lrecWhseActivityLine."Zone Code");
+
+      lrecBinContent.SETAUTOCALCFIELDS(Quantity,"Pick Qty.","Neg. Adjmt. Qty.");
+
+      // loop through bins and add to result if applicable
+      IF( lrecBinContent.FIND('-') ) THEN BEGIN
+        REPEAT
+          IF( pbsOutput.LENGTH > 0 ) THEN BEGIN
+            pbsOutput.ADDTEXT(',');
+          END;
+
+          lrecBinType.RESET;
+          lrecBinType.SETRANGE(Code, lrecBinContent."Bin Type Code");
+          IF( lrecWhseActivityLine."Action Type" = lrecWhseActivityLine."Action Type"::Take ) THEN
+            lrecBinType.SETRANGE(Pick, TRUE)
+          ELSE
+            lrecBinType.SETRANGE("Put Away", TRUE);
+
+          IF( lrecBinType.FIND('-') ) THEN BEGIN
+            // validate qty
+            IF( lrecWhseActivityLine."Action Type" = lrecWhseActivityLine."Action Type"::Take ) THEN BEGIN
+              ldAvailQty := lrecBinContent.Quantity
+                - lrecBinContent."Pick Qty."
+                - lrecBinContent."Neg. Adjmt. Qty.";
+              IF( ldAvailQty >= lrecWhseActivityLine."Qty. Outstanding" ) THEN BEGIN
+                pbsOutput.ADDTEXT(STRSUBSTNO('%1',lrecBinContent."Bin Code"));
+              END;
+            END
+            ELSE BEGIN
+              pbsOutput.ADDTEXT(STRSUBSTNO('%1',lrecBinContent."Bin Code"));
+            END;
+          END;
+
+        UNTIL( lrecBinContent.NEXT=0 );
+      END;
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE changeWhseActivityBin@1000000035(VAR ptrecEventParams@1000000008 : TEMPORARY Record 23044511;VAR pbsOutput@1000000007 : BigText);
+    VAR
+      lrecLocation@1000000012 : Record 14;
+      lcodLocation@1000000005 : Code[10];
+      lcodActivityNo@1000000004 : Code[20];
+      liActivityType@1000000003 : Integer;
+      liLineNumber@1000000002 : Integer;
+      lcodBinCode@1000000006 : Code[20];
+      lrecWhseActivityHeader@100000001 : Record 5766;
+      lrecWhseActivityLine@1000000001 : Record 5767;
+      ltxtActivityType@1000000009 : Text[50];
+      lrecBin@1000000010 : Record 7354;
+      lcodPreviousBin@1000000011 : Code[20];
+      ldnOutput@100000000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+    BEGIN
+      // Event 20004
+      // Sets the warehouse activity lines bin.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodBinCode := ptrecEventParams.getValue('bin');
+      lcodActivityNo := ptrecEventParams.getDocumentNo();
+      ltxtActivityType := ptrecEventParams.getValue('document_type');
+      IF(ltxtActivityType = '') THEN BEGIN
+        ltxtActivityType := ptrecEventParams.getValue('Type');
+      END;
+
+      EVALUATE(liActivityType, ltxtActivityType);
+      liLineNumber := ptrecEventParams.getLineNo();
+
+      // if action result is emptty, try the old one.
+      lcodBinCode := ptrecEventParams.getValue('action_result');
+      IF(lcodBinCode = '') THEN BEGIN
+        lcodBinCode := ptrecEventParams.getValue('bin');
+      END;
+
+      IF STRPOS(lcodBinCode, '%B%') = 1 THEN BEGIN
+        lcodBinCode := DELSTR(lcodBinCode, 1, 3);
+      END;
+
+      lrecWhseActivityHeader.GET(liActivityType,lcodActivityNo);
+      lrecWhseActivityLine.GET(liActivityType,lcodActivityNo,liLineNumber);
+
+      // need to check new bin zone code
+      IF (lrecBin.GET(lcodLocation, lcodBinCode)) THEN BEGIN
+        IF( lrecLocation.GET(lrecWhseActivityLine."Location Code") ) THEN BEGIN
+          IF( lrecLocation."Directed Put-away and Pick" ) THEN
+            lrecWhseActivityLine.VALIDATE("Zone Code", lrecBin."Zone Code");
+        END;
+      END;
+
+      lcodPreviousBin := lrecWhseActivityLine."Bin Code";
+
+      lrecWhseActivityLine.VALIDATE("Bin Code", lcodBinCode);
+      lrecWhseActivityLine.MODIFY(TRUE);
+
+
+      ldnOutput := ldnOutput.StringBuilder();
+      ldnOutput.Append('<DATASET>');
+      ldnOutput.Append('<TABLE id="line">');
+      ldnOutput.Append('<COLS>');
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.addDSColumnsFromConfigDN( ldnOutput,20001,'', DATABASE::"Warehouse Activity Line" );
+      cuCommonFuncs.addDSTrackingColumnsDN(ldnOutput);
+      ldnOutput.Append('</COLS><ROWS>');
+      getWarehouseActivityLine(ldnOutput, lrecWhseActivityLine, lrecWhseActivityHeader, FALSE);
+      ldnOutput.Append('</ROWS></TABLE></DATASET>');
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Warehouse Activity Line"));
+      ptrecEventParams.setValue('Document No.', lcodActivityNo);
+      ptrecEventParams.setValue('Document Line No.', FORMAT(liLineNumber));
+      ptrecEventParams.setValue('Source Document Type', FORMAT(lrecWhseActivityLine."Source Type"));
+      ptrecEventParams.setValue('Source Document No.', lrecWhseActivityLine."Source No.");
+      ptrecEventParams.setValue('Previous Bin', lcodPreviousBin);
+      ptrecEventParams.setValue('New Bin', lcodBinCode);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE updateWarehouseActivtyLine@1000000049(VAR ptrecEventParams@1000000014 : TEMPORARY Record 23044511;VAR pbsOutput2@1000000013 : BigText);
+    VAR
+      lrecActivityHeader@1000000002 : Record 5766;
+      lrecActivityLine@1000000001 : Record 5767;
+      lrecActivityLineTemp@1000000017 : Record 5767;
+      lrecItemTrackingCode@1000000026 : Record 6502;
+      lrecLPHeader@100000001 : Record 23044505;
+      ltrecCommentLine@1000000015 : TEMPORARY Record 97;
+      lrecConfig@1000000018 : Record 23044504;
+      ldnOutput@1000000033 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      ldtExpirationDate@1000000000 : Date;
+      lsBarcode@1000000010 : Text[250];
+      lcodLocation@1000000009 : Code[10];
+      lcodActivityNo@1000000008 : Code[20];
+      lsSerialNumber@1000000004 : Text;
+      lcodUOM@1000000023 : Code[10];
+      lsLotNumber@1000000024 : Text;
+      lcodLicensePlateNo@1000000029 : Code[20];
+      ldQtyToHandle@1000000003 : Decimal;
+      ldQtyChange@1000000022 : Decimal;
+      ldQtyChange2@1000000021 : Decimal;
+      ldPreviousQuantity@1000000025 : Decimal;
+      liActivityType@1000000007 : Integer;
+      liLineNumber@1000000006 : Integer;
+      lbAutoTakePlace@1000000011 : Boolean;
+      lbAutoShip@1000000012 : Boolean;
+      lbDecrease@1000000020 : Boolean;
+      lbFastDS@1000000019 : Boolean;
+      lcodBinCode@1000000005 : Code[20];
+      lbTakeMode@1000000027 : Boolean;
+      lbAddLine@1000000028 : Boolean;
+      lbAllowChange@1000000030 : Boolean;
+      lbAutoSplit@1000000031 : Boolean;
+      lbWhseTracked@1000000032 : Boolean;
+      liNewLineNumber@100000000 : Integer;
+    BEGIN
+      // Event 20006
+      //
+      // Updates a warehouse activity lines quantity to handle and
+      // and item tracking info.
+      // and auto-ship, auto-take/place.
+      ldnOutput := ldnOutput.StringBuilder();
+      lbFastDS := ptrecEventParams.getSupportsFastDataset();
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodActivityNo := ptrecEventParams.getDocumentNo();
+      liActivityType := ptrecEventParams.getValueAsInt('document_type');
+      liLineNumber := ptrecEventParams.getLineNo();
+
+      lsSerialNumber := ptrecEventParams.getSerialNo();
+      lsLotNumber := ptrecEventParams.getLotNo();
+      ldQtyToHandle := ptrecEventParams.getValueAsDecimal('qty_to_handle');
+      lsBarcode := COPYSTR( ptrecEventParams.getValue('barcode'), 1, MAXSTRLEN( lsBarcode) ) ;
+      ldtExpirationDate := cuCommonFuncs.getExpirationDate(ptrecEventParams);
+      lcodLicensePlateNo := ptrecEventParams.getValue('lp_number');
+      lcodBinCode := ptrecEventParams.getBin();
+      lbTakeMode := ptrecEventParams.getValueAsBool('take_mode');
+
+      cuCommonFuncs.getDeviceConfig ( lrecConfig,ptrecEventParams );
+
+      lrecActivityHeader.GET(liActivityType,lcodActivityNo);
+      lrecActivityLine.GET(lrecActivityHeader.Type,lrecActivityHeader."No.",liLineNumber);
+
+      IF ptrecEventParams.getValueAsBool('RequireTotes') THEN
+        CheckCorrectTote(lrecActivityLine,lcodLicensePlateNo);
+
+      cuCommonFuncs.checkLocation(lcodLocation, lrecActivityHeader."Location Code");
+
+      lbDecrease := (ldQtyToHandle < lrecActivityLine."Qty. to Handle");
+      ldQtyChange2 := ldQtyToHandle - lrecActivityLine."Qty. to Handle";
+      ldQtyChange := ABS((lrecActivityLine."Qty. to Handle" - ldQtyToHandle));
+      ldPreviousQuantity := lrecActivityLine."Qty. to Handle";
+
+      lbAutoTakePlace := isAutoTakePlace(lrecConfig,lrecActivityLine);
+      lbAutoShip := isUpdateShipmentOnPick(lrecConfig,lrecActivityLine);
+      lbAutoSplit := lrecConfig."Auto-Split Behavior" = lrecConfig."Auto-Split Behavior"::"Auto-Split User Quantity";
+      lbWhseTracked := cuCommonBase.isWhseTracked(lrecActivityLine."Item No.");
+
+      // if the line is warehouse tracked always split the lines (take & place)
+      IF lbWhseTracked AND lbAutoTakePlace THEN
+        lbAutoSplit := TRUE;
+
+      IF (lcodLicensePlateNo <> '') AND lbDecrease THEN BEGIN
+        IF lrecLPHeader.GET(lcodLicensePlateNo) THEN BEGIN
+          lrecLPHeader."Processing State" := lrecLPHeader."Processing State"::Removing;
+          lrecLPHeader.MODIFY;
+        END;
+      END;
+
+
+      IF lbWhseTracked THEN BEGIN
+        IF( (lrecActivityLine."Lot No." <> lsLotNumber) OR (lrecActivityLine."Serial No." <> lsSerialNumber) ) THEN BEGIN
+      //  IF( lbDecrease OR (ldQtyChange=0) ) THEN BEGIN
+          // find the corresponding place line and update it
+          UpdateAutoTakePlaceLotSerial(lrecActivityLine,lsSerialNumber,lsLotNumber,ldtExpirationDate);
+        END;
+      END;
+
+      prepareForSplitLine(lrecConfig, ldQtyToHandle, lrecActivityLine, lsLotNumber);
+
+      // update the qty. to handle
+      lrecActivityLine.VALIDATE("Qty. to Handle", ldQtyToHandle);
+
+      IF ((lcodBinCode <> '') AND (lrecActivityLine."Bin Code" = '')) THEN BEGIN
+        lrecActivityLine.VALIDATE("Bin Code", lcodBinCode);
+      END;
+
+      lrecActivityLine.MODIFY(TRUE);
+
+      lbAllowChange := (lrecConfig."Change Lot/SN on Whse. Pick" AND ((lrecActivityLine."Activity Type" = lrecActivityLine."Activity Type"::Pick) OR (lrecActivityLine."Activity Type" = lrecActivityLine."Activity Type"::"Invt. Pick")));
+      setItemTrackingLines(lrecActivityLine, lsLotNumber, lsSerialNumber, ldtExpirationDate, ldQtyChange2
+      ,lbAllowChange
+      );
+
+
+      IF lbAutoSplit  {AND (NOT lbDecrease)} AND (ldQtyToHandle<>0)  THEN BEGIN
+        IF ((lrecActivityLine."Qty. Outstanding" - ldQtyToHandle) > 0) THEN BEGIN
+          SplitLine(lrecActivityLine, liNewLineNumber);
+          ltrecCommentLine."Table Name" := ltrecCommentLine."Table Name"::Item;
+          ltrecCommentLine."No." := lrecActivityLine."Item No.";
+          ltrecCommentLine."Line No." := liNewLineNumber;
+          ltrecCommentLine.INSERT();
+        END;
+      END;
+
+      ltrecCommentLine.SETRANGE("Line No.", lrecActivityLine."Line No.");
+      IF( NOT ltrecCommentLine.FIND('-') ) THEN BEGIN
+        ltrecCommentLine."Table Name" := ltrecCommentLine."Table Name"::Item;
+        ltrecCommentLine."No." := lrecActivityLine."Item No.";
+        ltrecCommentLine."Line No." := lrecActivityLine."Line No.";
+        ltrecCommentLine.INSERT;
+      END;
+
+
+      IF( lbAutoShip) THEN BEGIN
+        cuCommonBase.processAutoShip(lrecActivityLine, lsSerialNumber, lsLotNumber, lbDecrease, ldQtyChange2, ldtExpirationDate);
+      END;
+
+
+      // adjust corresponding take/place lines if required
+      IF( lbAutoTakePlace ) THEN BEGIN
+        cuCommonBase.processAutoTakePlace(
+          lrecActivityLine
+          ,''               // Bin Code
+          ,ldQtyChange
+          ,lbDecrease
+          ,lbAutoSplit
+          ,ltrecCommentLine
+        );
+      END;
+
+      IF (lcodLicensePlateNo <> '') THEN BEGIN
+        cuLPManager.updateLPForWarehouseActivity(lrecActivityLine, lcodLicensePlateNo, lsLotNumber, lsSerialNumber, ldQtyChange2, ldtExpirationDate, lbAutoTakePlace, ltrecCommentLine);
+        IF lrecLPHeader.GET(lcodLicensePlateNo) THEN BEGIN
+          lrecLPHeader."Processing State" := lrecLPHeader."Processing State"::" ";
+          lrecLPHeader.MODIFY;
+        END;
+      END;
+
+
+      ldnOutput.Append('<DATASET>');
+      ldnOutput.Append('<TABLE id="line">');
+      ldnOutput.Append('<COLS>');
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.addDSColumnsFromConfigDN( ldnOutput,20001,'', DATABASE::"Warehouse Activity Line" );
+
+      IF ( lbFastDS ) THEN BEGIN
+        cuCommonFuncs.addDSColumnDN(ldnOutput,'',lrecItemTrackingCode.Code,FALSE,0,'','Item Tracking Code');
+      END ELSE BEGIN
+        cuCommonFuncs.addDSTrackingColumnsDN(ldnOutput);
+      END;
+      ldnOutput.Append('</COLS><ROWS>');
+
+      ltrecCommentLine.RESET;
+      ltrecCommentLine.FINDSET(FALSE);
+      REPEAT
+        lbAddLine := FALSE;
+        lrecActivityLine.GET(lrecActivityHeader.Type,lrecActivityHeader."No.",ltrecCommentLine."Line No.");
+
+        IF(lbTakeMode AND (lrecActivityLine."Action Type" IN [lrecActivityLine."Action Type"::" ",lrecActivityLine."Action Type"::Take]))THEN
+          lbAddLine := TRUE
+        ELSE IF( (NOT lbTakeMode) AND (lrecActivityLine."Action Type" IN [lrecActivityLine."Action Type"::" ",lrecActivityLine."Action Type"::Place])) THEN
+          lbAddLine := TRUE;
+
+        IF(lbAddLine) THEN
+          getWarehouseActivityLine(ldnOutput, lrecActivityLine, lrecActivityHeader, lbFastDS);
+      UNTIL( ltrecCommentLine.NEXT=0 );
+
+      ldnOutput.Append('</ROWS></TABLE></DATASET>');
+
+      pbsOutput2.ADDTEXT( ldnOutput.ToString() );
+
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Warehouse Activity Line"));
+      ptrecEventParams.setValue('Document No.', lcodActivityNo);
+      ptrecEventParams.setValue('Document Line No.', FORMAT(liLineNumber));
+      ptrecEventParams.setValue('Source Document Type', FORMAT(lrecActivityLine."Source Type"));
+      ptrecEventParams.setValue('Source Document No.', lrecActivityLine."Source No.");
+      ptrecEventParams.setValue('Source Document Line No.', FORMAT(lrecActivityLine."Source Line No."));
+      ptrecEventParams.setValue('Previous Quantity', FORMAT(ldPreviousQuantity));
+      ptrecEventParams.setValue('New Quantity', FORMAT(ldQtyToHandle));
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE registerActivityDocument@1000000036(VAR ptrecEventParams@1000000010 : TEMPORARY Record 23044511;VAR pbsOutput@1000000007 : BigText);
+    VAR
+      lrecActivityHeader@1000000008 : Record 5766;
+      lrecActivityLine@1000000006 : Record 5767;
+      lrecConfig@1000000011 : Record 23044504;
+      lrecLPSetup@1000000012 : Record 23044523;
+      lcuRegisterWhseDoc@1000000009 : Codeunit 7307;
+      lcuWMSManagement@1000000005 : Codeunit 7302;
+      lcuWhseActPost@1000000004 : Codeunit 7324;
+      ltxtDetails@1000000000 : Text[250];
+      lcodLocation@1000000003 : Code[10];
+      lcodActivityNo@1000000002 : Code[20];
+      liActivityType@1000000001 : Integer;
+      lbManuallyPosted@1000000013 : Boolean;
+    BEGIN
+      // Registers or Posts the Warehouse Activity document.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodActivityNo := ptrecEventParams.getValue('No.');
+      liActivityType := ptrecEventParams.getValueAsInt('Type');
+      lbManuallyPosted := ptrecEventParams.getValueAsBool('manuallyPosted');
+
+
+      lrecActivityHeader.GET(liActivityType,lcodActivityNo);
+      cuCommonFuncs.checkLocation(lcodLocation, lrecActivityHeader."Location Code");
+      handleBreakBulkLines(liActivityType,lcodActivityNo);
+
+      lrecActivityLine.SETRANGE("Activity Type", lrecActivityHeader.Type);
+      lrecActivityLine.SETRANGE("No.", lrecActivityHeader."No.");
+
+      IF NOT lbManuallyPosted THEN
+        lrecActivityLine.SETFILTER("Qty. to Handle",'<>0');
+
+      IF( lrecActivityLine.FINDSET(FALSE) ) THEN BEGIN
+        cuCommonFuncs.getDeviceConfig(lrecConfig,ptrecEventParams);
+        lrecLPSetup.GET;
+        IF lrecConfig."Update Shipment on Pick" THEN
+          lrecLPSetup."Update Shipment on Pick" := lrecLPSetup."Update Shipment on Pick"::Yes
+        ELSE
+          lrecLPSetup."Update Shipment on Pick" := lrecLPSetup."Update Shipment on Pick"::No;
+        lrecLPSetup.MODIFY;
+
+        lrecActivityHeader.VALIDATE("Posting Date",TODAY);
+        lrecActivityHeader.MODIFY(TRUE);
+
+        IF( (lrecActivityHeader.Type = lrecActivityHeader.Type::"Invt. Put-away") OR
+          (lrecActivityHeader.Type = lrecActivityHeader.Type::"Invt. Pick") ) THEN BEGIN
+          // do the post here
+          lcuWhseActPost.ShowHideDialog(TRUE);
+          lcuWhseActPost.RUN(lrecActivityLine);
+        END
+        ELSE BEGIN
+          lcuWMSManagement.CheckBalanceQtyToHandle(lrecActivityLine);
+          lcuRegisterWhseDoc.ShowHideDialog(TRUE);
+          lcuRegisterWhseDoc.RUN(lrecActivityLine);
+        END;
+      END;
+
+      setQtyToShipForInventoryMovement(lrecActivityHeader);
+
+      cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+
+
+      ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_REGISTER_DOCUMENT', codRegionCode), lcodActivityNo);
+      ptrecEventParams.setValue('details', ltxtDetails);
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Warehouse Activity Header"));
+      ptrecEventParams.setValue('Document No.', lcodActivityNo);
+      ptrecEventParams.setValue('Source Document Type', FORMAT(lrecActivityLine."Source Type"));
+      ptrecEventParams.setValue('Source Document No.', lrecActivityLine."Source No.");
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE getPutAwayDocument@1000000028(VAR ptrecEventParams@1000000006 : TEMPORARY Record 23044511;VAR pbsOutput@1000000002 : BigText);
+    VAR
+      lcodLocation@1000000005 : Code[10];
+      lcodActivityNo@1000000001 : Code[20];
+      lcodPurchaseOrderNumber@1000000009 : Code[20];
+      lcodItemNumber@1000000008 : Text;
+      lcodTransferOrderNumber@1000000004 : Code[20];
+      lcodSalesOrderNumber@1000000003 : Code[20];
+      lrecPostedWhseReceiptLine@1000000010 : Record 7319;
+      lrecWhseActivityLine@1000000012 : Record 5767;
+    BEGIN
+      //<TPZ1808>
+      ERROR('Deprecated function');
+      //</TPZ1808>
+
+      // This function will return a whse. activity document based on the supplied params.
+      // If the document does not exist it will be auto generated.
+      // The resulting xml will be generated via the getWarehouseActivityDocument function.
+
+      // get the supplied params
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodActivityNo := ptrecEventParams.getDocumentNo();
+      lcodPurchaseOrderNumber := ptrecEventParams.getValue('po_number');
+      lcodTransferOrderNumber := ptrecEventParams.getValue('transfer_number');
+      lcodItemNumber := ptrecEventParams.getItemNo();;
+      lcodSalesOrderNumber := ptrecEventParams.getValue('sales_number');
+
+      IF ((lcodPurchaseOrderNumber <> '') OR (lcodTransferOrderNumber <> '') OR (lcodSalesOrderNumber <> '')) THEN BEGIN
+        lcodActivityNo := '';
+      END;
+
+      // not already a put-away so auto generate
+      IF( lcodActivityNo = '' ) THEN BEGIN
+        // if part/po scanned
+        IF( lcodPurchaseOrderNumber <> '' ) THEN BEGIN
+          lrecPostedWhseReceiptLine.SETRANGE("Source Type",DATABASE::"Purchase Line");
+          lrecPostedWhseReceiptLine.SETRANGE("Source No.", lcodPurchaseOrderNumber);
+          lrecPostedWhseReceiptLine.SETRANGE("Location Code", lcodLocation);
+
+          // filtering by item number so that if there are multiple posted whse. receipts it will be able
+          // to find the correct one.
+          IF ( lcodItemNumber <> '' ) THEN BEGIN
+            lrecPostedWhseReceiptLine.SETRANGE("Item No.", lcodItemNumber);
+          END;
+        END
+        ELSE IF( lcodTransferOrderNumber <> '' ) THEN BEGIN
+          lrecPostedWhseReceiptLine.SETRANGE("Source Type",DATABASE::"Transfer Line");
+          lrecPostedWhseReceiptLine.SETRANGE("Source No.", lcodTransferOrderNumber);
+        END
+        ELSE IF( lcodSalesOrderNumber <> '' ) THEN BEGIN
+          lrecPostedWhseReceiptLine.SETRANGE("Source Type",DATABASE::"Sales Line");
+          lrecPostedWhseReceiptLine.SETRANGE("Source No.", lcodSalesOrderNumber);
+        END;
+
+
+        // get the document
+        IF( lrecPostedWhseReceiptLine.FIND('-') ) THEN BEGIN
+          // create it now or simply ignore if nothing to handle
+          lrecPostedWhseReceiptLine.SetHideValidationDialog(TRUE);
+          lrecPostedWhseReceiptLine.CreatePutAwayDoc(lrecPostedWhseReceiptLine,'');
+
+          // now go find it
+          lrecWhseActivityLine.SETRANGE("Whse. Document No.", lrecPostedWhseReceiptLine."No.");
+          lrecWhseActivityLine.SETRANGE("Whse. Document Type", lrecWhseActivityLine."Whse. Document Type"::Receipt);
+          IF( lcodItemNumber <> '' ) THEN BEGIN
+            lrecWhseActivityLine.SETRANGE("Item No.", lcodItemNumber);
+          END;
+
+          IF( lrecWhseActivityLine.FIND('-') ) THEN BEGIN
+            lcodActivityNo := lrecWhseActivityLine."No.";
+          END;
+        END;
+
+      END;
+
+      IF( lcodActivityNo <> '' ) THEN BEGIN
+        ptrecEventParams.setValue('document_type', '1');  // different enumeration type.
+        ptrecEventParams.setDocumentNo( lcodActivityNo);
+        iEventID := 20001;
+        ptrecEventParams.setEvent( iEventID );
+        getWarehouseActivityDocument(ptrecEventParams, pbsOutput);
+        EXIT;
+      END
+      ELSE BEGIN
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_PUTAWAY_AVAIL', codRegionCode));
+      END;
+    END;
+
+    PROCEDURE getDocumentList@1000000000(VAR ptrecEventParams@1000000008 : TEMPORARY Record 23044511;VAR pbsOutput@1000000007 : BigText);
+    VAR
+      lrecWHISetup@1000000015 : Record 23044502;
+      lrecConfig@1000000014 : Record 23044504;
+      ltrecDocList@1000000013 : TEMPORARY Record 23044535;
+      lrrefDocListRef@1000000012 : RecordRef;
+      lcuDataSetTools@1000000011 : Codeunit 23044535;
+      ldnOutput@1000100016 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lcodUserName@1000000009 : Code[50];
+      liActivityType@1000000006 : Integer;
+      lsFilter@1000000005 : Text[250];
+      liMaxDocList@1000000004 : Integer;
+      lcodOptionalItem@1000000003 : Code[100];
+      lsLot@1000000002 : Text;
+      lsSerial@1000000001 : Text;
+      lbOnlyAssignedDocs@1000000000 : Boolean;
+      WarehouseActivityLine@1000000016 : Record 5767;
+      WarehouseActivityHeader@1000000017 : Record 5766;
+      PSltrecDocList@1000000018 : Record 23044535;
+      LicensePlateMgmt@1000000019 : Codeunit 23044520;
+      ptrecEventParamsTest@1000000020 : TEMPORARY Record 23044511;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up a list of warehouse documents for the handheld
+      //  Called From: This codeunit (handheld)
+      //  Side Effect: None
+      //</FUNC>
+
+      ldnOutput := ldnOutput.StringBuilder();
+      liActivityType := ptrecEventParams.getValueAsInt('document_type');
+      lcodUserName := ptrecEventParams.getValue('user_name');
+      lsFilter := ptrecEventParams.getValue('filter');
+      lcodOptionalItem := ptrecEventParams.getValue('item_number');
+      lsLot := ptrecEventParams.getLotNo();
+      lsSerial := ptrecEventParams.getSerialNo();
+      //-->TPZ2781 PSHUKLA
+      IF UPPERCASE(lsFilter) = 'STOP' THEN BEGIN
+        ptrecEventParamsTest := ptrecEventParams;
+        IF liActivityType = 0 THEN
+          ptrecEventParamsTest."Event" := 99000
+        ELSE IF liActivityType = 1 THEN
+          ptrecEventParamsTest."Event" := 99002;
+        LicensePlateMgmt.updatePausePicking(ptrecEventParamsTest,pbsOutput);
+        COMMIT;
+        IF liActivityType = 0 THEN
+          ERROR('Picking Stopped')
+        ELSE IF liActivityType = 1 THEN
+          ERROR('Put Away Stopped');
+      END;
+      //<--
+      //>>001 TPZ2886
+      IF UPPERCASE(lsFilter) = 'START' THEN BEGIN
+        ptrecEventParamsTest := ptrecEventParams;
+        IF liActivityType = 0 THEN
+          ptrecEventParamsTest."Event" := 99003
+        ELSE IF liActivityType = 1 THEN
+          ptrecEventParamsTest."Event" := 99005;
+        LicensePlateMgmt.updatePausePicking(ptrecEventParamsTest,pbsOutput);
+        COMMIT;
+        IF liActivityType = 0 THEN
+          ERROR('Picking Started!')
+        ELSE IF liActivityType = 1 THEN
+          ERROR('Put Away Started!');
+      END;
+      //<<001 TPZ2886
+      IF( lsFilter <> '' ) THEN BEGIN
+        lsFilter := '*' + lsFilter + '*';
+      END;
+
+      IF lcodOptionalItem <> '' THEN
+        lsFilter := '';
+
+      cuCommonFuncs.getDeviceConfig( lrecConfig,ptrecEventParams );
+      lbOnlyAssignedDocs := ( lcodUserName<>'' ) AND ( NOT lrecConfig."Show All Documents");
+
+      lrecWHISetup.GET();
+      liMaxDocList := lrecWHISetup."Document Max List";
+      IF liMaxDocList = 0 THEN
+        liMaxDocList := 999999;
+
+      searchActivityDocuments(ltrecDocList,lrecConfig,ptrecEventParams,lbOnlyAssignedDocs,lcodUserName,
+        lsFilter,liMaxDocList,lcodOptionalItem,liActivityType,lsLot,lsSerial);
+
+      ltrecDocList.RESET;
+      IF((ltrecDocList.COUNT = 0) AND (liActivityType=1) AND (lcodOptionalItem<>'')) THEN BEGIN
+        searchPostedReceipts(ltrecDocList,lrecConfig,liMaxDocList,lcodOptionalItem,lsLot,lsSerial);
+      END;
+
+
+
+      ltrecDocList.RESET;
+      lrrefDocListRef.GETTABLE( ltrecDocList  );
+      IF ( lrrefDocListRef.FINDFIRST() ) THEN;
+
+      lcuDataSetTools.BuildLinesOnlyDataset(
+        iEventID,
+        lrrefDocListRef,
+        FALSE,
+        ldnOutput);
+
+
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE searchActivityDocuments@1000000027(VAR ptrecDocList@1000000000 : Record 23044535;VAR precConfig@1000000002 : Record 23044504;VAR ptrecEventParams@1000000023 : TEMPORARY Record 23044511;pbOnlyAssignedDocs@1000000003 : Boolean;pcodUser@1000000004 : Code[50];ptxtFilter@1000000007 : Text;piMaxDocCount@1000000013 : Integer;pcodItemNumber@1000000010 : Text;piActivityType@1000000001 : Integer;psLotNumber@1000000018 : Text;psSerialNumber@1000000019 : Text);
+    VAR
+      lrecWhseActHeader@1000000005 : Record 5766;
+      lrecWhseActLine@1000000017 : Record 5767;
+      lrecLocation@1000000014 : Record 14;
+      lrecWhseHeaderTemp@1000000015 : Record 5766;
+      lrecWhseLineTemp@1000000006 : Record 5767;
+      lrecSalesHeader@1000000021 : Record 36;
+      lrecPurchHeader@1000000022 : Record 38;
+      lrecLPUsage@1000000012 : Record 23044507;
+      lbIncludeResult@1000000008 : Boolean;
+      liLineCounter@1000000016 : Integer;
+      lsName@1000000009 : Text;
+      lsBarcode@1000000011 : Text;
+      liType@1000000020 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Description: Searches the warehouse activity documents for possible matches to include in the lookup
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      psLotNumber := UPPERCASE(psLotNumber);
+      psSerialNumber := UPPERCASE(psSerialNumber);
+
+      lrecLocation.GET(precConfig."Location Code");
+
+      lrecWhseActHeader.SETRANGE("Location Code",precConfig."Location Code");
+
+      IF( piActivityType = 0 ) THEN // pick
+        lrecWhseActHeader.SETFILTER(Type,'%1|%2',lrecWhseActHeader.Type::Pick,lrecWhseActHeader.Type::"Invt. Pick")
+      ELSE IF( piActivityType = 1) THEN // put
+        lrecWhseActHeader.SETFILTER(Type, '%1|%2',lrecWhseActHeader.Type::"Put-away",lrecWhseActHeader.Type::"Invt. Put-away")
+      ELSE BEGIN // move or inventory movement
+        lrecWhseActHeader.SETFILTER(Type, '%1|%2',lrecWhseActHeader.Type::Movement,lrecWhseActHeader.Type::"Invt. Movement");
+      END;
+
+      IF( pbOnlyAssignedDocs ) THEN
+        lrecWhseActHeader.SETFILTER("Assigned User ID",'%1|%2','','*'+ pcodUser);
+      IF( lrecWhseActHeader.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lbIncludeResult := (ptxtFilter = '');
+
+          // check the purchase lines
+          lrecWhseActLine.RESET;
+          lrecWhseActLine.SETRANGE("Activity Type",lrecWhseActHeader.Type);
+          lrecWhseActLine.SETRANGE("No.",lrecWhseActHeader."No.");
+          lrecWhseActLine.SETFILTER("Qty. Outstanding",'>%1',0);
+
+          IF( pcodItemNumber <> '' ) THEN
+            lrecWhseActLine.SETRANGE("Item No.",pcodItemNumber);
+          IF( psLotNumber <> '' ) THEN
+            lrecWhseActLine.SETRANGE("Lot No.",psLotNumber);
+          IF( psSerialNumber <> '' ) THEN
+            lrecWhseActLine.SETRANGE("Serial No.",psSerialNumber);
+
+          lrecWhseHeaderTemp.RESET;
+          lrecWhseHeaderTemp.SETRANGE(Type,lrecWhseActHeader.Type);
+
+          IF( lrecWhseActLine.FINDSET(FALSE) ) THEN BEGIN
+            REPEAT
+              IF( ptxtFilter <> '' ) THEN BEGIN
+                // check the warehouse activity number
+                lrecWhseHeaderTemp.SETFILTER("No.",ptxtFilter);
+                IF lrecWhseHeaderTemp.FINDSET(FALSE) THEN BEGIN
+                  REPEAT
+                    lbIncludeResult := lrecWhseHeaderTemp."No." = lrecWhseActHeader."No.";
+                  UNTIL( (lrecWhseHeaderTemp.NEXT=0) OR lbIncludeResult);
+                END;
+
+                // check the external document number
+                IF( NOT lbIncludeResult ) THEN BEGIN
+                  lrecWhseHeaderTemp.SETRANGE("No.", lrecWhseActHeader."No.");
+                  lrecWhseHeaderTemp.SETFILTER("External Document No.",ptxtFilter);
+                  lbIncludeResult := lrecWhseHeaderTemp.FINDFIRST;
+                END;
+
+                // check the source number
+                IF( NOT lbIncludeResult ) THEN BEGIN
+                  lrecWhseLineTemp.RESET;
+                  lrecWhseLineTemp.SETRANGE("Activity Type",lrecWhseActHeader.Type);
+                  lrecWhseLineTemp.SETRANGE("No.",lrecWhseActHeader."No.");
+                  lrecWhseLineTemp.SETFILTER("Source No.", ptxtFilter);
+                  lbIncludeResult := lrecWhseLineTemp.FINDFIRST;
+                END;
+
+                // check whse. document no.
+                IF( NOT lbIncludeResult ) THEN BEGIN
+                  lrecWhseLineTemp.RESET;
+                  lrecWhseLineTemp.SETRANGE("Activity Type",lrecWhseActHeader.Type);
+                  lrecWhseLineTemp.SETRANGE("No.",lrecWhseActHeader."No.");
+                  lrecWhseLineTemp.SETFILTER("Whse. Document No.", ptxtFilter);
+                  lbIncludeResult := lrecWhseLineTemp.FINDFIRST;
+                END;
+
+                IF( NOT lbIncludeResult ) THEN BEGIN
+                  lrecLPUsage.SETRANGE("License Plate No.", ptxtFilter );
+
+                  IF( piActivityType = 0 ) THEN // pick
+                    lrecLPUsage.SETFILTER("Source Document",'%1|%2',lrecLPUsage."Source Document"::Pick,lrecLPUsage."Source Document"::"Invt. Pick")
+                  ELSE IF( piActivityType = 1 ) THEN // put-away
+                    lrecLPUsage.SETFILTER("Source Document",'%1|%2',lrecLPUsage."Source Document"::"Put-away",lrecLPUsage."Source Document"::"Invt. Put-away");
+
+                  lrecLPUsage.SETRANGE("Source No.",lrecWhseActLine."No.");
+                  lbIncludeResult := lrecLPUsage.FINDFIRST;
+                END;
+              END;
+
+              IF( lbIncludeResult ) THEN BEGIN
+                lsName := '';
+                IF( lrecWhseActLine."Source Document" = lrecWhseActLine."Source Document"::"Sales Order" ) THEN BEGIN
+                  IF( lrecSalesHeader.GET(lrecWhseActLine."Source Subtype",lrecWhseActLine."Source No.") ) THEN BEGIN
+                    lsName :=  lrecSalesHeader."Sell-to Customer Name";
+                  END;
+                END ELSE IF( lrecWhseActLine."Source Document" = lrecWhseActLine."Source Document"::"Purchase Order" ) THEN BEGIN
+                  IF( lrecPurchHeader.GET(lrecWhseActLine."Source Subtype",lrecWhseActLine."Source No.") ) THEN BEGIN
+                    lsName := lrecPurchHeader."Buy-from Vendor Name";
+                  END;
+                END;
+
+                liType := lrecWhseActHeader.Type;
+                lsBarcode := '%A%' + STRSUBSTNO('%1 %2', lrecWhseActHeader."No.", liType);
+
+                addWhseActDocToList(
+                  ptrecDocList,
+                  liLineCounter,
+                  (precConfig."Use Source Doc. - Warehouse" = precConfig."Use Source Doc. - Warehouse"::Yes), // use source document
+                  lrecWhseActLine."No.",                    // document no
+                  lrecWhseActLine."Source No.",             // source no
+                  DATABASE::"Warehouse Activity Header",    // source table
+                  lrecWhseActHeader."External Document No.",// reference no
+                  lrecWhseActHeader."Assigned User ID",     // assigned user
+                  lrecWhseActLine."Due Date",               // due date
+                  lrecWhseActLine."Whse. Document No.",     // whse document #
+                  lsName,                                   // custom text 1
+                  lsBarcode,                                 // barcode
+                  lrecWhseActHeader."Pick Type",             //Pick Type  TPZ2781
+                  lrecWhseActHeader."Shipping Method",       //Shipment Method TPZ2781
+                  lrecWhseActHeader."Number of Lines"  //Number of Lines on SO  TPZ2781
+                );
+              END;
+            UNTIL((lrecWhseActLine.NEXT=0) OR (liLineCounter >= piMaxDocCount));
+          END;
+        UNTIL((lrecWhseActHeader.NEXT=0) OR (liLineCounter >= piMaxDocCount))
+      END;
+    END;
+
+    PROCEDURE searchPostedReceipts@1000000053(VAR ptrecDocList@1000000003 : Record 23044535;VAR precConfig@1000000002 : Record 23044504;piMaxDocCount@1000000001 : Integer;pcodItemNumber@1000000000 : Text;psLotNumber@1000000004 : Text;psSerialNumber@1000000005 : Text);
+    VAR
+      lrecPostedWhseRcptLine@1000000006 : Record 7319;
+      lrecPostedWhseRcptHeader@1000000008 : Record 7318;
+      lrecPurchRcpt@1000000009 : Record 120;
+      liLineCounter@1000000007 : Integer;
+      lsName@1000000010 : Text;
+      PickTypeVar@1000000011 : ' ,TO, SO';
+    BEGIN
+      //<FUNC>
+      //  Description: Searches the posted purchase receipts that might not have put-aways to include in the lookup list
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //  Todo:  Include other document tupes
+      //</FUNC>
+
+      psLotNumber := UPPERCASE(psLotNumber);
+      psSerialNumber := UPPERCASE(psSerialNumber);
+
+
+      lrecPostedWhseRcptLine.RESET();
+      lrecPostedWhseRcptLine.SETRANGE("Location Code", precConfig."Location Code" );
+      lrecPostedWhseRcptLine.SETRANGE("Item No.", pcodItemNumber);
+      lrecPostedWhseRcptLine.SETFILTER("Qty. Put Away", '=%1',0);
+      lrecPostedWhseRcptLine.SETFILTER("Put-away Qty.", '=%1',0);
+      IF( psSerialNumber <> '' ) THEN
+        lrecPostedWhseRcptLine.SETRANGE("Serial No.", psSerialNumber);
+      IF( psLotNumber <> '' ) THEN
+        lrecPostedWhseRcptLine.SETRANGE("Lot No.", psLotNumber);
+      lrecPostedWhseRcptLine.SETRANGE("Source Document",lrecPostedWhseRcptLine."Source Document"::"Purchase Order");
+      lrecPostedWhseRcptLine.SETCURRENTKEY("Posted Source No.","Posting Date"); // look at most recent first
+      lrecPostedWhseRcptLine.ASCENDING(FALSE); // most recent first.
+
+      liLineCounter := 0;
+      IF (lrecPostedWhseRcptLine.FIND('-') ) THEN BEGIN
+        REPEAT
+          lrecPostedWhseRcptHeader.GET(lrecPostedWhseRcptLine."No.");
+          liLineCounter += 1;
+          lsName := '';
+          IF( lrecPurchRcpt.GET(lrecPostedWhseRcptLine."Posted Source No.") ) THEN
+            lsName := lrecPurchRcpt."Buy-from Vendor Name";
+          //-->PKS
+          IF lrecPostedWhseRcptLine."Source Type" = 5741 THEN
+            PickTypeVar := PickTypeVar::"TO";
+          //<--
+          addWhseActDocToList(
+            ptrecDocList,
+            liLineCounter,
+            (precConfig."Use Source Doc. - Warehouse" = precConfig."Use Source Doc. - Warehouse"::Yes), // use source document
+            lrecPostedWhseRcptLine."Source No.",              // document no
+            lrecPostedWhseRcptLine."Source No.",              // source no
+            DATABASE::"Purchase Header",                      // source table
+            lrecPostedWhseRcptHeader."Vendor Shipment No.",   // reference no
+            '',                                               // assigned user
+            lrecPostedWhseRcptLine."Due Date",                // due date
+            '',                                               // whse document #
+            lsName,                                           // custom text 1
+            '%PO%' + lrecPostedWhseRcptLine."Source No.",      // barcode
+            PickTypeVar,                                                //Pick Type , used in lookup
+            '',
+            NumberOfLine(lrecPostedWhseRcptLine."Source No.")
+          );
+        UNTIL ((lrecPostedWhseRcptLine.NEXT = 0) OR (liLineCounter  >= piMaxDocCount))
+      END;
+    END;
+
+    PROCEDURE addWhseActDocToList@1000000037(VAR ptrecDocList@1000000002 : Record 23044535;VAR piLineCounter@1000000001 : Integer;pbUseSourceDocument@1000000000 : Boolean;pcodDocumentNo@1000000003 : Code[20];pcodSourceNo@1000000004 : Code[20];piSourceTable@1000000005 : Integer;pcodRefNumber@1000000006 : Code[50];pcodAssignedUser@1000000007 : Code[50];pdtDueDate@1000000008 : Date;pcodWhseDocNumber@1000000011 : Code[20];psCustomText1@1000000009 : Text[50];psBarcode@1000000010 : Text[100];PickTypePara@1000000014 : ' ,TO, SO';ShipmentMethodPara@1000000013 : Code[10];NumberofLinesofSOPara@1000000012 : Integer);
+    BEGIN
+      //<FUNC>
+      //  Description: Wrapper for adding an entry to the lookup list
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+
+      ptrecDocList.RESET;
+      ptrecDocList.SETRANGE("Document No.",pcodDocumentNo);
+      IF (pbUseSourceDocument) THEN
+        ptrecDocList.SETRANGE("Source Document No.",pcodSourceNo);
+
+      IF( NOT ptrecDocList.FINDFIRST ) THEN BEGIN
+        ptrecDocList.INIT;
+        piLineCounter += 1;
+        ptrecDocList."Entry No." := piLineCounter;
+        ptrecDocList."Source Table" := piSourceTable;
+        ptrecDocList."Reference No." := pcodRefNumber;
+        ptrecDocList."Document No." := pcodDocumentNo;
+        IF( pbUseSourceDocument ) AND (pcodSourceNo <> '') THEN
+          ptrecDocList."No." := pcodSourceNo
+        ELSE
+          ptrecDocList."No." := pcodDocumentNo;
+        //ERROR( FORMAT(pbUseSourceDocument) +pcodDocumentNo +'-'+pcodSourceNo);//pankaj
+        ptrecDocList."Assigned User ID" := pcodAssignedUser;
+        ptrecDocList."Due Date" := pdtDueDate;
+        ptrecDocList."Whse. Document No." := pcodWhseDocNumber;
+        ptrecDocList."Source Document No." := pcodSourceNo;
+        ptrecDocList."Custom Text 1" := psCustomText1;
+        ptrecDocList."Pick Type" := FORMAT(PickTypePara);  //TPZ2781
+        ptrecDocList."Shipping Method" := ShipmentMethodPara; //TPZ2781
+        ptrecDocList."Number of Lines" := NumberofLinesofSOPara; //TPZ2781
+        ptrecDocList.Barcode := psBarcode;
+        ptrecDocList.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetTextScanDocBarcode@1000000042(VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      lrecWhseActivityHeader@1000000003 : Record 5766;
+      lsBarcodeText@1000000002 : Text;
+      liType@1000000004 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Determines what type of document (if any) was scanned
+      //  on the lookup list.
+      //  Returns the appropriate barcode instead that should be used.
+      //<FUNC>
+
+      lsBarcodeText := ptrecEventParams.getValue('barcode_text');
+
+      lrecWhseActivityHeader.SETRANGE("No.",lsBarcodeText);
+      IF lrecWhseActivityHeader.FINDSET(FALSE) THEN BEGIN
+        liType := lrecWhseActivityHeader.Type;
+        pbsOutput.ADDTEXT('<VALUE>%A%' + lrecWhseActivityHeader."No." + ' ' + FORMAT(liType) + '</VALUE>');
+      END ELSE BEGIN
+        pbsOutput.ADDTEXT('<VALUE></VALUE>');
+      END;
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE getReclassJournal@1000000001(VAR ptrecEventParams@1000000008 : TEMPORARY Record 23044511;VAR pbsOutput2@1000000007 : BigText);
+    VAR
+      lrecItemJournalBatch@1000000001 : Record 233;
+      lrrefHeader@1000000006 : RecordRef;
+      lcodLocation@1000000003 : Code[10];
+      lcodUserName@1000000002 : Code[50];
+      lcodReclassBatch@1000000009 : Code[10];
+      lcodDocNumber@1000000004 : Code[20];
+      lrecItemJnlLine@1000000005 : Record 83;
+      lrecItemTrackingCode@1000000010 : Record 6502;
+      lrecItem@1000000011 : Record 27;
+      ldnOutput@1000000012 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+    BEGIN
+      // Event 20009
+      ldnOutput := ldnOutput.StringBuilder();
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodUserName := ptrecEventParams.getValue('user_name');
+
+      lcodReclassBatch := cuJournalFunc.getItemJnlReclassBatchToUse( ptrecEventParams );
+      IF ( lcodReclassBatch = '' ) THEN BEGIN
+        // legacy
+        lcodReclassBatch := ptrecEventParams.getValue('batch');
+      END;
+
+      lrecItemJournalBatch.GET(cuJournalFunc.getItemJnlTemplate(PAGE::"Item Reclass. Journal",1),lcodReclassBatch);
+      lrrefHeader.GETTABLE(lrecItemJournalBatch);
+
+
+      ldnOutput.Append('<DATASET>');
+      ldnOutput.Append('<TABLE id="header">');
+      ldnOutput.Append('<COLS>');
+      cuCommonFuncs.initVariantColumnIndex();
+      cuCommonFuncs.addDSColumnsFromConfigDN(ldnOutput,iEventID,'',DATABASE::"Item Journal Batch");
+      ldnOutput.Append('</COLS>');
+      ldnOutput.Append('<ROWS><R><FIELDS>');
+      cuCommonFuncs.initVariantColumnIndex();
+      cuCommonFuncs.addDSFieldsForRecordDN(ldnOutput,lrrefHeader,iEventID,'');
+      ldnOutput.Append('</FIELDS></R></ROWS>');
+      ldnOutput.Append('</TABLE>');
+      ldnOutput.Append('<TABLE id="line">');
+      ldnOutput.Append('<COLS>');
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.addDSColumnsFromConfigDN( ldnOutput,iEventID,'', DATABASE::"Item Journal Line" );
+      cuCommonFuncs.addDSTrackingColumnsDN(ldnOutput);
+      ldnOutput.Append('</COLS>');
+      ldnOutput.Append('<ROWS>');
+      lrecItemJnlLine.SETRANGE("Journal Template Name",cuJournalFunc.getItemJnlTemplate(PAGE::"Item Reclass. Journal",1));
+      lrecItemJnlLine.SETRANGE("Journal Batch Name",lcodReclassBatch);
+      lrecItemJnlLine.SETFILTER("Item No.",'<>%1','');
+
+      IF( lrecItemJnlLine.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          getReclassLine(ldnOutput,lrecItemJnlLine);
+        UNTIL(lrecItemJnlLine.NEXT=0);
+      END;
+
+      ldnOutput.Append('</ROWS>');
+      ldnOutput.Append('</TABLE>');
+      ldnOutput.Append('</DATASET>');
+      pbsOutput2.ADDTEXT( ldnOutput.ToString() );
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Item Journal Line"));
+      ptrecEventParams.setValue('Document No.', lcodReclassBatch);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE addDocumentToReclassJournal@1000000002(VAR ptrecEventParams@1000000008 : TEMPORARY Record 23044511;VAR pbsOutput@1000000007 : BigText);
+    VAR
+      lcodLocation@1000000003 : Code[10];
+      lcodNewLocation@1000000012 : Code[10];
+      lcodUserName@1000000002 : Code[50];
+      lcodReclassBatch@1000000009 : Code[10];
+      lcodDocNumber@1000000004 : Code[20];
+      lrecItemJnlLine@1000000005 : Record 83;
+      lrecItemTrackingCode@1000000010 : Record 6502;
+      lrecItem@1000000011 : Record 27;
+      lbHandled@1000000000 : Boolean;
+      lrecSalesDocument@1000000001 : Record 36;
+      lrecSalesDocLine@1000000006 : Record 37;
+      lbDefaultBin@1000000013 : Boolean;
+      lbsIgnoreText@1000000014 : BigText;
+      lcodBinCode@1000000015 : Code[20];
+      lcodNewBinCode@1000000016 : Code[20];
+      lrecPostedSalesInv@1000000017 : Record 112;
+      lrecPostedSalesInvLine@1000000018 : Record 113;
+      liAddedLinesCounter@1000000019 : Integer;
+      ltxtDocType@1000000020 : Text[100];
+      lrecPurchaseHeader@1000000021 : Record 38;
+      lrecPurchaseLine@1000000022 : Record 39;
+      lrecBin@1000000023 : Record 7354;
+      ldnOutput@1000000024 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      liSourceDocumentType@1000000026 : Integer;
+    BEGIN
+      // Event 20061
+      //  Allow scanning a document.  This will add the items in that document
+      //  to the reclass journal.
+      ldnOutput := ldnOutput.StringBuilder();
+      lcodLocation := COPYSTR( ptrecEventParams.getValue('location'), 1, MAXSTRLEN( lcodLocation) );
+      lcodNewLocation := COPYSTR( ptrecEventParams.getValue('new_location'), 1, MAXSTRLEN( lcodNewLocation) );
+      lcodUserName := COPYSTR( ptrecEventParams.getValue('user_name'), 1, MAXSTRLEN( lcodUserName ) ) ;
+      lcodReclassBatch := cuJournalFunc.getItemJnlReclassBatchToUse( ptrecEventParams );
+      IF ( lcodReclassBatch = '' ) THEN BEGIN
+        lcodReclassBatch := ptrecEventParams.getValue('batch');
+      END;
+
+      lcodDocNumber := COPYSTR( ptrecEventParams.getDocumentNo(), 1, MAXSTRLEN( lcodDocNumber ) );
+      lcodBinCode := COPYSTR( ptrecEventParams.getValue('bin_code'), 1, MAXSTRLEN( lcodBinCode ) );
+      lcodNewBinCode := COPYSTR( ptrecEventParams.getValue('new_bin_code'), 1, MAXSTRLEN( lcodNewBinCode ) );
+
+      lbHandled := FALSE;
+
+      lrecBin.RESET();
+      IF ( ( '' = lcodNewLocation ) AND ( '' <> lcodNewBinCode ) ) THEN BEGIN
+        // if no new location is specified but a bin is specified, then lookup
+        // the location from the bin.
+        lcodNewLocation := getLocationFromBin( lcodLocation, lcodNewBinCode );
+      END;
+
+      // try an unposted sales order first.
+      lrecSalesDocument.RESET();
+      lrecSalesDocument.SETRANGE("No.", lcodDocNumber );
+      IF ( lrecSalesDocument.FINDLAST() ) THEN BEGIN
+        ltxtDocType := FORMAT( lrecSalesDocument."Document Type" );
+
+        lrecSalesDocLine.RESET();
+        lrecSalesDocLine.SETRANGE("Document Type", lrecSalesDocument."Document Type" );
+        lrecSalesDocLine.SETRANGE("Document No.", lrecSalesDocument."No." );
+        lrecSalesDocLine.SETRANGE(Type, lrecSalesDocLine.Type::Item );
+        lrecSalesDocLine.SETFILTER("No.", '<>''''' );
+        IF ( lrecSalesDocLine.FIND('-') ) THEN BEGIN
+          liSourceDocumentType := DATABASE::"Sales Line";
+          REPEAT
+            codUOM := lrecSalesDocLine."Unit of Measure Code";
+
+            createReclassJournalLine(
+              lcodLocation,
+              lcodReclassBatch,
+              lrecSalesDocLine."No.",
+              lrecSalesDocLine."Variant Code",
+              lrecSalesDocLine.Quantity,
+              '', // serial number
+              '', // lot number
+              lcodBinCode,
+              ldnOutput,
+              lcodNewLocation,
+              lcodNewBinCode,
+              lcodDocNumber,
+              TRUE,
+              0D
+            );
+            // above does most of the work.
+            lbHandled := TRUE;
+            liAddedLinesCounter += 1;
+          UNTIL( 0 = lrecSalesDocLine.NEXT() )
+        END; // if we found lines in an unposted sales document.
+      END; // if we found an unposted sales document
+
+      // then try a posted sales order.
+      IF ( NOT lbHandled ) THEN BEGIN
+        lrecPostedSalesInv.RESET();
+        lrecPostedSalesInv.SETRANGE("Order No.", lcodDocNumber );
+        IF ( lrecPostedSalesInv.FINDLAST() ) THEN BEGIN
+          ltxtDocType := FORMAT( lrecSalesDocument."Document Type"::Order );
+        END ELSE BEGIN
+          // if it's not the order no, then try the posted invoice no.
+          lrecPostedSalesInv.SETRANGE("Order No." );
+          lrecPostedSalesInv.SETRANGE("No.", lcodDocNumber );
+          IF ( lrecPostedSalesInv.FIND('-') ) THEN BEGIN
+            ltxtDocType := FORMAT( lrecSalesDocument."Document Type"::Invoice );
+          END;
+        END;
+
+        //
+        IF ( lrecPostedSalesInv.COUNT() > 0 ) THEN BEGIN
+          lrecPostedSalesInvLine.SETRANGE("Document No.", lrecPostedSalesInv."No.");
+          lrecPostedSalesInvLine.SETRANGE(Type, lrecPostedSalesInvLine.Type::Item );
+          lrecPostedSalesInvLine.SETFILTER("No.", '<>''''');
+          IF ( lrecPostedSalesInvLine.FIND('-') ) THEN BEGIN
+            liSourceDocumentType := DATABASE::"Sales Invoice Line";
+            REPEAT
+              codUOM := lrecPostedSalesInvLine."Unit of Measure Code";
+
+              createReclassJournalLine(
+                lcodLocation,
+                lcodReclassBatch,
+                lrecPostedSalesInvLine."No.",
+                lrecPostedSalesInvLine."Variant Code",
+                lrecPostedSalesInvLine.Quantity,
+                '', // serial number
+                '', // lot number
+                lcodBinCode,
+                ldnOutput,
+                lcodNewLocation,
+                lcodNewBinCode,
+                lcodDocNumber,
+                TRUE,
+                0D
+              );
+              // above does most of the work.
+              lbHandled := TRUE;
+              liAddedLinesCounter += 1;
+            UNTIL ( 0 = lrecPostedSalesInvLine.NEXT() );
+          END; // if we have posted sales lines with items
+        END;// if we have a posted sales invoice.
+      END; // if not yet handled, then try a posted sales invoice.
+
+      IF ( NOT lbHandled ) THEN BEGIN
+        lrecPurchaseHeader.RESET();
+        lrecPurchaseHeader.SETRANGE("No.", lcodDocNumber );
+        IF ( lrecPurchaseHeader.FINDLAST() ) THEN BEGIN
+          lrecPurchaseLine.SETRANGE("Document Type", lrecPurchaseHeader."Document Type" );
+          lrecPurchaseLine.SETRANGE("Document No.", lrecPurchaseHeader."No." );
+          lrecPurchaseLine.SETRANGE(Type, lrecPurchaseLine.Type::Item );
+          lrecPurchaseLine.SETFILTER("No.", '<>''''');
+          IF ( lrecPurchaseLine.FIND('-') ) THEN BEGIN
+            liSourceDocumentType := DATABASE::"Purchase Line";
+            REPEAT
+              codUOM := lrecPurchaseLine."Unit of Measure Code";
+
+              createReclassJournalLine(
+                lcodLocation,
+                lcodReclassBatch,
+                lrecPurchaseLine."No.",
+                lrecPurchaseLine."Variant Code",
+                lrecPurchaseLine.Quantity,
+                '', // serial number
+                '', // lot number
+                lcodBinCode,
+                ldnOutput,
+                lcodNewLocation,
+                lcodNewBinCode,
+                lcodDocNumber,
+                TRUE,
+                0D
+              );
+              // above does most of the work.
+              lbHandled := TRUE;
+              liAddedLinesCounter += 1;
+            UNTIL ( 0 = lrecPurchaseLine.NEXT() );
+
+          END; // if we have purchase lines with items.
+        END;// if we found a purchase header
+      END;// if not yet handled try a purchase order.
+
+
+      pbsOutput.ADDTEXT('<wrapper>'); // using a wrapper to have a dataset and a message available in the response.
+      // now return the data in the journal to refresh for the handheld.
+      getReclassJournal( ptrecEventParams, pbsOutput );
+
+      cuCommonFuncs.generateSuccessReturnWithMsg(
+        1,
+        STRSUBSTNO(
+         cuTranslationMgmt.getTranslatedString('MSG_ADHOC_LINES_ADDED', codRegionCode),
+         liAddedLinesCounter,
+         ltxtDocType,
+         lcodDocNumber ), pbsOutput);
+      pbsOutput.ADDTEXT('</wrapper>');
+      // NO strinbuilding output is needed here.
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Item Journal Line"));
+      ptrecEventParams.setValue('Document No.', lcodReclassBatch);
+      ptrecEventParams.setValue('Source Document Type', FORMAT(liSourceDocumentType));
+      ptrecEventParams.setValue('Source Document No.', lcodDocNumber);
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE getReclassDocList@1000000003(VAR ptrecEventParams@1000000008 : TEMPORARY Record 23044511;VAR pbsOutput2@1000000007 : BigText);
+    VAR
+      lcodLocation@1000000002 : Code[10];
+      lcodUserName@1000000003 : Code[50];
+      lcodReclassBatch@1000000006 : Code[10];
+      lrecItemJnlLine@1000000004 : Record 83;
+      ltrecTemp@1000000005 : TEMPORARY Record 27;
+      ldnOutput@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+    BEGIN
+      // Event 20010
+      //
+      // Returns the lookup lists.  Code based on original from Mark H.
+      // Will generate unique list of documents based on batch/template
+      ldnOutput := ldnOutput.StringBuilder();
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodUserName := ptrecEventParams.getValue('user_name');
+      lcodReclassBatch := cuJournalFunc.getItemJnlReclassBatchToUse( ptrecEventParams );
+      IF ( lcodReclassBatch = '' ) THEN BEGIN
+        lcodReclassBatch := ptrecEventParams.getValue('batch');
+      END;
+
+      ldnOutput.Append('<DATASET>');
+      ldnOutput.Append('<TABLE id="list">');
+      ldnOutput.Append('<COLS>');
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.addDSColumnsFromConfigDN( ldnOutput,iEventID,'', DATABASE::Item );
+      ldnOutput.Append('</COLS>');
+
+      lrecItemJnlLine.SETRANGE("Journal Template Name",cuJournalFunc.getItemJnlTemplate(PAGE::"Item Reclass. Journal",1));
+      lrecItemJnlLine.SETRANGE("Journal Batch Name",lcodReclassBatch);
+
+      IF( lrecItemJnlLine.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          IF( ltrecTemp.GET(lrecItemJnlLine."Document No.") ) THEN BEGIN
+            ltrecTemp."Price Unit Conversion" := ltrecTemp."Price Unit Conversion" + 1;
+            ltrecTemp.MODIFY;
+          END
+          ELSE BEGIN
+            ltrecTemp."No." := lrecItemJnlLine."Document No.";
+            ltrecTemp."Price Unit Conversion" := 1;
+            ltrecTemp.INSERT;
+          END;
+        UNTIL( lrecItemJnlLine.NEXT=0 );
+      END;
+
+      ldnOutput.Append('<ROWS>');
+
+
+      ltrecTemp.RESET;
+      IF( ltrecTemp.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+
+          cuCommonFuncs.initVariantColumnIndex();
+          ldnOutput.Append('<R><FIELDS>');
+          cuCommonFuncs.addDSFieldDN(ldnOutput,ltrecTemp."No.");
+          cuCommonFuncs.addDSFieldDN(ldnOutput,ltrecTemp."Price Unit Conversion");
+          cuCommonFuncs.addDSFieldDN(ldnOutput,'');
+          ldnOutput.Append('</FIELDS></R>');
+
+        UNTIL ltrecTemp.NEXT = 0;
+      END;
+
+      ldnOutput.Append('</ROWS></TABLE></DATASET>');
+
+      pbsOutput2.ADDTEXT( ldnOutput.ToString() );
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE postReclassJournal@1000000004(VAR ptrecEventParams@1000000009 : TEMPORARY Record 23044511;VAR pbsOutput@1000000004 : BigText);
+    VAR
+      lcodLocation@1000000006 : Code[10];
+      lcodUserName@1000000005 : Code[50];
+      lcodReclassBatch@1000000003 : Code[10];
+      lcodDocNumber@1000000007 : Code[20];
+      lrecItemJnlLine@1000000001 : Record 83;
+      lrecLPLineUsage@1000000002 : Record 23044507;
+      lcuJnlPost@1000000008 : Codeunit 23;
+      liJournalLines@1000000000 : Integer;
+    BEGIN
+      // Posts the specified item journal template/batch/document no.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodUserName := ptrecEventParams.getValue('user_name');
+
+      lcodReclassBatch := cuJournalFunc.getItemJnlReclassBatchToUse( ptrecEventParams );
+      IF ( lcodReclassBatch = '' ) THEN BEGIN
+        lcodReclassBatch := ptrecEventParams.getValue('Journal Batch Name');
+      END;
+
+      IF ( '' = lcodReclassBatch ) THEN BEGIN
+        lcodReclassBatch := ptrecEventParams.getValue('batch');
+      END;
+      lrecItemJnlLine.SETRANGE("Journal Template Name", cuJournalFunc.getItemJnlTemplate(PAGE::"Item Reclass. Journal",1));
+      lrecItemJnlLine.SETRANGE("Journal Batch Name", lcodReclassBatch);
+      lrecItemJnlLine.SETFILTER("Document No.", '<>%1', '');
+      lrecItemJnlLine.SETFILTER("Item No.", '<>%1', '');
+      lrecItemJnlLine.SETFILTER("Location Code", '<>%1', '');
+
+      CLEAR( liJournalLines );
+
+      modifyItemJnlLineLPAction(lcodReclassBatch, cuJournalFunc.getItemJnlTemplate(PAGE::"Item Reclass. Journal",1));
+
+      IF lrecItemJnlLine.FIND('-') THEN BEGIN
+        liJournalLines := lrecItemJnlLine.COUNT();
+      END;
+
+      lcuJnlPost.RUN(lrecItemJnlLine);
+
+      lrecLPLineUsage.SETCURRENTKEY("Posting Date","Source No.", "Source Line No.", "Source Document");
+      lrecLPLineUsage.SETFILTER("Posting Date",'%1', 0D);
+      lrecLPLineUsage.SETRANGE("Source Document", lrecLPLineUsage."Source Document"::Reclass);
+      lrecLPLineUsage.SETRANGE("Source No.", lcodReclassBatch);
+      lrecLPLineUsage.MODIFYALL("Posting Date",TODAY,TRUE);
+
+      COMMIT();
+      cuCommonFuncs.generateSuccessReturnWithMsg(1, STRSUBSTNO( cuTranslationMgmt.getTranslatedString('MSG_JNL_LINES_POSTED', codRegionCode), liJournalLines), pbsOutput);
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Item Journal Line"));
+      ptrecEventParams.setValue('Document No.', lcodReclassBatch);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE updateReclassLine@1000000005(VAR ptrecEventParams@1000000014 : TEMPORARY Record 23044511;VAR pbsOutput2@1000000013 : BigText);
+    VAR
+      lrecItemJnlLine@1000000001 : Record 83;
+      ltrecCommentLine@1000000012 : TEMPORARY Record 97;
+      ldnOutput@1000000018 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      ldtExpirationDate@1000000017 : Date;
+      lcodLocation@1000000006 : Code[10];
+      lcodNewLocation@1000000000 : Code[10];
+      lcodUserName@1000000005 : Code[50];
+      lcodReclassBatch@1000000003 : Code[10];
+      lsSerialNumber@1000000008 : Text;
+      lsLotNumber@1000000009 : Text;
+      lcodReclassTemplate@1000000004 : Code[10];
+      ldChange@1000000011 : Decimal;
+      ldQuantity@1000000010 : Decimal;
+      ldPreviousQuantity@1000000015 : Decimal;
+      ldQuantityBase@1000000016 : Decimal;
+      liLineNumber@1000000007 : Integer;
+    BEGIN
+      // Event 20012
+      // updates the specified item journal line with quantity and item tracking info.
+      ldnOutput := ldnOutput.StringBuilder();
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodUserName := ptrecEventParams.getValue('user_name');
+      lcodReclassBatch := cuJournalFunc.getItemJnlReclassBatchToUse( ptrecEventParams );
+      IF ( lcodReclassBatch = '' ) THEN BEGIN
+        // legacy
+        lcodReclassBatch := ptrecEventParams.getValue('batch');
+      END;
+
+      liLineNumber := ptrecEventParams.getLineNo();
+      ldQuantity := ptrecEventParams.getValueAsDecimal('qty');
+      lsSerialNumber := ptrecEventParams.getSerialNo();
+      lsLotNumber := ptrecEventParams.getLotNo();
+      lcodNewLocation := ptrecEventParams.getValue('new_location');
+      lcodReclassTemplate := cuJournalFunc.getItemJnlTemplate(PAGE::"Item Reclass. Journal",1);
+      ldtExpirationDate := cuCommonFuncs.getExpirationDate(ptrecEventParams);
+
+      lrecItemJnlLine.GET(lcodReclassTemplate,lcodReclassBatch,liLineNumber);
+      IF ( '*' = lcodLocation ) THEN BEGIN
+        lcodLocation := lrecItemJnlLine."Location Code";
+      END;
+      IF ( '*' = lcodNewLocation ) THEN BEGIN
+        lcodNewLocation := lrecItemJnlLine."Location Code";
+      END;
+
+
+      IF ( ( '' <> lcodLocation ) AND ( lcodLocation <> lrecItemJnlLine."Location Code" ) ) THEN BEGIN
+        lrecItemJnlLine.VALIDATE("Location Code", lcodLocation );
+      END;
+      IF ( ( '' <> lcodNewLocation ) AND ( lcodNewLocation <> lrecItemJnlLine."New Location Code" ) ) THEN BEGIN
+        lrecItemJnlLine.VALIDATE("New Location Code", lcodNewLocation );
+      END;
+      //
+      // Special case for reclass -
+      //   if increasing qty then do that before tracking
+      //   if decreasing qty then do that after tracking
+      //
+
+
+      ldPreviousQuantity := lrecItemJnlLine.Quantity;
+      ldChange := ldQuantity - lrecItemJnlLine.Quantity;
+
+      IF (ldChange <> 0) THEN BEGIN
+        IF(lrecItemJnlLine."LPM License Plate No." <> '' ) THEN BEGIN
+          ERROR(cuTranslationMgmt.getTranslatedString('ERR_CANNOT_CHANGE_LINE_ASSIGN_LP', codRegionCode), lrecItemJnlLine."Item No.", lrecItemJnlLine."LPM License Plate No.");
+        END;
+      END;
+
+
+      IF( ldChange >= 0 ) THEN BEGIN
+        ldQuantityBase := cuCommonFuncs.ConvertToBaseUomQuantity(lrecItemJnlLine."Item No.", ldQuantity, lrecItemJnlLine."Unit of Measure Code");
+
+        cuCommonBase.validateReclassMove(
+          lcodLocation,
+          lrecItemJnlLine."Item No.",
+          lrecItemJnlLine."Variant Code",
+          lsLotNumber,
+          lsSerialNumber,
+          lrecItemJnlLine."Bin Code",
+          ldQuantityBase);
+
+        // set the quantity
+        lrecItemJnlLine.VALIDATE(Quantity,ldQuantity);
+        lrecItemJnlLine.MODIFY(TRUE);
+
+        // add/remove the serial number
+        IF( (lsLotNumber <> '') OR (lsSerialNumber <> '') ) THEN BEGIN
+          cuResMgmt.AddRemoveReclassTracking(lrecItemJnlLine,lsSerialNumber,lsLotNumber,ldChange, lrecItemJnlLine."Unit of Measure Code", ldtExpirationDate);
+        END;
+      END
+      ELSE BEGIN
+        IF( (lsLotNumber <> '') OR (lsSerialNumber <> '') ) THEN BEGIN
+          cuResMgmt.AddRemoveReclassTracking(lrecItemJnlLine,lsSerialNumber,lsLotNumber,ldChange, lrecItemJnlLine."Unit of Measure Code", ldtExpirationDate);
+        END;
+
+        // set the quantity
+        lrecItemJnlLine.VALIDATE(Quantity,ldQuantity);
+        lrecItemJnlLine.MODIFY(TRUE);
+      END;
+
+      // store this line in the list of changed lines
+      ltrecCommentLine.SETRANGE("Line No.", lrecItemJnlLine."Line No.");
+      IF( NOT ltrecCommentLine.FIND('-') ) THEN BEGIN
+        ltrecCommentLine."Table Name" := ltrecCommentLine."Table Name"::Item;
+        ltrecCommentLine."No." := lrecItemJnlLine."Item No.";
+        ltrecCommentLine."Line No." := lrecItemJnlLine."Line No.";
+        ltrecCommentLine.INSERT;
+      END;
+
+      ldnOutput.Append('<DATASET><TABLE id="line">');
+      ldnOutput.Append('<COLS>');
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.addDSColumnsFromConfigDN(ldnOutput, 20009, '', DATABASE::"Item Journal Line");
+      cuCommonFuncs.addDSTrackingColumnsDN(ldnOutput);
+      ldnOutput.Append('</COLS>');
+      ldnOutput.Append('<ROWS>');
+
+      // in theory there are modified lines (including the original)
+      // loop through them and return that xml set to the device for further processing
+      ltrecCommentLine.RESET;
+      ltrecCommentLine.FINDSET(FALSE);
+      REPEAT
+        lrecItemJnlLine.GET(lcodReclassTemplate,lcodReclassBatch,liLineNumber);
+        getReclassLine(ldnOutput, lrecItemJnlLine);
+      UNTIL( ltrecCommentLine.NEXT=0 );
+
+      ldnOutput.Append('</ROWS>');
+      ldnOutput.Append('</TABLE>');
+      ldnOutput.Append('</DATASET>');
+
+      pbsOutput2.ADDTEXT( ldnOutput.ToString() );
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Item Journal Line"));
+      ptrecEventParams.setValue('Document No.', lcodReclassBatch);
+      ptrecEventParams.setValue('Previous Quantity', FORMAT(ldPreviousQuantity));
+      ptrecEventParams.setValue('New Quantity', FORMAT(ldQuantity));
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE getReclassLine@1000000006(VAR pdnOutput@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";precItemJnlLine@1000000000 : Record 83);
+    VAR
+      lrecItem@1000000002 : Record 27;
+      lrecItemTrackingCode@1000000003 : Record 6502;
+      lrrefWriter@1000000004 : RecordRef;
+    BEGIN
+      pdnOutput.Append('<R><FIELDS>');
+      lrrefWriter.GETTABLE( precItemJnlLine );
+      cuCommonFuncs.addDSFieldsForRecordDN(pdnOutput,lrrefWriter,iEventID,'');
+      lrecItem.GET(precItemJnlLine."Item No.");
+      cuCommonFuncs.addDSTrackingFieldsDN(pdnOutput, lrecItem."Item Tracking Code");
+      pdnOutput.Append('</FIELDS>');
+
+      cuCommonFuncs.getReclassReservationEntries(
+        pdnOutput, precItemJnlLine."Item No.", precItemJnlLine."Location Code",precItemJnlLine."Journal Template Name",
+        precItemJnlLine."Journal Batch Name",precItemJnlLine."Line No.",FALSE);
+      pdnOutput.Append('</R>');
+    END;
+
+    PROCEDURE createReclassLine@1000000007(VAR ptrecEventParams@1000000019 : TEMPORARY Record 23044511;VAR pbsOutput2@1000000016 : BigText);
+    VAR
+      lcodLocation@1000000009 : Code[10];
+      lcodNewLocation@1000000000 : Code[10];
+      lcodUserName@1000000008 : Code[50];
+      lcodReclassBatch@1000000006 : Code[10];
+      lcodItemNumber@1000000012 : Text;
+      ldQuantity@1000000005 : Decimal;
+      lsSerialNumber@1000000004 : Text;
+      lsLotNumber@1000000003 : Text;
+      lcodBinCode@1000000010 : Code[20];
+      lcodDocNumber@1000000013 : Code[20];
+      lcodVariantCode@1000000014 : Text;
+      lrecBinContent@1000000017 : Record 7302;
+      lbDefaultBin@1000000011 : Boolean;
+      lbDefaultQty@1000000015 : Boolean;
+      lbWhseTracked@1000000018 : Boolean;
+      lcodNewBinCode@1000000001 : Code[20];
+      ldnOutput@1000000022 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      ldQuantityBase@1000000007 : Decimal;
+      lrecItem@1000000020 : Record 27;
+      ldtExpirationDate@1000000021 : Date;
+    BEGIN
+      // Event 20013
+      // Creates a reclass entry based on the params supplied.
+      ldnOutput := ldnOutput.StringBuilder();
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodNewLocation := ptrecEventParams.getValue('new_location');
+      lcodUserName := ptrecEventParams.getValue('user_name');
+      lcodReclassBatch := cuJournalFunc.getItemJnlReclassBatchToUse( ptrecEventParams );
+      IF ( lcodReclassBatch = '' ) THEN BEGIN
+        lcodReclassBatch := ptrecEventParams.getValue('Journal Batch Name');
+      END;
+
+      lcodItemNumber := ptrecEventParams.getItemNo();
+      ldQuantity := ptrecEventParams.getValueAsDecimal('qty');
+      lsSerialNumber := ptrecEventParams.getSerialNo();
+      lsLotNumber := ptrecEventParams.getLotNo();
+      lcodBinCode := ptrecEventParams.getValue('bin_code');
+      lcodVariantCode := ptrecEventParams.getValue('variant_code');
+      lbDefaultBin := ptrecEventParams.getValueAsBool('default_bin');
+      lbDefaultQty := ptrecEventParams.getValueAsBool('default_qty');
+      lcodNewBinCode := ptrecEventParams.getValue('new_bin_code');
+      ldtExpirationDate := cuCommonFuncs.getExpirationDate(ptrecEventParams);
+
+      codUOM := ptrecEventParams.getValue('uom');
+      ldQuantityBase := ldQuantity;
+      IF (codUOM <> '') THEN BEGIN
+        ldQuantityBase := cuCommonFuncs.ConvertToBaseUomQuantity(lcodItemNumber, ldQuantity, codUOM);
+      END;
+      lrecItem.GET(lcodItemNumber);
+
+      // return the new line
+      ldnOutput.Append('<DATASET><TABLE id="line">');
+      ldnOutput.Append('<COLS>');
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.addDSColumnsFromConfigDN(ldnOutput,20009,'', DATABASE::"Item Journal Line" );
+      cuCommonFuncs.addDSTrackingColumnsDN(ldnOutput);
+      ldnOutput.Append('</COLS>');
+      ldnOutput.Append('<ROWS>');
+
+      // create multiple entries
+      IF( lbDefaultBin ) THEN BEGIN
+        lrecBinContent.SETRANGE("Location Code",lcodLocation);
+        lrecBinContent.SETRANGE("Item No.",lcodItemNumber);
+        lrecBinContent.SETRANGE("Variant Code",lcodVariantCode);
+        lrecBinContent.SETFILTER(Quantity,'>%1',0);
+
+        lbWhseTracked := cuCommonBase.isWhseTracked( lcodItemNumber);
+
+        IF( lbWhseTracked ) THEN BEGIN
+          IF( lsLotNumber <> '' ) THEN BEGIN
+            lrecBinContent.SETRANGE("Lot No. Filter",lsLotNumber);
+          END;
+          IF( lsSerialNumber <> '' ) THEN
+            lrecBinContent.SETRANGE("Serial No. Filter",lsSerialNumber);
+        END;
+
+        lrecBinContent.SETAUTOCALCFIELDS("Quantity (Base)");
+
+        IF( lrecBinContent.FINDSET(FALSE) ) THEN BEGIN
+          REPEAT
+            IF( lbDefaultQty ) THEN BEGIN
+              ldQuantity := lrecBinContent."Quantity (Base)";
+              IF (codUOM <> '') THEN BEGIN
+                ldQuantity := cuCommonFuncs.ConvertUnitOfMeasure(lrecItem, ldQuantity, lrecItem."Base Unit of Measure", codUOM);
+              END;
+            END ELSE IF( ldQuantity <> 0 ) THEN BEGIN
+              cuCommonBase.validateReclassMove(
+                          lcodLocation,
+                          lcodItemNumber,
+                          lcodVariantCode,
+                          lsLotNumber,
+                          lsSerialNumber,
+                          lrecBinContent."Bin Code",
+                          ldQuantityBase);
+            END;
+
+            // if the quantity is 0 and it's whse. tracked
+            // we can't create 0 quantity reservations (if you do it will create orphan records)
+            // therefore set the default to 1 (or bin qty) and allow the user to change from there
+            IF( (ldQuantity = 0) AND lbWhseTracked ) THEN BEGIN
+              IF( lrecBinContent."Quantity (Base)" < 1 ) THEN
+                ldQuantity := lrecBinContent."Quantity (Base)"
+              ELSE
+                ldQuantity := 1;
+
+              IF (codUOM <> lrecBinContent."Unit of Measure Code") THEN BEGIN
+                ldQuantity := cuCommonFuncs.ConvertUnitOfMeasure(lrecItem, ldQuantity, lrecBinContent."Unit of Measure Code", codUOM);
+              END;
+            END;
+
+            createReclassJournalLine(
+              lcodLocation,
+              lcodReclassBatch,
+              lcodItemNumber,
+              lcodVariantCode,
+              ldQuantity,
+              lsSerialNumber,
+              lsLotNumber,
+              lrecBinContent."Bin Code",
+              ldnOutput,
+              lcodNewLocation,
+              lcodNewBinCode,
+              '',
+              FALSE,
+              ldtExpirationDate
+            );
+
+          UNTIL(lrecBinContent.NEXT=0);
+        END ELSE BEGIN
+          ERROR(cuTranslationMgmt.getTranslatedString('ERR_NOTHING_AVAIL_MOVE', codRegionCode),lcodItemNumber);
+        END;
+      END ELSE BEGIN // create only a single entry
+        IF( lbDefaultQty ) THEN BEGIN
+          ldQuantity := cuCommonBase.validateReclassMove(
+                          lcodLocation,
+                          lcodItemNumber,
+                          lcodVariantCode,
+                          lsLotNumber,
+                          lsSerialNumber,
+                          lcodBinCode,
+                          0);
+          IF (codUOM <> '') THEN BEGIN
+            ldQuantity := cuCommonFuncs.ConvertUnitOfMeasure(lrecItem, ldQuantity, lrecItem."Base Unit of Measure", codUOM);
+          END;
+        END ELSE BEGIN
+          cuCommonBase.validateReclassMove(
+                          lcodLocation,
+                          lcodItemNumber,
+                          lcodVariantCode,
+                          lsLotNumber,
+                          lsSerialNumber,
+                          lcodBinCode,
+                          ldQuantityBase);
+        END;
+
+        createReclassJournalLine(
+            lcodLocation,
+            lcodReclassBatch,
+            lcodItemNumber,
+            lcodVariantCode,
+            ldQuantity,
+            lsSerialNumber,
+            lsLotNumber,
+            lcodBinCode,
+            ldnOutput,
+            lcodNewLocation,
+            lcodNewBinCode,
+            '',
+            FALSE,
+            ldtExpirationDate
+          );
+      END;
+
+      ldnOutput.Append('</ROWS>');
+      ldnOutput.Append('</TABLE>');
+      ldnOutput.Append('</DATASET>');
+
+      pbsOutput2.ADDTEXT( ldnOutput.ToString() );
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Item Journal Line"));
+      ptrecEventParams.setValue('Document No.', lcodReclassBatch);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE createReclassJournalLine@1000000030(pcodLocation@1000000007 : Code[10];pcodReclassBatch@1000000006 : Code[10];pcodItemNumber@1000000005 : Text;pcodVariantCode@1000000014 : Text;pdQuantity@1000000004 : Decimal;psSerialNumber@1000000003 : Text;psLotNumber@1000000002 : Text;pcodBinCode@1000000001 : Code[20];VAR pdnOutput@1000000020 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";pcodNewLocation@1000000016 : Code[10];pcodNewBinCode@1000000017 : Code[20];pcodScannedDocument@1000000019 : Code[20];pbAdjustQuantityRequired@1000000021 : Boolean;pdtExpirationDate@1000000025 : Date);
+    VAR
+      lrecItemJnlLineOut@1000000000 : Record 83;
+      ltrecItemJnlLineData@1000000022 : TEMPORARY Record 83;
+      liNextLineNumber@1000000008 : Integer;
+      lcodReclassTemplate@1000000010 : Code[10];
+      lcodDocNumber@1000000011 : Code[20];
+      lrecItemJnlBatch@1000000012 : Record 233;
+      lcuNoSeriesMgmt@1000000013 : Codeunit 396;
+      lbWhseTracked@1000000015 : Boolean;
+      lrecBin@1000000018 : Record 7354;
+      lrecNotUsedLicensePlateLine@1000100020 : Record 23044506;
+      liEventForColumns@1000000024 : Integer;
+      lrecWMDMEvent@1000000023 : Record 23044534;
+    BEGIN
+      lrecBin.RESET();
+      IF ( ( '' = pcodNewLocation ) AND ( '' <> pcodNewBinCode ) ) THEN BEGIN
+        pcodNewLocation := getLocationFromBin(pcodLocation,pcodNewBinCode);
+      END;
+
+      ltrecItemJnlLineData."Journal Template Name" := '';
+      ltrecItemJnlLineData."Journal Batch Name" := pcodReclassBatch;
+      ltrecItemJnlLineData."Item No." := pcodItemNumber;
+      ltrecItemJnlLineData."Variant Code" := pcodVariantCode;
+      ltrecItemJnlLineData."Location Code" := pcodLocation;
+      ltrecItemJnlLineData."New Location Code" := pcodNewLocation;
+      ltrecItemJnlLineData."Bin Code" := pcodBinCode;
+      ltrecItemJnlLineData."New Bin Code" := pcodNewBinCode;
+      ltrecItemJnlLineData.Quantity := pdQuantity;
+      ltrecItemJnlLineData."Source Code" := '';
+      ltrecItemJnlLineData."LPM Source Line No." := 0;
+      ltrecItemJnlLineData."WHI Document No." := pcodScannedDocument;
+      ltrecItemJnlLineData."Unit of Measure Code" := codUOM;
+      ltrecItemJnlLineData.INSERT;
+
+      cuCommonBase.insertReclassJournalLine(
+        lrecItemJnlLineOut,
+        ltrecItemJnlLineData,
+        psSerialNumber,
+        psLotNumber,
+        FALSE,
+         // OPTIONAL License plate
+        pbAdjustQuantityRequired,
+        cuJournalFunc.getDocNoFromParameters(),
+        pdtExpirationDate
+      );
+
+      IF pbAdjustQuantityRequired THEN
+        lrecItemJnlLineOut.VALIDATE("WHI Quantity Required",ltrecItemJnlLineData.Quantity);
+      lrecItemJnlLineOut."WHI Document No." := COPYSTR( pcodScannedDocument, 1, MAXSTRLEN( lrecItemJnlLineOut."WHI Document No.") );
+      lrecItemJnlLineOut.MODIFY;
+
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.setWriteColumnHeader( FALSE ); // do not write the <c> definitions
+      cuCommonFuncs.addDSColumnsFromConfigDN(pdnOutput, 20009, '', DATABASE::"Item Journal Line");
+      cuCommonFuncs.setWriteColumnHeader( TRUE ); // the update in this case will not use them.
+      txtLastInsertedJournalLine := COPYSTR( lrecItemJnlLineOut.GETVIEW(), 1, MAXSTRLEN( txtLastInsertedJournalLine ) );
+      getReclassLine(pdnOutput, lrecItemJnlLineOut);
+    END;
+
+    PROCEDURE updateReclassBin@1000000009(VAR ptrecEventParams@1000000010 : TEMPORARY Record 23044511;VAR pbsOutput@1000000005 : BigText);
+    VAR
+      lrecLocation@1000000020 : Record 14;
+      lrecItemJnlLine@1000000011 : Record 83;
+      ltrecTempModifiedLines@1000000017 : TEMPORARY Record 83;
+      lbsXMLOutput@1000000002 : BigText;
+      ldnOutput@1000000021 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lcodLocation@1000000007 : Code[10];
+      lcodNewLocation@1000000000 : Code[10];
+      lcodUserName@1000000006 : Code[50];
+      lcodReclassBatch@1000000004 : Code[10];
+      lcodBinCode@1000000003 : Code[20];
+      lcodNewBinCode@1000000008 : Code[20];
+      lcodOrigialTakeBinCode@1000000013 : Code[20];
+      lcodOrigialPlaceBinCode@1000000014 : Code[20];
+      liLineNumber@1000000009 : Integer;
+      lbPlaceMode@100000000 : Boolean;
+    BEGIN
+      // Event 20014
+      // Updates the bin code based on the supplied params.
+      // (or location code)
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodNewLocation := ptrecEventParams.getValue('new_location');
+      lcodUserName := ptrecEventParams.getValue('user_name');
+      lcodReclassBatch := cuJournalFunc.getItemJnlReclassBatchToUse( ptrecEventParams );
+      IF ( lcodReclassBatch = '' ) THEN BEGIN
+        lcodReclassBatch := ptrecEventParams.getValue('Journal Batch Name');
+      END;
+
+      liLineNumber := ptrecEventParams.getLineNo();
+      lcodBinCode := ptrecEventParams.getValue('bin_code');
+      lcodNewBinCode := ptrecEventParams.getValue('new_bin_code');
+      lrecItemJnlLine.GET(cuJournalFunc.getItemJnlTemplate(PAGE::"Item Reclass. Journal",1),lcodReclassBatch,liLineNumber);
+      IF ( '*' = lcodLocation ) THEN BEGIN
+        lcodLocation := lrecItemJnlLine."Location Code";
+      END;
+      IF ( '*' = lcodNewLocation ) THEN BEGIN
+        lcodNewLocation := lrecItemJnlLine."Location Code";
+      END;
+
+      lcodOrigialTakeBinCode := lrecItemJnlLine."Bin Code";
+      lcodOrigialPlaceBinCode := lrecItemJnlLine."New Bin Code";
+
+
+      lbPlaceMode := (lcodOrigialTakeBinCode = lcodBinCode);
+
+      IF lcodLocation  <> '' THEN
+        lrecItemJnlLine.VALIDATE("Location Code",lcodLocation);
+
+      IF lcodNewLocation <> '' THEN BEGIN
+        lrecLocation.GET(lcodNewLocation);
+        lrecLocation.TESTFIELD("Directed Put-away and Pick",FALSE);
+        lrecItemJnlLine.VALIDATE("New Location Code",lcodNewLocation);
+      END;
+
+      IF( lcodBinCode <> '' ) THEN BEGIN
+        lrecItemJnlLine.VALIDATE("Bin Code",lcodBinCode);
+      END;
+
+      IF lcodNewBinCode <> '' THEN  BEGIN
+        IF  lrecItemJnlLine."New Location Code" = '' THEN
+          lrecItemJnlLine.VALIDATE("New Location Code",lrecItemJnlLine."Location Code");
+
+        lrecItemJnlLine.VALIDATE("New Bin Code",lcodNewBinCode);
+      END;
+
+      lrecItemJnlLine.MODIFY;
+
+      ltrecTempModifiedLines := lrecItemJnlLine;
+      IF ltrecTempModifiedLines.INSERT() THEN;
+
+
+      // update lines based on license plates if applicable
+      UpdateReclassLineLPPlaceBins(lrecItemJnlLine,ltrecTempModifiedLines, lbPlaceMode);
+
+
+      ldnOutput := ldnOutput.StringBuilder();
+      ldnOutput.Append('<DATASET><TABLE id="line">');
+      ldnOutput.Append('<COLS>');
+      cuCommonFuncs.initializeColumns( TRUE );
+      cuCommonFuncs.addDSColumnsFromConfigDN( ldnOutput,20009,'', DATABASE::"Item Journal Line" );
+      cuCommonFuncs.addDSTrackingColumnsDN(ldnOutput);
+      ldnOutput.Append('</COLS>');
+      ldnOutput.Append('<ROWS>');
+
+      ltrecTempModifiedLines.RESET();
+      ltrecTempModifiedLines.FINDSET(FALSE);
+      REPEAT
+        getReclassLine(ldnOutput, ltrecTempModifiedLines);
+      UNTIL (ltrecTempModifiedLines.NEXT() = 0);
+
+      ldnOutput.Append('</ROWS>');
+      ldnOutput.Append('</TABLE>');
+      ldnOutput.Append('</DATASET>');
+      pbsOutput.ADDTEXT( ldnOutput.ToString() );
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Item Journal Line"));
+      ptrecEventParams.setValue('Document No.', lcodReclassBatch);
+      IF (lcodBinCode <> lcodOrigialTakeBinCode) THEN BEGIN
+        ptrecEventParams.setValue('Previous Bin', lcodOrigialTakeBinCode);
+        ptrecEventParams.setValue('New Bin', lcodBinCode);
+      END;
+
+      IF (lcodNewBinCode <> lcodOrigialPlaceBinCode) THEN BEGIN
+        ptrecEventParams.setValue('Previous Bin', lcodOrigialPlaceBinCode);
+        ptrecEventParams.setValue('New Bin', lcodNewBinCode);
+      END;
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE getPurchaseOrderListBySN@1000000023(VAR ptrecEventParams@1000000009 : TEMPORARY Record 23044511;VAR pbsOutput@1000000006 : BigText);
+    VAR
+      lcodLocation@1000000003 : Code[10];
+      lcodItemNumber@1000000001 : Text;
+      lsSerialNumber@1000000002 : Text;
+      lsLotNumber@1000000000 : Text;
+      lrecItemLedger@1000000005 : Record 32;
+      lrecPurchRcpt@1000000008 : Record 120;
+      lrecReservationEntry@1000000007 : Record 337;
+    BEGIN
+      // Retrieves a list of received purchase orders based on the serial number.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodItemNumber := COPYSTR( ptrecEventParams.getItemNo(), 1, MAXSTRLEN(lcodItemNumber) );
+      lsSerialNumber := ptrecEventParams.getSerialNo();
+      lsLotNumber := ptrecEventParams.getLotNo();
+
+      // go by received and or reservation entries
+      lrecItemLedger.SETRANGE("Location Code", lcodLocation);
+      lrecItemLedger.SETRANGE("Item No.", lcodItemNumber);
+      IF ( lsSerialNumber <> '' ) THEN BEGIN
+        lrecItemLedger.SETRANGE("Serial No.", lsSerialNumber);
+      END;
+      IF ( lsLotNumber <> '' ) THEN BEGIN
+        lrecItemLedger.SETRANGE("Lot No.", lsLotNumber);
+      END;
+
+      lrecItemLedger.SETRANGE("Entry Type", lrecItemLedger."Entry Type"::Purchase);
+
+
+      IF( lrecItemLedger.FIND('-') ) THEN BEGIN
+        REPEAT
+          IF( pbsOutput.LENGTH > 0 ) THEN BEGIN
+            pbsOutput.ADDTEXT(',');
+          END;
+
+          // find the po number from this
+          lrecPurchRcpt.GET(lrecItemLedger."Document No.");
+
+          pbsOutput.ADDTEXT(STRSUBSTNO('%1',lrecPurchRcpt."Order No."));
+        UNTIL( lrecItemLedger.NEXT=0 );
+      END;
+
+
+      lrecReservationEntry.SETRANGE("Location Code", lcodLocation);
+      lrecReservationEntry.SETRANGE("Item No.", lcodItemNumber);
+      lrecReservationEntry.SETRANGE("Serial No.", lsSerialNumber);
+      lrecReservationEntry.SETRANGE("Source Type", DATABASE::"Purchase Line");
+      lrecReservationEntry.SETRANGE("Source Subtype",1);
+
+      IF( lrecReservationEntry.FIND('-') ) THEN BEGIN
+        REPEAT
+          IF( pbsOutput.LENGTH > 0 ) THEN BEGIN
+            pbsOutput.ADDTEXT(',');
+          END;
+
+          pbsOutput.ADDTEXT(STRSUBSTNO('%1',lrecReservationEntry."Source ID"));
+        UNTIL( lrecReservationEntry.NEXT=0 );
+      END;
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE deleteReclassLine@1000000015(VAR ptrecEventParams@1000000009 : TEMPORARY Record 23044511;VAR pbsOutput@1000000008 : BigText);
+    VAR
+      lrecItemJnlLine@1000000002 : Record 83;
+      lrecReservationEntry@1000000000 : Record 337;
+      lrecLPLineUsage@1000000010 : Record 23044507;
+      lrecLPHeader@100000000 : Record 23044505;
+      lcodLocation@1000000006 : Code[10];
+      lcodUserName@1000000005 : Code[50];
+      lcodReclassBatch@1000000004 : Code[10];
+      lcodReclassTemplate@1000000001 : Code[10];
+      lcodLicensePlateNo@1000000007 : Code[20];
+      liLineNumber@1000000003 : Integer;
+    BEGIN
+      // Deletes the requested line.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodUserName := ptrecEventParams.getValue('user_name');
+      lcodReclassBatch := cuJournalFunc.getItemJnlReclassBatchToUse( ptrecEventParams );
+      IF ( lcodReclassBatch = '' ) THEN BEGIN
+        lcodReclassBatch := ptrecEventParams.getValue('Journal Batch Name');
+      END;
+
+      liLineNumber := ptrecEventParams.getLineNo();
+      lcodReclassTemplate := cuJournalFunc.getItemJnlTemplate(PAGE::"Item Reclass. Journal",1);
+
+      // get the effected line
+      lrecItemJnlLine.GET(lcodReclassTemplate,lcodReclassBatch,liLineNumber);
+
+      DeleteLPReclassLines(lrecItemJnlLine);
+
+      IF lrecItemJnlLine.GET(lcodReclassTemplate,lcodReclassBatch,liLineNumber) THEN BEGIN
+        DeleteReclassReservationEntries(lrecItemJnlLine);
+        lrecItemJnlLine.DELETE;
+      END;
+
+
+      cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Item Journal Line"));
+      ptrecEventParams.setValue('Document No.', lcodReclassBatch);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE processWhseActivityLPScan@1000000019(VAR ptrecEventParams@1000000005 : TEMPORARY Record 23044511;VAR pbsOutput@1000000001 : BigText);
+    VAR
+      ltrecLPLine@1000000019 : TEMPORARY Record 23044506;
+      ltrecLPHeader@1000000025 : TEMPORARY Record 23044505;
+      lrecLPHeader@1000000011 : Record 23044505;
+      lrecSrcActivityLine@1000000010 : Record 5767;
+      lrecLPLineUsage@1000000024 : Record 23044507;
+      lrecActivityLine@1000000009 : Record 5767;
+      ltrecCommentLine@1000000008 : TEMPORARY Record 97;
+      lrecConfig@1000000003 : Record 23044504;
+      ltxtDetails@1000000000 : Text[250];
+      lcodLicensePlateNumber@1000000022 : Code[20];
+      lcodBinCode@1000000020 : Code[20];
+      lcodLocation@1000000018 : Code[10];
+      lcodActivityNo@1000000017 : Code[20];
+      lcodLastBin@1000000023 : Code[20];
+      lcodReclassBatch@1000000002 : Code[10];
+      liActivityType@1000000016 : Integer;
+      liLPAction@1000000021 : Integer;
+      liSelectedLineNumber@1000000013 : Integer;
+      lbAutoTakePlace@1000000015 : Boolean;
+      lbAutoShip@1000000014 : Boolean;
+      lbTake@1000000012 : Boolean;
+      ldQtyToApply@1000000007 : Decimal;
+      ldQtyApplied@1000000006 : Decimal;
+      ldQtyOutstanding@1000000004 : Decimal;
+    BEGIN
+      // Updates the Warehouse Activity Lines with the appropriate License Plate.
+      // If quantities do not match resulting License Plate then an error will be thrown.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodLicensePlateNumber := ptrecEventParams.getValue('lp_number');
+      liLPAction := ptrecEventParams.getValueAsInt('update_action');
+      lcodActivityNo := ptrecEventParams.getDocumentNo();
+      liActivityType := ptrecEventParams.getValueAsInt('document_type');
+      lbAutoTakePlace := ptrecEventParams.getValueAsBool('auto_take_place');
+      lbAutoShip := ptrecEventParams.getValueAsBool('auto_ship');
+      lcodBinCode := ptrecEventParams.getValue('bin');
+      liSelectedLineNumber := ptrecEventParams.getLineNo();
+
+      lbTake := ptrecEventParams.getValueAsBool('take');
+
+
+      lcodReclassBatch := cuJournalFunc.getItemJnlReclassBatchToUse( ptrecEventParams );
+      IF ( lcodReclassBatch = '' ) THEN BEGIN
+        lcodReclassBatch := ptrecEventParams.getValue('Journal Batch Name');
+      END;
+      ptrecEventParams.setValue('lp_batch',lcodReclassBatch);
+      cuCommonFuncs.getDeviceConfig(lrecConfig,ptrecEventParams);
+
+      IF lrecConfig."LP Reclass Mode"::"Update Required Quantity" =  lrecConfig."LP Reclass Mode" THEN
+        ptrecEventParams.setValue('lp_reclass_update_req_qty','1')
+      ELSE
+        ptrecEventParams.setValue('lp_reclass_update_req_qty','0');
+
+
+
+
+      // modify/breakapart the license plate as required
+      // the resulting temp record will either contain the license plate to use or just
+      // a list of items.
+      lcodLicensePlateNumber := cuLPManager.AdjustLicensePlate(ptrecEventParams, ltrecLPLine, ltrecLPHeader);
+
+      // get the selected line or the first line (used to limit selection if combined activity documents)
+      IF( NOT lrecSrcActivityLine.GET(liActivityType,lcodActivityNo,liSelectedLineNumber) ) THEN BEGIN
+        lrecSrcActivityLine.SETRANGE("Activity Type",liActivityType);
+        lrecSrcActivityLine.SETRANGE("No.",lcodActivityNo);
+
+        IF( liActivityType <= 3 ) THEN BEGIN
+          IF( lbTake ) THEN
+            lrecSrcActivityLine.SETRANGE("Action Type",lrecSrcActivityLine."Action Type"::Take)
+          ELSE
+           lrecSrcActivityLine.SETRANGE("Action Type",lrecSrcActivityLine."Action Type"::Place);
+        END;
+
+        lrecSrcActivityLine.FINDFIRST;
+      END;
+
+      cuLPCommon.updateWhseActivityLinesCode(lcodLocation,lcodLicensePlateNumber,lrecSrcActivityLine,lcodBinCode,
+        lbAutoShip,lbAutoTakePlace,ltrecLPLine, ltrecLPHeader);
+
+      cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+
+      ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_ASSIGN_LP', codRegionCode), lcodLicensePlateNumber, lcodActivityNo);
+      ptrecEventParams.setValue('details', ltxtDetails);
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Warehouse Activity Line"));
+      ptrecEventParams.setValue('Document No.', lcodActivityNo);
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE processReclassLPScan@1000000034(VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      ltrecLPLine@1000000007 : TEMPORARY Record 23044506;
+      ltrecLPHeader@1000000016 : TEMPORARY Record 23044505;
+      lrecLicensePlateHeader@1000000005 : Record 23044505;
+      lrecLicensePlateLine@1000000004 : Record 23044506;
+      lrecSpecificItemJournalLine@1000000003 : Record 83;
+      ltxtDetails@1000000002 : Text[250];
+      lcodReclassBatch@1000000015 : Code[10];
+      lcodLicensePlateNumber@1000000014 : Code[20];
+      lcodLocation@1000000013 : Code[10];
+      lcodNewLocation@1000000012 : Code[10];
+      lcodBinCode@1000000011 : Code[20];
+      lcodNewBinCode@1000000010 : Code[20];
+      liLPAction@1000000009 : Integer;
+      liSpecificLineNumber@1000000006 : Integer;
+      lbTake@1000000008 : Boolean;
+    BEGIN
+      lcodLicensePlateNumber := ptrecEventParams.getValue('lp_number');
+      lcodReclassBatch := cuJournalFunc.getItemJnlReclassBatchToUse( ptrecEventParams );
+      IF ( lcodReclassBatch = '' ) THEN BEGIN
+        lcodReclassBatch := ptrecEventParams.getValue('Journal Batch Name');
+      END;
+
+
+      // Updates the Reclass Lines with the appropriate License Plate.
+      lcodLocation := ptrecEventParams.getValue('location');
+      lcodNewLocation := ptrecEventParams.getValue('new_location');
+      lcodBinCode := ptrecEventParams.getValue('bin');
+      lcodNewBinCode := ptrecEventParams.getValue('new_bin_code');
+      lcodLicensePlateNumber := ptrecEventParams.getValue('lp_number');
+      liLPAction := ptrecEventParams.getValueAsInt('update_action');
+      lbTake := ptrecEventParams.getValueAsBool('take');
+      liSpecificLineNumber := ptrecEventParams.getLineNo();
+
+
+      // get the appropriate location if not specified
+      IF( (lcodNewLocation = '') AND (lcodNewBinCode<>'') ) THEN
+        lcodNewLocation := getLocationFromBin(lcodLocation,lcodNewBinCode);
+
+
+      // modify/breakapart the license plate as required
+      // the resulting temp record will either contain the license plate to use or just
+      // a list of items.
+      lcodLicensePlateNumber := cuLPManager.AdjustLicensePlate(ptrecEventParams, ltrecLPLine, ltrecLPHeader);
+      ltrecLPHeader.RESET;
+
+      //
+      IF( ptrecEventParams.getValueAsBool('lp_reclass_update_req_qty') ) THEN BEGIN
+        //
+        //  Less typical case, is when the reclass journal is treated as a pick
+        //  In this case we need to be updating a specific line.
+        //
+        lrecSpecificItemJournalLine.RESET();
+        lrecSpecificItemJournalLine.SETRANGE("Journal Batch Name",  lcodReclassBatch);
+        IF ( liSpecificLineNumber > 0 ) THEN BEGIN
+          lrecSpecificItemJournalLine.SETRANGE("Line No.", liSpecificLineNumber );
+        END ELSE BEGIN
+          // otherwise, the entire journal batch
+        END;
+        IF ( lrecSpecificItemJournalLine.FINDSET(TRUE) ) THEN BEGIN
+          // we found a specific
+          // line (or lines) to update.
+        END;
+
+        IF (lcodLicensePlateNumber <> '') THEN BEGIN
+        {
+          lrecLicensePlateHeader.GET(lcodLicensePlateNumber);
+          REPEAT  // for every item journal line
+            // lrecLicensePlateLine.NEXT(-1 * lrecLicensePlateLine.COUNT());
+            lrecLicensePlateLine.SETRANGE("License Plate No.", lcodLicensePlateNumber);
+            lrecLicensePlateLine.SETRANGE("Item No.", lrecSpecificItemJournalLine."Item No.");
+            lrecLicensePlateLine.SETRANGE("Variant Code", lrecSpecificItemJournalLine."Variant Code");
+            IF ( lrecLicensePlateLine.FINDSET(FALSE) ) THEN BEGIN
+              REPEAT
+                 ltrecLPLine.RESET();
+                 ltrecLPLine.DELETEALL(); // temporary record
+                 ltrecLPLine := lrecLicensePlateLine;
+                 ltrecLPLine.INSERT;
+                 cuLPCommon.assignReclassSpecificJnlLine(
+                   lrecLicensePlateHeader,
+                   ltrecLPLine, // temporary
+                   lrecSpecificItemJournalLine,
+                   lrecSpecificItemJournalLine."New Location Code",
+                   lrecSpecificItemJournalLine."New Bin Code" );
+
+              UNTIL(lrecLicensePlateLine.NEXT = 0);
+            END; // if we found matching license plate plines
+          UNTIL(lrecSpecificItemJournalLine.NEXT = 0);
+          }
+        END;
+      END ELSE BEGIN
+        //
+        //  Most typical case.
+        //  The user will be scanning a license plate to perform an ad-hoc move
+        //  of the entire license plate
+        //
+        cuLPCommon.updateReclassLinesCode(
+          lcodLicensePlateNumber,
+          lbTake,
+          lcodReclassBatch,
+          lcodLocation,
+          lcodBinCode,
+          lcodNewLocation,
+          lcodNewBinCode,
+          FALSE,  // Force Item Tracking
+          ltrecLPLine,
+          '', // USE DEFAULT template
+          FALSE, // Adjust quantity, not quantity required
+          0,  // No connection to another journal line required
+          ''  // Source Code   //
+          ,ltrecLPHeader
+          );
+      END;
+
+      ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_ASSIGN_LP', codRegionCode), lcodLicensePlateNumber, lcodReclassBatch);
+      ptrecEventParams.setValue('details', ltxtDetails);
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Item Journal Line"));
+      ptrecEventParams.setValue('Document No.', lcodReclassBatch);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE getLocationFromBin@1000000020(pcodDefaultLocation@1000000000 : Code[10];pcodBinCode@1000000001 : Code[20]) : Code[10];
+    VAR
+      lrecBin@1000000002 : Record 7354;
+    BEGIN
+      // if no location is specified but a bin is specified, then lookup
+      // the location from the bin.
+      // first try with same location, this is the most likely scenario.
+
+      lrecBin.SETRANGE("Location Code", pcodDefaultLocation );
+      lrecBin.SETRANGE(Code, pcodBinCode );
+      IF ( lrecBin.FINDFIRST() ) THEN BEGIN
+        EXIT( lrecBin."Location Code" );
+      END ELSE BEGIN
+        // no problem, not the same location, so just use the first location found.
+        // note, that the bin key is location code, bin code.
+        // It is a good practice, but not a requirement that duplicate bin codes not be
+        // used, so this helper functionality assumes that practice.
+        lrecBin.SETRANGE("Location Code");
+        IF ( lrecBin.FINDFIRST() ) THEN BEGIN
+          // it's in a different location, use the first one found.
+          // remember, this is based on an assumption about best practices, this
+          // won't work if there are many bins with the same name.
+          EXIT( lrecBin."Location Code" );
+        END;
+      END;
+    END;
+
+    PROCEDURE splitActivityLine@1000000010(VAR ptrecEventParams@1000000008 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      ldnOutput@100000000 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lcodActivityNo@1000000001 : Code[50];
+      liActivityType@1000000002 : Integer;
+      liLineNumber@1000000003 : Integer;
+      liNewLineNumber@100000001 : Integer;
+      lrecActivityHeader@1000000004 : Record 5766;
+      lrecActivityLine@1000000005 : Record 5767;
+      lbsXMLOutput@1000000006 : BigText;
+      ltxtActivityNo@1000000007 : Text[50];
+      lcodItemNumber@1000000009 : Text;
+      lcodVariantCode@1000000010 : Text;
+    BEGIN
+      //Function for splitting warehouse activity lines
+      lcodActivityNo := ptrecEventParams.getDocumentNo();
+      EVALUATE( liActivityType, ptrecEventParams.getValue('Type') );
+      liLineNumber := ptrecEventParams.getLineNo();
+      lrecActivityHeader.GET(liActivityType,lcodActivityNo);
+      IF ( NOT lrecActivityLine.GET(lrecActivityHeader.Type,lrecActivityHeader."No.",liLineNumber) ) THEN
+        ERROR(STRSUBSTNO(cuTranslationMgmt.getTranslatedString('ERR_UNABLE_FIND_WHSE_LINE', codRegionCode),liLineNumber,lrecActivityHeader."No."));
+
+      SplitLine(lrecActivityLine, liNewLineNumber);
+
+
+      ldnOutput := ldnOutput.StringBuilder();
+
+      ldnOutput.Append('<DATASET>');
+      ldnOutput.Append('<TABLE id="line">');
+      ldnOutput.Append('<COLS>');
+      cuCommonFuncs.initializeColumns(TRUE);
+      cuCommonFuncs.addDSColumnsFromConfigDN(ldnOutput, 20001, '', DATABASE::"Warehouse Activity Line");
+      cuCommonFuncs.addDSTrackingColumnsDN(ldnOutput);
+      ldnOutput.Append('</COLS><ROWS>');
+
+      lrecActivityLine.GET(lrecActivityHeader.Type,lrecActivityHeader."No.",liLineNumber);
+      getWarehouseActivityLine(ldnOutput, lrecActivityLine, lrecActivityHeader, FALSE);
+
+      lrecActivityLine.GET(lrecActivityHeader.Type, lrecActivityHeader."No.", liNewLineNumber);
+      getWarehouseActivityLine(ldnOutput, lrecActivityLine, lrecActivityHeader, FALSE);
+
+      ldnOutput.Append('</ROWS></TABLE></DATASET>');
+      pbsOutput.ADDTEXT(ldnOutput.ToString());
+
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Warehouse Activity Line"));
+      ptrecEventParams.setValue('Document No.', lcodActivityNo);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    LOCAL PROCEDURE SplitLine@100000001(precWhseActivityLine@100000001 : Record 5767;VAR piNewLineNumberOut@100000002 : Integer);
+    VAR
+      lrecWhseActivityLine@100000000 : Record 5767;
+    BEGIN
+      lrecWhseActivityLine.COPY(precWhseActivityLine);
+
+      lrecWhseActivityLine.SplitLine(precWhseActivityLine);
+      lrecWhseActivityLine.NEXT();
+      lrecWhseActivityLine.VALIDATE("Qty. to Handle", 0);
+
+      IF ((lrecWhseActivityLine."Activity Type" <> lrecWhseActivityLine."Activity Type"::"Put-away") AND
+        (lrecWhseActivityLine."Activity Type" <> lrecWhseActivityLine."Activity Type"::"Invt. Put-away")) THEN BEGIN
+        lrecWhseActivityLine.VALIDATE("Lot No.", '');
+        lrecWhseActivityLine.VALIDATE("Serial No.", '');
+        lrecWhseActivityLine.VALIDATE("Expiration Date", 0D);
+      END;
+
+      lrecWhseActivityLine.VALIDATE("Bin Code", '');
+      lrecWhseActivityLine.MODIFY();
+
+      piNewLineNumberOut := lrecWhseActivityLine."Line No.";
+    END;
+
+    PROCEDURE handleBreakBulkLines@1000000014(piActivityType@1000000002 : Integer;pcodActivityNo@1000000003 : Code[20]);
+    VAR
+      lrecWarehouseActivityLine1@1000000000 : Record 5767;
+      lrecWarehouseActivityLine2@1000000001 : Record 5767;
+    BEGIN
+      // Fill in breakbulk lines for pick, don't support multiple lot/serial no.
+      lrecWarehouseActivityLine1.SETRANGE("Activity Type", piActivityType);
+      lrecWarehouseActivityLine1.SETRANGE("No.", pcodActivityNo);
+      lrecWarehouseActivityLine1.SETRANGE("Breakbulk No.", 0);
+      lrecWarehouseActivityLine1.SETRANGE("Action Type", lrecWarehouseActivityLine1."Action Type"::Take);
+      IF (lrecWarehouseActivityLine1.FINDSET(FALSE)) THEN BEGIN
+        REPEAT
+          lrecWarehouseActivityLine2.SETRANGE("Activity Type", piActivityType);
+          lrecWarehouseActivityLine2.SETRANGE("No.", pcodActivityNo);
+          lrecWarehouseActivityLine2.SETFILTER("Breakbulk No.", '<>0');
+          lrecWarehouseActivityLine2.SETRANGE("Item No.", lrecWarehouseActivityLine1."Item No.");
+          lrecWarehouseActivityLine2.SETRANGE("Variant Code", lrecWarehouseActivityLine1."Variant Code");
+          lrecWarehouseActivityLine2.SETRANGE("Qty. to Handle", 0);
+          IF (lrecWarehouseActivityLine2.FINDSET(TRUE)) THEN BEGIN
+            REPEAT
+              // update take an place lines
+              lrecWarehouseActivityLine2.VALIDATE("Qty. to Handle", lrecWarehouseActivityLine2.Quantity);
+              IF (lrecWarehouseActivityLine1."Lot No." <> '') THEN BEGIN
+                lrecWarehouseActivityLine2.VALIDATE("Lot No.", lrecWarehouseActivityLine1."Lot No.");
+              END;
+              IF (lrecWarehouseActivityLine1."Serial No." <> '') THEN BEGIN
+                lrecWarehouseActivityLine2.VALIDATE("Serial No.", lrecWarehouseActivityLine1."Serial No.");
+              END;
+              lrecWarehouseActivityLine2.MODIFY;
+            UNTIL(lrecWarehouseActivityLine2.NEXT = 0);
+          END;
+        UNTIL(lrecWarehouseActivityLine1.NEXT = 0);
+      END;
+    END;
+
+    PROCEDURE updatePredefinedRes@1000000024(pcodLocationCode@1000000000 : Code[10];pcodSourceNo@1000000002 : Code[20];pcodSourceWhseDoc@1000000009 : Code[20];pcodItemNo@1000000003 : Text;pcodExistingLot@1000000004 : Code[20];pcodNewLot@1000000005 : Code[20];pcodExistingSerial@1000000006 : Code[20];pcodNewSerial@1000000007 : Code[20]);
+    VAR
+      lrecReservationEntry@1000000008 : Record 337;
+      lrecWhseItemTrackingLine@1000000001 : Record 6550;
+    BEGIN
+      // Updae existing reservation entries with new lot/serial
+
+      lrecReservationEntry.SETRANGE("Location Code", pcodLocationCode);
+      lrecReservationEntry.SETRANGE("Source ID", pcodSourceNo);
+      lrecReservationEntry.SETRANGE("Item No.", pcodItemNo);
+      lrecReservationEntry.SETRANGE("Lot No.", pcodExistingLot);
+      lrecReservationEntry.SETRANGE("Serial No.", pcodExistingSerial);
+
+      IF (lrecReservationEntry.FINDSET(TRUE)) THEN BEGIN
+         lrecReservationEntry."Lot No." := pcodNewLot;
+         lrecReservationEntry."Serial No." := pcodNewSerial;
+         lrecReservationEntry.MODIFY;
+      END;
+
+      lrecWhseItemTrackingLine.SETRANGE("Location Code", pcodLocationCode);
+      lrecWhseItemTrackingLine.SETRANGE("Source ID", pcodSourceWhseDoc);
+      lrecWhseItemTrackingLine.SETRANGE("Item No.", pcodItemNo);
+      lrecWhseItemTrackingLine.SETRANGE("Lot No.", pcodExistingLot);
+      lrecWhseItemTrackingLine.SETRANGE("Serial No.", pcodExistingSerial);
+      IF (lrecWhseItemTrackingLine.FINDSET(TRUE)) THEN BEGIN
+         lrecWhseItemTrackingLine."Lot No." := pcodNewLot;
+         lrecWhseItemTrackingLine."Serial No." := pcodNewSerial;
+         lrecWhseItemTrackingLine.MODIFY;
+      END;
+    END;
+
+    PROCEDURE prepareForSplitLine@1000000029(precConfig@1000000001 : Record 23044504;VAR pdQtyToHandle@1000000003 : Decimal;precActivityLine@1000000004 : Record 5767;psLotNumber@1000000008 : Text);
+    VAR
+      ldBinQuantity@1000000000 : Decimal;
+      lbDecrease@1000000002 : Boolean;
+      lcodBinCode@1000000005 : Code[20];
+      lcuCompatibility@1000000007 : Codeunit 23044530;
+      lcodZoneCode@1000000006 : Code[10];
+      ldAlreadySetQtyToHandle@1000000009 : Decimal;
+      lrecAlreadySetLine@1000000010 : Record 5767;
+    BEGIN
+      ldBinQuantity := 0;
+      IF (precConfig."Auto-Split Behavior" = precConfig."Auto-Split Behavior"::"Auto-Split Bin Contents") THEN BEGIN
+        lbDecrease := (pdQtyToHandle < precActivityLine."Qty. to Handle");
+        IF (NOT lbDecrease) THEN BEGIN
+          // if it is increasing, we need to check bin content
+          lcodBinCode := precActivityLine."Bin Code";
+          lcodZoneCode := precActivityLine."Zone Code";
+          lcuCompatibility.BinContentsQueryWithBinAndLot(
+                                                             precConfig."Location Code",
+                                                             lcodZoneCode,
+                                                             lcodBinCode,
+                                                             precActivityLine."Item No.",
+                                                             precActivityLine."Variant Code",
+                                                             precActivityLine."Unit of Measure Code",
+                                                             psLotNumber,
+                                                             ldBinQuantity
+                                                            );
+
+          // need to check already set on the other lines quantity to handle with the same
+          // item/bin/lot/serial
+          ldAlreadySetQtyToHandle := 0;
+          lrecAlreadySetLine.RESET;
+          lrecAlreadySetLine.SETRANGE("Activity Type", precActivityLine."Activity Type");
+          lrecAlreadySetLine.SETRANGE("No.", precActivityLine."No.");
+          lrecAlreadySetLine.SETRANGE("Location Code", precActivityLine."Location Code");
+          lrecAlreadySetLine.SETRANGE("Bin Code", precActivityLine."Bin Code");
+          lrecAlreadySetLine.SETRANGE("Item No.", precActivityLine."Item No.");
+          lrecAlreadySetLine.SETRANGE("Variant Code", precActivityLine."Variant Code");
+          lrecAlreadySetLine.SETRANGE("Unit of Measure Code", precActivityLine."Unit of Measure Code");
+          lrecAlreadySetLine.SETRANGE("Lot No.", psLotNumber);
+          lrecAlreadySetLine.SETFILTER("Line No.", '<>%1', precActivityLine."Line No.");
+          IF (lrecAlreadySetLine.FINDSET(FALSE)) THEN BEGIN
+            REPEAT
+              ldAlreadySetQtyToHandle += lrecAlreadySetLine."Qty. to Handle";
+            UNTIL (lrecAlreadySetLine.NEXT = 0);
+          END;
+
+          // Basically if the quantity available for that item/bin/lot/serial
+          // is < the quantity outstanding on the line,
+          // then auto-split based on the available quantity
+
+          ldBinQuantity := ldBinQuantity - ldAlreadySetQtyToHandle;
+          IF (ldBinQuantity > 0) THEN BEGIN
+            IF (pdQtyToHandle > ldBinQuantity) THEN BEGIN
+              pdQtyToHandle := ldBinQuantity;
+            END;
+          END;
+        END; // IF increasing
+      END;
+    END;
+
+    PROCEDURE setItemTrackingLines@1000000026(VAR precActivityLine@1000000000 : Record 5767;psLotNumber@1000000001 : Text;psSerialNumber@1000000002 : Text;pdtExpirationDate@1000000003 : Date;pdQtyChange@1000000014 : Decimal;pbAllowChange@1000000012 : Boolean);
+    VAR
+      lbIsWhseTracked@1000000004 : Boolean;
+      lrecItem@1000000006 : Record 27;
+      lrecTrackingCode@1000000005 : Record 6502;
+      lbIsLotTracking@1000000008 : Boolean;
+      lbIsSerialTracking@1000000007 : Boolean;
+      lcuDataManager@1000000011 : Codeunit 23044502;
+      lsOriginalLot@1000000010 : Text;
+      lsOriginalSerial@1000000009 : Text;
+    BEGIN
+
+      lbIsLotTracking := FALSE;
+      lbIsSerialTracking := FALSE;
+      lbIsWhseTracked := FALSE;
+
+      cuCommonFuncs.getIsAnyLotOrSerialTracked(precActivityLine."Item No.", lbIsSerialTracking, lbIsLotTracking);
+      IF (lbIsLotTracking AND (precActivityLine."Activity Type" = precActivityLine."Activity Type"::"Invt. Put-away") AND
+          (precActivityLine."Source Document" = precActivityLine."Source Document"::"Prod. Output") AND (psLotNumber = '')) THEN BEGIN
+        psLotNumber := lcuDataManager.generateLotNumber(precActivityLine."Item No.", precActivityLine."Variant Code");
+      END;
+
+      IF (lbIsSerialTracking AND (precActivityLine."Activity Type" = precActivityLine."Activity Type"::"Invt. Put-away") AND
+          (precActivityLine."Source Document" = precActivityLine."Source Document"::"Prod. Output") AND (psSerialNumber = '')) THEN BEGIN
+        psSerialNumber := lcuDataManager.generateSerialNumber(precActivityLine."Item No.", precActivityLine."Variant Code");
+      END;
+
+      lrecItem.GET(precActivityLine."Item No.");
+      IF(NOT lrecTrackingCode.GET(lrecItem."Item Tracking Code") ) THEN
+        EXIT;
+
+      lsOriginalSerial := precActivityLine."Serial No.";
+      lsOriginalLot := precActivityLine."Lot No.";
+
+
+      IF( lrecTrackingCode."Lot Warehouse Tracking" )  THEN BEGIN
+        IF (lsOriginalLot <> psLotNumber) AND (NOT pbAllowChange) AND (lsOriginalLot<>'') THEN
+          ERROR(cuTranslationMgmt.getTranslatedString('ERR_CANNOT_CHANGE_LNSN', codRegionCode));
+
+        precActivityLine."Lot No." := psLotNumber;
+        precActivityLine."Expiration Date" := pdtExpirationDate;
+        lbIsWhseTracked := TRUE;
+      END;
+
+      IF( lrecTrackingCode."SN Warehouse Tracking" ) THEN BEGIN
+        IF (lsOriginalSerial <> psSerialNumber) AND (NOT pbAllowChange) AND (lsOriginalSerial<>'') THEN
+          ERROR(cuTranslationMgmt.getTranslatedString('ERR_CANNOT_CHANGE_LNSN', codRegionCode));
+
+        precActivityLine."Serial No." := psSerialNumber;
+        precActivityLine."Expiration Date" := pdtExpirationDate;
+        lbIsWhseTracked := TRUE;
+      END;
+
+      // Lot or Serial on the row must be not empty,
+      // Otherwise, can't find existing reservation entries
+      IF ((lsOriginalLot <> '') OR (lsOriginalSerial <> '')) THEN BEGIN
+        updatePredefinedRes(
+           precActivityLine."Location Code",
+           precActivityLine."Source No.",
+           precActivityLine."Whse. Document No.",
+           precActivityLine."Item No.",
+           lsOriginalLot,
+           psLotNumber,
+           lsOriginalSerial,
+           psSerialNumber);
+      END;
+
+      IF (((psLotNumber <> '') OR (psSerialNumber <> '')) AND (NOT lbIsWhseTracked)) THEN BEGIN
+        cuResMgmt.AddRemoveInvtPickPutAwayTrack(precActivityLine, psSerialNumber, psLotNumber, pdQtyChange, pdtExpirationDate);
+      END;
+
+      precActivityLine.MODIFY(TRUE);
+    END;
+
+    PROCEDURE setReclassExtraParams@1000000021(pcodUOM@1000000000 : Code[10]);
+    BEGIN
+      codUOM := pcodUOM;
+    END;
+
+    PROCEDURE copyExistingReclassLine@1000000013(VAR ptrecEventParams@1000000008 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      liLineNumber@1000000003 : Integer;
+      lrecExistingReclassLine@1000000001 : Record 83;
+      lrecNewReclassLine@1000000002 : Record 83;
+      liNextLineNumber@1000000004 : Integer;
+      lcodTemplateName@1000000006 : Code[10];
+      lcodReclassBatch@1000000007 : Code[10];
+      lrecExistingReservationEntry@1000000009 : Record 337;
+      lrecNewReservationEntry@1000000010 : Record 337;
+    BEGIN
+      // Copy a existing line and reservation entry
+
+      liLineNumber := ptrecEventParams.getLineNo();
+      lcodTemplateName := cuJournalFunc.getItemJnlTemplate(PAGE::"Item Reclass. Journal",1);
+      lcodReclassBatch := cuJournalFunc.getItemJnlReclassBatchToUse(ptrecEventParams);
+
+      lrecExistingReclassLine.GET(lcodTemplateName, lcodReclassBatch, liLineNumber);
+
+      liNextLineNumber := 10000;
+      lrecNewReclassLine.SETRANGE("Journal Template Name", lcodTemplateName);
+      lrecNewReclassLine.SETRANGE("Journal Batch Name", lcodReclassBatch);
+      IF(lrecNewReclassLine.FINDLAST) THEN BEGIN
+        liNextLineNumber := lrecNewReclassLine."Line No." + 10000;
+      END;
+
+      lrecNewReclassLine.RESET;
+      lrecNewReclassLine.INIT;
+      lrecNewReclassLine.COPY(lrecExistingReclassLine);
+      lrecNewReclassLine.VALIDATE("Line No.", liNextLineNumber);
+      lrecNewReclassLine."LPM License Plate No." := '';
+      lrecNewReclassLine.SetUpNewLine(lrecNewReclassLine);
+      lrecNewReclassLine.INSERT(TRUE);
+
+      modifyItemJnlLineLicensePlateNo(lrecNewReclassLine);
+
+      lrecExistingReservationEntry.SETRANGE("Reservation Status", lrecExistingReservationEntry."Reservation Status"::Prospect);
+      lrecExistingReservationEntry.SETRANGE("Location Code", lrecExistingReclassLine."Location Code");
+      lrecExistingReservationEntry.SETRANGE("Source Type", DATABASE::"Item Journal Line");
+      lrecExistingReservationEntry.SETRANGE("Source ID", lrecExistingReclassLine."Journal Template Name");
+      lrecExistingReservationEntry.SETRANGE("Source Batch Name", lrecExistingReclassLine."Journal Batch Name");
+      lrecExistingReservationEntry.SETRANGE("Source Ref. No.", lrecExistingReclassLine."Line No.");
+      IF (lrecExistingReservationEntry.FINDFIRST) THEN BEGIN   // Should be only one record
+        lrecNewReservationEntry.INIT;
+        lrecNewReservationEntry.COPY(lrecExistingReservationEntry);
+        lrecNewReservationEntry."Entry No." := 0;
+        lrecNewReservationEntry.VALIDATE("Source Ref. No.", lrecNewReclassLine."Line No.");
+        lrecNewReservationEntry.INSERT(TRUE);
+      END;
+
+      cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Item Journal Line"));
+      ptrecEventParams.setValue('Document No.', lcodReclassBatch);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE isAutoTakePlace@1000000022(precConfig@1000000000 : Record 23044504;precWhseActivityLine@1000000001 : Record 5767) : Boolean;
+    VAR
+      lbAutoTakePlace@1000000002 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Determines if the take/place line should be auto-handled.
+      //  Called From: "updateWarehouseActivtyLine", "isUpdateShipmentOnPick"
+      //  Side Effect: None
+      //</FUNC>
+
+      lbAutoTakePlace := FALSE;
+
+      CASE precWhseActivityLine."Activity Type" OF
+        precWhseActivityLine."Activity Type"::Movement:
+          BEGIN
+            IF precWhseActivityLine."Action Type" = precWhseActivityLine."Action Type"::Take THEN
+              lbAutoTakePlace := precConfig."Auto Handle Move Placements";
+          END;
+        precWhseActivityLine."Activity Type"::Pick:
+          BEGIN
+            IF precWhseActivityLine."Action Type" = precWhseActivityLine."Action Type"::Take THEN
+              lbAutoTakePlace := precConfig."Auto Handle Pick Placements";
+          END;
+        precWhseActivityLine."Activity Type"::"Put-away":
+          BEGIN
+            IF precWhseActivityLine."Action Type" = precWhseActivityLine."Action Type"::Place THEN
+              lbAutoTakePlace := precConfig."Auto Handle Put-Away Takes";
+          END;
+        precWhseActivityLine."Activity Type"::"Invt. Movement":
+          BEGIN
+            IF precWhseActivityLine."Action Type" = precWhseActivityLine."Action Type"::Take THEN BEGIN
+              IF ((precWhseActivityLine."Source Document" = precWhseActivityLine."Source Document"::"Sales Order") OR
+                  (precWhseActivityLine."Source Document" = precWhseActivityLine."Source Document"::"Outbound Transfer")
+                  OR (precWhseActivityLine."Source Document"=precWhseActivityLine."Source Document"::" ") ) THEN BEGIN
+                lbAutoTakePlace := precConfig."Auto Handle Move Placements";
+              END;
+            END;
+          END;
+      END;
+
+      EXIT(lbAutoTakePlace);
+    END;
+
+    PROCEDURE isUpdateShipmentOnPick@1000000032(precConfig@1000000001 : Record 23044504;precWhseActivityLine@1000000000 : Record 5767) : Boolean;
+    VAR
+      lbUpdateShipment@1000000002 : Boolean;
+      lbAutoPlace@1000000003 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Determines if the shipment should be updated when the activity lines are updated.
+      //               Applicable to invt. picks and whse. picks for sales orders/shipments.
+      //  Called From: "updateWarehouseActivtyLine"
+      //  Side Effect: None
+      //</FUNC>
+
+      lbUpdateShipment := FALSE;
+      lbAutoPlace := isAutoTakePlace(precConfig,precWhseActivityLine);
+
+      IF precConfig."Update Shipment on Pick" THEN BEGIN
+        CASE precWhseActivityLine."Activity Type" OF
+          precWhseActivityLine."Activity Type"::Pick:
+            BEGIN
+              IF precWhseActivityLine."Whse. Document Type" = precWhseActivityLine."Whse. Document Type"::Shipment THEN BEGIN
+                IF( lbAutoPlace OR (precWhseActivityLine."Action Type" = precWhseActivityLine."Action Type"::Place) ) THEN BEGIN
+                  lbUpdateShipment := TRUE;
+                END;
+              END;
+            END;
+          precWhseActivityLine."Activity Type"::"Invt. Pick":
+            BEGIN
+              IF precWhseActivityLine."Source Document" = precWhseActivityLine."Source Document"::"Sales Order" THEN BEGIN
+                  lbUpdateShipment := TRUE;
+              END;
+            END;
+        END;
+      END;
+
+      EXIT(lbUpdateShipment);
+    END;
+
+    LOCAL PROCEDURE modifyItemJnlLineLPAction@1000000017(pcodReclassBatch@1000000000 : Code[20];pcodJournalTemplate@1000000003 : Code[20]);
+    VAR
+      lrrefItemJnlLine@1000000001 : RecordRef;
+      lfrefLPAction@1000000002 : FieldRef;
+      lrecItemJnlLine@1000000004 : Record 83;
+    BEGIN
+      //<FUNC>
+      //  Description: set the "LP Action" field to Delete for all Item Journal Lines if it exists
+      //  Side Effect: None
+      //</FUNC>
+
+
+
+      lrecItemJnlLine.SETRANGE("Journal Template Name", pcodJournalTemplate);
+      lrecItemJnlLine.SETRANGE("Journal Batch Name", pcodReclassBatch);
+
+      lrecItemJnlLine.SETFILTER("Document No.", '<>%1', '');
+      lrecItemJnlLine.SETFILTER("Item No.", '<>%1', '');
+      lrecItemJnlLine.SETFILTER("Location Code", '<>%1', '');
+
+      lrrefItemJnlLine.GETTABLE(lrecItemJnlLine);
+      //loop through the records and set the LP Action field to Delete if possible
+      IF lrrefItemJnlLine.FIELDEXIST(23044512) THEN BEGIN //if "LP Action" field exists
+        lfrefLPAction := lrrefItemJnlLine.FIELD(23044512);
+        IF lrrefItemJnlLine.FIND('-') THEN BEGIN
+          REPEAT
+            lfrefLPAction.VALIDATE(1);  //"LP Action"::Delete
+            lrrefItemJnlLine.MODIFY;
+          UNTIL lrrefItemJnlLine.NEXT = 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE modifyItemJnlLineLicensePlateNo@1000000033(VAR precItemJnlLine@1000000000 : Record 83);
+    VAR
+      lrrefItemJnlLine@1000000001 : RecordRef;
+      lfrefLicensePlateNo@1000000002 : FieldRef;
+    BEGIN
+      //<FUNC>
+      //  Description: set the "License Plate No." field to '' if it exists
+      //  Side Effect: None
+      //</FUNC>
+
+      lrrefItemJnlLine.GETTABLE(precItemJnlLine);
+      IF lrrefItemJnlLine.FIELDEXIST(23044509) THEN BEGIN //if "License Plate No." field exist
+        lfrefLicensePlateNo := lrrefItemJnlLine.FIELD(23044509);
+        lfrefLicensePlateNo.VALIDATE('');  //"License Plate No." := ''
+        lrrefItemJnlLine.MODIFY;
+      END;
+    END;
+
+    PROCEDURE assignWhseActivity@1000000008(VAR precWhseActivityHeader@1000000000 : Record 5766;VAR ptrecEventParams@1000000002 : TEMPORARY Record 23044511);
+    VAR
+      lrecConfig@1000000003 : Record 23044504;
+      lcodUserName@1000000001 : Code[50];
+    BEGIN
+      //<FUNC>
+      //  Description: Assigns the user to the warehouse activity header if required.
+      //  Side Effect: None
+      //</FUNC>
+
+      lcodUserName := cuCommonFuncs.getUserNameWithDomain(ptrecEventParams); //<IW author="R.Trudeau" date="05/03/17" issue="3104" />
+
+      IF( lcodUserName <> '' ) THEN BEGIN
+       { //-->PKS
+        IF STRPOS(lcodUserName,'\') > 0 THEN
+          lcodUserName := COPYSTR(lcodUserName,STRPOS(lcodUserName,'\') + 2,MAXSTRLEN(lcodUserName))
+        ELSE
+          lcodUserName := COPYSTR( USERID, 1, MAXSTRLEN( lcodUserName));
+        //<--PKS
+        }
+        cuCommonFuncs.getDeviceConfig(lrecConfig,ptrecEventParams);
+        IF (lrecConfig."Assign Document" = lrecConfig."Assign Document"::Always) OR
+          ((lrecConfig."Assign Document" = lrecConfig."Assign Document"::Unassigned) AND (precWhseActivityHeader."Assigned User ID"='')) THEN BEGIN
+          precWhseActivityHeader."Assigned User ID" := lcodUserName;
+          //ERROR(lcodUserName);
+          precWhseActivityHeader."Assignment Date" := TODAY;
+          precWhseActivityHeader."Assignment Time" := TIME;
+          precWhseActivityHeader.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE setQtyToShipForInventoryMovement@1000000031(precActivityHeader@1000000000 : Record 5766);
+    VAR
+      lrecSalesLine@1000000001 : Record 37;
+      lrecTransferLine@1000000002 : Record 5741;
+      lrecWhseActivityLine@1000000003 : Record 5767;
+    BEGIN
+      //<FUNC>
+      //  Description: Set qty to ship to 0 if the document is inventory movement
+      //               and source document is sales order or outbound transfer
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      IF (precActivityHeader.Type <> precActivityHeader.Type::"Invt. Movement") THEN
+        EXIT;
+
+      lrecWhseActivityLine.SETRANGE("Activity Type", lrecWhseActivityLine."Activity Type"::"Invt. Movement");
+      lrecWhseActivityLine.SETRANGE("No.", precActivityHeader."No.");
+      lrecWhseActivityLine.SETRANGE("Location Code", precActivityHeader."Location Code");
+      IF (lrecWhseActivityLine.FINDSET(FALSE)) THEN BEGIN
+        REPEAT
+          IF (lrecWhseActivityLine."Action Type" = lrecWhseActivityLine."Action Type"::Take) THEN BEGIN
+            IF (precActivityHeader."Source Document" = precActivityHeader."Source Document"::"Sales Order") THEN BEGIN
+              lrecSalesLine.RESET;
+              IF (lrecSalesLine.GET(lrecSalesLine."Document Type"::Order, lrecWhseActivityLine."Source No.", lrecWhseActivityLine."Source Line No.")) THEN BEGIN
+                lrecSalesLine.VALIDATE("Qty. to Ship", 0);
+                lrecSalesLine.MODIFY;
+              END;
+            END ELSE IF (precActivityHeader."Source Document" = precActivityHeader."Source Document"::"Outbound Transfer") THEN BEGIN
+              lrecTransferLine.RESET;
+              IF (lrecTransferLine.GET(lrecWhseActivityLine."Source No.", lrecWhseActivityLine."Source Line No.")) THEN BEGIN
+                lrecTransferLine.VALIDATE("Qty. to Ship", 0);
+                lrecTransferLine.MODIFY;
+              END;
+            END;
+          END;
+        UNTIL (lrecWhseActivityLine.NEXT = 0);
+      END;
+    END;
+
+    PROCEDURE UpdateAutoTakePlaceLotSerial@1000000039(precWhseActivityLineSource@1000000000 : Record 5767;pcodNewSerialNumber@1000000002 : Code[20];pcodNewLotNumber@1000000003 : Code[20];pdtNewExpirationDate@1000000004 : Date);
+    VAR
+      lrecWhseActivityLine@1000000001 : Record 5767;
+    BEGIN
+      //<FUNC>
+      //  Description: Find the first corresponding take or place line that matches
+      //               the existing quantity and lot/serial and updates it to match the new lot/serial.
+      //               Quantity to handle is updated via the usual auto/take place.
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecWhseActivityLine.SETRANGE("Activity Type", precWhseActivityLineSource."Activity Type");
+      lrecWhseActivityLine.SETRANGE("No.", precWhseActivityLineSource."No.");
+      lrecWhseActivityLine.SETRANGE("Whse. Document Type", precWhseActivityLineSource."Whse. Document Type");
+      lrecWhseActivityLine.SETRANGE("Whse. Document No.", precWhseActivityLineSource."Whse. Document No.");
+      lrecWhseActivityLine.SETRANGE("Whse. Document Line No.", precWhseActivityLineSource."Whse. Document Line No.");
+      lrecWhseActivityLine.SETRANGE("Lot No.", precWhseActivityLineSource."Lot No.");
+      lrecWhseActivityLine.SETRANGE("Serial No.", precWhseActivityLineSource."Serial No.");
+      lrecWhseActivityLine.SETRANGE("Qty. to Handle (Base)", precWhseActivityLineSource."Qty. to Handle (Base)");
+      lrecWhseActivityLine.SETFILTER("Qty. Outstanding (Base)", '>=%1', precWhseActivityLineSource."Qty. Outstanding (Base)");
+
+
+      IF( precWhseActivityLineSource."Action Type" = precWhseActivityLineSource."Action Type"::Take ) THEN BEGIN
+        lrecWhseActivityLine.SETRANGE("Action Type", lrecWhseActivityLine."Action Type"::Place);
+        lrecWhseActivityLine.SETFILTER("Line No.",'>%1',precWhseActivityLineSource."Line No.");
+
+      END ELSE BEGIN
+        lrecWhseActivityLine.SETRANGE("Action Type", lrecWhseActivityLine."Action Type"::Take);
+        lrecWhseActivityLine.SETFILTER("Line No.",'<%1',precWhseActivityLineSource."Line No.");
+      END;
+
+      IF lrecWhseActivityLine.COUNT=0 THEN
+        lrecWhseActivityLine.SETRANGE("Line No.");
+
+      IF(lrecWhseActivityLine.FINDFIRST) THEN BEGIN
+        lrecWhseActivityLine."Serial No." := pcodNewSerialNumber;
+        lrecWhseActivityLine."Lot No." := pcodNewLotNumber;
+        lrecWhseActivityLine."Expiration Date" := pdtNewExpirationDate;
+        lrecWhseActivityLine.MODIFY;
+      END;
+    END;
+
+    PROCEDURE GetPickToteAssignement@1000000016(VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      lrecWhseActivityLine@1000000002 : Record 5767;
+      ltrecTempWhseActivityLine@1000000003 : TEMPORARY Record 5767;
+      lrecSalesHeader@1000000007 : Record 36;
+      lrrefLine@1000000005 : RecordRef;
+      ldnOutput@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lsCustomerName@1000000006 : Text[50];
+      lsTotes@1000000008 : Text;
+    BEGIN
+      //<FUNC>
+      //  Description: Returns a list of pick source documents for tote assignment
+      //</FUNC>
+
+      lrecWhseActivityLine.SETRANGE("Activity Type",lrecWhseActivityLine."Activity Type"::Pick);
+      lrecWhseActivityLine.SETRANGE("No.",ptrecEventParams.getDocumentNo());
+
+      IF lrecWhseActivityLine.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+         // key is pick number and source type, source no.
+         ltrecTempWhseActivityLine.RESET;
+         ltrecTempWhseActivityLine.SETRANGE("Source Type",lrecWhseActivityLine."Source Type");
+         ltrecTempWhseActivityLine.SETRANGE("Source No.",lrecWhseActivityLine."Source No.");
+         IF(NOT ltrecTempWhseActivityLine.FINDFIRST) THEN BEGIN
+           ltrecTempWhseActivityLine := lrecWhseActivityLine;
+           lsCustomerName := '';
+
+           IF(lrecWhseActivityLine."Source Document" = lrecWhseActivityLine."Source Document"::"Sales Order") THEN BEGIN
+             IF lrecSalesHeader.GET(lrecWhseActivityLine."Source Subtype",lrecWhseActivityLine."Source No.") THEN BEGIN
+               lsCustomerName := lrecSalesHeader."Sell-to Customer Name";
+             END;
+           END;
+           ltrecTempWhseActivityLine.Description := lsCustomerName;
+
+
+           ltrecTempWhseActivityLine.INSERT;
+         END;
+        UNTIL( lrecWhseActivityLine.NEXT=0 );
+      END;
+
+      ltrecTempWhseActivityLine.RESET;
+      ltrecTempWhseActivityLine.FINDSET;
+
+      IF ltrecTempWhseActivityLine.FIND('-') THEN BEGIN
+        REPEAT
+          lsTotes := GetAssignedTotes(ltrecTempWhseActivityLine);
+          cuDataset.SetOverrideValueEachRow(iEventID,DATABASE::"Warehouse Activity Line",-1,FORMAT(ltrecTempWhseActivityLine."Line No."),lsTotes,FALSE,TRUE,3);
+        UNTIL(ltrecTempWhseActivityLine.NEXT=0);
+      END;
+
+      ltrecTempWhseActivityLine.RESET;
+      ltrecTempWhseActivityLine.FINDSET;
+      lrrefLine.GETTABLE(ltrecTempWhseActivityLine);
+
+      ldnOutput := ldnOutput.StringBuilder();
+      cuDataset.BuildLinesOnlyDataset(iEventID,lrrefLine,FALSE,ldnOutput);
+
+      pbsOutput.ADDTEXT(ldnOutput.ToString());
+    END;
+
+    PROCEDURE AssignPickTote@1000000040(VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      lrecLPHeader@1000000003 : Record 23044505;
+      lrecWhseActivityLine@1000000005 : Record 5767;
+      lrecSalesHeader@100000001 : Record 36;
+      lrrefLine@1000000007 : RecordRef;
+      ldnOutput@1000000009 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lcodLPNumber@1000000002 : Code[20];
+      lcodPickNumber@1000000004 : Code[20];
+      liLineNumber@1000000006 : Integer;
+      ltcAlreadyAssignedErr@100000000 : TextConst 'ENU=The tote is already assigned to [%1] [%2]';
+    BEGIN
+      //<FUNC>
+      //  Description: Assigns the tote to the pick
+      //</FUNC>
+
+      lcodLPNumber := ptrecEventParams.getValue('lp_number');
+      liLineNumber := ptrecEventParams.getValueAsInt('Line No.');
+      lcodPickNumber := ptrecEventParams.getDocumentNo();
+
+      lrecWhseActivityLine.GET(lrecWhseActivityLine."Activity Type"::Pick,lcodPickNumber,liLineNumber);
+
+
+      lrecLPHeader.GET(lcodLPNumber);
+      lrecLPHeader.TESTFIELD(Tote,lrecLPHeader.Tote::Yes);
+      lrecLPHeader.TESTFIELD("Location Code",lrecWhseActivityLine."Location Code");
+
+      IF (lrecLPHeader."Tote Whse. Document No." <> '') AND (lrecLPHeader."Tote Whse. Document No." <> lcodPickNumber) THEN
+        ERROR(ltcAlreadyAssignedErr, lrecLPHeader."Tote Whse. Document Type", lrecLPHeader."Tote Whse. Document No.");
+
+
+
+      lrecLPHeader."Tote Whse. Document Type" := lrecLPHeader."Tote Whse. Document Type"::Pick;
+      lrecLPHeader."Tote Whse. Document No." := lcodPickNumber;
+
+      IF lrecWhseActivityLine."Source Document" = lrecWhseActivityLine."Source Document"::"Sales Order" THEN
+        lrecLPHeader."Tote Source Type" := lrecLPHeader."Tote Source Type"::"Sales Order";
+      IF lrecWhseActivityLine."Source Document" = lrecWhseActivityLine."Source Document"::"Outbound Transfer" THEN
+        lrecLPHeader."Tote Source Type" := lrecLPHeader."Tote Source Type"::"Outbound Transfer";
+
+      lrecLPHeader."Tote Source No." := lrecWhseActivityLine."Source No.";
+      lrecLPHeader.MODIFY(TRUE);
+
+      lrecWhseActivityLine.SETRANGE("Activity Type",lrecWhseActivityLine."Activity Type");
+      lrecWhseActivityLine.SETRANGE("No.",lrecWhseActivityLine."No.");
+      lrecWhseActivityLine.SETRANGE("Line No.",lrecWhseActivityLine."Line No.");
+      lrecWhseActivityLine.FINDSET;
+
+      lrecWhseActivityLine.Description := '';
+      IF(lrecWhseActivityLine."Source Document" = lrecWhseActivityLine."Source Document"::"Sales Order") THEN BEGIN
+        IF lrecSalesHeader.GET(lrecWhseActivityLine."Source Subtype",lrecWhseActivityLine."Source No.") THEN BEGIN
+          lrecWhseActivityLine.Description := lrecSalesHeader."Sell-to Customer Name";
+        END;
+      END;
+
+      cuDataset.SetOverrideValueEachRow(20020,DATABASE::"Warehouse Activity Line",-1,FORMAT(lrecWhseActivityLine."Line No."),GetAssignedTotes(lrecWhseActivityLine),FALSE,TRUE,3);
+      lrrefLine.GETTABLE(lrecWhseActivityLine);
+
+      ldnOutput := ldnOutput.StringBuilder();
+      cuDataset.BuildLinesOnlyDataset(20020,lrrefLine,FALSE,ldnOutput);
+      pbsOutput.ADDTEXT(ldnOutput.ToString());
+    END;
+
+    PROCEDURE GetAssignedTotes@1000000059(precWhseActivityLine@1000000000 : Record 5767) : Text[100];
+    VAR
+      lrecLPHeader@1000000001 : Record 23044505;
+      lsTotes@1000000002 : Text;
+    BEGIN
+      //<FUNC>
+      //  Description: Gets a comma seperated list of totes for the pick line
+      //</FUNC>
+
+      lrecLPHeader.SETRANGE("Tote Whse. Document Type",lrecLPHeader."Tote Whse. Document Type"::Pick);
+      lrecLPHeader.SETRANGE("Tote Whse. Document No.",precWhseActivityLine."No.");
+      lrecLPHeader.SETRANGE("Tote Source No.",precWhseActivityLine."Source No.");
+      IF lrecLPHeader.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          IF lsTotes <> '' THEN
+            lsTotes += ',';
+          lsTotes += lrecLPHeader."No.";
+        UNTIL(lrecLPHeader.NEXT=0);
+      END;
+
+      EXIT(COPYSTR(lsTotes,1,100));
+    END;
+
+    PROCEDURE CheckCorrectTote@1000000041(precWhseActivityLine@1000000000 : Record 5767;pcodLicensePlateNo@1000000001 : Code[20]);
+    VAR
+      lrecLPHeader@1000000002 : Record 23044505;
+    BEGIN
+      IF (pcodLicensePlateNo = '') OR (precWhseActivityLine."Activity Type" <> precWhseActivityLine."Activity Type"::Pick) THEN
+        EXIT;
+
+      lrecLPHeader.GET(pcodLicensePlateNo);
+      lrecLPHeader.TESTFIELD(Tote,lrecLPHeader.Tote::Yes);
+      lrecLPHeader.TESTFIELD("Tote Whse. Document Type",lrecLPHeader."Tote Whse. Document Type"::Pick);
+
+      IF lrecLPHeader."Tote Source No." <> precWhseActivityLine."Source No." THEN BEGIN
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_TOTE_WRONG_SORUCE', codRegionCode), pcodLicensePlateNo,lrecLPHeader."Tote Source Type", lrecLPHeader."Tote Source No.");
+      END;
+    END;
+
+    PROCEDURE GetListOfAssignedTotes@100000002(VAR ptrecEventParams@100000001 : TEMPORARY Record 23044511;VAR pbsOutput@100000000 : BigText);
+    VAR
+      lrecWhseActivityLine@100000004 : Record 5767;
+      lsTotes@100000005 : Text;
+      lcodPickNumber@100000003 : Code[20];
+      liLineNumber@100000002 : Integer;
+    BEGIN
+      liLineNumber := ptrecEventParams.getValueAsInt('Line No.');
+      lcodPickNumber := ptrecEventParams.getDocumentNo();
+
+      lrecWhseActivityLine.GET(lrecWhseActivityLine."Activity Type"::Pick,lcodPickNumber,liLineNumber);
+
+      lsTotes := GetAssignedTotes(lrecWhseActivityLine);
+
+      pbsOutput.ADDTEXT(STRSUBSTNO('<VALUE>%1</VALUE>', lsTotes));
+
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    LOCAL PROCEDURE GetInvtPutCrossRefLines@1000000043(VAR ptrecEventParams@1000000005 : TEMPORARY Record 23044511;VAR pbsOutput@1000000004 : BigText);
+    VAR
+      lrecActivityHeader@1000000002 : Record 5766;
+      ltrecItemCrossRef@1000000007 : TEMPORARY Record 5717;
+      lrrefLines@1000000006 : RecordRef;
+      ldnOutput@1000000008 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lrecActivityLine@1000000003 : Record 5767;
+      lcodActivityNo@1000000000 : Code[20];
+      liActivityType@1000000001 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Description: Returns a list of possible invt. put-away lines that could be cross referenced.
+      //               If quantity to handle has been set the item is not included (presumably it's been scanned already)
+      //</FUNC>
+
+      lcodActivityNo := ptrecEventParams.getDocumentNo();
+      liActivityType := ptrecEventParams.getValueAsInt('document_type');
+
+      lrecActivityHeader.GET(liActivityType,lcodActivityNo);
+
+      IF lrecActivityHeader.Type = lrecActivityHeader.Type::"Invt. Pick" THEN BEGIN
+        lrecActivityLine.SETRANGE("Activity Type",lrecActivityHeader.Type);
+        lrecActivityLine.SETRANGE("No.",lrecActivityHeader."No.");
+        lrecActivityLine.SETRANGE("Qty. to Handle",0);
+
+        IF NOT lrecActivityLine.FINDSET THEN
+          ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_CROSS_REF_LINES', codRegionCode));
+
+        REPEAT
+          ltrecItemCrossRef."Item No." := lrecActivityLine."Item No.";
+          ltrecItemCrossRef."Variant Code" := lrecActivityLine."Variant Code";
+          ltrecItemCrossRef."Unit of Measure" := lrecActivityLine."Unit of Measure Code";
+          IF ltrecItemCrossRef.INSERT THEN ;
+        UNTIL(lrecActivityLine.NEXT=0);
+      END;
+
+      ltrecItemCrossRef.RESET;
+      IF ltrecItemCrossRef.FINDSET THEN ;
+
+
+      lrrefLines.GETTABLE(ltrecItemCrossRef);
+
+      // create the dataset
+      ldnOutput := ldnOutput.StringBuilder();
+      cuDataset.BuildLinesOnlyDataset(iEventID,lrrefLines,FALSE,ldnOutput);
+
+      // send the result back
+      pbsOutput.ADDTEXT(ldnOutput.ToString());
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"Warehouse Activity Header"));
+      ptrecEventParams.setValue('Document No.', lcodActivityNo);
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE GetIsTotePickingRequired@100000000(VAR ptrecEventParams@100000002 : TEMPORARY Record 23044511;VAR pbsOutput@100000001 : BigText);
+    VAR
+      lrecLPHeader@100000000 : Record 23044505;
+    BEGIN
+      lrecLPHeader.SETRANGE("Tote Whse. Document Type",lrecLPHeader."Tote Whse. Document Type"::Pick);
+      lrecLPHeader.SETRANGE("Tote Whse. Document No.",ptrecEventParams.getDocumentNo());
+
+      IF lrecLPHeader.FINDSET(FALSE) THEN
+        pbsOutput.ADDTEXT('<VALUE>1</VALUE>')
+      ELSE
+        pbsOutput.ADDTEXT('<VALUE>0</VALUE>');
+
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE UpdateReclassLineLPPlaceBins@100000007(VAR precItemJnlLine@100000001 : Record 83;VAR ptrecTempModifiedLines@100000002 : TEMPORARY Record 83;pbPlaceMode@100000006 : Boolean);
+    VAR
+      ltrecLPHeader@100000003 : TEMPORARY Record 23044505;
+      lrecLPLineUsage@100000005 : Record 23044507;
+      lrecRelatedItemJnlLine@100000004 : Record 83;
+      lcodLicensePlateNo@100000000 : Code[20];
+    BEGIN
+      lcodLicensePlateNo := GetReclassLineLPNumber(precItemJnlLine);
+
+      IF lcodLicensePlateNo <> '' THEN BEGIN
+        IF NOT pbPlaceMode THEN BEGIN
+          ERROR(cuTranslationMgmt.getTranslatedString('ERR_CANNOT_CHANGE_LINE_ASSIGN_LP', codRegionCode), precItemJnlLine."Item No.", lcodLicensePlateNo);
+        END;
+
+        cuLPCommon.GetAssociatedLPs(lcodLicensePlateNo,ltrecLPHeader);
+
+        ltrecLPHeader.RESET;
+        IF ltrecLPHeader.FINDSET(FALSE) THEN BEGIN
+          REPEAT
+            lrecLPLineUsage.SETRANGE("License Plate No.",ltrecLPHeader."No.");
+            lrecLPLineUsage.SETRANGE("Source Document",lrecLPLineUsage."Source Document"::Reclass);
+            lrecLPLineUsage.SETRANGE("Source No.",precItemJnlLine."Journal Batch Name");
+            lrecLPLineUsage.SETRANGE("Posting Date",0D);
+
+            IF lrecLPLineUsage.FINDSET(FALSE) THEN BEGIN
+              REPEAT
+                lrecRelatedItemJnlLine.GET(precItemJnlLine."Journal Template Name",precItemJnlLine."Journal Batch Name",lrecLPLineUsage."Source Line No.");
+                lrecRelatedItemJnlLine.VALIDATE("New Location Code", precItemJnlLine."New Location Code");
+                lrecRelatedItemJnlLine.VALIDATE("New Bin Code", precItemJnlLine."New Bin Code");
+                lrecRelatedItemJnlLine.MODIFY;
+
+               ptrecTempModifiedLines :=  lrecRelatedItemJnlLine;
+               IF ptrecTempModifiedLines.INSERT THEN ;
+
+              UNTIL(lrecLPLineUsage.NEXT=0);
+            END;
+          UNTIL(ltrecLPHeader.NEXT=0);
+        END;
+      END;
+    END;
+
+    PROCEDURE GetReclassLineLPNumber@100000003(VAR precItemJnlLine@100000000 : Record 83) : Code[20];
+    VAR
+      lrecLPLineUsage@100000001 : Record 23044507;
+    BEGIN
+      lrecLPLineUsage.SETRANGE("Source Document",lrecLPLineUsage."Source Document"::Reclass);
+      lrecLPLineUsage.SETRANGE("Source No.",precItemJnlLine."Journal Batch Name");
+      lrecLPLineUsage.SETRANGE("Source Line No.",precItemJnlLine."Line No.");
+      lrecLPLineUsage.SETRANGE("Posting Date",0D);
+
+      IF lrecLPLineUsage.FINDSET(FALSE) THEN
+        EXIT(lrecLPLineUsage."License Plate No.")
+      ELSE
+        EXIT('');
+    END;
+
+    PROCEDURE DeleteLPReclassLines@100000020(VAR precItemJnlLine@100000001 : Record 83);
+    VAR
+      ltrecLPHeader@100000004 : TEMPORARY Record 23044505;
+      lrecLPLineUsage@100000003 : Record 23044507;
+      lrecRelatedItemJnlLine@100000002 : Record 83;
+      ltrecTempItemJnlLinesDelete@100000006 : TEMPORARY Record 83;
+      lrecLPHeader@100000005 : Record 23044505;
+      lcodLicensePlateNo@100000000 : Code[20];
+    BEGIN
+      lcodLicensePlateNo := GetReclassLineLPNumber(precItemJnlLine);
+
+      IF lcodLicensePlateNo <> '' THEN BEGIN
+        cuLPCommon.GetAssociatedLPs(lcodLicensePlateNo,ltrecLPHeader);
+
+        ltrecLPHeader.RESET;
+        IF ltrecLPHeader.FINDSET(FALSE) THEN BEGIN
+          REPEAT
+            lrecLPLineUsage.SETRANGE("License Plate No.",ltrecLPHeader."No.");
+            lrecLPLineUsage.SETRANGE("Source Document",lrecLPLineUsage."Source Document"::Reclass);
+            lrecLPLineUsage.SETRANGE("Source No.",precItemJnlLine."Journal Batch Name");
+            lrecLPLineUsage.SETRANGE("Posting Date",0D);
+
+            IF lrecLPLineUsage.FINDSET(FALSE) THEN BEGIN
+              REPEAT
+                lrecRelatedItemJnlLine.GET(precItemJnlLine."Journal Template Name",precItemJnlLine."Journal Batch Name",lrecLPLineUsage."Source Line No.");
+                ltrecTempItemJnlLinesDelete := lrecRelatedItemJnlLine;
+                IF ltrecTempItemJnlLinesDelete.INSERT THEN ;
+              UNTIL(lrecLPLineUsage.NEXT=0);
+
+              lrecLPLineUsage.DELETEALL;
+            END;
+
+            lrecLPHeader.GET(ltrecLPHeader."No.");
+            lrecLPHeader."Source Document Type" := lrecLPHeader."Source Document Type"::" ";
+            lrecLPHeader."Source Document No." := '';
+            lrecLPHeader.MODIFY(TRUE);
+          UNTIL(ltrecLPHeader.NEXT=0);
+        END;
+      END;
+
+      // have to delete the journal lines 'after' to avoid the error saying
+      // the line can't be deleted due to assigments
+      ltrecTempItemJnlLinesDelete.RESET;
+      IF ltrecTempItemJnlLinesDelete.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          lrecRelatedItemJnlLine.GET(ltrecTempItemJnlLinesDelete."Journal Template Name",ltrecTempItemJnlLinesDelete."Journal Batch Name",ltrecTempItemJnlLinesDelete."Line No.");
+          DeleteReclassReservationEntries(lrecRelatedItemJnlLine);
+          lrecRelatedItemJnlLine.DELETE;
+        UNTIL(ltrecTempItemJnlLinesDelete.NEXT=0);
+      END;
+    END;
+
+    PROCEDURE DeleteReclassReservationEntries@100000022(VAR precItemJnlLine@100000000 : Record 83);
+    VAR
+      lrecReservationEntry@100000001 : Record 337;
+    BEGIN
+      lrecReservationEntry.RESET;
+      lrecReservationEntry.SETRANGE("Reservation Status",lrecReservationEntry."Reservation Status"::Prospect);
+      lrecReservationEntry.SETRANGE("Location Code",precItemJnlLine."Location Code");
+      lrecReservationEntry.SETRANGE("Source Type",DATABASE::"Item Journal Line");
+      lrecReservationEntry.SETRANGE("Source ID",precItemJnlLine."Journal Template Name");
+      lrecReservationEntry.SETRANGE("Source Batch Name",precItemJnlLine."Journal Batch Name");
+      lrecReservationEntry.SETRANGE("Source Ref. No.",precItemJnlLine."Line No.");
+      lrecReservationEntry.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE NumberOfLine@1000000045(NoPara@1000000000 : Code[20]) : Integer;
+    VAR
+      TransferLineLoc@1000000001 : Record 5741;
+    BEGIN
+      //PKS
+      TransferLineLoc.SETRANGE("Document No.",NoPara);
+      TransferLineLoc.SETFILTER("Item No.",'<>%1','');
+      IF TransferLineLoc.FINDFIRST THEN
+        EXIT(TransferLineLoc.COUNT);
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+      2020-04-25 TPZ2781  PSHUKLA Added code for stopped picking
+      001 TPZ2886 RPS 10192020 - Picking Performance  | PowerBI
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,1232 @@
+OBJECT Codeunit 14123804 ES FLADS Company Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=04/30/18;
+    Time=12:00:00 PM;
+    Version List=ES1.41.51;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text004@1004 : TextConst 'ENU=Cannot be the same company.';
+      Text005@1005 : TextConst 'ENU=Copying Field Level and Data Security Setup\';
+      Text006@1006 : TextConst 'ENU=Company #1################################################\';
+      Text007@1007 : TextConst 'ENU=Table   #2################################################';
+      Text008@1008 : TextConst 'ENU=Existing %1 %2 %3';
+      Text009@1009 : TextConst 'ENU=New %1 %2 %3';
+      Text010@1010 : TextConst 'ENU=Data updated in %1.\';
+      Text011@1011 : TextConst 'ENU=%1, %2 new, %3 updated, %4 deleted and %5 skipped.';
+      Text001@1001 : TextConst 'ENU=Summarizing %1.';
+      Text002@1002 : TextConst 'ENU=No company to copy from.';
+      Text003@1003 : TextConst 'ENU=Nothing to copy.';
+      Text012@1012 : TextConst 'ENU=Copying %1\%2.';
+      Text013@1013 : TextConst 'ENU=%1 records inserted and %2 records modified.';
+      Text014@1014 : TextConst 'ENU=%1 %2 %3 is using %4 %5 in Company %6.';
+      Text015@1015 : TextConst 'ENU=Inconsistent %1 in company %2 before update.';
+      Text016@1016 : TextConst 'ENU=Inconsistent %1 in company %2 after update.';
+      Text017@1017 : TextConst 'ENU=%1 in %2 must be %3 in Company %4.';
+      Text018@1018 : TextConst 'ENU=%1 Companies updated.';
+
+    PROCEDURE UpdateAllCompanies@1240520003(ShowDetails@1240520006 : Boolean;ShowStatus@1240520004 : Boolean);
+    VAR
+      Company@1240520002 : Record 2000000006;
+      ESFLADSSetup@1240520001 : Record 14123801;
+      ESFLADSSetupComp@1240520003 : Record 14123801;
+      ESUserSecuritySetup@1240520005 : Record 14123805;
+      CompaniesUpdated@1240520007 : Integer;
+    BEGIN
+      ESFLADSSetup.GET;
+      ESFLADSSetup.TESTFIELD("Install Allowed");
+
+      TestConsistentSetup(COMPANYNAME,TRUE);
+
+      Company.RESET;
+      Company.FIND('-');
+      REPEAT
+        IF Company.Name <> COMPANYNAME THEN BEGIN
+          ESFLADSSetupComp.RESET;
+          ESFLADSSetupComp.CHANGECOMPANY(Company.Name);
+          IF ESFLADSSetupComp.GET THEN
+            IF ESFLADSSetupComp."Copy From Setup Company" THEN BEGIN
+              IF ESFLADSSetupComp."Copy From Company Name" <> COMPANYNAME THEN
+                ERROR(
+                  Text017,
+                  ESFLADSSetupComp.FIELDCAPTION("Copy From Company Name"),
+                  ESFLADSSetupComp.TABLECAPTION,COMPANYNAME,Company.Name);
+              ESFLADSSetupComp.TESTFIELD("Copy From Company Name",COMPANYNAME);
+
+              IF NOT TestConsistentSetup(Company.Name,FALSE) THEN
+                ERROR(Text015,ESUserSecuritySetup.TABLECAPTION,Company.Name);
+
+              UpdateCompany(COMPANYNAME,Company.Name,ShowDetails);
+
+              CompaniesUpdated := CompaniesUpdated + 1;
+
+              IF NOT TestConsistentSetup(Company.Name,FALSE) THEN
+                ERROR(Text016,ESUserSecuritySetup.TABLECAPTION,Company.Name);
+
+              COMMIT;
+            END;
+        END;
+      UNTIL Company.NEXT = 0;
+
+      IF ShowStatus THEN
+        MESSAGE(Text018,CompaniesUpdated);
+    END;
+
+    PROCEDURE UpdateCompany@1240520001(FromCompanyName@1240520022 : Text[30];ToCompanyName@1240520001 : Text[30];ShowStatus@1240520013 : Boolean);
+    VAR
+      Company@1240520002 : Record 2000000006;
+      ESFLADSSetupFrom@1240520003 : Record 14123801;
+      ESFLADSSetupTo@1240520004 : Record 14123801;
+      ESSourceTableSetup@1240520017 : Record 14123802;
+      ESFLADSGroupMemberFrom@1240520020 : Record 14123817;
+      ESFLADSGroupMemberTo@1240520021 : Record 14123817;
+      ESDynamicFilterFrom@1240520023 : Record 14123818;
+      ESDynamicFilterTo@1240520024 : Record 14123818;
+      ESFLADSCopySetupTo@1240520006 : Record 14123816;
+      ESFLADSCopySetupTo2@1240520008 : Record 14123816;
+      ESFieldLevelSecurityCodeFrom@1240520007 : Record 14123803;
+      ESDataSecurityCodeFrom@1240520011 : Record 14123804;
+      ESUserSecuritySetupFrom@1240520012 : Record 14123805;
+      ESFLADSUpdateNoTo@1240520009 : Record 14123813;
+      Object@1240520018 : Record 2000000001;
+      ESFLADSLookupData@1240520005 : Codeunit 14123813;
+      Window@1240520016 : Dialog;
+      UpdateRecord@1240520010 : Boolean;
+      UpdateCount@1240520014 : ARRAY [10,5] OF Integer;
+      CountID@1240520015 : Integer;
+      StatusMessage@1240520019 : Text[1024];
+    BEGIN
+      IF ToCompanyName = FromCompanyName THEN
+        ERROR(Text004);
+
+      IF ToCompanyName = COMPANYNAME THEN
+        TestConsistentSetup(COMPANYNAME,TRUE);
+
+      Company.GET(ToCompanyName);
+
+      ESFLADSSetupFrom.CHANGECOMPANY(FromCompanyName);
+      ESFLADSSetupFrom.GET;
+      ESFLADSSetupFrom.TESTFIELD("Install Allowed");
+
+      ESFLADSSetupTo.CHANGECOMPANY(ToCompanyName);
+      ESFLADSSetupTo.GET;
+      IF NOT ESFLADSSetupTo."Copy From Setup Company" THEN
+        EXIT;
+
+      IF GUIALLOWED THEN BEGIN
+        Window.OPEN(
+          Text005 +
+          Text006 +
+          Text007);
+        Window.UPDATE(1,ToCompanyName);
+      END;
+
+      ESFLADSSetupTo.TESTFIELD("Install Allowed",FALSE);
+      ESFLADSSetupTo."Last Copy Date Time" := CURRENTDATETIME;
+
+      IF GUIALLOWED THEN
+        Window.UPDATE(2,ESSourceTableSetup.TABLECAPTION);
+      Object.GET(Object.Type::Codeunit,'',CODEUNIT::"ES FLADS Lookup Data");
+      ESFLADSSetupTo."Lookup Data Date" := Object.Date;
+      ESFLADSSetupTo."Lookup Data Time" := Object.Time;
+      ESFLADSSetupTo.MODIFY;
+      ESFLADSLookupData.InsertLookupData(ToCompanyName);
+
+      ESFLADSCopySetupTo.RESET;
+      ESFLADSCopySetupTo.CHANGECOMPANY(ToCompanyName);
+      IF NOT ESFLADSCopySetupTo.GET(DATABASE::"ES FLADS Relation",0,'') THEN BEGIN
+        ESFLADSCopySetupTo.INIT;
+        ESFLADSCopySetupTo."Table ID" := DATABASE::"ES FLADS Relation";
+        ESFLADSCopySetupTo."Source Table ID" := 0;
+        ESFLADSCopySetupTo.Code := '';
+        ESFLADSCopySetupTo."Created Date Time" := CURRENTDATETIME;
+        ESFLADSCopySetupTo."Last Copy Date Time" := CURRENTDATETIME;
+        ESFLADSCopySetupTo.INSERT;
+      END ELSE BEGIN
+        ESFLADSCopySetupTo."Last Copy Date Time" := CURRENTDATETIME;
+        ESFLADSCopySetupTo.MODIFY;
+      END;
+
+      IF ESFLADSSetupTo."Copy Group Members" THEN BEGIN
+        IF GUIALLOWED THEN
+          Window.UPDATE(2,ESFLADSGroupMemberFrom.TABLECAPTION);
+        ESFLADSGroupMemberTo.RESET;
+        ESFLADSGroupMemberTo.CHANGECOMPANY(ToCompanyName);
+        ESFLADSGroupMemberTo.DELETEALL;
+
+        ESFLADSGroupMemberFrom.RESET;
+        ESFLADSGroupMemberFrom.CHANGECOMPANY(FromCompanyName);
+        IF ESFLADSGroupMemberFrom.FIND('-') THEN
+          REPEAT
+            ESFLADSGroupMemberTo := ESFLADSGroupMemberFrom;
+            ESFLADSGroupMemberTo.CHANGECOMPANY(ToCompanyName);
+            ESFLADSGroupMemberTo.INSERT;
+          UNTIL ESFLADSGroupMemberFrom.NEXT = 0;
+      END;
+
+      IF GUIALLOWED THEN
+        Window.UPDATE(2,ESDynamicFilterFrom.TABLECAPTION);
+      ESDynamicFilterTo.RESET;
+      ESDynamicFilterTo.CHANGECOMPANY(ToCompanyName);
+      ESDynamicFilterTo.DELETEALL;
+
+      ESDynamicFilterFrom.RESET;
+      ESDynamicFilterFrom.CHANGECOMPANY(FromCompanyName);
+      IF ESDynamicFilterFrom.FIND('-') THEN
+        REPEAT
+          ESDynamicFilterTo := ESDynamicFilterFrom;
+          ESDynamicFilterTo.CHANGECOMPANY(ToCompanyName);
+          ESDynamicFilterTo.INSERT;
+        UNTIL ESDynamicFilterFrom.NEXT = 0;
+
+      ESFLADSCopySetupTo.RESET;
+      ESFLADSCopySetupTo.CHANGECOMPANY(ToCompanyName);
+      IF NOT ESFLADSCopySetupTo.GET(DATABASE::"ES FLADS Group Member",0,'') THEN BEGIN
+        ESFLADSCopySetupTo.INIT;
+        ESFLADSCopySetupTo."Table ID" := DATABASE::"ES FLADS Group Member";
+        ESFLADSCopySetupTo."Source Table ID" := 0;
+        ESFLADSCopySetupTo.Code := '';
+        ESFLADSCopySetupTo."Created Date Time" := CURRENTDATETIME;
+        ESFLADSCopySetupTo."Last Copy Date Time" := CURRENTDATETIME;
+        ESFLADSCopySetupTo.INSERT;
+      END ELSE BEGIN
+        ESFLADSCopySetupTo."Last Copy Date Time" := CURRENTDATETIME;
+        ESFLADSCopySetupTo.MODIFY;
+      END;
+
+      ESFLADSCopySetupTo2.RESET;
+      ESFLADSCopySetupTo2.CHANGECOMPANY(ToCompanyName);
+
+      ESFLADSCopySetupTo.RESET;
+      ESFLADSCopySetupTo.CHANGECOMPANY(ToCompanyName);
+      ESFLADSCopySetupTo.SETRANGE("From Setup Company",TRUE);
+      IF ESFLADSCopySetupTo.FIND('-') THEN
+        REPEAT
+          UpdateRecord := FALSE;
+          CountID := 0;
+
+          CASE ESFLADSCopySetupTo."Table ID" OF
+            DATABASE::"ES Field Level Security Code":
+              BEGIN
+                IF GUIALLOWED THEN
+                  Window.UPDATE(
+                    2,
+                    STRSUBSTNO(
+                      Text008,ESFieldLevelSecurityCodeFrom.TABLECAPTION,
+                      ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code));
+
+                CountID := 1;
+                IF ESFLADSSetupTo."Copy Field Level Sec. Setup" THEN BEGIN
+                  ESFieldLevelSecurityCodeFrom.CHANGECOMPANY(FromCompanyName);
+                  IF ESFieldLevelSecurityCodeFrom.GET(
+                       ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code)
+                  THEN BEGIN
+                    DeleteFieldLevelSecCode(
+                      ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code,ToCompanyName,FALSE);
+
+                    CopyFieldLevelSecCode(
+                      ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code,
+                      FromCompanyName,ToCompanyName);
+                    UpdateRecord := TRUE;
+                  END ELSE
+                    DeleteFieldLevelSecCode(
+                      ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code,ToCompanyName,TRUE);
+                END;
+              END;
+            DATABASE::"ES Data Security Code":
+              BEGIN
+                IF GUIALLOWED THEN
+                  Window.UPDATE(
+                    2,
+                    STRSUBSTNO(
+                      Text008,ESDataSecurityCodeFrom.TABLECAPTION,
+                      ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code));
+
+                CountID := 2;
+                IF ESFLADSSetupTo."Copy Data Security Setup" THEN BEGIN
+                  ESDataSecurityCodeFrom.CHANGECOMPANY(FromCompanyName);
+                  IF ESDataSecurityCodeFrom.GET(
+                       ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code)
+                  THEN BEGIN
+                    DeleteDataSecCode(
+                      ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code,ToCompanyName,FALSE);
+
+                    CopyDataSecCode(
+                      ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code,
+                      FromCompanyName,ToCompanyName);
+                    UpdateRecord := TRUE;
+                  END ELSE
+                    DeleteDataSecCode(
+                      ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code,ToCompanyName,TRUE);
+                END;
+              END;
+            DATABASE::"ES User Security Setup":
+              BEGIN
+                IF GUIALLOWED THEN
+                  Window.UPDATE(
+                    2,
+                    STRSUBSTNO(
+                      Text008,ESUserSecuritySetupFrom.TABLECAPTION,
+                      ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code));
+
+                CountID := 3;
+                IF ESFLADSSetupTo."Copy User Security Setup" THEN BEGIN
+                  ESUserSecuritySetupFrom.CHANGECOMPANY(FromCompanyName);
+                  IF ESUserSecuritySetupFrom.GET(
+                       ESFLADSCopySetupTo.Code,ESFLADSCopySetupTo."Source Table ID")
+                  THEN BEGIN
+                    DeleteUserSecSetup(
+                      ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code,ToCompanyName);
+
+                    CopyUserSecSetup(
+                      ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code,
+                      FromCompanyName,ToCompanyName);
+                    UpdateRecord := TRUE;
+                  END ELSE
+                    DeleteUserSecSetup(
+                      ESFLADSCopySetupTo."Source Table ID",ESFLADSCopySetupTo.Code,ToCompanyName);
+                END;
+              END;
+          END;
+
+          IF CountID > 0 THEN BEGIN
+            IF UpdateRecord THEN BEGIN
+              UpdateCount[CountID,1] := UpdateCount[CountID,1] + 1;
+
+              ESFLADSCopySetupTo2 := ESFLADSCopySetupTo;
+              ESFLADSCopySetupTo2."Last Copy Date Time" := CURRENTDATETIME;
+              ESFLADSCopySetupTo2.MODIFY;
+            END ELSE BEGIN
+              UpdateCount[CountID,2] := UpdateCount[CountID,2] + 1;
+
+              ESFLADSCopySetupTo2 := ESFLADSCopySetupTo;
+              ESFLADSCopySetupTo2.DELETE;
+            END;
+          END;
+        UNTIL ESFLADSCopySetupTo.NEXT = 0;
+
+      // New Field Level Security
+      IF ESFLADSSetupTo."Copy Field Level Sec. Setup" THEN BEGIN
+        ESFieldLevelSecurityCodeFrom.RESET;
+        ESFieldLevelSecurityCodeFrom.CHANGECOMPANY(FromCompanyName);
+        IF ESFieldLevelSecurityCodeFrom.FIND('-') THEN
+          REPEAT
+            IF GUIALLOWED THEN
+              Window.UPDATE(
+                2,
+                STRSUBSTNO(
+                  Text009,ESFieldLevelSecurityCodeFrom.TABLECAPTION,
+                  ESFieldLevelSecurityCodeFrom."Source Table ID",ESFieldLevelSecurityCodeFrom.Code));
+
+            IF NOT ESFLADSCopySetupTo.GET(
+                     DATABASE::"ES Field Level Security Code",
+                     ESFieldLevelSecurityCodeFrom."Source Table ID",
+                     ESFieldLevelSecurityCodeFrom.Code)
+            THEN BEGIN
+              UpdateCount[1,3] := UpdateCount[1,3] + 1;
+
+              ESFLADSCopySetupTo."Table ID" := DATABASE::"ES Field Level Security Code";
+              ESFLADSCopySetupTo."Source Table ID" := ESFieldLevelSecurityCodeFrom."Source Table ID";
+              ESFLADSCopySetupTo.Code := ESFieldLevelSecurityCodeFrom.Code;
+              ESFLADSCopySetupTo."From Setup Company" := TRUE;
+              ESFLADSCopySetupTo."Created Date Time" := CURRENTDATETIME;
+              ESFLADSCopySetupTo."Last Copy Date Time" := CURRENTDATETIME;
+              ESFLADSCopySetupTo.INSERT;
+
+              CopyFieldLevelSecCode(
+                ESFieldLevelSecurityCodeFrom."Source Table ID",ESFieldLevelSecurityCodeFrom.Code,
+                FromCompanyName,ToCompanyName);
+            END ELSE
+              IF NOT ESFLADSCopySetupTo."From Setup Company" THEN
+                UpdateCount[1,4] := UpdateCount[1,4] + 1;
+          UNTIL ESFieldLevelSecurityCodeFrom.NEXT = 0;
+      END;
+
+      // New Data Security
+      IF ESFLADSSetupTo."Copy Data Security Setup" THEN BEGIN
+        ESDataSecurityCodeFrom.RESET;
+        ESDataSecurityCodeFrom.CHANGECOMPANY(FromCompanyName);
+        IF ESDataSecurityCodeFrom.FIND('-') THEN
+          REPEAT
+            IF GUIALLOWED THEN
+              Window.UPDATE(
+                2,
+                STRSUBSTNO(
+                  Text009,ESDataSecurityCodeFrom.TABLECAPTION,
+                  ESDataSecurityCodeFrom."Source Table ID",
+                  ESDataSecurityCodeFrom.Code));
+
+            IF NOT ESFLADSCopySetupTo.GET(
+                     DATABASE::"ES Data Security Code",
+                     ESDataSecurityCodeFrom."Source Table ID",
+                     ESDataSecurityCodeFrom.Code)
+            THEN BEGIN
+              UpdateCount[2,3] := UpdateCount[2,3] + 1;
+
+              ESFLADSCopySetupTo."Table ID" := DATABASE::"ES Data Security Code";
+              ESFLADSCopySetupTo."Source Table ID" := ESDataSecurityCodeFrom."Source Table ID";
+              ESFLADSCopySetupTo.Code := ESDataSecurityCodeFrom.Code;
+              ESFLADSCopySetupTo."From Setup Company" := TRUE;
+              ESFLADSCopySetupTo."Created Date Time" := CURRENTDATETIME;
+              ESFLADSCopySetupTo."Last Copy Date Time" := CURRENTDATETIME;
+              ESFLADSCopySetupTo.INSERT;
+
+              CopyDataSecCode(
+                ESDataSecurityCodeFrom."Source Table ID",ESDataSecurityCodeFrom.Code,
+                FromCompanyName,ToCompanyName);
+            END ELSE
+              IF NOT ESFLADSCopySetupTo."From Setup Company" THEN
+                UpdateCount[2,4] := UpdateCount[2,4] + 1;
+          UNTIL ESDataSecurityCodeFrom.NEXT = 0;
+      END;
+
+      // New User Security
+      IF ESFLADSSetupTo."Copy User Security Setup" THEN BEGIN
+        ESUserSecuritySetupFrom.RESET;
+        ESUserSecuritySetupFrom.CHANGECOMPANY(FromCompanyName);
+        IF ESUserSecuritySetupFrom.FIND('-') THEN
+          REPEAT
+            IF GUIALLOWED THEN
+              Window.UPDATE(
+                2,
+                STRSUBSTNO(
+                  Text009,ESUserSecuritySetupFrom.TABLECAPTION,
+                  ESUserSecuritySetupFrom."User ID",ESUserSecuritySetupFrom."Source Table ID"));
+
+            IF NOT ESFLADSCopySetupTo.GET(
+                     DATABASE::"ES User Security Setup",
+                     ESUserSecuritySetupFrom."Source Table ID",
+                     ESUserSecuritySetupFrom."User ID")
+            THEN BEGIN
+              UpdateCount[3,3] := UpdateCount[3,3] + 1;
+
+              ESFLADSCopySetupTo."Table ID" := DATABASE::"ES User Security Setup";
+              ESFLADSCopySetupTo."Source Table ID" := ESUserSecuritySetupFrom."Source Table ID";
+              ESFLADSCopySetupTo.Code := ESUserSecuritySetupFrom."User ID";
+              ESFLADSCopySetupTo."From Setup Company" := TRUE;
+              ESFLADSCopySetupTo."Created Date Time" := CURRENTDATETIME;
+              ESFLADSCopySetupTo."Last Copy Date Time" := CURRENTDATETIME;
+              ESFLADSCopySetupTo.INSERT;
+
+              CopyUserSecSetup(
+                ESUserSecuritySetupFrom."Source Table ID",ESUserSecuritySetupFrom."User ID",
+                FromCompanyName,ToCompanyName);
+            END ELSE
+              IF NOT ESFLADSCopySetupTo."From Setup Company" THEN
+                UpdateCount[3,4] := UpdateCount[3,4] + 1;
+          UNTIL ESUserSecuritySetupFrom.NEXT = 0;
+      END;
+
+      // Refresh Client Data
+      ESFLADSUpdateNoTo.CHANGECOMPANY(ToCompanyName);
+      ESFLADSUpdateNoTo.UpdateNo;
+
+      IF ToCompanyName = COMPANYNAME THEN
+        TestConsistentSetup(COMPANYNAME,TRUE);
+
+      IF GUIALLOWED THEN
+       Window.CLOSE;
+
+      IF ShowStatus THEN BEGIN
+        StatusMessage := STRSUBSTNO(Text010,ToCompanyName);
+        IF ESFLADSSetupTo."Copy Field Level Sec. Setup" THEN
+          StatusMessage :=
+            StatusMessage +
+            STRSUBSTNO(
+              Text011,
+              ESFieldLevelSecurityCodeFrom.TABLECAPTION,
+              UpdateCount[1,3],UpdateCount[1,1],UpdateCount[1,2],UpdateCount[1,4]) + '\';
+
+        IF ESFLADSSetupTo."Copy Data Security Setup" THEN
+          StatusMessage :=
+            StatusMessage +
+            STRSUBSTNO(
+              Text011,
+              ESDataSecurityCodeFrom.TABLECAPTION,
+              UpdateCount[2,3],UpdateCount[2,1],UpdateCount[2,2],UpdateCount[2,4]) + '\';
+
+        IF ESFLADSSetupTo."Copy User Security Setup" THEN
+          StatusMessage :=
+            StatusMessage +
+            STRSUBSTNO(
+              Text011,
+              ESUserSecuritySetupFrom.TABLECAPTION,
+              UpdateCount[3,3],UpdateCount[3,1],UpdateCount[3,2],UpdateCount[3,4]);
+
+        MESSAGE(StatusMessage);
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteFieldLevelSecCode@1240520002(SourceTableID@1240520003 : Integer;SecurityCode@1240520001 : Code[20];FromCompanyName@1240520007 : Text[30];TestUsage@1240520005 : Boolean);
+    VAR
+      ESUserSecuritySetup@1240520008 : Record 14123805;
+      ESFieldLevelSecCode@1240520006 : Record 14123803;
+      ESFieldLevelSecObject@1240520004 : Record 14123806;
+      ESFieldLevelSecControl@1240520002 : Record 14123807;
+    BEGIN
+      IF TestUsage THEN BEGIN
+        ESUserSecuritySetup.RESET;
+        ESUserSecuritySetup.CHANGECOMPANY(FromCompanyName);
+        ESUserSecuritySetup.SETRANGE("Source Table ID",SourceTableID);
+        ESUserSecuritySetup.SETRANGE("Field Level Security Code",SecurityCode);
+        IF ESUserSecuritySetup.FIND('-') THEN
+          ERROR(
+            Text014,ESUserSecuritySetup.TABLECAPTION,
+            ESUserSecuritySetup."User ID",ESUserSecuritySetup."Source Table ID",
+            ESFieldLevelSecCode.TABLECAPTION,SecurityCode,FromCompanyName);
+      END;
+
+      IF FromCompanyName <> COMPANYNAME THEN
+        ESFieldLevelSecCode.CHANGECOMPANY(FromCompanyName);
+      IF ESFieldLevelSecCode.GET(SourceTableID,SecurityCode) THEN BEGIN
+        ESFieldLevelSecCode.DELETE;
+
+        ESFieldLevelSecObject.RESET;
+        IF FromCompanyName <> COMPANYNAME THEN
+          ESFieldLevelSecObject.CHANGECOMPANY(FromCompanyName);
+        ESFieldLevelSecObject.SETRANGE("Source Table ID",SourceTableID);
+        ESFieldLevelSecObject.SETRANGE("Field Level Security Code",SecurityCode);
+        ESFieldLevelSecObject.DELETEALL;
+
+        ESFieldLevelSecControl.RESET;
+        IF FromCompanyName <> COMPANYNAME THEN
+          ESFieldLevelSecControl.CHANGECOMPANY(FromCompanyName);
+        ESFieldLevelSecControl.SETRANGE("Source Table ID",SourceTableID);
+        ESFieldLevelSecControl.SETRANGE("Field Level Security Code",SecurityCode);
+        ESFieldLevelSecControl.DELETEALL;
+      END;
+    END;
+
+    LOCAL PROCEDURE CopyFieldLevelSecCode@1240520004(SourceTableID@1240520010 : Integer;SecurityCode@1240520009 : Code[20];FromCompanyName@1240520001 : Text[30];ToCompanyName@1240520002 : Text[30]);
+    VAR
+      ESFieldLevelSecCodeFrom@1240520008 : Record 14123803;
+      ESFieldLevelSecCodeTo@1240520007 : Record 14123803;
+      ESFieldLevelSecObjectFrom@1240520006 : Record 14123806;
+      ESFieldLevelSecObjectTo@1240520005 : Record 14123806;
+      ESFieldLevelSecControlFrom@1240520004 : Record 14123807;
+      ESFieldLevelSecControlTo@1240520003 : Record 14123807;
+    BEGIN
+      IF FromCompanyName <> COMPANYNAME THEN
+        ESFieldLevelSecCodeFrom.CHANGECOMPANY(FromCompanyName);
+      ESFieldLevelSecCodeFrom.GET(SourceTableID,SecurityCode);
+
+      ESFieldLevelSecCodeTo := ESFieldLevelSecCodeFrom;
+      IF ToCompanyName <> COMPANYNAME THEN
+        ESFieldLevelSecCodeTo.CHANGECOMPANY(ToCompanyName);
+      ESFieldLevelSecCodeTo.INSERT;
+
+      ESFieldLevelSecObjectFrom.RESET;
+      IF FromCompanyName <> COMPANYNAME THEN
+        ESFieldLevelSecObjectFrom.CHANGECOMPANY(FromCompanyName);
+      ESFieldLevelSecObjectFrom.SETRANGE("Source Table ID",SourceTableID);
+      ESFieldLevelSecObjectFrom.SETRANGE("Field Level Security Code",SecurityCode);
+      IF ESFieldLevelSecObjectFrom.FIND('-') THEN
+        REPEAT
+          ESFieldLevelSecObjectTo := ESFieldLevelSecObjectFrom;
+          IF ToCompanyName <> COMPANYNAME THEN
+            ESFieldLevelSecObjectTo.CHANGECOMPANY(ToCompanyName);
+          ESFieldLevelSecObjectTo.INSERT;
+        UNTIL ESFieldLevelSecObjectFrom.NEXT = 0;
+
+      ESFieldLevelSecControlFrom.RESET;
+      IF FromCompanyName <> COMPANYNAME THEN
+        ESFieldLevelSecControlFrom.CHANGECOMPANY(FromCompanyName);
+      ESFieldLevelSecControlFrom.SETRANGE("Source Table ID",SourceTableID);
+      ESFieldLevelSecControlFrom.SETRANGE("Field Level Security Code",SecurityCode);
+      IF ESFieldLevelSecControlFrom.FIND('-') THEN
+        REPEAT
+          ESFieldLevelSecControlTo := ESFieldLevelSecControlFrom;
+          IF ToCompanyName <> COMPANYNAME THEN
+            ESFieldLevelSecControlTo.CHANGECOMPANY(ToCompanyName);
+          ESFieldLevelSecControlTo.INSERT;
+        UNTIL ESFieldLevelSecControlFrom.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE DeleteDataSecCode@1240520006(SourceTableID@1240520002 : Integer;SecurityCode@1240520001 : Code[20];FromCompanyName@1240520003 : Text[30];TestUsage@1240520004 : Boolean);
+    VAR
+      ESUserSecuritySetup@1240520005 : Record 14123805;
+      ESDataSecCode@1240520013 : Record 14123804;
+      ESDataSecObject@1240520011 : Record 14123808;
+      ESDataSecField@1240520009 : Record 14123809;
+    BEGIN
+      IF TestUsage THEN BEGIN
+        ESUserSecuritySetup.RESET;
+        ESUserSecuritySetup.CHANGECOMPANY(FromCompanyName);
+        ESUserSecuritySetup.SETRANGE("Source Table ID",SourceTableID);
+        ESUserSecuritySetup.SETRANGE("Data Security Code",SecurityCode);
+        IF ESUserSecuritySetup.FIND('-') THEN
+          ERROR(
+            Text014,ESUserSecuritySetup.TABLECAPTION,
+            ESUserSecuritySetup."User ID",ESUserSecuritySetup."Source Table ID",
+            ESDataSecCode.TABLECAPTION,SecurityCode,FromCompanyName);
+      END;
+
+      IF FromCompanyName <> COMPANYNAME THEN
+        ESDataSecCode.CHANGECOMPANY(FromCompanyName);
+      IF ESDataSecCode.GET(SourceTableID,SecurityCode) THEN BEGIN
+        ESDataSecCode.DELETE;
+
+        ESDataSecObject.RESET;
+        IF FromCompanyName <> COMPANYNAME THEN
+          ESDataSecObject.CHANGECOMPANY(FromCompanyName);
+        ESDataSecObject.SETRANGE("Source Table ID",SourceTableID);
+        ESDataSecObject.SETRANGE("Data Security Code",SecurityCode);
+        ESDataSecObject.DELETEALL;
+
+        ESDataSecField.RESET;
+        IF FromCompanyName <> COMPANYNAME THEN
+          ESDataSecField.CHANGECOMPANY(FromCompanyName);
+        ESDataSecField.SETRANGE("Source Table ID",SourceTableID);
+        ESDataSecField.SETRANGE("Data Security Code",SecurityCode);
+        ESDataSecField.DELETEALL;
+      END;
+    END;
+
+    LOCAL PROCEDURE CopyDataSecCode@1240520005(SourceTableID@1240520010 : Integer;SecurityCode@1240520009 : Code[20];FromCompanyName@1240520002 : Text[30];ToCompanyName@1240520001 : Text[30]);
+    VAR
+      ESDataSecCodeFrom@1240520008 : Record 14123804;
+      ESDataSecCodeTo@1240520007 : Record 14123804;
+      ESDataSecObjectFrom@1240520006 : Record 14123808;
+      ESDataSecObjectTo@1240520005 : Record 14123808;
+      ESDataSecFieldFrom@1240520004 : Record 14123809;
+      ESDataSecFieldTo@1240520003 : Record 14123809;
+    BEGIN
+      IF FromCompanyName <> COMPANYNAME THEN
+        ESDataSecCodeFrom.CHANGECOMPANY(FromCompanyName);
+      ESDataSecCodeFrom.GET(SourceTableID,SecurityCode);
+
+      ESDataSecCodeTo := ESDataSecCodeFrom;
+      IF ToCompanyName <> COMPANYNAME THEN
+        ESDataSecCodeTo.CHANGECOMPANY(ToCompanyName);
+      ESDataSecCodeTo.INSERT;
+
+      ESDataSecObjectFrom.RESET;
+      IF FromCompanyName <> COMPANYNAME THEN
+        ESDataSecObjectFrom.CHANGECOMPANY(FromCompanyName);
+      ESDataSecObjectFrom.SETRANGE("Source Table ID",SourceTableID);
+      ESDataSecObjectFrom.SETRANGE("Data Security Code",SecurityCode);
+      IF ESDataSecObjectFrom.FIND('-') THEN
+        REPEAT
+          ESDataSecObjectTo := ESDataSecObjectFrom;
+          IF ToCompanyName <> COMPANYNAME THEN
+            ESDataSecObjectTo.CHANGECOMPANY(ToCompanyName);
+          ESDataSecObjectTo.INSERT;
+        UNTIL ESDataSecObjectFrom.NEXT = 0;
+
+      ESDataSecFieldFrom.RESET;
+      IF FromCompanyName <> COMPANYNAME THEN
+        ESDataSecFieldFrom.CHANGECOMPANY(FromCompanyName);
+      ESDataSecFieldFrom.SETRANGE("Source Table ID",SourceTableID);
+      ESDataSecFieldFrom.SETRANGE("Data Security Code",SecurityCode);
+      IF ESDataSecFieldFrom.FIND('-') THEN
+        REPEAT
+          ESDataSecFieldTo := ESDataSecFieldFrom;
+          IF ToCompanyName <> COMPANYNAME THEN
+            ESDataSecFieldTo.CHANGECOMPANY(ToCompanyName);
+          ESDataSecFieldTo.INSERT;
+        UNTIL ESDataSecFieldFrom.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE DeleteUserSecSetup@1240520008(SourceTableID@1240520002 : Integer;UserIDCode@1240520001 : Code[50];FromCompanyName@1240520003 : Text[30]);
+    VAR
+      ESUserSecuritySetup@1240520013 : Record 14123805;
+    BEGIN
+      IF FromCompanyName <> COMPANYNAME THEN
+        ESUserSecuritySetup.CHANGECOMPANY(FromCompanyName);
+      IF ESUserSecuritySetup.GET(UserIDCode,SourceTableID) THEN
+        ESUserSecuritySetup.DELETE;
+    END;
+
+    LOCAL PROCEDURE CopyUserSecSetup@1240520007(SourceTableID@1240520010 : Integer;UserIDCode@1240520009 : Code[50];FromCompanyName@1240520002 : Text[30];ToCompanyName@1240520001 : Text[30]);
+    VAR
+      ESUserSecuritySetupFrom@1240520011 : Record 14123805;
+      ESUserSecuritySetupTo@1240520012 : Record 14123805;
+    BEGIN
+      IF FromCompanyName <> COMPANYNAME THEN
+        ESUserSecuritySetupFrom.CHANGECOMPANY(FromCompanyName);
+      ESUserSecuritySetupFrom.GET(UserIDCode,SourceTableID);
+
+      ESUserSecuritySetupTo := ESUserSecuritySetupFrom;
+      IF ToCompanyName <> COMPANYNAME THEN
+        ESUserSecuritySetupTo.CHANGECOMPANY(ToCompanyName);
+      ESUserSecuritySetupTo.INSERT;
+    END;
+
+    PROCEDURE CopyFieldLevelSecCodeFromComp@1240520009(UpdateExisting@1240520011 : Boolean;CopyAll@1240520013 : Boolean;ShowStatus@1240520007 : Boolean);
+    VAR
+      ESFLADSSetup@1240520006 : Record 14123801;
+      ESFLADSSetupComp@1240520012 : Record 14123801;
+      Company@1240520001 : Record 2000000006;
+      CompanyTmp@1240520002 : TEMPORARY Record 2000000006;
+      ESFieldLevelSecCode@1240520010 : Record 14123803;
+      ESFieldLevelSecCodeComp@1240520003 : Record 14123803;
+      ESFieldLevelSecCodeTmp@1240520004 : TEMPORARY Record 14123803;
+      ESFLADSCopySetup@1240520016 : Record 14123816;
+      ESSelectFieldLvlSecCodes@1240520005 : Page 14123828;
+      Window@1240520015 : Dialog;
+      InsertedRecords@1240520008 : Integer;
+      UpdatedRecords@1240520009 : Integer;
+      SelectedOK@1240520014 : Boolean;
+    BEGIN
+      ESFLADSSetup.GET;
+
+      IF GUIALLOWED THEN
+        Window.OPEN(STRSUBSTNO(Text001,Company.TABLECAPTION));
+
+      Company.RESET;
+      IF Company.FIND('-') THEN
+        REPEAT
+          IF Company.Name <> COMPANYNAME THEN BEGIN
+            ESFLADSSetupComp.CHANGECOMPANY(Company.Name);
+            IF ESFLADSSetupComp.READPERMISSION THEN BEGIN
+              IF ESFLADSSetupComp.GET THEN BEGIN
+                ESFieldLevelSecCodeComp.RESET;
+                ESFieldLevelSecCodeComp.CHANGECOMPANY(Company.Name);
+                IF ESFieldLevelSecCodeComp.READPERMISSION THEN BEGIN
+                  CompanyTmp := Company;
+                  CompanyTmp.INSERT;
+                END;
+              END;
+            END;
+          END;
+        UNTIL Company.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+
+      IF NOT CompanyTmp.FIND('-') THEN
+        ERROR(Text002);
+
+      IF PAGE.RUNMODAL(PAGE::"ES Select FieldLvlCopyFromComp",CompanyTmp) <> ACTION::LookupOK THEN
+        EXIT;
+
+      IF GUIALLOWED THEN
+        Window.OPEN(STRSUBSTNO(Text001,ESFieldLevelSecCode.TABLECAPTION));
+
+      ESFieldLevelSecCodeComp.RESET;
+      ESFieldLevelSecCodeComp.CHANGECOMPANY(CompanyTmp.Name);
+      IF ESFieldLevelSecCodeComp.FIND('-') THEN
+        REPEAT
+          IF NOT FieldLevelSecCodeCompCopied(ESFieldLevelSecCodeComp,CompanyTmp.Name) OR
+             ESFLADSSetup."Install Allowed"
+          THEN BEGIN
+            ESFieldLevelSecCodeTmp := ESFieldLevelSecCodeComp;
+            ESFieldLevelSecCodeTmp.INSERT;
+          END;
+        UNTIL ESFieldLevelSecCodeComp.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+
+      IF NOT ESFieldLevelSecCodeTmp.FIND('-') THEN
+        ERROR(Text003);
+
+      IF NOT CopyAll THEN BEGIN
+        CLEAR(ESSelectFieldLvlSecCodes);
+        ESSelectFieldLvlSecCodes.InitFromCompany(
+          ESFieldLevelSecCodeTmp,CompanyTmp.Name,ESFLADSSetup."Install Allowed");
+        ESSelectFieldLvlSecCodes.LOOKUPMODE(TRUE);
+        IF ESSelectFieldLvlSecCodes.RUNMODAL = ACTION::LookupOK THEN BEGIN
+          SelectedOK := TRUE;
+
+          ESFieldLevelSecCodeTmp.RESET;
+          ESFieldLevelSecCodeTmp.DELETEALL;
+
+          IF ESSelectFieldLvlSecCodes.GetFirstSelected(ESFieldLevelSecCode) THEN
+          REPEAT
+            ESFieldLevelSecCodeTmp := ESFieldLevelSecCode;
+            ESFieldLevelSecCodeTmp.INSERT;
+          UNTIL NOT ESSelectFieldLvlSecCodes.GetNextSelected(ESFieldLevelSecCode);
+        END ELSE
+          EXIT;
+      END;
+
+      IF GUIALLOWED THEN
+        Window.OPEN(
+          STRSUBSTNO(Text012,ESFieldLevelSecCode.TABLECAPTION,'#1##################'));
+
+      IF SelectedOK OR CopyAll THEN BEGIN
+        IF ESFieldLevelSecCodeTmp.FIND('-') THEN
+          REPEAT
+            IF GUIALLOWED THEN
+              Window.UPDATE(
+                1,
+                STRSUBSTNO(
+                  '%1 %2',ESFieldLevelSecCodeTmp."Source Table ID",ESFieldLevelSecCodeTmp.Code));
+
+            IF ESFieldLevelSecCode.GET(
+                 ESFieldLevelSecCodeTmp."Source Table ID",ESFieldLevelSecCodeTmp.Code)
+            THEN BEGIN
+              IF UpdateExisting THEN BEGIN
+                ESFieldLevelSecCode.CALCFIELDS("From Setup Company");
+                ESFieldLevelSecCode.TESTFIELD("From Setup Company",FALSE);
+
+                DeleteFieldLevelSecCode(
+                  ESFieldLevelSecCode."Source Table ID",ESFieldLevelSecCode.Code,COMPANYNAME,FALSE);
+                UpdatedRecords := UpdatedRecords + 1;
+              END ELSE
+                ESFieldLevelSecCode.INSERT;
+            END ELSE
+              InsertedRecords := InsertedRecords + 1;
+
+            CopyFieldLevelSecCode(
+              ESFieldLevelSecCodeTmp."Source Table ID",ESFieldLevelSecCodeTmp.Code,
+              CompanyTmp.Name,COMPANYNAME);
+
+            IF ESFLADSSetup."Install Allowed" AND ESFLADSSetupComp."Copy Field Level Sec. Setup"
+            THEN BEGIN
+              ESFLADSCopySetup.CHANGECOMPANY(CompanyTmp.Name);
+              IF NOT ESFLADSCopySetup.GET(
+                       DATABASE::"ES Field Level Security Code",
+                       ESFieldLevelSecCodeTmp."Source Table ID",ESFieldLevelSecCodeTmp.Code)
+              THEN BEGIN
+                ESFLADSCopySetup.INIT;
+                ESFLADSCopySetup."Table ID" := DATABASE::"ES Field Level Security Code";
+                ESFLADSCopySetup."Source Table ID" := ESFieldLevelSecCodeTmp."Source Table ID";
+                ESFLADSCopySetup.Code := ESFieldLevelSecCodeTmp.Code;
+                ESFLADSCopySetup."From Setup Company" := TRUE;
+                ESFLADSCopySetup."Created Date Time" := CREATEDATETIME(TODAY,TIME);
+                ESFLADSCopySetup.INSERT;
+              END ELSE BEGIN
+                ESFLADSCopySetup."From Setup Company" := TRUE;
+                ESFLADSCopySetup.INSERT;
+              END;
+            END;
+          UNTIL ESFieldLevelSecCodeTmp.NEXT = 0;
+      END;
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+
+      IF ShowStatus THEN
+        MESSAGE(Text013,InsertedRecords,UpdatedRecords);
+    END;
+
+    PROCEDURE FieldLevelSecCodeCompStatus@1240520010(FromCompanyName@1240520001 : Text[30];VAR FieldLevelSecCodes@1240520002 : Integer;VAR CopiedFieldLevelSecCodes@1240520003 : Integer);
+    VAR
+      ESFieldLevelSecurityCode@1240520004 : Record 14123803;
+    BEGIN
+      FieldLevelSecCodes := 0;
+      CopiedFieldLevelSecCodes := 0;
+
+      ESFieldLevelSecurityCode.RESET;
+      ESFieldLevelSecurityCode.CHANGECOMPANY(FromCompanyName);
+      IF ESFieldLevelSecurityCode.FIND('-') THEN
+        REPEAT
+          FieldLevelSecCodes := FieldLevelSecCodes + 1;
+
+          IF FieldLevelSecCodeCompCopied(ESFieldLevelSecurityCode,FromCompanyName) THEN
+            CopiedFieldLevelSecCodes := CopiedFieldLevelSecCodes + 1;
+        UNTIL ESFieldLevelSecurityCode.NEXT = 0;
+    END;
+
+    PROCEDURE FieldLevelSecCodeCompCopied@1240520011(ESFieldLevelSecurityCode@1240520004 : Record 14123803;FromCompanyName@1240520001 : Text[30]) : Boolean;
+    VAR
+      ESFLADSCopySetup@1240520005 : Record 14123816;
+    BEGIN
+      ESFLADSCopySetup.RESET;
+      ESFLADSCopySetup.CHANGECOMPANY(FromCompanyName);
+      IF ESFLADSCopySetup.GET(
+           DATABASE::"ES Field Level Security Code",ESFieldLevelSecurityCode."Source Table ID",
+           ESFieldLevelSecurityCode.Code)
+      THEN
+        ;
+
+      EXIT(ESFLADSCopySetup."From Setup Company");
+    END;
+
+    PROCEDURE CopyDataSecCodeFromComp@1240520015(UpdateExisting@1240520011 : Boolean;CopyAll@1240520013 : Boolean;ShowStatus@1240520007 : Boolean);
+    VAR
+      ESFLADSSetup@1240520006 : Record 14123801;
+      ESFLADSSetupComp@1240520012 : Record 14123801;
+      Company@1240520001 : Record 2000000006;
+      CompanyTmp@1240520002 : TEMPORARY Record 2000000006;
+      ESDataSecCode@1240520010 : Record 14123804;
+      ESDataSecCodeComp@1240520003 : Record 14123804;
+      ESDataSecCodeTmp@1240520004 : TEMPORARY Record 14123804;
+      ESFLADSCopySetup@1240520016 : Record 14123816;
+      ESSelectDataSecCodes@1240520005 : Page 14123829;
+      Window@1240520015 : Dialog;
+      InsertedRecords@1240520008 : Integer;
+      UpdatedRecords@1240520009 : Integer;
+      SelectedOK@1240520014 : Boolean;
+    BEGIN
+      ESFLADSSetup.GET;
+
+      IF GUIALLOWED THEN
+        Window.OPEN(STRSUBSTNO(Text001,Company.TABLECAPTION));
+
+      Company.RESET;
+      IF Company.FIND('-') THEN
+        REPEAT
+          IF Company.Name <> COMPANYNAME THEN BEGIN
+            ESFLADSSetupComp.CHANGECOMPANY(Company.Name);
+            IF ESFLADSSetupComp.READPERMISSION THEN BEGIN
+              IF ESFLADSSetupComp.GET THEN BEGIN
+                ESDataSecCodeComp.RESET;
+                ESDataSecCodeComp.CHANGECOMPANY(Company.Name);
+                IF ESDataSecCodeComp.READPERMISSION THEN BEGIN
+                  CompanyTmp := Company;
+                  CompanyTmp.INSERT;
+                END;
+              END;
+            END;
+          END;
+        UNTIL Company.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+
+      IF NOT CompanyTmp.FIND('-') THEN
+        ERROR(Text002);
+
+      IF PAGE.RUNMODAL(PAGE::"ES Select DataCopyFromCompany",CompanyTmp) <> ACTION::LookupOK THEN
+        EXIT;
+
+      IF GUIALLOWED THEN
+        Window.OPEN(STRSUBSTNO(Text001,ESDataSecCode.TABLECAPTION));
+
+      ESDataSecCodeComp.RESET;
+      ESDataSecCodeComp.CHANGECOMPANY(CompanyTmp.Name);
+      IF ESDataSecCodeComp.FIND('-') THEN
+        REPEAT
+          IF NOT DataSecCodeCompCopied(ESDataSecCodeComp,CompanyTmp.Name) OR
+             ESFLADSSetup."Install Allowed"
+          THEN BEGIN
+            ESDataSecCodeTmp := ESDataSecCodeComp;
+            ESDataSecCodeTmp.INSERT;
+          END;
+        UNTIL ESDataSecCodeComp.NEXT = 0;
+
+      IF NOT ESDataSecCodeTmp.FIND('-') THEN
+        ERROR(Text003);
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+
+      IF NOT CopyAll THEN BEGIN
+        CLEAR(ESSelectDataSecCodes);
+        ESSelectDataSecCodes.InitFromCompany(
+          ESDataSecCodeTmp,CompanyTmp.Name,ESFLADSSetup."Install Allowed");
+        ESSelectDataSecCodes.LOOKUPMODE(TRUE);
+        IF ESSelectDataSecCodes.RUNMODAL = ACTION::LookupOK THEN BEGIN
+          SelectedOK := TRUE;
+
+          ESDataSecCodeTmp.RESET;
+          ESDataSecCodeTmp.DELETEALL;
+
+          IF ESSelectDataSecCodes.GetFirstSelected(ESDataSecCode) THEN
+          REPEAT
+            ESDataSecCodeTmp := ESDataSecCode;
+            ESDataSecCodeTmp.INSERT;
+          UNTIL NOT ESSelectDataSecCodes.GetNextSelected(ESDataSecCode);
+        END ELSE
+          EXIT;
+      END;
+
+      IF GUIALLOWED THEN
+        Window.OPEN(
+          STRSUBSTNO(Text012,ESDataSecCode.TABLECAPTION,'#1##################'));
+
+      IF SelectedOK OR CopyAll THEN BEGIN
+        IF ESDataSecCodeTmp.FIND('-') THEN
+          REPEAT
+            IF GUIALLOWED THEN
+              Window.UPDATE(
+                1,
+                STRSUBSTNO(
+                  '%1 %2',ESDataSecCodeTmp."Source Table ID",ESDataSecCodeTmp.Code));
+
+            IF ESDataSecCode.GET(
+                 ESDataSecCodeTmp."Source Table ID",ESDataSecCodeTmp.Code)
+            THEN BEGIN
+              IF UpdateExisting THEN BEGIN
+                ESDataSecCode.CALCFIELDS("From Setup Company");
+                ESDataSecCode.TESTFIELD("From Setup Company",FALSE);
+
+                DeleteDataSecCode(
+                  ESDataSecCode."Source Table ID",ESDataSecCode.Code,COMPANYNAME,FALSE);
+                UpdatedRecords := UpdatedRecords + 1;
+              END ELSE
+                ESDataSecCode.INSERT;
+            END ELSE
+              InsertedRecords := InsertedRecords + 1;
+
+            CopyDataSecCode(
+              ESDataSecCodeTmp."Source Table ID",ESDataSecCodeTmp.Code,
+              CompanyTmp.Name,COMPANYNAME);
+
+            IF ESFLADSSetup."Install Allowed" AND ESFLADSSetupComp."Copy Field Level Sec. Setup"
+            THEN BEGIN
+              ESFLADSCopySetup.CHANGECOMPANY(CompanyTmp.Name);
+              IF NOT ESFLADSCopySetup.GET(
+                       DATABASE::"ES Data Security Code",
+                       ESDataSecCodeTmp."Source Table ID",ESDataSecCodeTmp.Code)
+              THEN BEGIN
+                ESFLADSCopySetup.INIT;
+                ESFLADSCopySetup."Table ID" := DATABASE::"ES Data Security Code";
+                ESFLADSCopySetup."Source Table ID" := ESDataSecCodeTmp."Source Table ID";
+                ESFLADSCopySetup.Code := ESDataSecCodeTmp.Code;
+                ESFLADSCopySetup."From Setup Company" := TRUE;
+                ESFLADSCopySetup."Created Date Time" := CREATEDATETIME(TODAY,TIME);
+                ESFLADSCopySetup.INSERT;
+              END ELSE BEGIN
+                ESFLADSCopySetup."From Setup Company" := TRUE;
+                ESFLADSCopySetup.INSERT;
+              END;
+            END;
+          UNTIL ESDataSecCodeTmp.NEXT = 0;
+      END;
+
+      IF GUIALLOWED THEN
+        Window.CLOSE;
+
+      IF ShowStatus THEN
+        MESSAGE(Text013,InsertedRecords,UpdatedRecords);
+    END;
+
+    PROCEDURE DataSecCodeCompStatus@1240520014(FromCompanyName@1240520001 : Text[30];VAR DataSecCodes@1240520002 : Integer;VAR CopiedDataSecCodes@1240520003 : Integer);
+    VAR
+      ESDataSecurityCode@1240520004 : Record 14123804;
+    BEGIN
+      DataSecCodes := 0;
+      CopiedDataSecCodes := 0;
+
+      ESDataSecurityCode.RESET;
+      ESDataSecurityCode.CHANGECOMPANY(FromCompanyName);
+      IF ESDataSecurityCode.FIND('-') THEN
+        REPEAT
+          DataSecCodes := DataSecCodes + 1;
+
+          IF DataSecCodeCompCopied(ESDataSecurityCode,FromCompanyName) THEN
+            CopiedDataSecCodes := CopiedDataSecCodes + 1;
+        UNTIL ESDataSecurityCode.NEXT = 0;
+    END;
+
+    PROCEDURE DataSecCodeCompCopied@1240520013(ESDataSecurityCode@1240520004 : Record 14123804;FromCompanyName@1240520001 : Text[30]) : Boolean;
+    VAR
+      ESFLADSCopySetup@1240520005 : Record 14123816;
+    BEGIN
+      ESFLADSCopySetup.RESET;
+      ESFLADSCopySetup.CHANGECOMPANY(FromCompanyName);
+      IF ESFLADSCopySetup.GET(
+           DATABASE::"ES Data Security Code",ESDataSecurityCode."Source Table ID",
+           ESDataSecurityCode.Code)
+      THEN
+        ;
+
+      EXIT(ESFLADSCopySetup."From Setup Company");
+    END;
+
+    PROCEDURE FLADSSetupInstall@1240520012(FromCompanyName@1240520001 : Text[30]) : Boolean;
+    VAR
+      ESFLADSSetup@1240520002 : Record 14123801;
+    BEGIN
+      ESFLADSSetup.CHANGECOMPANY(FromCompanyName);
+      IF ESFLADSSetup.GET THEN
+        ;
+      EXIT(ESFLADSSetup."Install Allowed");
+    END;
+
+    PROCEDURE TestConsistentSetup@1240520016(FromCompanyName@1240520001 : Text[30];GiveError@1240520006 : Boolean) : Boolean;
+    VAR
+      ESUserSecuritySetup@1240520002 : Record 14123805;
+      ESUserSecuritySetup2@1240520005 : Record 14123805;
+      ESFieldLevelSecurityCode@1240520003 : Record 14123803;
+      ESDataSecurityCode@1240520004 : Record 14123804;
+    BEGIN
+      ESUserSecuritySetup.RESET;
+      ESUserSecuritySetup.CHANGECOMPANY(FromCompanyName);
+      IF ESUserSecuritySetup.FIND('-') THEN
+        REPEAT
+          IF ESUserSecuritySetup."Security as User ID" <> '' THEN BEGIN
+            ESUserSecuritySetup2.RESET;
+            ESUserSecuritySetup2.CHANGECOMPANY(FromCompanyName);
+            ESUserSecuritySetup2.SETRANGE("User ID",ESUserSecuritySetup."Security as User ID");
+            ESUserSecuritySetup2.SETRANGE("Source Table ID",ESUserSecuritySetup."Source Table ID");
+            IF NOT ESUserSecuritySetup2.FIND('-') THEN
+              IF GiveError THEN
+                ESUserSecuritySetup2.FIND('-')
+              ELSE
+                EXIT(FALSE);
+          END;
+
+          IF ESUserSecuritySetup."Field Level Security Code" <> '' THEN BEGIN
+            ESFieldLevelSecurityCode.RESET;
+            ESFieldLevelSecurityCode.CHANGECOMPANY(FromCompanyName);
+            ESFieldLevelSecurityCode.SETRANGE("Source Table ID",ESUserSecuritySetup."Source Table ID");
+            ESFieldLevelSecurityCode.SETRANGE(Code,ESUserSecuritySetup."Field Level Security Code");
+            IF NOT ESFieldLevelSecurityCode.FIND('-') THEN
+              IF GiveError THEN
+                ESFieldLevelSecurityCode.FIND('-')
+              ELSE
+                EXIT(FALSE);
+          END;
+
+          IF ESUserSecuritySetup."Data Security Code" <> '' THEN BEGIN
+            ESDataSecurityCode.RESET;
+            ESDataSecurityCode.CHANGECOMPANY(FromCompanyName);
+            ESDataSecurityCode.SETRANGE("Source Table ID",ESUserSecuritySetup."Source Table ID");
+            ESDataSecurityCode.SETRANGE(Code,ESUserSecuritySetup."Data Security Code");
+            IF NOT ESDataSecurityCode.FIND('-') THEN
+              IF GiveError THEN
+                ESDataSecurityCode.FIND('-')
+              ELSE
+                EXIT(FALSE);
+          END;
+        UNTIL ESUserSecuritySetup.NEXT = 0;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CreateCopySetupRecords@1240520017(FromCompanyName@1240520002 : Text[30];ToCompanyName@1240520001 : Text[30];FieldLevelSecurityCodes@1240520010 : Boolean;DataSecurityCodes@1240520011 : Boolean;UserSecuritySetups@1240520012 : Boolean);
+    VAR
+      ESFLADSSetupFrom@1240520003 : Record 14123801;
+      ESFLADSSetupTo@1240520004 : Record 14123801;
+      ESFLADSCopySetupTo@1240520009 : Record 14123816;
+      ESFieldLevelSecCodeFrom@1240520005 : Record 14123803;
+      ESFieldLevelSecCodeTo@1240520006 : Record 14123803;
+      ESDataSecCodeFrom@1240520007 : Record 14123804;
+      ESDataSecCodeTo@1240520008 : Record 14123804;
+      ESUserSecSetupFrom@1240520013 : Record 14123805;
+      ESUserSecSetupTo@1240520014 : Record 14123805;
+    BEGIN
+      ESFLADSSetupFrom.RESET;
+      ESFLADSSetupFrom.CHANGECOMPANY(FromCompanyName);
+      ESFLADSSetupFrom.GET;
+      ESFLADSSetupFrom.TESTFIELD("Install Allowed");
+
+      ESFLADSSetupTo.RESET;
+      ESFLADSSetupTo.CHANGECOMPANY(ToCompanyName);
+      ESFLADSSetupTo.GET;
+      IF ESFLADSSetupTo."Copy From Setup Company" THEN BEGIN
+        ESFLADSSetupTo.TESTFIELD("Copy From Company Name",FromCompanyName);
+
+        IF ESFLADSSetupTo."Copy Field Level Sec. Setup" AND FieldLevelSecurityCodes THEN BEGIN
+          ESFieldLevelSecCodeTo.RESET;
+          ESFieldLevelSecCodeTo.CHANGECOMPANY(ToCompanyName);
+          IF ESFieldLevelSecCodeTo.FIND('-') THEN
+            REPEAT
+              ESFieldLevelSecCodeFrom.RESET;
+              ESFieldLevelSecCodeFrom.CHANGECOMPANY(FromCompanyName);
+              IF ESFieldLevelSecCodeFrom.GET(
+                   ESFieldLevelSecCodeTo."Source Table ID",ESFieldLevelSecCodeTo.Code)
+              THEN BEGIN
+                ESFLADSCopySetupTo.RESET;
+                ESFLADSCopySetupTo.CHANGECOMPANY(ToCompanyName);
+                IF NOT ESFLADSCopySetupTo.GET(
+                         DATABASE::"ES Field Level Security Code",ESFieldLevelSecCodeTo."Source Table ID",
+                         ESFieldLevelSecCodeTo.Code)
+                THEN BEGIN
+                  ESFLADSCopySetupTo.INIT;
+                  ESFLADSCopySetupTo."Table ID" := DATABASE::"ES Field Level Security Code";
+                  ESFLADSCopySetupTo."Source Table ID" := ESFieldLevelSecCodeTo."Source Table ID";
+                  ESFLADSCopySetupTo.Code := ESFieldLevelSecCodeTo.Code;
+                  ESFLADSCopySetupTo."From Setup Company" := TRUE;
+                  ESFLADSCopySetupTo."Created Date Time" := CURRENTDATETIME;
+                  ESFLADSCopySetupTo.INSERT;
+                END;
+              END;
+            UNTIL ESFieldLevelSecCodeTo.NEXT = 0;
+        END;
+
+        IF ESFLADSSetupTo."Copy Data Security Setup" AND DataSecurityCodes THEN BEGIN
+          ESDataSecCodeTo.RESET;
+          ESDataSecCodeTo.CHANGECOMPANY(ToCompanyName);
+          IF ESDataSecCodeTo.FIND('-') THEN
+            REPEAT
+              ESDataSecCodeFrom.RESET;
+              ESDataSecCodeFrom.CHANGECOMPANY(FromCompanyName);
+              IF ESDataSecCodeFrom.GET(
+                   ESDataSecCodeTo."Source Table ID",ESDataSecCodeTo.Code)
+              THEN BEGIN
+                ESFLADSCopySetupTo.RESET;
+                ESFLADSCopySetupTo.CHANGECOMPANY(ToCompanyName);
+                IF NOT ESFLADSCopySetupTo.GET(
+                         DATABASE::"ES Data Security Code",ESDataSecCodeTo."Source Table ID",
+                         ESDataSecCodeTo.Code)
+                THEN BEGIN
+                  ESFLADSCopySetupTo.INIT;
+                  ESFLADSCopySetupTo."Table ID" := DATABASE::"ES Data Security Code";
+                  ESFLADSCopySetupTo."Source Table ID" := ESDataSecCodeTo."Source Table ID";
+                  ESFLADSCopySetupTo.Code := ESDataSecCodeTo.Code;
+                  ESFLADSCopySetupTo."From Setup Company" := TRUE;
+                  ESFLADSCopySetupTo."Created Date Time" := CURRENTDATETIME;
+                  ESFLADSCopySetupTo.INSERT;
+                END;
+              END;
+            UNTIL ESDataSecCodeTo.NEXT = 0;
+        END;
+
+        IF ESFLADSSetupTo."Copy User Security Setup" AND UserSecuritySetups THEN BEGIN
+          ESUserSecSetupTo.RESET;
+          ESUserSecSetupTo.CHANGECOMPANY(ToCompanyName);
+          IF ESUserSecSetupTo.FIND('-') THEN
+            REPEAT
+              ESUserSecSetupFrom.RESET;
+              ESUserSecSetupFrom.CHANGECOMPANY(FromCompanyName);
+              IF ESUserSecSetupFrom.GET(
+                   ESUserSecSetupTo."User ID",ESUserSecSetupTo."Source Table ID")
+              THEN BEGIN
+                ESFLADSCopySetupTo.RESET;
+                ESFLADSCopySetupTo.CHANGECOMPANY(ToCompanyName);
+                IF NOT ESFLADSCopySetupTo.GET(
+                         DATABASE::"ES User Security Setup",ESUserSecSetupTo."Source Table ID",
+                         ESUserSecSetupTo."User ID")
+                THEN BEGIN
+                  ESFLADSCopySetupTo.INIT;
+                  ESFLADSCopySetupTo."Table ID" := DATABASE::"ES User Security Setup";
+                  ESFLADSCopySetupTo."Source Table ID" := ESUserSecSetupTo."Source Table ID";
+                  ESFLADSCopySetupTo.Code := ESUserSecSetupTo."User ID";
+                  ESFLADSCopySetupTo."From Setup Company" := TRUE;
+                  ESFLADSCopySetupTo."Created Date Time" := CURRENTDATETIME;
+                  ESFLADSCopySetupTo.INSERT;
+                END;
+              END;
+            UNTIL ESUserSecSetupTo.NEXT = 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE DeleteCopySetupRecords@1240520018(FieldLevelSecurityCodes@1240520010 : Boolean;DataSecurityCodes@1240520011 : Boolean;UserSecuritySetups@1240520012 : Boolean);
+    VAR
+      ESFLADSSetup@1240520003 : Record 14123801;
+      ESFLADSCopySetup@1240520009 : Record 14123816;
+    BEGIN
+      ESFLADSSetup.GET;
+      ESFLADSSetup.TESTFIELD("Copy From Company Name");
+      ESFLADSSetup.TESTFIELD("Install Allowed",FALSE);
+
+      IF NOT ESFLADSSetup."Copy Field Level Sec. Setup" AND FieldLevelSecurityCodes THEN BEGIN
+        ESFLADSCopySetup.RESET;
+        ESFLADSCopySetup.SETRANGE("Table ID",DATABASE::"ES Field Level Security Code");
+        ESFLADSCopySetup.DELETEALL;
+      END;
+
+      IF NOT ESFLADSSetup."Copy Data Security Setup" AND DataSecurityCodes THEN BEGIN
+        ESFLADSCopySetup.RESET;
+        ESFLADSCopySetup.SETRANGE("Table ID",DATABASE::"ES Data Security Code");
+        ESFLADSCopySetup.DELETEALL;
+      END;
+
+      IF NOT ESFLADSSetup."Copy User Security Setup" AND UserSecuritySetups THEN BEGIN
+        ESFLADSCopySetup.RESET;
+        ESFLADSCopySetup.SETRANGE("Table ID",DATABASE::"ES User Security Setup");
+        ESFLADSCopySetup.DELETEALL;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

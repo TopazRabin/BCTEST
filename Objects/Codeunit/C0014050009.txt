@@ -1,0 +1,347 @@
+OBJECT Codeunit 14050009 UPSlink Client File IO
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/28/17;
+    Time=12:00:00 PM;
+    Version List=SE0.60.03;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            ServerFIle@1240030000 : File;
+          BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      UPSlinkSetup@1240030003 : Record 14050001;
+      ReadClientFileIO@1240030000 : Automation "{2F47B491-6E93-4FC8-AECB-6A3628D92518} 1.0:{4C06561E-DD21-48C3-0001-9C0EAF9A2683}:Unknown Automation Server.Unknown Class";
+      Text001@1240030001 : TextConst 'ENU=Copying File from Client to Server... @1@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@';
+      Text002@1240030002 : TextConst 'ENU=Copying File from Server to Client... @1@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@';
+      AutomationCreated@1000000000 : Boolean;
+      UPSlinkSetupRetrieved@1240030004 : Boolean;
+
+    PROCEDURE ClientToServer@1240030005(VAR ServerFileNamePath@1240030001 : Text[250];ReplaceFile@1000000000 : Boolean);
+    VAR
+      ClientFileNamePath@1000000001 : Text[250];
+      BufferSize@1240030023 : BigInteger;
+      EOF@1240030022 : Boolean;
+      TempText@1240030021 : Text[250];
+      TempInt@1240030020 : Integer;
+      TotalInt@1240030019 : Integer;
+      TempChar@1240030018 : Char;
+      WriteText@1240030016 : Text[250];
+      x@1240030015 : Integer;
+      y@1240030014 : Integer;
+      z@1240030013 : Integer;
+      ServerFile@1240030012 : File;
+      NullChar@1240030011 : Char;
+      StartTime@1240030009 : Time;
+      FileLength@1240030007 : Decimal;
+      FileProgress@1240030006 : Integer;
+      ProgressWindow@1240030005 : Dialog;
+    BEGIN
+      IF NOT AutomationCreated THEN
+        CreateAutomation;
+
+      ClientFileNamePath := ServerFileNamePath;
+      ServerFileNamePath := AddSuffixtoFileName(ClientFileNamePath,'_SVR');
+      IF NOT ReplaceFile AND EXISTS(ServerFileNamePath) THEN
+        EXIT;
+
+      IF ERASE(ServerFileNamePath) THEN ;
+
+      ReadClientFileIO.Initialize;
+      StartTime := TIME;
+      NullChar := 0;
+      BufferSize := 10000;
+
+      ServerFile.WRITEMODE(TRUE);
+      ServerFile.TEXTMODE(FALSE);
+      ServerFile.CREATE(ServerFileNamePath);
+
+      ProgressWindow.OPEN(Text001);
+      z := 1;
+
+      REPEAT
+        y := 0;
+        x := 0;
+        TotalInt := 0;
+
+        WHILE x < STRLEN(TempText) DO BEGIN
+          y := y + 1;
+          x := x + 1;
+
+          CASE COPYSTR(TempText,x,1) OF
+            '0','1','2','3','4','5','6','7','8','9':
+              EVALUATE(TempInt,COPYSTR(TempText,x,1));
+            'A':
+              TempInt := 10;
+            'B':
+              TempInt := 11;
+            'C':
+              TempInt := 12;
+            'D':
+              TempInt := 13;
+            'E':
+              TempInt := 14;
+            'F':
+              TempInt := 15;
+          END;
+
+          IF y = 2 THEN BEGIN
+            TotalInt := TotalInt + TempInt;
+            TempChar := TotalInt;
+            IF TotalInt = 0 THEN BEGIN
+              IF WriteText <> '' THEN BEGIN
+                WriteData(ServerFile,WriteText);
+                WriteText := '';
+              END;
+              WriteChar(ServerFile,NullChar);
+              z := 0;
+            END ELSE
+              WriteText[z] := TempChar;
+
+            FileProgress := FileProgress + 1;
+            z := z + 1;
+            y := 0;
+            TotalInt := 0;
+
+            IF (WriteText <> '') AND (STRLEN(WriteText) = 250) THEN BEGIN
+              WriteData(ServerFile,WriteText);
+              WriteText := '';
+              z := 1;
+            END;
+          END ELSE
+            TotalInt := TotalInt + (TempInt * 16);
+        END;
+
+        IF EOF THEN BEGIN
+          IF WriteText <> '' THEN
+            WriteData(ServerFile,WriteText);
+          TempText := '';
+        END ELSE
+          TempText := ReadClientFileIO.ReadClientFile(ClientFileNamePath, BufferSize, FileLength, EOF);
+
+        IF TIME - StartTime > 1000 THEN BEGIN
+          ProgressWindow.UPDATE(1,ROUND(10000 * (FileProgress / FileLength),1));
+          StartTime := TIME;
+        END;
+      UNTIL EOF AND (STRLEN(TempText) = 0);
+
+      ServerFile.CLOSE;
+    END;
+
+    PROCEDURE ServerToClient@1240030006(VAR ClientFileNamePath@1240030001 : Text[250];ReplaceFile@1000000000 : Boolean);
+    VAR
+      ServerFileNamePath@1000000001 : Text[250];
+      EOF@1240030016 : Boolean;
+      TempText@1240030015 : Text[250];
+      ServerFile@1240030007 : File;
+      StartTime@1240030005 : Time;
+      FileLength@1240030004 : Decimal;
+      FileProgress@1240030003 : Integer;
+      ProgressWindow@1240030002 : Dialog;
+    BEGIN
+      IF NOT AutomationCreated THEN
+        CreateAutomation;
+
+      ServerFileNamePath := ClientFileNamePath;
+
+      IF NOT ReplaceFile AND ClientFileExists(ClientFileNamePath) THEN
+        EXIT;
+
+      ReadClientFileIO.Initialize;
+      StartTime := TIME;
+
+      ServerFile.TEXTMODE(FALSE);
+      ServerFile.OPEN(ServerFileNamePath);
+      FileLength := ServerFile.LEN;
+
+      ProgressWindow.OPEN(Text002);
+
+      WHILE NOT EOF DO BEGIN
+        TempText := LoadBuffer(ServerFile,EOF);
+        IF ReadClientFileIO.WriteTexttoClientFile(TempText, ClientFileNamePath, EOF) THEN ;
+
+        FileProgress := FileProgress + STRLEN(TempText);
+        IF TIME - StartTime > 1000 THEN BEGIN
+          ProgressWindow.UPDATE(1,ROUND(10000 * (FileProgress / FileLength),1));
+          StartTime := TIME;
+        END;
+      END;
+      ServerFile.CLOSE;
+    END;
+
+    PROCEDURE ProcessMailFiles@1000000000(ManifestUploadDirectory@1000000002 : Text[250];MailRefList@1000000001 : Text[250];MailFileList@1000000000 : Text[250];VAR LargeMailFile@1240030000 : ARRAY [25] OF Boolean);
+    VAR
+      i@1000000009 : Integer;
+      j@1000000008 : Integer;
+      MailFileName@1000000007 : Text[250];
+      ClientFileNamePath@1000000006 : Text[250];
+      ReferenceNo@1000000005 : Text[30];
+      MailFileNamePath@1000000003 : Text[250];
+      Extension@1000000010 : Code[4];
+      x@1240030002 : Integer;
+      FileLength@1240030001 : Decimal;
+    BEGIN
+      IF NOT AutomationCreated THEN
+        CreateAutomation;
+
+      GetUPSlinkSetup;
+      x := 1;
+      CLEAR(LargeMailFile);
+
+      REPEAT
+        i := STRPOS(MailFileList,',');
+        MailFileName := COPYSTR(MailFileList,1,i-1);
+
+        IF STRLEN(MailFileList) > i THEN
+          MailFileList := COPYSTR(MailFileList,i+1)
+        ELSE
+          MailFileList := ',';
+
+        j := STRPOS(MailRefList,',');
+        ReferenceNo := COPYSTR(MailRefList,1,j-1);
+        Extension := '.000';
+        MailFileNamePath := ManifestUploadDirectory + '\' + MailFileName + ReferenceNo + Extension;
+        REPEAT
+          IF Extension <> '.000' THEN BEGIN
+            FileLength := GetFileSize(MailFileNamePath);
+             IF FileLength >= 1000000.0 THEN
+               LargeMailFile[x] := TRUE;
+          END;
+
+          IF ISSERVICETIER AND
+             ((Extension = '.000') OR
+              NOT UPSlinkSetup."Manually Apply Files Over 1M" OR
+              NOT LargeMailFile[x])
+          THEN
+            ClientToServer2(MailFileNamePath);
+          Extension := INCSTR(Extension);
+          MailFileNamePath := ManifestUploadDirectory + '\' + MailFileName + ReferenceNo + Extension;
+        UNTIL NOT ReadClientFileIO.ClientFileExists(MailFileNamePath);
+
+        IF STRLEN(MailRefList) > j THEN
+          MailRefList := COPYSTR(MailRefList,j+1);
+        x := x + 1;
+      UNTIL STRLEN(MailFileList) = 1;
+    END;
+
+    LOCAL PROCEDURE WriteData@34(VAR ServerFile@1240030003 : File;DataText@1240030000 : Text[250]);
+    VAR
+      i@1240030001 : Integer;
+      CharToWrite@1240030002 : Char;
+    BEGIN
+      REPEAT
+        i := i + 1;
+        CharToWrite := DataText[i];
+        WriteChar(ServerFile,CharToWrite);
+      UNTIL i = STRLEN(DataText);
+    END;
+
+    LOCAL PROCEDURE WriteChar@1240030000(VAR ServerFile@1240030001 : File;Char@1240030000 : Char);
+    BEGIN
+      ServerFile.WRITE(Char);
+    END;
+
+    LOCAL PROCEDURE LoadBuffer@1240030002(VAR FileToRead@1240030000 : File;VAR EOF@1240030004 : Boolean) BufferText : Text[250];
+    VAR
+      i@1240030002 : Integer;
+      ReadChar@1240030003 : Char;
+    BEGIN
+      CLEAR(BufferText);
+
+      IF (FileToRead.READ(ReadChar)) = 0 THEN BEGIN
+        EOF := TRUE;
+        EXIT(BufferText);
+      END;
+
+      i := 1;
+      BufferText[i] := ReadChar;
+
+      REPEAT
+        i := i + 1;
+        IF FileToRead.READ(ReadChar) = 0 THEN
+          EOF := TRUE
+        ELSE
+          BufferText[i] := ReadChar;
+      UNTIL EOF OR (STRLEN(BufferText) = 250);
+    END;
+
+    PROCEDURE ClientFileExists@1240030014(ClientFileName@1240030000 : Text[250]) : Boolean;
+    BEGIN
+      IF NOT AutomationCreated THEN
+        CreateAutomation;
+
+      EXIT(ReadClientFileIO.ClientFileExists(ClientFileName));
+    END;
+
+    PROCEDURE DeleteClientFile@1240030015(ClientFileName@1240030000 : Text[250]) : Boolean;
+    BEGIN
+      IF NOT AutomationCreated THEN
+        CreateAutomation;
+
+      EXIT(ReadClientFileIO.DeleteClientFile(ClientFileName));
+    END;
+
+    LOCAL PROCEDURE CreateAutomation@1240030018();
+    BEGIN
+      CREATE(ReadClientFileIO,FALSE,TRUE);
+      AutomationCreated := TRUE;
+    END;
+
+    PROCEDURE AddSuffixtoFileName@1240030008(FileName@1240030000 : Text[250];Suffix@1240030001 : Text[30]) : Text[250];
+    BEGIN
+      EXIT(
+        COPYSTR(FileName,1,STRLEN(FileName) - 4) + Suffix +
+        COPYSTR(FileName,STRLEN(FileName) - 3));
+    END;
+
+    PROCEDURE GetFileSize@1240030001(FileNamePath@1240030000 : Text[250]) : Decimal;
+    BEGIN
+      IF NOT AutomationCreated THEN
+        CreateAutomation;
+      EXIT(ReadClientFileIO.FileInfoLength(FileNamePath));
+    END;
+
+    LOCAL PROCEDURE GetUPSlinkSetup@1240030007();
+    BEGIN
+      IF NOT UPSlinkSetupRetrieved THEN BEGIN
+        UPSlinkSetup.GET;
+        UPSlinkSetupRetrieved := TRUE;
+      END;
+    END;
+
+    PROCEDURE ClientToServer2@1240040000(VAR ClientFilenamePath@1240040001 : Text[1024]);
+    VAR
+      FileMgmt@1240040002 : Codeunit 419;
+      ServerTempFilename@1240040003 : Text[1024];
+    BEGIN
+      //Copies from client to temp directory on server
+      ServerTempFilename := FileMgmt.UploadFileSilent(ClientFilenamePath);
+
+      IF EXISTS(ClientFilenamePath) THEN
+        EXIT;
+
+      IF COPY(ServerTempFilename, ClientFilenamePath) THEN;
+    END;
+
+    PROCEDURE ServerToClient2@1240040004(VAR ClientFileNamePath@1240040005 : Text[250]);
+    VAR
+      FileMgmt@1240040006 : Codeunit 419;
+    BEGIN
+      IF NOT AutomationCreated THEN
+        CreateAutomation;
+
+      FileMgmt.DownloadToFile(ClientFileNamePath,ClientFileNamePath);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

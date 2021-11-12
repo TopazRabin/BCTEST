@@ -1,0 +1,371 @@
+OBJECT Codeunit 23044517 IWX Decode Rule Mgmt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/31/20;
+    Time=[ 9:34:50 AM];
+    Version List=IWX2.4.7684.0;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      cuCustomDecodeRules@1000000000 : Codeunit 23044518;
+      tcNotANumber@1000000003 : TextConst 'ENU=Cannot evaluate [%1] as a number, please correct barcode rule %2';
+
+    PROCEDURE decodeItemBarcode@1000000006(ptxtBarcode@1000000000 : Text[250];VAR precBarcodeRule@1000000013 : Record 23044509;VAR precItem@1000000014 : Record 27;piMenuContext@1000000008 : Integer;psItemNumber@1000000015 : Text;psVariantCode@1000000016 : Text) : Boolean;
+    VAR
+      lbFound@1000000011 : Boolean;
+      lbDone@1000000012 : Boolean;
+      lcodItemNo@1000000001 : Text;
+      ldtExpiry@1000000004 : Date;
+      lcodCustom1@1000000005 : Code[100];
+      lcodCustom2@1000000006 : Code[100];
+      lcodCustom3@1000000007 : Code[100];
+    BEGIN
+      // Runs the rules until it finds a match
+
+      precBarcodeRule.SETCURRENTKEY("Run Order");
+      precBarcodeRule.SETRANGE(Enabled, TRUE);
+      precBarcodeRule.FINDSET(FALSE);
+
+      REPEAT
+
+        IF ( ( precBarcodeRule.Context::Generic = precBarcodeRule.Context ) OR
+             ( piMenuContext = precBarcodeRule.Context) ) THEN BEGIN
+          // if the barcode rule is generic (all contexts)
+          // or if the barcode rule is specific to a context AND that context matches
+          // the context passed in then continue, otherwise skip this.
+
+          prepareEvaluation(precBarcodeRule, ptxtBarcode);
+          evaluateBarcodeRule( precBarcodeRule, ptxtBarcode );
+          precItem.RESET;
+
+          //IW author="R.Trudeau" date="06/07/19" issue="TFS4581">
+          lbFound := FALSE;
+          CheckItemNoResult(precBarcodeRule,precItem,lbFound);
+          IF NOT lbFound THEN
+            CheckItemNo2Result(precBarcodeRule,precItem,lbFound);
+          IF NOT lbFound THEN
+            CheckItemCrossRefResult(precBarcodeRule,precItem,lbFound);
+
+          // for serial/lot items if the item is found already then only get additional information if validate enabled
+          CheckSerialNoResult(precBarcodeRule,precItem, psItemNumber, psVariantCode, lbFound);
+          CheckLotNoResult(precBarcodeRule,precItem, psItemNumber, psVariantCode, lbFound);
+
+          // if there are custom results, then always run the doCustomDecode
+          IF (precBarcodeRule."Custom 1 Result"+precBarcodeRule."Custom 2 Result"+precBarcodeRule."Custom 3 Result"<>'') THEN
+            lbFound := cuCustomDecodeRules.doCustomDecode(ptxtBarcode,precBarcodeRule, precItem, lbFound );
+
+        END;// end if the barcode rule applies here
+
+        IF NOT lbFound THEN
+          lbDone := (precBarcodeRule.NEXT = 0);
+
+      UNTIL lbDone OR lbFound;
+
+      EXIT(lbFound);
+    END;
+
+    PROCEDURE evaluateSample@1000000002(VAR precBarcodeRule@1000000000 : Record 23044509);
+    BEGIN
+      // Updated Nav 2013 support.
+      evaluateBarcodeRule( precBarcodeRule, precBarcodeRule."Sample Text");
+    END;
+
+    PROCEDURE evaluateBarcodeRule@1000000000(VAR precBarcodeRule@1000000000 : Record 23044509;ptxtBarcodeText@1000000002 : Text[250]);
+    VAR
+      ltxtQuantityTest@1000000001 : Text[100];
+      lrecIgnoredItem@1000000003 : Record 27;
+      lbIgnoredFound@1000000004 : Boolean;
+    BEGIN
+
+      // Runs regex code on sample data
+      // Converted to dotNet for better Nav 2013 support.
+
+
+      prepareEvaluation( precBarcodeRule, ptxtBarcodeText );
+
+      IF( ( ptxtBarcodeText <>'' ) AND ( RegexIsMatch(ptxtBarcodeText,precBarcodeRule."Find Text"))) THEN BEGIN
+        IF precBarcodeRule."Item No. Expression"<>'' THEN  BEGIN
+          precBarcodeRule."Item No. Result" := RegexReplaceIgnoreCase(ptxtBarcodeText, precBarcodeRule."Find Text", precBarcodeRule."Item No. Expression" );
+        END;
+        IF precBarcodeRule."Item No. 2 Expression"<>'' THEN BEGIN
+          precBarcodeRule."Item No. 2 Result" := RegexReplaceIgnoreCase( ptxtBarcodeText, precBarcodeRule."Find Text", precBarcodeRule."Item No. 2 Expression" );
+        END;
+
+        IF precBarcodeRule."Variant Expression"<>'' THEN BEGIN
+          precBarcodeRule."Variant Result" := RegexReplaceIgnoreCase( ptxtBarcodeText, precBarcodeRule."Find Text", precBarcodeRule."Variant Expression" );
+        END;
+
+        IF precBarcodeRule."Serial No. Expression"<>'' THEN BEGIN
+          precBarcodeRule."Serial No. Result" := RegexReplaceIgnoreCase( ptxtBarcodeText, precBarcodeRule."Find Text", precBarcodeRule."Serial No. Expression" );
+        END;
+
+        IF precBarcodeRule."Lot No. Expression"<>'' THEN BEGIN
+          precBarcodeRule."Lot No. Result" := RegexReplaceIgnoreCase( ptxtBarcodeText, precBarcodeRule."Find Text", precBarcodeRule."Lot No. Expression" );
+        END;
+
+        IF precBarcodeRule."Cross-Ref. Expression"<>'' THEN BEGIN
+          precBarcodeRule."Cross-Ref. Result" := RegexReplaceIgnoreCase( ptxtBarcodeText, precBarcodeRule."Find Text", precBarcodeRule."Cross-Ref. Expression");
+        END;
+
+        IF precBarcodeRule."Expiry Date Expression"<>'' THEN BEGIN
+          precBarcodeRule."Expiry Date Result" := RegexReplaceIgnoreCase( ptxtBarcodeText, precBarcodeRule."Find Text", precBarcodeRule."Expiry Date Expression");
+        END;
+
+        IF precBarcodeRule."UOM Expression" <>'' THEN BEGIN
+          precBarcodeRule."UOM Result" := RegexReplaceIgnoreCase( ptxtBarcodeText, precBarcodeRule."Find Text", precBarcodeRule."UOM Expression");
+        END;
+
+
+        IF precBarcodeRule."Custom 1 Expression" <>'' THEN BEGIN
+          precBarcodeRule."Custom 1 Result" := RegexReplaceIgnoreCase( ptxtBarcodeText, precBarcodeRule."Find Text", precBarcodeRule."Custom 1 Expression");
+        END;
+
+        IF precBarcodeRule."Custom 2 Expression" <>'' THEN BEGIN
+          precBarcodeRule."Custom 2 Result" := RegexReplaceIgnoreCase( ptxtBarcodeText, precBarcodeRule."Find Text", precBarcodeRule."Custom 2 Expression");
+        END;
+
+        IF precBarcodeRule."Custom 3 Expression" <>'' THEN BEGIN
+          precBarcodeRule."Custom 3 Result" := RegexReplaceIgnoreCase( ptxtBarcodeText, precBarcodeRule."Find Text", precBarcodeRule."Custom 3 Expression");
+        END;
+
+        IF precBarcodeRule."Quantity Expression" <>'' THEN BEGIN
+          ltxtQuantityTest := RegexReplaceIgnoreCase( ptxtBarcodeText, precBarcodeRule."Find Text", precBarcodeRule."Quantity Expression");
+          IF ( ltxtQuantityTest <> '' ) THEN BEGIN
+            IF NOT ( EVALUATE( precBarcodeRule."Quantity Result", ltxtQuantityTest ) ) THEN BEGIN
+              IF ( GUIALLOWED) THEN BEGIN
+                // if a human is involved (GUIALLOWED) then point them
+                // in the correct direction.
+                ERROR( tcNotANumber, ltxtQuantityTest, precBarcodeRule."Rule ID" );
+              END;
+            END;
+          END;
+        END;
+
+
+        IF (precBarcodeRule."Custom 1 Result"+precBarcodeRule."Custom 2 Result"+precBarcodeRule."Custom 3 Result"<>'') THEN BEGIN
+          cuCustomDecodeRules.doCustomDecode(ptxtBarcodeText,precBarcodeRule, lrecIgnoredItem, lbIgnoredFound );
+        END;
+      END;//if
+    END;
+
+    PROCEDURE prepareEvaluation@1000000001(VAR precBarcodeRule@1000000001 : Record 23044509;ptxtBarcode@1000000000 : Text[250]);
+    BEGIN
+      // Sets up record for evaluation
+
+      precBarcodeRule."Sample Text" := ptxtBarcode;
+      precBarcodeRule."Item No. Result" := '';
+      precBarcodeRule."Item No. 2 Result" := '';
+      precBarcodeRule."Variant Result" := '';
+      precBarcodeRule."Serial No. Result" := '';
+      precBarcodeRule."Lot No. Result" := '';
+      precBarcodeRule."Expiry Date Result" := '';
+      precBarcodeRule."Cross-Ref. Result" := '';
+      precBarcodeRule."UOM Result" := '';
+      precBarcodeRule."Custom 1 Result" := '';
+      precBarcodeRule."Custom 2 Result" := '';
+      precBarcodeRule."Custom 3 Result" := '';
+    END;
+
+    LOCAL PROCEDURE CheckItemNoResult@1000000003(VAR precBarcodeRule@1000000002 : Record 23044509;VAR precItem@1000000001 : Record 27;VAR pbFound@1000000000 : Boolean);
+    BEGIN
+      //<FUNC>
+      //  If there is a Item No. Result attempt to get the item from the Item No. field
+      //</FUNC>
+      IF precBarcodeRule."Item No. Result" <> '' THEN BEGIN
+        pbFound := precItem.GET(UPPERCASE(COPYSTR(precBarcodeRule."Item No. Result", 1, MAXSTRLEN(precItem."No."))));  //<IW author="R.Trudeau" date="06/21/18" issue="TFS4077" />
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckItemNo2Result@1000000004(VAR precBarcodeRule@1000000002 : Record 23044509;VAR precItem@1000000001 : Record 27;VAR pbFound@1000000000 : Boolean);
+    BEGIN
+      //<FUNC>
+      //  If there is a Item No. 2 Result attempt to get the item from the Item "No. 2" field
+      //</FUNC>
+      IF precBarcodeRule."Item No. 2 Result" <> '' THEN BEGIN
+        {{// 2016-::begin
+        precItem.SETCURRENTKEY("No. 2"); // ensure we have key for search
+        }}// 2016-::end
+
+        precItem.SETRANGE("No. 2", COPYSTR(precBarcodeRule."Item No. 2 Result", 1, MAXSTRLEN(precItem."No. 2"))); //<IW author="R.Trudeau" date="06/21/18" issue="TFS4077" />
+        pbFound := precItem.FINDFIRST;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckItemCrossRefResult@1000000005(VAR precBarcodeRule@1000000002 : Record 23044509;VAR precItem@1000000001 : Record 27;VAR pbFound@1000000000 : Boolean);
+    VAR
+      lrecCrossRef@1000000003 : Record 5717;
+    BEGIN
+      //<FUNC>
+      //  If there is a Cross-Ref. Result attempt to get the item from the Item Cross Reference
+      //</FUNC>
+      IF precBarcodeRule."Cross-Ref. Result" <> '' THEN BEGIN
+        lrecCrossRef.RESET;
+        lrecCrossRef.SETRANGE("Cross-Reference No.", COPYSTR(precBarcodeRule."Cross-Ref. Result",1,MAXSTRLEN(lrecCrossRef."Cross-Reference No."))); //<IW author="R.Trudeau" date="06/21/18" issue="TFS4077" />
+        IF precBarcodeRule."Variant Result"<>'' THEN
+          lrecCrossRef.SETRANGE("Variant Code", precBarcodeRule."Variant Result");
+
+        IF lrecCrossRef.FINDFIRST THEN BEGIN
+          precItem.GET(lrecCrossRef."Item No.");
+
+          IF ( '' <> lrecCrossRef."Variant Code" )  AND ( '' = precBarcodeRule."Variant Result" ) THEN BEGIN
+            precBarcodeRule."Variant Result" := lrecCrossRef."Variant Code";
+          END;
+
+          IF ( '' <> lrecCrossRef."Unit of Measure" ) AND ( '' = precBarcodeRule."UOM Result" ) THEN BEGIN
+            precBarcodeRule."UOM Result" := lrecCrossRef."Unit of Measure";
+          END;
+
+          pbFound := TRUE;
+        END;//if
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckSerialNoResult@1000000007(VAR precBarcodeRule@1000000002 : Record 23044509;VAR precItem@1000000001 : Record 27;psItemNumber@100000000 : Text;psVariantCode@100000001 : Text;VAR pbFound@1000000000 : Boolean);
+    VAR
+      lrecItemLedger@1000000003 : Record 32;
+    BEGIN
+      //<FUNC>
+      //  If there is a Serial No. Result attempt to get details from the Item Ledger Entry
+      //  if the Validate Serial No. option is enabled.
+      //  Will populate extra details and only set the found result to true if an entry is found.
+      //</FUNC>
+
+      IF precBarcodeRule."Serial No. Result"='' THEN
+        EXIT;
+
+      // if the something already found only get additional information
+      IF precBarcodeRule."Validate Serial No." THEN BEGIN
+        lrecItemLedger.RESET;
+        {{// 2016-::begin
+        lrecItemLedger.SETCURRENTKEY("Serial No."); // ensure we have key for search
+        }}// 2016-::end
+        lrecItemLedger.SETRANGE("Serial No.",UPPERCASE(COPYSTR(precBarcodeRule."Serial No. Result",1,MAXSTRLEN(lrecItemLedger."Serial No."))));
+
+        IF psItemNumber <> '' THEN
+          lrecItemLedger.SETRANGE("Item No.", UPPERCASE(COPYSTR(psItemNumber, 1, MAXSTRLEN(lrecItemLedger."Item No."))))
+        ELSE IF (precBarcodeRule."Item No. Result" <> '') THEN
+          lrecItemLedger.SETRANGE("Item No.", UPPERCASE(COPYSTR(precBarcodeRule."Item No. Result", 1, MAXSTRLEN(lrecItemLedger."Item No."))));
+
+        IF psVariantCode <> '' THEN
+           lrecItemLedger.SETRANGE("Variant Code", UPPERCASE(COPYSTR(psVariantCode, 1, MAXSTRLEN(lrecItemLedger."Variant Code"))))
+        ELSE IF (precBarcodeRule."Variant Result" <> '') THEN
+           lrecItemLedger.SETRANGE("Variant Code", UPPERCASE(COPYSTR(precBarcodeRule."Variant Result", 1, MAXSTRLEN(lrecItemLedger."Variant Code"))));
+
+
+        IF lrecItemLedger.FINDLAST THEN BEGIN
+          pbFound := TRUE;
+          IF( precBarcodeRule."Item No. Result" = '' ) THEN BEGIN //<IW author="R.Trudeau" date="07/29/16" issue="TFS2658" />
+            precItem.GET(lrecItemLedger."Item No.");
+            precBarcodeRule."Item No. Result" := lrecItemLedger."Item No.";
+          END;
+
+          IF ( '' <> lrecItemLedger."Variant Code" ) AND ( '' = precBarcodeRule."Variant Result" ) THEN
+            precBarcodeRule."Variant Result" := lrecItemLedger."Variant Code";
+
+          IF ( '' <> lrecItemLedger."Unit of Measure Code" )  AND ( '' = precBarcodeRule."UOM Result" ) THEN
+            precBarcodeRule."UOM Result" := lrecItemLedger."Unit of Measure Code";
+
+          IF (0D <> lrecItemLedger."Expiration Date") AND ('' = precBarcodeRule."Expiry Date Result") THEN
+            precBarcodeRule."Expiry Date Result" := FORMAT(lrecItemLedger."Expiration Date");
+
+          IF ('' <> lrecItemLedger."Lot No.") AND ('' = precBarcodeRule."Lot No. Result") THEN
+            precBarcodeRule."Lot No. Result" := lrecItemLedger."Lot No.";
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckLotNoResult@1000000008(VAR precBarcodeRule@1000000001 : Record 23044509;VAR precItem@1000000000 : Record 27;psItemNumber@100000001 : Text;psVariantCode@100000000 : Text;VAR pbFound@1000000002 : Boolean);
+    VAR
+      lrecItemLedger@1000000003 : Record 32;
+    BEGIN
+      //<FUNC>
+      //  If there is a Lot No. Result attempt to get details from the Item Ledger Entry
+      //  if the Validate Lot No. option is enabled.
+      //  Will populate extra details and only set the found result to true if an entry is found.
+      //</FUNC>
+      IF precBarcodeRule."Lot No. Result"='' THEN
+        EXIT;
+
+      // if the something already found only get additional information
+      IF precBarcodeRule."Validate Lot No." THEN BEGIN
+        lrecItemLedger.RESET;
+        {{// 2016-::begin
+        lrecItemLedger.SETCURRENTKEY("Lot No."); // ensure we have key for search
+        }}// 2016-::end
+        lrecItemLedger.SETRANGE("Lot No.",UPPERCASE(COPYSTR(precBarcodeRule."Lot No. Result",1,MAXSTRLEN(lrecItemLedger."Lot No."))));
+
+        IF psItemNumber <> '' THEN
+          lrecItemLedger.SETRANGE("Item No.", UPPERCASE(COPYSTR(psItemNumber, 1, MAXSTRLEN(lrecItemLedger."Item No."))))
+        ELSE IF (precBarcodeRule."Item No. Result" <> '') THEN
+          lrecItemLedger.SETRANGE("Item No.", UPPERCASE(COPYSTR(precBarcodeRule."Item No. Result", 1, MAXSTRLEN(lrecItemLedger."Item No."))));
+
+        IF psVariantCode <> '' THEN
+           lrecItemLedger.SETRANGE("Variant Code", UPPERCASE(COPYSTR(psVariantCode, 1, MAXSTRLEN(lrecItemLedger."Variant Code"))))
+        ELSE IF (precBarcodeRule."Variant Result" <> '') THEN
+           lrecItemLedger.SETRANGE("Variant Code", UPPERCASE(COPYSTR(precBarcodeRule."Variant Result", 1, MAXSTRLEN(lrecItemLedger."Variant Code"))));
+
+
+        IF lrecItemLedger.FINDLAST THEN BEGIN
+          pbFound := TRUE;
+          IF( precBarcodeRule."Item No. Result" = '' ) THEN BEGIN
+            precItem.GET(lrecItemLedger."Item No.");
+            precBarcodeRule."Item No. Result" := lrecItemLedger."Item No.";
+          END;
+
+          IF ( '' <> lrecItemLedger."Variant Code" ) AND ( '' = precBarcodeRule."Variant Result" ) THEN
+            precBarcodeRule."Variant Result" := lrecItemLedger."Variant Code";
+
+          IF ( '' <> lrecItemLedger."Unit of Measure Code" )  AND ( '' = precBarcodeRule."UOM Result" ) THEN
+            precBarcodeRule."UOM Result" := lrecItemLedger."Unit of Measure Code";
+
+          IF (0D <> lrecItemLedger."Expiration Date") AND ('' = precBarcodeRule."Expiry Date Result") THEN
+            precBarcodeRule."Expiry Date Result" := FORMAT(lrecItemLedger."Expiration Date");
+        END;
+      END;
+    END;
+
+    PROCEDURE RegexIsMatch@1000000010(psInput@1000000001 : Text;psRegExExpression@1000000000 : Text) : Boolean;
+    VAR
+      ldnRegEx@1000000003 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      ldnRegExOptionsIgnoreCase@1000000002 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.RegexOptions";
+    BEGIN
+      ldnRegExOptionsIgnoreCase := ldnRegExOptionsIgnoreCase.IgnoreCase;
+      ldnRegEx := ldnRegEx.Regex( psRegExExpression, ldnRegExOptionsIgnoreCase );
+      EXIT(ldnRegEx.IsMatch(psInput));
+    END;
+
+    PROCEDURE RegexReplaceIgnoreCase@1000000009(psInput@1000000002 : Text;psRegExExpression@1000000001 : Text;psReplacement@1000000000 : Text) : Text;
+    VAR
+      ldnRegEx@1000000004 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.Regex";
+      ldnRegExOptionsIgnoreCase@1000000003 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.RegularExpressions.RegexOptions";
+    BEGIN
+      ldnRegExOptionsIgnoreCase := ldnRegExOptionsIgnoreCase.IgnoreCase;
+      ldnRegEx := ldnRegEx.Regex( psRegExExpression, ldnRegExOptionsIgnoreCase );
+      EXIT(ldnRegEx.Replace(psInput, psReplacement));
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+
+      ** See http://msdn.microsoft.com/en-us/library/ms974570.aspx#scripting05_topic5 for regex guide
+
+      *** DO NOT put customer specific decoding in this codeunit ***
+          Instead use "Decode Custom Rules"
+    }
+    END.
+  }
+}
+

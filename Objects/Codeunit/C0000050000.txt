@@ -1,0 +1,339 @@
+OBJECT Codeunit 50000 Stock Status Wksh. Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=TOP010,130,010B;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            DivisionCodeFilterEntry;
+
+            IF DivisionCodeFilter <> '' THEN BEGIN
+              CLEAR(StockStatusWkshPg);
+              StockStatusWkshPg.SetDivisionCodeFilter(DivisionCodeFilter);
+
+              IF FromCustPage THEN BEGIN
+                StockStatusWkshPg.SETRECORD(CustRec);
+                StockStatusWkshPg.SetFromCustPage(FromCustPage,CustRec);
+              END;
+
+              StockStatusWkshPg.RUN;
+            END ELSE IF (DivisionCodeFilter = '') AND (DivCodeSelected) THEN
+              ERROR('You did not select Division Code Filter Value!');
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Item@1000000000 : Record 27;
+      AvailableToPromise@1000000001 : Codeunit 5790;
+      UOMManagement@1000000002 : Codeunit 5402;
+      DivisionCodeFilter@1000000003 : Code[20];
+      StockStatusWkshPg@1000000004 : Page 50006;
+      FromCustPage@1000000005 : Boolean;
+      CustRec@1000000006 : Record 18;
+      InLocFilter@1000000007 : Code[10];
+      DivCodeSelected@1000000008 : Boolean;
+      Text001@1000000009 : TextConst 'ENU=Either Default Division Code is not assigned to your User Setup or You did not select Division Code Filter Value';
+
+    PROCEDURE DivisionCodeFilterEntry@1000000006();
+    VAR
+      DimensionValue@1000000001 : Record 349;
+      GLSetup@1000000000 : Record 98;
+      DivisionCodeSelection@1000000002 : Page 50003;
+      UserSetup@1000000003 : Record 91;
+    BEGIN
+      CLEAR(DivisionCodeSelection);
+      CLEAR(DivCodeSelected);
+      //TOP10B KT ABCSI - SSQQ Division Code 07082015
+      UserSetup.GET(USERID);
+      IF UserSetup."Shortcut Dimension 5 Code" <> '' THEN
+        DivisionCodeFilter := UserSetup."Shortcut Dimension 5 Code";
+      //TOP10B KT ABCSI - SSQQ Division Code 07082015
+
+      IF DivisionCodeFilter = '' THEN BEGIN
+        //DivisionCodeSelection.LOOKUPMODE(TRUE);
+        IF DivisionCodeSelection.RUNMODAL = ACTION::Yes THEN BEGIN
+          DivisionCodeFilter := DivisionCodeSelection.GetDivisionCodeValue;
+          DivCodeSelected := TRUE;
+        END;
+      END;
+    END;
+
+    PROCEDURE SetFromCustPage@1000000000(varFromCustPage@1000000000 : Boolean;varCustRec@1000000001 : Record 18);
+    BEGIN
+      FromCustPage := varFromCustPage;
+      CustRec := varCustRec;
+    END;
+
+    PROCEDURE CalcAvailability@18(VAR StockStatusQuickQuote@1000000000 : Record 50000;LocationCode@1000000001 : Code[10]) : Decimal;
+    VAR
+      GrossRequirement@1002 : Decimal;
+      ScheduledReceipt@1003 : Decimal;
+      PeriodType@1006 : 'Day,Week,Month,Quarter,Year';
+      LookaheadDateformula@1005 : DateFormula;
+    BEGIN
+      IF GetItem(StockStatusQuickQuote) THEN BEGIN
+        SetItemFilter(Item,StockStatusQuickQuote);
+        IF LocationCode <> '' THEN
+        Item.SETRANGE("Location Filter",LocationCode);
+        EXIT(
+          ConvertQty(
+            AvailableToPromise.QtyAvailabletoPromise(
+              Item,
+              GrossRequirement,
+              ScheduledReceipt,
+              CalcAvailabilityDate(StockStatusQuickQuote),
+              PeriodType,
+              LookaheadDateformula),
+            UOMManagement.GetQtyPerUnitOfMeasure(Item,Item."Base Unit of Measure")));
+      END;
+    END;
+
+    PROCEDURE CalcAvailabilityDate@27(StockStatusQuickQuote@1000000000 : Record 50000) : Date;
+    BEGIN
+      EXIT(WORKDATE);
+    END;
+
+    PROCEDURE CalcAvailableInventory@9(StockStatusQuickQuote@1000000000 : Record 50000;LocationCode@1000000001 : Code[10]) : Decimal;
+    BEGIN
+      IF GetItem(StockStatusQuickQuote) THEN BEGIN
+        SetItemFilter(Item,StockStatusQuickQuote);
+        IF LocationCode <> '' THEN
+        Item.SETRANGE("Location Filter",LocationCode);
+        EXIT(
+          ConvertQty(
+            AvailableToPromise.CalcAvailableInventory(Item),
+            UOMManagement.GetQtyPerUnitOfMeasure(Item,Item."Base Unit of Measure")));
+      END;
+    END;
+
+    PROCEDURE CalcNoOfSubstitutions@20(StockStatusQuickQuote@1000000000 : Record 50000) : Integer;
+    BEGIN
+      IF GetItem(StockStatusQuickQuote) THEN BEGIN
+        Item.CALCFIELDS("No. of Substitutes");
+        EXIT(Item."No. of Substitutes");
+      END;
+    END;
+
+    PROCEDURE CalcNoOfSalesPrices@19(StockStatusQuickQuote@1000000000 : Record 50000) : Integer;
+    BEGIN
+
+      IF GetItem(StockStatusQuickQuote) THEN BEGIN
+        EXIT(NoOfSalesLinePrice(StockStatusQuickQuote));
+      END;
+    END;
+
+    PROCEDURE NoOfSalesLinePrice@1000000001(StockStatusQuickQuote@1000000000 : Record 50000) : Integer;
+    VAR
+      SalesPrice@1000000001 : Record 7002;
+    BEGIN
+      SalesPrice.RESET;
+      SalesPrice.SETRANGE("Item No.",StockStatusQuickQuote."Item No.");
+      EXIT(SalesPrice.COUNT);
+    END;
+
+    PROCEDURE LookupItem@7(StockStatusQuickQuote@1000000000 : Record 50000);
+    BEGIN
+      StockStatusQuickQuote.TESTFIELD("Item No.");
+      GetItem(StockStatusQuickQuote);
+      PAGE.RUNMODAL(PAGE::"Item Card",Item);
+    END;
+
+    LOCAL PROCEDURE GetItem@24(VAR StockStatusQuickQuote@1000 : Record 50000) : Boolean;
+    BEGIN
+      WITH Item DO BEGIN
+        IF NOT GET(StockStatusQuickQuote."Item No.") OR (StockStatusQuickQuote."Item No." = '') THEN
+          EXIT(FALSE);
+
+        IF StockStatusQuickQuote."Item No." <> "No." THEN
+          GET(StockStatusQuickQuote."Item No.");
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE SetItemFilter@4(VAR Item@1000 : Record 27;StockStatusQuickQuote@1001 : Record 50000);
+    BEGIN
+      Item.RESET;
+      Item.SETRANGE("Date Filter",0D,CalcAvailabilityDate(StockStatusQuickQuote));
+      Item.SETRANGE("Location Filter",StockStatusQuickQuote."Location Code");
+      Item.SETRANGE("Drop Shipment Filter",FALSE);
+    END;
+
+    LOCAL PROCEDURE ConvertQty@28(Qty@1000 : Decimal;PerUoMQty@1001 : Decimal) : Decimal;
+    BEGIN
+      IF PerUoMQty = 0 THEN
+        PerUoMQty := 1;
+      EXIT(ROUND(Qty / PerUoMQty,0.00001));
+    END;
+
+    PROCEDURE SetUserFilters@1000000002(InLocation@1000000001 : Code[10]);
+    BEGIN
+      InLocFilter := InLocation;
+    END;
+
+    PROCEDURE GetDivisionCodeFilter@1000000003() : Code[20];
+    BEGIN
+      //<TPZ1240>
+      EXIT(DivisionCodeFilter);
+      //<TPZ1240>
+    END;
+
+    PROCEDURE FindRelCustLastSalesPrice@1000000004(VAR StockStatusWkshLine@1000000001 : Record 50000);
+    VAR
+      Customer@1000000003 : Record 18;
+      Customer2@1000000005 : Record 18;
+      LastSalesPrice@1000000002 : Record 50004;
+      CustGrLastSalesPrice@1000000004 : TEMPORARY Record 51100;
+      CustGrLastSalesPrices@1000000000 : Page 50057;
+    BEGIN
+      // <TPZ1014>
+      Customer.GET(StockStatusWkshLine."Sell-to Customer No.");
+      IF Customer."Customer Group Code" = '' THEN
+        EXIT;
+
+      CustGrLastSalesPrice.DELETEALL;
+
+      Customer2.RESET;
+      Customer2.SETCURRENTKEY("Customer Group Code");
+      Customer2.SETRANGE("Customer Group Code",Customer."Customer Group Code");
+      Customer2.SETFILTER("No.",'<>%1',Customer."No.");
+      IF Customer2.FINDSET THEN BEGIN
+        REPEAT
+          LastSalesPrice.RESET;
+          LastSalesPrice.ASCENDING;
+          LastSalesPrice.SETCURRENTKEY("Sell-to Customer No.","Item No.","Document Date");
+          LastSalesPrice.SETRANGE("Item No.",StockStatusWkshLine."Item No.");
+          LastSalesPrice.SETFILTER("Sell-to Customer No.",Customer2."No.");
+          IF LastSalesPrice.FINDLAST THEN BEGIN
+            CustGrLastSalesPrice.TRANSFERFIELDS(LastSalesPrice);
+            CustGrLastSalesPrice."Sell-to Customer Name" := Customer2.Name;
+            CustGrLastSalesPrice.INSERT;
+          END;
+        UNTIL Customer2.NEXT = 0;
+
+        COMMIT;
+
+        PAGE.RUNMODAL(PAGE::"Cust. Group Last Sales Prices",CustGrLastSalesPrice);
+
+        CustGrLastSalesPrice.DELETEALL;
+        CLEAR(CustGrLastSalesPrices);
+      END;
+      // </TPZ1014>
+    END;
+
+    PROCEDURE CalcQtyAvailableToPick@1000000005(StockStatusQuickQuote@1000000003 : Record 50000;LocationCode@1000000005 : Code[10]) : Decimal;
+    VAR
+      WhseCreatePick@1000000001 : Codeunit 5778;
+      BinContent@1000000000 : Record 7302;
+      Location@1000000002 : Record 14;
+      QtytoPick@1000000004 : Decimal;
+    BEGIN
+      // <TPZ2389>
+      IF GetItem(StockStatusQuickQuote) THEN BEGIN
+        EXIT(WhseCreatePick.QtyAvailtoPick(StockStatusQuickQuote."Item No.",LocationCode));
+      END;
+      // </TPZ2389>
+    END;
+
+    PROCEDURE CalcQtyInTransit@1000000008(StockStatusQuickQuote@1000000002 : Record 50000) : Decimal;
+    VAR
+      TransferLine@1000000000 : Record 5741;
+      QtyinTransit@1000000001 : Decimal;
+    BEGIN
+      // <TPZ2389>
+      IF GetItem(StockStatusQuickQuote) THEN BEGIN
+         QtyinTransit := 0;
+         TransferLine.RESET;
+         TransferLine.SETRANGE("Derived From Line No.");
+         TransferLine.SETRANGE("Item No.",StockStatusQuickQuote."Item No.");
+         IF TransferLine.FINDSET THEN BEGIN
+           REPEAT
+             QtyinTransit := QtyinTransit + TransferLine."Qty. in Transit (Base)";
+           UNTIL TransferLine.NEXT=0;
+         END;
+         EXIT(QtyinTransit);
+      END;
+      // </TPZ2389>
+    END;
+
+    PROCEDURE CalcEnterPriseInventory@1000000010(StockStatusWkshLine@1000000000 : Record 50000) : Decimal;
+    VAR
+      Location1@1000000001 : Record 14;
+      EntPInventory@1000000002 : Decimal;
+      WhseCreatePick@1000000003 : Codeunit 5778;
+    BEGIN
+      //<TPZ2590>
+      EntPInventory :=0;
+      IF GetItem(StockStatusWkshLine) THEN BEGIN
+        Location1.RESET;
+        Location1.SETRANGE("Shipping Location",TRUE);
+        IF Location1.FINDSET THEN BEGIN
+          REPEAT
+            //Item.SETRANGE("Location Filter",Location1.Code);
+            //Item.CALCFIELDS(Inventory);
+            //EntPInventory := EntPInventory + Item.Inventory;
+              EntPInventory := EntPInventory + WhseCreatePick.QtyAvailtoPick(StockStatusWkshLine."Item No.",Location1.Code);
+          UNTIL Location1.NEXT=0;
+        END;
+        EXIT(EntPInventory);
+      END;
+      //</TPZ2590>
+    END;
+
+    PROCEDURE CalcMonthOfStock@1000000013(StockStatusWkshLine@1000000000 : Record 50000) : Decimal;
+    VAR
+      Location1@1000000001 : Record 14;
+      EntPInventory@1000000002 : Decimal;
+      WhseCreatePick@1000000003 : Codeunit 5778;
+    BEGIN
+      //<TPZ2590>
+      EntPInventory :=0;
+      IF GetItem(StockStatusWkshLine) THEN BEGIN
+        Location1.RESET;
+        Location1.SETRANGE("Shipping Location",TRUE);
+        IF Location1.FINDSET THEN BEGIN
+          REPEAT
+           // Item.SETRANGE("Location Filter",Location1.Code);
+            //Item.CALCFIELDS(Inventory);
+            //EntPInventory := EntPInventory + Item.Inventory;
+            EntPInventory := EntPInventory + WhseCreatePick.QtyAvailtoPick(StockStatusWkshLine."Item No.",Location1.Code);
+          UNTIL Location1.NEXT=0;
+        END;
+        IF Item."Monthly Demand" <> 0 THEN
+          EXIT(EntPInventory/Item."Monthly Demand")
+        ELSE
+          EXIT(0);
+      END;
+      //</TPZ2590>
+    END;
+
+    BEGIN
+    {
+      TOP010 KT ABCSI Stock Status Quick Quote Screen 12122014
+        - Created the codeunit for FactBox on the SSQQ and other functions
+
+      TOP130 KT ABCSI Item List Sort and Filter by Status 04172015
+        - removed the comments from OnRun trigger for focusing the record on the customer record when being opened from the customer card or list
+
+      TOP10B KT ABCSI - SSQQ Division Code 07082015
+        - Added code in DivisionCodeFilterEntry function
+
+      2016-04-01 TPZ1014 TAKHMETO
+        FindRelCustLastSalesPrice funciton has been added
+
+      2018-08-25 TPZ2389 UCHOUHAN
+        Added two new function CalcQtyAvailableToPick and CalcQtyInTransit.
+
+      2019-06-21 TPZ2590 UCHOUHAN
+        Added two new funtions CalcEnterPriseInventory and CalcMonthOfStock.
+    }
+    END.
+  }
+}
+

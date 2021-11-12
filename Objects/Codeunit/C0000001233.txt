@@ -1,0 +1,121 @@
+OBJECT Codeunit 1233 SEPA DD-Check Line
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/01/20;
+    Time=12:00:00 PM;
+    Version List=NAVW111.00.00.40505;
+  }
+  PROPERTIES
+  {
+    TableNo=1208;
+    OnRun=BEGIN
+            DeletePaymentFileErrors;
+            CheckCollectionEntry(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EuroCurrErr@1007 : TextConst 'ENU=Only transactions in euro (EUR) are allowed.;ESM=Solo se permiten transacciones en euros (EUR).;FRC=Seules les transactions en euros (EUR) sont autoris‚es.;ENC=Only transactions in euro (EUR) are allowed.';
+      FieldBlankErr@1006 : TextConst '@@@="%1=field name, %2=table name. Example: Name must have a value in Customer.";ENU=%1 must have a value in %2.;ESM=%1 debe tener un valor en %2.;FRC=%1 doit avoir une valeur dans %2.;ENC=%1 must have a value in %2.';
+      FieldKeyBlankErr@1004 : TextConst '@@@="%1=field name, %2= table name, %3=key field value. Example: Name must have a value in Customer 10000.";ENU=%1 must have a value in %2 %3.;ESM=%1 debe tener un valor en %2 %3.;FRC=%1 doit avoir une valeur dans %2 %3.;ENC=%1 must have a value in %2 %3.';
+      MustBeCustomerErr@1001 : TextConst 'ENU=The customer %1 does not exist.;ESM=El cliente %1 no existe.;FRC=Le client %1 n''existe pas.;ENC=The customer %1 does not exist.';
+      MustBePositiveErr@1000 : TextConst 'ENU=The amount must be positive.;ESM=El importe debe ser positivo.;FRC=Le montant doit ˆtre positif.;ENC=The amount must be positive.';
+      NotActiveMandateErr@1010 : TextConst 'ENU=The mandate %1 is not active.;ESM=La orden de domiciliaci¢n %1 no est  activa.;FRC=Le mandat %1 n''est pas actif.;ENC=The mandate %1 is not active.';
+      PartnerTypeErr@1008 : TextConst '@@@="%1 = Partner Type; %2 = Company/Person; %3 = Company/Person.";ENU=The customer''s %1, %2, must be equal to the %1, %3, specified in the collection.;ESM=El %1 del cliente, %2, debe ser igual al %1, %3, especificado en la colecci¢n.;FRC=Le/la %1 du client, %2, doit ˆtre ‚gal(e) … %1, %3, sp‚cifi‚(e) dans la collection.;ENC=The customer''s %1, %2, must be equal to the %1, %3, specified in the collection.';
+      TransferDateErr@1002 : TextConst 'ENU=The earliest possible transfer date is today.;ESM=La fecha de transferencia m s pr¢xima posible es hoy.;FRC=La date de transfert la plus proche possible est aujourd''hui.;ENC=The earliest possible transfer date is today.';
+      TransferDateAddnlInfoTxt@1005 : TextConst 'ENU=You can use the Reset Transfer Date action to eliminate the error.;ESM=Puede usar la acci¢n Restablecer fecha de transferencia para eliminar el error.;FRC=Pour ‚liminer l''erreur, vous pouvez utiliser l''action R‚initialiser date transfert.;ENC=You can use the Reset Transfer Date action to eliminate the error.';
+      SelectedRecordTxt@1003 : TextConst 'ENU=the currently selected record;ESM=el registro seleccionado actualmente;FRC=l''enregistrement actuellement s‚lectionn‚;ENC=the currently selected record';
+      PartnerTypeBlankErr@1103 : TextConst '@@@=Partner Type must be filled.;ENU=%1 must be filled.;ESM=Debe rellenarse %1.;FRC=%1 doit ˆtre renseign‚.;ENC=%1 must be filled.';
+      ExportWithoutIBANAndSWIFTErr@1011 : TextConst '@@@="%1= table name, %2=key field value. Example: Either the Bank Account No. and Bank Branch No. fields or the SWIFT Code and IBAN fields must be filled in for Customer Bank Account ECA.";ENU=Either the Bank Account No. and Bank Branch No. fields or the SWIFT Code and IBAN fields must be filled in for %1 %2.;ESM=Debe rellenar para %1 %2 los campos N.§ cuenta bancaria y C¢d. sucursal banco, o bien los campos C¢digo SWIFT e IBAN.;FRC=Vous devez renseigner les champs Nø compte bancaire et Code ‚tablissement ou les champs Code SWIFT et IBAN pour %1 %2.;ENC=Either the Bank Account No. and Bank Branch No. fields or the SWIFT Code and IBAN fields must be filled in for %1 %2.';
+
+    LOCAL PROCEDURE CheckCollectionEntry@2(DirectDebitCollectionEntry@1000 : Record 1208);
+    VAR
+      Customer@1004 : Record 18;
+      CustomerBankAccount@1003 : Record 287;
+      DirectDebitCollection@1005 : Record 1207;
+      GLSetup@1002 : Record 98;
+      SEPADirectDebitMandate@1001 : Record 1230;
+    BEGIN
+      GLSetup.GET;
+      WITH DirectDebitCollectionEntry DO BEGIN
+        IF "Transfer Amount" <= 0 THEN
+          InsertPaymentFileError(MustBePositiveErr);
+
+        IF ("Currency Code" <> GLSetup.GetCurrencyCode('EUR')) AND NOT GLSetup."SEPA Non-Euro Export" THEN
+          InsertPaymentFileError(EuroCurrErr);
+
+        IF "Transfer Date" < TODAY THEN
+          InsertPaymentFileErrorWithDetails(TransferDateErr,TransferDateAddnlInfoTxt);
+
+        IF NOT Customer.GET("Customer No.") THEN BEGIN
+          InsertPaymentFileError(STRSUBSTNO(MustBeCustomerErr,"Customer No."));
+          EXIT;
+        END;
+
+        IF Customer.Name = '' THEN
+          AddFieldEmptyError(DirectDebitCollectionEntry,Customer.TABLECAPTION,Customer.FIELDCAPTION(Name),"Customer No.");
+
+        DirectDebitCollection.GET("Direct Debit Collection No.");
+        IF Customer."Partner Type" <> DirectDebitCollection."Partner Type" THEN
+          InsertPaymentFileError(STRSUBSTNO(PartnerTypeErr,Customer.FIELDCAPTION("Partner Type"),Customer."Partner Type",
+              DirectDebitCollection."Partner Type"));
+
+        IF DirectDebitCollection."Partner Type" = DirectDebitCollection."Partner Type"::" " THEN
+          InsertPaymentFileError(STRSUBSTNO(PartnerTypeBlankErr,DirectDebitCollection.FIELDCAPTION("Partner Type")));
+
+        IF "Mandate ID" = '' THEN
+          AddFieldEmptyError(DirectDebitCollectionEntry,SelectedRecordTxt,FIELDCAPTION("Mandate ID"),"Mandate ID")
+        ELSE BEGIN
+          SEPADirectDebitMandate.GET("Mandate ID");
+          IF SEPADirectDebitMandate."Date of Signature" = 0D THEN
+            AddFieldEmptyError(
+              DirectDebitCollectionEntry,SEPADirectDebitMandate.TABLECAPTION,SEPADirectDebitMandate.FIELDCAPTION("Date of Signature"),
+              "Mandate ID");
+          IF NOT SEPADirectDebitMandate.IsMandateActive("Transfer Date") THEN
+            InsertPaymentFileError(STRSUBSTNO(NotActiveMandateErr,"Mandate ID"));
+
+          IF SEPADirectDebitMandate."Customer Bank Account Code" = '' THEN
+            AddFieldEmptyError(
+              DirectDebitCollectionEntry,SEPADirectDebitMandate.TABLECAPTION,
+              SEPADirectDebitMandate.FIELDCAPTION("Customer Bank Account Code"),SEPADirectDebitMandate.ID)
+          ELSE BEGIN
+            CustomerBankAccount.GET(Customer."No.",SEPADirectDebitMandate."Customer Bank Account Code");
+            IF NOT GLSetup."SEPA Export w/o Bank Acc. Data" THEN BEGIN
+              IF CustomerBankAccount."SWIFT Code" = '' THEN
+                AddFieldEmptyError(
+                  DirectDebitCollectionEntry,CustomerBankAccount.TABLECAPTION,CustomerBankAccount.FIELDCAPTION("SWIFT Code"),
+                  CustomerBankAccount.Code);
+              IF CustomerBankAccount.IBAN = '' THEN
+                AddFieldEmptyError(
+                  DirectDebitCollectionEntry,CustomerBankAccount.TABLECAPTION,CustomerBankAccount.FIELDCAPTION(IBAN),
+                  CustomerBankAccount.Code);
+            END ELSE BEGIN
+              IF (CustomerBankAccount."Bank Account No." = '') OR (CustomerBankAccount."Bank Branch No." = '') THEN
+                IF (CustomerBankAccount."SWIFT Code" = '') OR (CustomerBankAccount.IBAN = '') THEN
+                  InsertPaymentFileError(
+                    STRSUBSTNO(ExportWithoutIBANAndSWIFTErr,CustomerBankAccount.TABLECAPTION,CustomerBankAccount.Code));
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE AddFieldEmptyError@1(VAR DirectDebitCollectionEntry@1002 : Record 1208;TableCaption@1000 : Text;FieldCaption@1001 : Text;KeyValue@1003 : Text);
+    VAR
+      ErrorText@1004 : Text;
+    BEGIN
+      IF KeyValue = '' THEN
+        ErrorText := STRSUBSTNO(FieldBlankErr,FieldCaption,TableCaption)
+      ELSE
+        ErrorText := STRSUBSTNO(FieldKeyBlankErr,FieldCaption,TableCaption,KeyValue);
+      DirectDebitCollectionEntry.InsertPaymentFileError(ErrorText);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

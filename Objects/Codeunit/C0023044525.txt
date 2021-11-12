@@ -1,0 +1,1132 @@
+OBJECT Codeunit 23044525 WHI Printing Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/25/21;
+    Time=[ 4:01:59 PM];
+    Modified=Yes;
+    Version List=WHI2.4.7684.0;
+  }
+  PROPERTIES
+  {
+    TableNo=23044511;
+    OnRun=VAR
+            lrrefNASPrintRecord@1000000000 : RecordRef;
+            lrecordID@1000000001 : RecordID;
+            ltxtDetails@1000000002 : Text[250];
+          BEGIN
+            // this is needed to work around a NAV 2013 R2 issue with records in codeunits started from a session.
+            Rec.CHANGECOMPANY();
+
+            SELECTLATESTVERSION();
+
+
+            codRegionCode := Rec.getValue('device_culture'); //<IW author="R.Trudeau" date="10/17/18" issue="TFS3495" />
+
+            cuCommonFuncs.getDeviceConfig( recConfig, Rec );
+            iEventID := Rec.getEvent();
+
+
+            Rec.RESET; //<IW author="R.Trudeau" date="11/02/17" issue="TFS3602" />
+            IF Rec.FINDSET(FALSE) THEN BEGIN   //<IW author="R.Trudeau" date="11/02/17" issue="TFS3602" />
+            REPEAT
+              IF ( NOT trecEventParamters.GET(Rec.Key)  ) THEN BEGIN
+                trecEventParamters := Rec;
+                IF ( trecEventParamters.INSERT ) THEN; // then nothing
+              END;
+            UNTIL (Rec.NEXT() = 0);
+            END;
+
+
+            trecEventParamters.RESET;
+            IF trecEventParamters.FINDSET THEN ;
+            cuSessionHelper.CacheEventParameters(trecEventParamters);
+
+
+            //
+            // Helper message to show up in the windows event log for common printer
+            // troubleshooting from the handheld.
+            IF NOT GUIALLOWED THEN BEGIN
+              MESSAGE( cuTranslationMgmt.getTranslatedString('LOG_PRINT_REQUEST', codRegionCode),
+                iEventID,
+                recConfig.Code,
+                recConfig."Regular Printer Name",
+                recConfig."Label Printer Name" );
+            END;
+
+            CASE iEventID OF
+              // -1 is a special case for printing with the JOB queue in the NAS
+              -1: BEGIN
+                    lrrefNASPrintRecord.OPEN( Rec.getValueAsInt('tableno') );
+                    EVALUATE( lrecordID, Rec.getValue('recordid') );
+                    lrrefNASPrintRecord.GET( lrecordID );
+                    printDirectly(lrrefNASPrintRecord,
+                      Rec.getValueAsInt('Report No.'),
+                      Rec.getValue('Printer Name') );
+                  END;
+
+              // item and bin labels
+
+              10009:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_ITEM', codRegionCode), Rec.getItemNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+                  printItemLabel(recConfig); //<IW author="R.Trudeau" date="05/23/17" issue="TFS3150" />
+                END;
+              10010:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_BIN', codRegionCode), Rec.getValue('bin_code'));
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+                  printBinLabel(  // [META:category=Inventory,action=Print]
+                    recConfig,
+                    Rec.getValue('bin_code') );
+                END;
+              // warehouse module
+              20017:  printInvMove( // [META:category=ItemReclassMove,action=Print]
+                recConfig,
+                Rec.getLineNo() );
+
+              20018:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getDocumentNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+
+                  printWarehouseDoc( // [META:category=WarehouseDoc,action=Print]
+                    recConfig,
+                    Rec.getValueAsInt('Type'),
+                    Rec.getDocumentNo(),
+                    Rec.getLineNo() );
+                END;
+              20074:  printWhseReclassMove(recConfig, Rec.getLineNo() ); // [META:category=WhseItemMove,action=Print]
+
+              // production
+              40008:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getDocumentNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+
+                  printOnOutput(recConfig); //<IW author="R.Trudeau" date="05/23/17" issue="TFS3150" >
+                END;
+              40009:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getDocumentNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+
+                  printOutputDoc( // [META:category=Output,action=Print]
+                    recConfig,
+                    Rec.getDocumentNo(),
+                    Rec.getLineNo(),
+                    Rec.getValue('oper') );
+                END;
+              // receiving
+              50017:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getDocumentNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+
+                  printWhseReceipt(     // [META:category=Receiving,action=Print]
+                      recConfig,
+                      Rec.getDocumentNo(),
+                      Rec.getLineNo() );
+                END;
+              50018:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getDocumentNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+
+                  printPurchaseOrder(  // [META:category=Receiving,action=Print]
+                     recConfig,
+                     Rec.getDocumentNo(),
+                     Rec.getLineNo() );
+                END;
+              50019:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getDocumentNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+
+                  printTransferOrder(  // [META:name=printTransferOrder_In,category=Receiving,action=Print]
+                      recConfig,
+                      Rec.getDocumentNo(),
+                      FALSE, // receiving transfer
+                      Rec.getLineNo() );
+                END;
+              //<IW author="R.Trudeau" date="07/11/14" issue="TFS1530" >
+              50002:
+                BEGIN
+
+                  //<IW author="Howie Zhao" date="08/12/16" issue="TFS2476" >
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), getDocumentNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+
+                  printReceiptQtyHandled(recConfig);
+                END;
+
+              50040:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getDocumentNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+                  printPurchaseOrderOnPost(Rec.getDocumentNo());
+                END;
+
+              50041:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getDocumentNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+                  printTransferRcptOnPost(Rec.getDocumentNo());
+                END;
+
+              50042:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getDocumentNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+                  printWhseReceiptOnPost(Rec.getDocumentNo());
+                END;
+
+              // shipping
+              70015:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getDocumentNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+
+                  printSalesOrder( // [META:category=Shipping,action=Print]
+                    recConfig,
+                    Rec.getDocumentNo(),
+                    Rec.getLineNo() );
+                END;
+              70016:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getDocumentNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+
+                  printWhseShipment( // [META:category=Shipping,action=Print]
+                     recConfig,
+                     Rec.getDocumentNo(),
+                     Rec.getLineNo() );
+                END;
+              70017:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getDocumentNo());
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+
+                  printTransferOrder( // [META:name=printTransferOrder_Out,category=Shipping,action=Print]
+                    recConfig,
+                    Rec.getDocumentNo(),
+                    TRUE, // shipping transfer
+                    Rec.getLineNo() );
+                END;
+              // license plates
+              // 95001 is get/create
+              // 95006 is direct print LP
+              95001:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getValue('lp_number'));
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+
+                  printLicensePlateLabel( // [META:name=getLicensePlate,ignore=true,action=Print,category=License Plate]
+                      recConfig,
+                      Rec.getValue('lp_number'),
+                      Rec.getLineNo()  );
+                END;
+              95006:
+                BEGIN
+                  ltxtDetails := STRSUBSTNO(cuTranslationMgmt.getTranslatedString('LOG_PRINT_DOCUMENT', codRegionCode), Rec.getValue('lp_number'));
+                  Rec.setValue('details', ltxtDetails);
+                  cuActivityLogMgt.logActivity(Rec);
+
+                  printLicensePlateLabel( // [META:category=Shipping,action=Print,category=License Plate,action=Print]
+                      recConfig,
+                      Rec.getValue('lp_number'),
+                      Rec.getLineNo()  );
+                END;
+              ELSE BEGIN
+                // FOR Extensibility.. if you have report selections defined
+                // with custom, and custom table, then just call this codeunit.
+                IF ( NOT printAutomaticAnything( Rec) ) THEN BEGIN
+
+                END; // if print anything worked.
+              END; // fallback
+            END; // case
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      iPrintingSessionID@1000000003 : Integer;
+      cuExtensibility@1000000005 : Codeunit 23044515;
+      recConfig@1000000006 : Record 23044504;
+      iEventID@1000000007 : Integer;
+      trecEventParamters@1000000012 : TEMPORARY Record 23044511;
+      cuActivityLogMgt@1000000016 : Codeunit 23044537;
+      cuSessionHelper@1000000017 : Codeunit 23044527;
+      cuCommonBase@1000000018 : Codeunit 23044519;
+      cuCommonFuncs@1000000019 : Codeunit 23044501;
+      cuTranslationMgmt@1000000021 : Codeunit 23044526;
+      codRegionCode@1000000020 : Code[10];
+      gcd_WMDMTopazPrintExtension@1000000000 : Codeunit 50032;
+
+    PROCEDURE handlePrint@1000000011(VAR ptrecEventParams@1000000006 : TEMPORARY Record 23044511;VAR pbsOutput@1000000005 : BigText);
+    VAR
+      lcodSalesNumber@1000000002 : Code[20];
+      lcodConfig@1000000003 : Code[20];
+      liLineNumber@1000000001 : Integer;
+      lsLineNumber@1000000004 : Text[30];
+      lcuCommonFuncs@1000000000 : Codeunit 23044501;
+      lrecConfig@1000000007 : Record 23044504;
+    BEGIN
+
+      IF ( NOT cuExtensibility.CallExtensibility(
+        ptrecEventParams."Extensibility Event"::OnPrint,
+        ptrecEventParams.getEvent(),
+        ptrecEventParams,
+        pbsOutput ) ) THEN BEGIN
+
+        // validate the printers up front so the error will bubble up to the handhelds
+      cuCommonFuncs.getDeviceConfig(lrecConfig,ptrecEventParams);
+        //lcuCommonFuncs.checkPrinters(lrecConfig);  //<IW author="R.Trudeau" date="11/09/17" issue="TFS3617" />
+
+        STARTSESSION( iPrintingSessionID, CODEUNIT::"WHI Printing Management", COMPANYNAME, ptrecEventParams );
+
+        lcuCommonFuncs.generateSuccessReturnWithMsg(1, cuTranslationMgmt.getTranslatedString('MSG_REPORT_QUEUED', codRegionCode), pbsOutput);
+      END;
+    END;
+
+    PROCEDURE printInvMove@1000000002(VAR precConfig@1000000003 : Record 23044504;piLineNumber@1000000001 : Integer);
+    VAR
+      lrecItemJnlLine@1000000000 : Record 83;
+      lrecItemJnlTemplate@1000000004 : Record 82;
+      lrecReportSel@1000000005 : Record 23044508;
+      lrefRecRef@1000000007 : RecordRef;
+    BEGIN
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Reclass Movement");
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+
+        //
+        // determine the template
+        //
+        lrecItemJnlTemplate.SETRANGE("Page ID",PAGE::"Item Reclass. Journal");
+        lrecItemJnlTemplate.SETRANGE(Recurring,FALSE);
+        lrecItemJnlTemplate.FINDFIRST;
+
+        REPEAT
+          lrecItemJnlLine.RESET;
+
+          //
+          // filter the report
+          //
+          lrecItemJnlLine.SETRANGE("Journal Template Name",lrecItemJnlTemplate.Name);
+          lrecItemJnlLine.SETRANGE("Journal Batch Name",precConfig."Reclass Journal Batch");
+          IF( lrecReportSel."Use Line Data" ) THEN BEGIN
+            IF( piLineNumber <> -1 ) THEN BEGIN
+              lrecItemJnlLine.SETRANGE("Line No.", piLineNumber);
+            END;
+          END;
+
+          lrefRecRef.GETTABLE(lrecItemJnlLine);
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+
+        UNTIL( lrecReportSel.NEXT=0 );
+      END ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::"Reclass Movement" ) );
+    END;
+
+    PROCEDURE printWhseMove@1000000003(VAR precConfig@1000000003 : Record 23044504;precActivityHeader@1000000000 : Record 5766;piLineNumber@1000000002 : Integer);
+    VAR
+      lrecReportSel@1000000004 : Record 23044508;
+      lrecWhseActivityHeader@1000000001 : Record 5766;
+      lrecWhseActivityLine@1000000006 : Record 5767;
+      lrefRecRef@1000000005 : RecordRef;
+    BEGIN
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::Movement);
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lrecWhseActivityHeader.RESET;
+          lrecWhseActivityLine.RESET;
+
+          IF( lrecReportSel."Use Line Data" ) THEN BEGIN
+            // filter the report
+            lrecWhseActivityLine.SETRANGE("Activity Type",precActivityHeader.Type);
+            lrecWhseActivityLine.SETRANGE("No.",precActivityHeader."No.");
+            IF( piLineNumber <> -1 ) THEN BEGIN
+              lrecWhseActivityLine.SETRANGE("Line No.",piLineNumber);
+            END;
+
+            lrefRecRef.GETTABLE(lrecWhseActivityLine);
+
+          END ELSE BEGIN
+            lrecWhseActivityHeader.SETRANGE(Type,precActivityHeader.Type);
+            lrecWhseActivityHeader.SETRANGE("No.",precActivityHeader."No.");
+
+            lrefRecRef.GETTABLE(lrecWhseActivityHeader);
+          END;
+
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::Movement ) );
+    END;
+
+    PROCEDURE printPick@1000000004(VAR precConfig@1000000007 : Record 23044504;precActivityHeader@1000000000 : Record 5766;piLineNumber@1000000005 : Integer);
+    VAR
+      lrecReportSel@1000000003 : Record 23044508;
+      lrecWhseActivityHeader@1000000002 : Record 5766;
+      lrecWhseActivityLine@1000000001 : Record 5767;
+      lrefRecRef@1000000008 : RecordRef;
+    BEGIN
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::Pick);
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lrecWhseActivityHeader.RESET;
+          lrecWhseActivityLine.RESET;
+
+          IF( lrecReportSel."Use Line Data" ) THEN BEGIN
+            // filter the report
+            lrecWhseActivityLine.SETRANGE("Activity Type",precActivityHeader.Type);
+            lrecWhseActivityLine.SETRANGE("No.",precActivityHeader."No.");
+            IF( piLineNumber <> -1 ) THEN BEGIN
+              lrecWhseActivityLine.SETRANGE("Line No.",piLineNumber);
+            END;
+
+            lrefRecRef.GETTABLE(lrecWhseActivityLine);
+          END ELSE BEGIN
+            lrecWhseActivityHeader.SETRANGE(Type,precActivityHeader.Type);
+            lrecWhseActivityHeader.SETRANGE("No.",precActivityHeader."No.");
+            lrefRecRef.GETTABLE(lrecWhseActivityHeader);
+          END;
+
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::Pick ) );
+    END;
+
+    PROCEDURE printPutAway@1000000005(VAR precConfig@1000000004 : Record 23044504;precActivityHeader@1000000000 : Record 5766;piLineNumber@1000000005 : Integer);
+    VAR
+      lrecReportSel@1000000003 : Record 23044508;
+      lrecWhseActivityHeader@1000000002 : Record 5766;
+      lrecWhseActivityLine@1000000001 : Record 5767;
+      lrefRecRef@1000000006 : RecordRef;
+    BEGIN
+      //<TPZ2039>
+      //IF ((precPDAConfig."Location Code" = '1') OR (precPDAConfig."Location Code" = '25') OR (precPDAConfig."Location Code" = '76') OR (precPDAConfig."Location Code" = '30')) AND
+      IF (precConfig."Label Printer IP" <> '') THEN BEGIN
+          gcd_WMDMTopazPrintExtension.GlobalPrintPostedPOPutAwayPaperLess(precConfig, precActivityHeader);
+          EXIT;
+      END;
+      //</TPZ2039>
+
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Put-Away");
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lrecWhseActivityHeader.RESET;
+          lrecWhseActivityLine.RESET;
+
+          IF( lrecReportSel."Use Line Data" ) THEN BEGIN
+            // filter the report
+            lrecWhseActivityLine.SETRANGE("Activity Type",precActivityHeader.Type);
+            lrecWhseActivityLine.SETRANGE("No.",precActivityHeader."No.");
+            IF( piLineNumber <> -1 ) THEN BEGIN
+              lrecWhseActivityLine.SETRANGE("Line No.",piLineNumber);
+            END;
+
+            lrefRecRef.GETTABLE(lrecWhseActivityLine);
+
+          END ELSE BEGIN
+            lrecWhseActivityHeader.SETRANGE(Type,precActivityHeader.Type);
+            lrecWhseActivityHeader.SETRANGE("No.",precActivityHeader."No.");
+            lrefRecRef.GETTABLE(lrecWhseActivityHeader);
+          END;
+
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::"Put-Away" ) );
+    END;
+
+    PROCEDURE printWarehouseDoc@1000000012(VAR precConfig@1000000002 : Record 23044504;piActivityType@1000000001 : Integer;pcodActivityNo@1000000000 : Code[20];piLineNumber@1000000003 : Integer);
+    VAR
+      lrecWhseActivityHeader@1000000004 : Record 5766;
+    BEGIN
+      lrecWhseActivityHeader.GET(piActivityType, pcodActivityNo);
+
+      CASE lrecWhseActivityHeader.Type OF
+        lrecWhseActivityHeader.Type::"Put-away",lrecWhseActivityHeader.Type::"Invt. Put-away":
+            printPutAway(precConfig, lrecWhseActivityHeader,piLineNumber);
+        lrecWhseActivityHeader.Type::Pick,lrecWhseActivityHeader.Type::"Invt. Pick":
+            printPick(precConfig, lrecWhseActivityHeader,piLineNumber);
+        lrecWhseActivityHeader.Type::Movement:
+            printWhseMove( precConfig, lrecWhseActivityHeader,piLineNumber);
+        lrecWhseActivityHeader.Type::"Invt. Movement":
+            printWhseMove( precConfig, lrecWhseActivityHeader,piLineNumber);
+      END;
+    END;
+
+    PROCEDURE printOutputDoc@1000000000(precConfig@1000000008 : Record 23044504;pcodProdOrderNo@1000000005 : Code[20];piProdOrderLineNo@1000000007 : Integer;pcodOperation@1000000001 : Code[10]);
+    VAR
+      lrecProdOrderLine@1000000002 : Record 5406;
+      lrecProdRtngLine@1000000003 : Record 5409;
+      lrecReportSel@1000000004 : Record 23044508;
+      lrefRecRef@1000000000 : RecordRef;
+    BEGIN
+      lrecProdOrderLine.GET(lrecProdOrderLine.Status::Released,pcodProdOrderNo,piProdOrderLineNo );
+
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::Output);
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lrecProdOrderLine.RESET;
+          lrecProdRtngLine.RESET;
+
+          IF( lrecReportSel."Use Line Data" ) THEN BEGIN
+            lrecProdRtngLine.SETRANGE(Status,lrecProdOrderLine.Status);
+            lrecProdRtngLine.SETRANGE("Prod. Order No.",lrecProdOrderLine."Prod. Order No.");
+            lrecProdRtngLine.SETRANGE("Routing Reference No.",lrecProdOrderLine."Line No.");
+            lrecProdRtngLine.SETRANGE("Operation No.",pcodOperation);
+
+            lrefRecRef.GETTABLE(lrecProdRtngLine);
+          END ELSE BEGIN
+            lrecProdOrderLine.SETRANGE(Status,lrecProdOrderLine.Status);
+            lrecProdOrderLine.SETRANGE("Prod. Order No.",lrecProdOrderLine."Prod. Order No.");
+
+            lrefRecRef.GETTABLE(lrecProdOrderLine);
+          END;
+
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::Output ) );
+    END;
+
+    PROCEDURE printWhseReceipt@1000000006(VAR precConfig@1000000003 : Record 23044504;pcodReceiptNo@1000000001 : Code[20];piLineNumber@1000000006 : Integer);
+    VAR
+      lrecWhseReceipt@1000000000 : Record 7316;
+      lrecWhseReceiptLine@1000000004 : Record 7317;
+      lrecReportSel@1000000002 : Record 23044508;
+      lrefRecRef@1000000005 : RecordRef;
+    BEGIN
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Whse. Receipt");
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lrecWhseReceipt.RESET;
+          lrecWhseReceiptLine.RESET;
+
+          IF( lrecReportSel."Use Line Data" ) THEN BEGIN
+            lrecWhseReceiptLine.SETRANGE("No.",pcodReceiptNo);
+            IF( piLineNumber <> -1 ) THEN BEGIN
+              lrecWhseReceiptLine.SETRANGE("Line No.",piLineNumber);
+            END;
+
+            lrefRecRef.GETTABLE(lrecWhseReceiptLine);
+          END ELSE BEGIN
+            lrecWhseReceipt.SETRANGE("No.",pcodReceiptNo);
+            lrefRecRef.GETTABLE(lrecWhseReceipt);
+          END;
+
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::"Whse. Receipt" ) );
+    END;
+
+    PROCEDURE printSalesOrder@1000000018(VAR precConfig@1000000003 : Record 23044504;pcodSalesNumber@1000000000 : Code[20];piLineNumber@1000000002 : Integer);
+    VAR
+      lrecSalesHeader@1000000001 : Record 36;
+      lrecSalesLine@1000000004 : Record 37;
+      lrecReportSel@1000000005 : Record 23044508;
+      lrefRecRef@1000000006 : RecordRef;
+    BEGIN
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Sales Order");
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lrecSalesHeader.RESET;
+          lrecSalesLine.RESET;
+
+          IF( lrecReportSel."Use Line Data" ) THEN BEGIN
+            lrecSalesLine.SETRANGE("Document Type",lrecSalesLine."Document Type"::Order);
+            lrecSalesLine.SETRANGE("Document No.",pcodSalesNumber);
+            IF( piLineNumber <> -1 ) THEN BEGIN
+              lrecSalesLine.SETRANGE("Line No.",piLineNumber);
+            END;
+
+            lrefRecRef.GETTABLE(lrecSalesLine);
+          END ELSE BEGIN
+            lrecSalesHeader.SETRANGE("Document Type",lrecSalesHeader."Document Type"::Order);
+            lrecSalesHeader.SETRANGE("No.",pcodSalesNumber);
+
+            lrefRecRef.GETTABLE(lrecSalesHeader);
+          END;
+
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::"Sales Order" ) );
+    END;
+
+    PROCEDURE printPurchaseOrder@1000000007(VAR precConfig@1000000006 : Record 23044504;pcodPurchaseNumber@1000000000 : Code[20];piLineNumber@1000000002 : Integer);
+    VAR
+      lrecPurchaseHeader@1000000001 : Record 38;
+      lrecPurchaseLine@1000000004 : Record 39;
+      lrecReportSel@1000000005 : Record 23044508;
+      lrefRecRef@1000000003 : RecordRef;
+    BEGIN
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Purchase Order");
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lrecPurchaseHeader.RESET;
+          lrecPurchaseLine.RESET;
+
+          IF( lrecReportSel."Use Line Data" ) THEN BEGIN
+            lrecPurchaseLine.SETRANGE("Document Type",lrecPurchaseLine."Document Type"::Order);
+            lrecPurchaseLine.SETRANGE("Document No.",pcodPurchaseNumber);
+            IF( piLineNumber <> -1 ) THEN BEGIN
+              lrecPurchaseLine.SETRANGE("Line No.",piLineNumber);
+            END;
+
+            lrefRecRef.GETTABLE(lrecPurchaseLine);
+          END ELSE BEGIN
+            lrecPurchaseHeader.SETRANGE("Document Type",lrecPurchaseHeader."Document Type"::Order);
+            lrecPurchaseHeader.SETRANGE("No.",pcodPurchaseNumber);
+
+            lrefRecRef.GETTABLE(lrecPurchaseHeader);
+          END;
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::"Purchase Order" ) );
+    END;
+
+    PROCEDURE printWhseShipment@1000000013(VAR precConfig@1000000003 : Record 23044504;pcodShipmentNumber@1000000000 : Code[20];piLineNumber@1000000002 : Integer);
+    VAR
+      lrecWhseShipment@1000000001 : Record 7320;
+      lrecWhseShipmentLine@1000000006 : Record 7321;
+      lrecReportSel@1000000004 : Record 23044508;
+      lrefRecRef@1000000005 : RecordRef;
+    BEGIN
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Whse. Shipment");
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lrecWhseShipment.RESET;
+          lrecWhseShipmentLine.RESET;
+
+          IF( lrecReportSel."Use Line Data" ) THEN BEGIN
+            lrecWhseShipmentLine.SETRANGE("No.",pcodShipmentNumber);
+            IF( piLineNumber <> -1 ) THEN BEGIN
+              lrecWhseShipmentLine.SETRANGE("Line No.",piLineNumber);
+            END;
+
+            lrefRecRef.GETTABLE(lrecWhseShipmentLine);
+          END ELSE BEGIN
+            lrecWhseShipment.SETRANGE("No.",pcodShipmentNumber);
+            lrefRecRef.GETTABLE(lrecWhseShipment);
+          END;
+
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::"Whse. Shipment" ) );
+    END;
+
+    PROCEDURE printItemLabel@1000000008(VAR precConfig@1000000005 : Record 23044504);
+    VAR
+      lrecReportSel@1000000010 : Record 23044508;
+      lrecItemLedgerEntry@1000000009 : Record 32;
+      lrecItem@1000000008 : Record 27;
+      lrefRecRef@1000000007 : RecordRef;
+      liEntryNo@1000000006 : Integer;
+      lcodItemNumber@1000000004 : Text;
+    BEGIN
+      //kvb VSO2251 03/28/18 ->
+      IF precConfig."Label Printer IP" <> '' THEN BEGIN
+        gcd_WMDMTopazPrintExtension.GlobalItemLabel(precConfig, cuSessionHelper.GetValue('label_item_number'));
+        EXIT;
+      END;
+      //kvb VSO2251 03/28/18 <-
+
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Item Label");
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          liEntryNo := cuSessionHelper.GetValueAsInt('label_ledger_entry_number');
+          IF( liEntryNo = 0 ) THEN BEGIN
+            lcodItemNumber := cuSessionHelper.GetValue('label_item_number');
+            lrecItem.SETRANGE("No.",lcodItemNumber);
+            lrefRecRef.GETTABLE(lrecItem);
+          END ELSE BEGIN
+            lrecItemLedgerEntry.SETRANGE("Entry No.", liEntryNo);
+            lrefRecRef.GETTABLE(lrecItemLedgerEntry);
+          END;
+
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::"Item Label" ) );
+    END;
+
+    PROCEDURE printBinLabel@1000000009(VAR precConfig@1000000004 : Record 23044504;pcodBinCode@1000000001 : Code[20]);
+    VAR
+      lrecBin@1000000000 : Record 7354;
+      lrecReportSel@1000000003 : Record 23044508;
+      lrefRecRef@1000000002 : RecordRef;
+    BEGIN
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Bin Label");
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lrecBin.RESET;
+
+          lrecBin.SETRANGE("Location Code", precConfig."Location Code");
+          lrecBin.SETRANGE(Code,pcodBinCode);
+
+          lrefRecRef.GETTABLE(lrecBin);
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::"Bin Label" ) );
+    END;
+
+    PROCEDURE printTransferOrder@1000000010(VAR precConfig@1000000006 : Record 23044504;pcodTransferNumber@1000000000 : Code[20];pbShipping@1000000005 : Boolean;piLineNumber@1000000007 : Integer);
+    VAR
+      lrecTransferHeader@1000000001 : Record 5740;
+      lrecTransferLine@1000000004 : Record 5741;
+      lrecReportSel@1000000002 : Record 23044508;
+      lrefRecRef@1000000003 : RecordRef;
+    BEGIN
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Transfer Order");
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lrecTransferHeader.RESET;
+          lrecTransferLine.RESET;
+
+          IF( lrecReportSel."Use Line Data" ) THEN BEGIN
+            lrecTransferLine.SETRANGE("Document No.",pcodTransferNumber);
+            IF( piLineNumber <> -1 ) THEN BEGIN
+              lrecTransferLine.SETRANGE("Line No.",piLineNumber);
+            END;
+
+            lrefRecRef.GETTABLE(lrecTransferLine);
+          END ELSE BEGIN
+            lrecTransferHeader.SETRANGE("No.",pcodTransferNumber);
+            lrefRecRef.GETTABLE(lrecTransferHeader);
+          END;
+
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::"Transfer Order" ) );
+    END;
+
+    PROCEDURE printLicensePlateLabel@1000000001(VAR precConfig@1000000002 : Record 23044504;pcodLPDocNo@1000000000 : Code[20];piLineNumber@1000000006 : Integer);
+    VAR
+      lrecLPHeader@1000000007 : Record 23044505;
+      lrecLPLine@1000000005 : Record 23044506;
+      lrecPrinterSelections@1000000004 : Record 78;
+      lrecReportSel@1000000003 : Record 23044508;
+      lrefRecRef@1000000001 : RecordRef;
+    BEGIN
+      //kvb VSO2251 03/28/18 ->
+      //ERROR('!');
+      IF precConfig."Label Printer IP" <> '' THEN BEGIN
+        gcd_WMDMTopazPrintExtension.GlobalPrintLicensePlate(precConfig, pcodLPDocNo, piLineNumber);
+        EXIT;
+      END;
+      //kvb VSO2251 03/28/18 <-
+
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"LP Label");
+
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lrecLPHeader.RESET();
+          lrecLPLine.RESET();
+
+          IF( lrecReportSel."Use Line Data" ) THEN BEGIN
+            lrecLPLine.SETRANGE("License Plate No.",pcodLPDocNo);
+            IF( piLineNumber <> -1 ) THEN BEGIN
+              lrecLPLine.SETRANGE("Line No.",piLineNumber);
+            END;
+
+            lrefRecRef.GETTABLE(lrecLPLine);
+          END
+          ELSE BEGIN
+            lrecLPHeader.SETRANGE("No.",pcodLPDocNo);
+            lrefRecRef.GETTABLE(lrecLPHeader);
+          END;
+
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::"LP Label" ) );
+    END;
+
+    PROCEDURE printWhseReclassMove@1000000015(VAR precConfig@1000000003 : Record 23044504;piLineNumber@1000000001 : Integer);
+    VAR
+      lrecWhseJnlLine@1000000000 : Record 7311;
+      lrecWhseJnlTemplate@1000000004 : Record 7309;
+      lrecReportSel@1000000005 : Record 23044508;
+      lcudReclassMgmt@1000000002 : Codeunit 23044524;
+      lrefRecRef@1000000006 : RecordRef;
+    BEGIN
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Whse. Reclass Movement");
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        lrecWhseJnlTemplate.SETRANGE("Page ID",PAGE::"Whse. Reclassification Journal");
+        lrecWhseJnlTemplate.FINDFIRST;
+
+        REPEAT
+          //
+          // filter the report
+          //
+          lrecWhseJnlLine.RESET;
+          lrecWhseJnlLine.SETRANGE("Journal Template Name",lrecWhseJnlTemplate.Name);
+          lrecWhseJnlLine.SETRANGE("Journal Batch Name",precConfig."Whse. Reclass Journal Batch");
+          lrecWhseJnlLine.SETRANGE("Location Code",precConfig."Location Code");
+
+          IF( lrecReportSel."Use Line Data" ) THEN BEGIN
+            IF( piLineNumber <> -1 ) THEN BEGIN
+              lrecWhseJnlLine.SETRANGE("Line No.", piLineNumber);
+            END;
+          END;
+
+          lrefRecRef.GETTABLE(lrecWhseJnlLine);
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::"Whse. Reclass Movement" ) );
+    END;
+
+    PROCEDURE printReceiptQtyHandled@1000000016(VAR precConfig@1000000001 : Record 23044504);
+    VAR
+      lrecReportSel@1000000000 : Record 23044508;
+      lrecItemLedgerEntry@1000000007 : Record 32;
+      lrecItem@1000000008 : Record 27;
+      lrefRecRef@1000000006 : RecordRef;
+      liEntryNo@1000000005 : Integer;
+      lcodItemNumber@1000000009 : Text;
+    BEGIN
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Item Label");
+
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          liEntryNo := cuSessionHelper.GetValueAsInt('label_ledger_entry_number');
+          IF( liEntryNo = 0 ) THEN BEGIN
+            lcodItemNumber := cuSessionHelper.GetValue('label_item_number');
+            lrecItem.SETRANGE("No.",lcodItemNumber);
+            lrefRecRef.GETTABLE(lrecItem);
+          END ELSE BEGIN
+            lrecItemLedgerEntry.SETRANGE("Entry No.", liEntryNo);
+            lrefRecRef.GETTABLE(lrecItemLedgerEntry);
+          END;
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::"Item Label" ) );
+    END;
+
+    PROCEDURE printOnOutput@1000000024(VAR precConfig@1000000001 : Record 23044504);
+    VAR
+      lrecReportSel@1000000000 : Record 23044508;
+      lrecItemLedgerEntry@1000000007 : Record 32;
+      lrecItem@1000000008 : Record 27;
+      lrefRecRef@1000000006 : RecordRef;
+      liEntryNo@1000000005 : Integer;
+      lcodItemNumber@1000000009 : Text;
+    BEGIN
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Item Label");
+
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          liEntryNo := cuSessionHelper.GetValueAsInt('label_ledger_entry_number');
+          IF( liEntryNo = 0 ) THEN BEGIN
+            lcodItemNumber := cuSessionHelper.GetValue('label_item_number');
+            lrecItem.SETRANGE("No.",lcodItemNumber);
+            lrefRecRef.GETTABLE(lrecItem);
+          END ELSE BEGIN
+            lrecItemLedgerEntry.SETRANGE("Entry No.", liEntryNo);
+            lrefRecRef.GETTABLE(lrecItemLedgerEntry);
+          END;
+
+          printWithWHISelection(lrefRecRef, precConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END
+      ELSE
+        ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), precConfig.Code,FORMAT( lrecReportSel.Usage::"Item Label" ) );
+    END;
+
+    PROCEDURE insertWHIJobQueue@1000000019(piTableNo@1000000005 : Integer;ptxtFilters@1000000002 : Text[250];piReportNo@1000000003 : Integer;ptxtPrinterName@1000000004 : Text[250];pcodDeviceCode@1000000001 : Code[20]);
+    VAR
+      lrecJobQueuePrinting@1000000000 : Record 23044530;
+      lrecConfig@1000000007 : Record 23044504;
+      lcuAutoSetup@1000000006 : Codeunit 23044590;
+      lrecWHISetup@1000000008 : Record 23044502;
+    BEGIN
+      lrecWHISetup.GET();
+
+      lrecJobQueuePrinting.INIT;
+      lrecJobQueuePrinting.VALIDATE("Table No.", piTableNo);
+      lrecJobQueuePrinting.VALIDATE(Filters, ptxtFilters);
+      lrecJobQueuePrinting.VALIDATE("Report No.", piReportNo);
+      lrecJobQueuePrinting.VALIDATE("Printer Name", ptxtPrinterName);
+      lrecJobQueuePrinting.VALIDATE("Config ID", pcodDeviceCode);
+      lrecJobQueuePrinting.VALIDATE("Device User", USERID);
+
+      lrecJobQueuePrinting.INSERT(TRUE);
+
+      // we're doing this for two reasons:
+      //   1) it will re-set the state to 'ready' in the scenario that it has errored out.
+      //   2) it will reset the 'start time' to be the current time, so the user does not have to wait.
+      lcuAutoSetup.ConfigPrintingJobQueue(TRUE);
+    END;
+
+    PROCEDURE printWithWHISelection@1000000026(VAR prefRecord@1000000005 : RecordRef;precConfig@1000000004 : Record 23044504;precReportSelection@1000000003 : Record 23044508);
+    VAR
+      ltxtPrinterName@1000000000 : Text[250];
+    BEGIN
+      //
+      //  This method should be used when your report type is within a WHI Report Selections.
+      //  It will use the report selections to determine the printer to use for printing.
+      //
+      IF( precReportSelection."Printer Type" = precReportSelection."Printer Type"::"Regular Printer" ) THEN BEGIN
+        ltxtPrinterName := precConfig."Regular Printer Name";
+      END ELSE BEGIN
+        ltxtPrinterName := precConfig."Label Printer Name";
+      END;
+
+      printReport( prefRecord, precConfig.Code, precReportSelection."Report ID", ltxtPrinterName);
+    END;
+
+    PROCEDURE printReport@1000000017(VAR prefRecord@1000000001 : RecordRef;pcodDevice@1000000002 : Code[20];piReportNo@1000000006 : Integer;ptxtPrinterName@1000000005 : Text[250]);
+    VAR
+      lrecWHISetup@1000000000 : Record 23044502;
+    BEGIN
+      lrecWHISetup.GET();
+      IF (lrecWHISetup."Print Behavior" = lrecWHISetup."Print Behavior"::"Directly Print") THEN BEGIN
+        printDirectly(prefRecord, piReportNo, ptxtPrinterName);
+      END ELSE BEGIN
+        insertWHIJobQueue(prefRecord.NUMBER, prefRecord.GETVIEW(), piReportNo, ptxtPrinterName, pcodDevice);
+      END;
+    END;
+
+    PROCEDURE printDirectly@1000000020(VAR prrecRef@1000000000 : RecordRef;piReportNo@1000000001 : Integer;ptxtPrinterName@1000000002 : Text[250]);
+    VAR
+      lcuCommonFuncs@1000000003 : Codeunit 23044501;
+      ltxtPreviousPrinter@1000000004 : Text[250];
+      lbUseSystemPrinter@1000000005 : Boolean;
+      lvarRecRef@1000000006 : Variant;
+      lrecPrinterSelection@1000000007 : Record 78;
+    BEGIN
+      lrecPrinterSelection.LOCKTABLE();
+
+
+      IF ( ptxtPrinterName <> '' ) THEN BEGIN
+        lbUseSystemPrinter := FALSE;
+        ltxtPreviousPrinter := lcuCommonFuncs.setPrinterSelection(ptxtPrinterName, piReportNo);
+      END ELSE BEGIN
+        lbUseSystemPrinter := TRUE;
+      END;
+
+      IF (prrecRef.HASFILTER) THEN BEGIN
+        IF prrecRef.FIND('-') THEN; // then nothing.  Keep going if no records
+      END;
+
+      prrecRef.SETRECFILTER();
+
+      lvarRecRef := prrecRef;
+
+      IF ( NOT cuExtensibility.OnReportRun( piReportNo,GUIALLOWED,lbUseSystemPrinter,lvarRecRef) )  THEN BEGIN
+        REPORT.RUNMODAL(piReportNo, GUIALLOWED, lbUseSystemPrinter, lvarRecRef );
+      END; // if extensibility handled this
+
+      IF (( ptxtPrinterName <> '' ) AND (ltxtPreviousPrinter <> '')) THEN BEGIN
+        // if we didn't change the default printer to use, then
+        // don't try and change it back.
+        lcuCommonFuncs.setPrinterSelection(ltxtPreviousPrinter, piReportNo);
+      END;
+    END;
+
+    PROCEDURE printAutomaticAnything@1000000022(VAR ptrecEventParams@1000000000 : TEMPORARY Record 23044511) pbOutPrint : Boolean;
+    VAR
+      lrrefRecord@1000000001 : RecordRef;
+      lrecConfig@1000000002 : Record 23044504;
+      lcuDocLink@1000000003 : Codeunit 23044529;
+      lrecReportSelection@1000000004 : Record 23044508;
+    BEGIN
+      //
+      // Uses the document link search to guess the document you are trying to print.
+      //
+      pbOutPrint := FALSE;
+
+      cuCommonFuncs.getDeviceConfig( lrecConfig,ptrecEventParams );
+
+      IF ( lcuDocLink.GetRecordRef(ptrecEventParams,lrrefRecord ) ) THEN BEGIN
+        lrecReportSelection.RESET();
+        lrecReportSelection.SETRANGE(Usage, lrecReportSelection.Usage::Custom );
+        lrecReportSelection.SETRANGE("Custom Table", lrrefRecord.NUMBER );
+        IF ( lrecReportSelection.FINDSET(FALSE) ) THEN BEGIN
+          REPEAT
+            IF (isCustomRecordRefMatch(lrrefRecord, lrecReportSelection)) THEN BEGIN
+              printWithWHISelection(lrrefRecord, lrecConfig, lrecReportSelection );
+              pbOutPrint := TRUE;
+            END;
+          UNTIL( lrecReportSelection.NEXT() = 0 );
+
+          IF (NOT pbOutPrint) THEN BEGIN
+            ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), lrecConfig.Code,  lrecReportSelection."Custom Table Name" );
+
+          END;
+        END ELSE BEGIN
+          lrecReportSelection.CALCFIELDS("Custom Table Name");
+          ERROR(cuTranslationMgmt.getTranslatedString('ERR_NO_REPORTS_CONFIGURED', codRegionCode), lrecConfig.Code,  lrecReportSelection."Custom Table Name" );
+        END;
+      END ELSE BEGIN
+
+      END;
+      EXIT( pbOutPrint );
+    END;
+
+    PROCEDURE isCustomRecordRefMatch@1000000021(VAR precRecordToMatch@1000000000 : RecordRef;VAR precReportSelection@1000000001 : Record 23044508) prbFound : Boolean;
+    VAR
+      lrrefCompareRef@1000000002 : RecordRef;
+      lrrefTestValidity@1000000011 : RecordRef;
+      lfrefFieldOnCompareRef@1000000003 : FieldRef;
+      lfrefFieldValidCheck@1000000012 : FieldRef;
+      liFieldIndex@1000000004 : Integer;
+      ltxtFilterOnCompareField@1000000005 : Text[250];
+      lbMatched@1000000006 : Boolean;
+    BEGIN
+      //
+      // Compare filter on the specific field
+      //
+
+      // first, compare table
+      IF ( precRecordToMatch.NUMBER <> precReportSelection."Custom Table" )  THEN BEGIN
+        EXIT(FALSE);
+      END;
+
+      lrrefCompareRef.OPEN( precReportSelection."Custom Table" ); // open the table.
+      IF (precReportSelection."Custom Filter" <> '') THEN BEGIN
+        lrrefCompareRef.SETVIEW(precReportSelection."Custom Filter");
+      END;
+
+      lrrefTestValidity.OPEN( precRecordToMatch.NUMBER );
+      lrrefTestValidity.SETVIEW( precRecordToMatch.GETVIEW() ); // start with everything we know about this record.
+
+      lbMatched := TRUE;
+      FOR liFieldIndex:= 1 TO lrrefCompareRef.FIELDCOUNT DO
+      BEGIN
+        lfrefFieldOnCompareRef := lrrefCompareRef.FIELDINDEX(liFieldIndex);
+        // we have a reference to the field
+        ltxtFilterOnCompareField := lfrefFieldOnCompareRef.GETFILTER();
+        //
+        // IF this blank then there has been no custom filter setup in report selection custom filer
+        // for that field.
+        IF ( ltxtFilterOnCompareField <> '' ) THEN BEGIN
+            lfrefFieldValidCheck := lrrefTestValidity.FIELDINDEX( liFieldIndex );
+            lfrefFieldValidCheck.SETFILTER( ltxtFilterOnCompareField );
+        END; // if we have a filter on this field
+      END; // end for loop
+
+      IF ( lrrefTestValidity.FIND('-') ) THEN BEGIN
+          lbMatched := TRUE;
+      END ELSE BEGIN
+          lbMatched := FALSE;
+      END;
+
+      EXIT(lbMatched);
+    END;
+
+    PROCEDURE printPurchaseOrderOnPost@1000000023(pcodPurchaseNumber@1000000000 : Code[20]);
+    VAR
+      lrecPurchaseHeader@1000000001 : Record 38;
+      lrecReportSel@1000000005 : Record 23044508;
+      lrefRecRef@1000000003 : RecordRef;
+      lrecPurchRcptHeader@1000000002 : Record 120;
+    BEGIN
+      // assumption: the "Purchase Order" report selections will be based on the purchase receipt
+      lrecPurchaseHeader.GET(lrecPurchaseHeader."Document Type"::Order,pcodPurchaseNumber);
+      lrecPurchRcptHeader.GET(lrecPurchaseHeader."Last Receiving No.");
+      lrefRecRef.GETTABLE(lrecPurchRcptHeader);
+
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Purchase Order");
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          printWithWHISelection(lrefRecRef, recConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END;
+    END;
+
+    PROCEDURE printTransferRcptOnPost@1000000025(pcodTransferNumber@1000000000 : Code[20]);
+    VAR
+      lrecTransferHeader@1000000001 : Record 5740;
+      lrecReportSel@1000000005 : Record 23044508;
+      lrefRecRef@1000000003 : RecordRef;
+      lrecTransRcptHeader@1000000002 : Record 5746;
+    BEGIN
+      // assumption: the "Transfer Order" report selections will be based on the transfer receipt
+      lrecTransferHeader.GET(pcodTransferNumber);
+      lrecTransRcptHeader.GET(lrecTransferHeader."Last Receipt No.");
+      lrefRecRef.GETTABLE(lrecTransRcptHeader);
+
+      lrecReportSel.SETRANGE(Usage,lrecReportSel.Usage::"Transfer Order");
+      IF( lrecReportSel.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          printWithWHISelection(lrefRecRef, recConfig, lrecReportSel );
+        UNTIL( lrecReportSel.NEXT=0 );
+      END;
+    END;
+
+    PROCEDURE printWhseReceiptOnPost@1000000027(pcodWhseRcptNumber@1000000000 : Code[20]);
+    VAR
+      lrecPostWhseRcptHeader@1000000004 : Record 7318;
+      lrecPostWhseRcptLine@1000000001 : Record 7319;
+    BEGIN
+      // assumption: the "Whse. Receipt" report selections will be based on the underlying source document and be a single order
+      lrecPostWhseRcptHeader.SETRANGE("Whse. Receipt No.",pcodWhseRcptNumber);
+      lrecPostWhseRcptHeader.FINDLAST;
+      lrecPostWhseRcptLine.SETRANGE("No.",lrecPostWhseRcptHeader."No.");
+      lrecPostWhseRcptLine.FINDFIRST;
+
+      CASE lrecPostWhseRcptLine."Source Document" OF
+        lrecPostWhseRcptLine."Source Document"::"Purchase Order": printPurchaseOrderOnPost(lrecPostWhseRcptLine."Source No.");
+        lrecPostWhseRcptLine."Source Document"::"Inbound Transfer": printTransferRcptOnPost(lrecPostWhseRcptLine."Source No.");
+      END;
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+    }
+    END.
+  }
+}
+

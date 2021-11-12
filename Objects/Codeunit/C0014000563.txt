@@ -1,0 +1,166 @@
+OBJECT Codeunit 14000563 Find Seasonal Items
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/10/09;
+    Time=12:00:00 PM;
+    Version List=UBP2.70;
+  }
+  PROPERTIES
+  {
+    TableNo=14;
+    OnRun=VAR
+            InvMgtSetup@14000500 : Record 14000551;
+            ItemUsage@14000501 : Record 14000557;
+            LocInvPeriod@14000502 : Record 14000553;
+            ProcUnit@14000503 : Record 14000555;
+            TempProcUnit@14000504 : TEMPORARY Record 14000555;
+            Window@14000505 : Dialog;
+            AnnualUsage@14000506 : Decimal;
+            BeginCount@14000507 : Integer;
+            EndCount@14000508 : Integer;
+            FirstClosedStartingDate@14000510 : Date;
+            LastClosedEndingDate@14000511 : Date;
+            LastClosedStartingDate@14000512 : Date;
+            FirstTime@14000513 : Boolean;
+            InsertedRecords@14000514 : Integer;
+            TestDate@14000516 : Date;
+            SixMoUsage@14000517 : ARRAY [12] OF Decimal;
+            i@14000518 : Integer;
+            j@14000519 : Integer;
+            PeriodsPerMonth@14000520 : Integer;
+            PeriodBeginCount@14000521 : ARRAY [12] OF Integer;
+            PeriodEndCount@14000522 : ARRAY [12] OF Integer;
+            SeasonalAmt@14000523 : Decimal;
+            SeasonalItem@14000524 : Boolean;
+            Text000@14000525 : TextConst 'ENU=Suggesting Seasonal Items';
+            Text001@14000526 : TextConst 'ENU=Location';
+            Text002@14000527 : TextConst 'ENU=Evaluating Procurement Units';
+            Text003@14000528 : TextConst 'ENU=Saving Results';
+            WindowProcCount@14000529 : Integer;
+            WindowTotalCount@14000530 : Integer;
+          BEGIN
+            Window.OPEN(
+              '#1########################################\' +
+              PADSTR(Text001,30) + '#2########\' +
+              PADSTR(Text002,30) + '@3@@@@@@@@@@@@@@@@@@\' +
+              PADSTR(Text003,30) + '@4@@@@@@@@@@@@@@@@@@');
+            Window.UPDATE(1,Text000);
+            Window.UPDATE(2,Code);
+
+            InvMgtSetup.GET;
+            InvMgtSetup.TESTFIELD("Seasonal Item %");
+            InvMgtSetup.TESTFIELD("No. of Periods in a Year");
+            CLEAR(PeriodBeginCount);
+            CLEAR(PeriodEndCount);
+            PeriodsPerMonth := ROUND(InvMgtSetup."No. of Periods in a Year" / 12,1.0);
+            FirstTime := TRUE;
+            BeginCount := 1;
+            EndCount := (6 * PeriodsPerMonth);
+            FOR i := 1 TO 12 DO BEGIN
+              IF FirstTime THEN BEGIN
+                FirstTime := FALSE;
+                PeriodBeginCount[i] := BeginCount;
+                PeriodEndCount[i] := EndCount;
+              END ELSE BEGIN
+                BeginCount := BeginCount + PeriodsPerMonth;
+                EndCount := EndCount + PeriodsPerMonth;
+                IF EndCount > (12 * PeriodsPerMonth) THEN
+                  EndCount := PeriodsPerMonth;
+                PeriodBeginCount[i] := BeginCount;
+                PeriodEndCount[i] := EndCount;
+              END;
+            END;
+
+            LocInvPeriod.RESET;
+            LocInvPeriod.SETCURRENTKEY("Location Code","Starting Date","Period End Closed");
+            LocInvPeriod.SETRANGE("Location Code",Code);
+            LocInvPeriod.SETRANGE("Period End Closed",TRUE);
+            IF LocInvPeriod.FIND('+') THEN BEGIN
+              LastClosedEndingDate := LocInvPeriod."Ending Date";
+              LastClosedStartingDate := LocInvPeriod."Starting Date";
+              TestDate := CALCDATE('<-1Y>',LastClosedEndingDate);
+              TestDate := CALCDATE('<+1D>',TestDate);
+              LocInvPeriod.SETRANGE("Starting Date",TestDate,LastClosedStartingDate);
+              LocInvPeriod.FIND('-');
+              FirstClosedStartingDate := LocInvPeriod."Starting Date";
+            END;
+
+            ProcUnit.RESET;
+            ProcUnit.SETRANGE("Location Code",Code);
+            ProcUnit.SETFILTER("First Stocked Date",'<=%1',FirstClosedStartingDate);
+            WindowTotalCount := ProcUnit.COUNT;
+            IF ProcUnit.FIND('-') THEN BEGIN
+              ItemUsage.RESET;
+              ItemUsage.SETCURRENTKEY("Location Code","Starting Date","Item No.","Variant Code");
+              ItemUsage.SETRANGE("Location Code",Code);
+              ItemUsage.SETRANGE("Starting Date",FirstClosedStartingDate,LastClosedStartingDate);
+              REPEAT
+                AnnualUsage := 0;
+                ItemUsage.SETRANGE("Item No.",ProcUnit."Item No.");
+                ItemUsage.SETRANGE("Variant Code",ProcUnit."Variant Code");
+                CLEAR(SixMoUsage);
+                j := 1;
+                IF ItemUsage.FIND('-') THEN
+                  REPEAT
+                    FOR i := 1 TO 12 DO BEGIN
+                      IF PeriodEndCount[i] < PeriodBeginCount[i] THEN BEGIN
+                        IF (j >= PeriodBeginCount[i]) OR
+                           (j <= PeriodEndCount[i]) THEN
+                          SixMoUsage[i] := SixMoUsage[i] + ItemUsage."Period End Adjusted Usage";
+                      END ELSE BEGIN
+                        IF (j >= PeriodBeginCount[i]) AND
+                           (j <= PeriodEndCount[i]) THEN
+                          SixMoUsage[i] := SixMoUsage[i] + ItemUsage."Period End Adjusted Usage";
+                      END;
+                    END;
+                    j := j + 1;
+                    AnnualUsage := AnnualUsage + ItemUsage."Period End Adjusted Usage";
+                  UNTIL ItemUsage.NEXT = 0;
+                  SeasonalAmt := AnnualUsage * (InvMgtSetup."Seasonal Item %" / 100);
+                  SeasonalItem := FALSE;
+                  IF (AnnualUsage <> 0) AND
+                     (AnnualUsage >= InvMgtSetup."Seasonal Min. Annual Usage") THEN
+                    FOR i := 1 TO 12 DO BEGIN
+                      IF SixMoUsage[i] > SeasonalAmt THEN
+                        SeasonalItem := TRUE;
+                    END;
+                  IF ProcUnit."Seasonal Item Review" <> SeasonalItem THEN BEGIN
+                    TempProcUnit.COPY(ProcUnit);
+                    TempProcUnit."Seasonal Item Review" := SeasonalItem;
+                    TempProcUnit.INSERT;
+                    InsertedRecords := InsertedRecords + 1;
+                  END;
+                WindowProcCount := WindowProcCount + 1;
+                IF WindowProcCount MOD 50 = 0 THEN
+                  Window.UPDATE(3,ROUND(10000 * (WindowProcCount / WindowTotalCount),1));
+              UNTIL ProcUnit.NEXT = 0;
+            END;
+
+            WindowTotalCount := InsertedRecords;
+            WindowProcCount := 0;
+            IF TempProcUnit.FIND('-') THEN BEGIN
+              REPEAT
+                ProcUnit.GET(
+                  TempProcUnit."Location Code",TempProcUnit."Item No.",TempProcUnit."Variant Code");
+                ProcUnit."Seasonal Item Review" := TempProcUnit."Seasonal Item Review";
+                ProcUnit."Seasonal Review Date" := WORKDATE;
+                ProcUnit.MODIFY;
+                WindowProcCount := WindowProcCount + 1;
+                IF WindowProcCount MOD 20 = 0 THEN
+                  Window.UPDATE(4,ROUND(10000 * (WindowProcCount / WindowTotalCount),1));
+              UNTIL TempProcUnit.NEXT = 0;
+            END;
+
+            Window.CLOSE;
+          END;
+
+  }
+  CODE
+  {
+
+    BEGIN
+    END.
+  }
+}
+

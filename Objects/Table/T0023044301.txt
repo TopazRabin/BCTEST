@@ -1,0 +1,1148 @@
+OBJECT Table 23044301 IWX Count Sheet Line
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/25/21;
+    Time=[ 2:12:39 PM];
+    Modified=Yes;
+    Version List=IWX2.4.7684.0;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 23044301=rimd;
+    OnInsert=VAR
+               lrecItem@1000000001 : Record 27;
+             BEGIN
+               // Sets tag number if required and validates item no.
+
+               TESTFIELD("Count No.");
+               TESTFIELD("Sheet Name");
+
+               LOCKTABLE;
+
+               setLocationCode;
+
+               VALIDATE("Tag No.");
+               calcDifference;
+
+               IF ("Serial No."<>'') AND ("Quantity (Base)"<>0) THEN
+                 cuInvCountMgmt.updateKitCountLines(Rec, "Quantity (Base)");
+             END;
+
+    OnModify=VAR
+               ltcErrBinRequired@1000000000 : TextConst 'ENC=Bin is required for location %1';
+             BEGIN
+               TESTFIELD("Item No.");
+               IF "Bin Code"='' THEN BEGIN
+                 getLocation;
+                 IF recLocation."Bin Mandatory" THEN
+                   ERROR(ltcErrBinRequired, recLocation.Code);
+               END;//if
+
+               IF "WHI Kit Item" THEN
+                 ERROR(tcErrorKitItem);
+             END;
+
+    OnDelete=VAR
+               lrecCountSheetLine@1000000000 : Record 23044301;
+               ltcDeleteRecount@1000000001 : TextConst 'ENU=A recount line exists for %1 %2\Delete this recount line?;FRC=Une ligne de recomptage existe pour %1 %2\Supprimer cette ligne de recomptage?';
+               ltcErrRecountExists@1000000002 : TextConst 'ENU=You cannot delete a count line when recount lines exist for it.;FRC=Vous ne pouvez supprimer une ligne de d‚compte s''il existe des lignes de recomptage pour celle-ci.';
+             BEGIN
+               performOnDelete;
+             END;
+
+    CaptionML=[ENU=Count Sheet Line;
+               ESM=L¡nea de la hoja de conteo;
+               FRC=Ligne de feuille de temps;
+               ENC=Count Sheet Line];
+    DrillDownPageID=Page23044301;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Count No.           ;Code20        ;TableRelation="IWX Inventory Count Header";
+                                                   OnValidate=BEGIN
+                                                                // prevent blank count
+                                                                TESTFIELD("Count No.");
+                                                              END;
+
+                                                   CaptionML=[ENU=Count No.;
+                                                              ESM=No. Contar;
+                                                              FRC=No. D‚compte;
+                                                              ENC=Count No.];
+                                                   Description=The Count No. }
+    { 2   ;   ;Tag No.             ;Integer       ;OnValidate=VAR
+                                                                lrecCountSheets@1000000000 : Record 23044301;
+                                                              BEGIN
+                                                                IF "Tag No." = 0 THEN BEGIN
+                                                                  IF ( Rec."Count No." <> '' ) THEN BEGIN
+                                                                    lrecCountSheets.SETRANGE("Count No.", "Count No.");
+                                                                  END;
+
+                                                                  IF lrecCountSheets.FINDLAST THEN
+                                                                    "Tag No." := lrecCountSheets."Tag No."+1
+                                                                  ELSE
+                                                                    "Tag No." := 1;
+                                                                END;//if
+                                                              END;
+
+                                                   CaptionML=[ENU=Tag No.;
+                                                              ESM=N£mero de marca;
+                                                              FRC=Tag No.;
+                                                              ENC=Tag No.] }
+    { 3   ;   ;Sheet Name          ;Code20        ;TableRelation="IWX Count Sheet Configuration"."Sheet Name" WHERE (Count No.=FIELD(Count No.));
+                                                   OnValidate=BEGIN
+                                                                setLocationCode;
+
+                                                                // prevent blank count
+                                                                TESTFIELD("Count No.");
+                                                              END;
+
+                                                   CaptionML=[ENU=Sheet Name;
+                                                              ESM=Nombre de la hoja;
+                                                              FRC=Nom de la feuille;
+                                                              ENC=Sheet Name];
+                                                   Description=Name of count sheet }
+    { 4   ;   ;Item No.            ;Code20        ;TableRelation=Item.No.;
+                                                   OnValidate=BEGIN
+                                                                IF "Item No."<>xRec."Item No." THEN BEGIN
+
+
+                                                                  IF ( xRec."Item No."<>'' ) THEN BEGIN
+                                                                    testRecount;
+                                                                  END;
+
+                                                                  getItem("Item No.");
+
+                                                                  cuInvCountMgmt.updateKitCountLines(xRec, -xRec."Quantity (Base)");  // remove items from old SN
+                                                                  IF cuInvCountMgmt.updateKitCountLines(Rec, "Quantity (Base)") THEN // add new serial number items
+                                                                    "WHI Kit Assembly" := TRUE
+                                                                  ELSE
+                                                                    "WHI Kit Assembly" := FALSE;
+
+                                                                  IF "Shelf No."='' THEN BEGIN
+                                                                    "Shelf No." := recItem."Shelf No.";
+                                                                  END;//if
+
+                                                                  setLocationCode;
+
+                                                                  getLocation;
+                                                                  getCountSetup;
+                                                                  IF NOT recLocation."Directed Put-away and Pick" THEN BEGIN
+                                                                    CASE recInvCountSetup."Default Unit of Measure" OF
+                                                                      recInvCountSetup."Default Unit of Measure"::"Put-away": BEGIN
+                                                                        getItemUOM(recItem."No.", recItem."Put-away Unit of Measure Code");
+                                                                        "Unit of Measure Code" := recItemUOM.Code;
+                                                                        "Qty. per Unit of Measure" := recItemUOM."Qty. per Unit of Measure";
+                                                                      END;//put-away
+
+                                                                      recInvCountSetup."Default Unit of Measure"::Purchase: BEGIN
+                                                                        getItemUOM(recItem."No.", recItem."Purch. Unit of Measure");
+                                                                        "Unit of Measure Code" := recItemUOM.Code;
+                                                                        "Qty. per Unit of Measure" := recItemUOM."Qty. per Unit of Measure";
+                                                                      END;//purchase
+                                                                    END;//case
+                                                                  END;//if not directed pick
+
+                                                                  IF "Unit of Measure Code" = '' THEN BEGIN
+                                                                      "Unit of Measure Code" := recItem."Base Unit of Measure";
+                                                                      "Qty. per Unit of Measure" := 1;
+                                                                  END;//if
+
+                                                                  IF xRec."Item No."<>'' THEN
+                                                                    calcDifference;
+                                                                END;//if
+                                                              END;
+
+                                                   CaptionML=[ENU=Item No.;
+                                                              ESM=N§ producto;
+                                                              FRC=Nø d'article;
+                                                              ENC=Item No.] }
+    { 5   ;   ;Location Code       ;Code10        ;TableRelation=Location.Code;
+                                                   OnValidate=VAR
+                                                                lrecLocation@1000000000 : Record 14;
+                                                                ltcChangeLocation@1000000002 : TextConst 'ENU=Location [%1] is required for count [%2], sheet [%3];FRC=Emplacement [%1] est requis pour d‚compte  [%2], feuille [%3]';
+                                                              BEGIN
+                                                                getConfig;
+
+                                                                IF lrecLocation.GET(recCountCfg."Location Code") AND ("Location Code"<>recCountCfg."Location Code")
+                                                                   AND (xRec."Location Code"<>'')
+                                                                THEN
+                                                                  ERROR(ltcChangeLocation, recCountCfg."Location Code", "Count No.","Sheet Name");
+
+                                                                IF ( Rec."Location Code" <> xRec."Location Code" ) THEN BEGIN
+                                                                  testRecount();
+                                                                END;
+
+                                                                calcDifference;
+                                                              END;
+
+                                                   CaptionML=[ENU=Location Code;
+                                                              ESM=C¢d. almac‚n;
+                                                              FRC=Code d'emplacement;
+                                                              ENC=Location Code] }
+    { 6   ;   ;Quantity (Base)     ;Decimal       ;OnValidate=VAR
+                                                                ltcErrRecountLine@1000000000 : TextConst 'ENU=This item is on a recount sheet and cannot be modified.\To adjust count quantity, edit Tag No. %1;FRC=Cet article est sur une feuille de recomptage et ne peut ˆtre modifi‚.\Pour ajuster la quantit‚ compt‚e, modifier le no. d''‚tiquette %1';
+                                                              BEGIN
+                                                                // Marks record as counted and sets difference
+
+                                                                IF ("Recount Tag No."<>0) AND ("Quantity (Base)"<>xRec."Quantity (Base)") THEN
+                                                                  ERROR(ltcErrRecountLine, "Recount Tag No.");
+
+                                                                IF xRec."Tag No."<>0 THEN BEGIN //if not a new record
+
+                                                                  testLicensePlate;
+
+                                                                  IF "WHI Kit Item" THEN
+                                                                    ERROR(tcErrorKitItem);
+
+                                                                  IF "Quantity (Base)" <> xRec."Quantity (Base)" THEN
+                                                                    IF cuInvCountMgmt.updateKitCountLines(Rec, "Quantity (Base)"-xRec."Quantity (Base)") THEN  // adjust qty of torqued items if required
+                                                                      "WHI Kit Assembly" := TRUE
+                                                                    ELSE
+                                                                      "WHI Kit Assembly" := FALSE;
+
+                                                                END; // if modifying existing rec
+
+                                                                Quantity := "Quantity (Base)" / "Qty. per Unit of Measure"; //<IW author="MH" date="7/23/2015" issue="TFS1895" />
+
+                                                                Counted := TRUE;
+
+                                                                IF GUIALLOWED THEN //<IW author="R.Trudeau" date="07/30/18" issue="TFS4118" />
+                                                                  "User ID" := USERID;
+                                                                "Date Entered" := CURRENTDATETIME;
+
+                                                                calcDifference;
+                                                              END;
+
+                                                   CaptionML=[ENU=Quantity (Base);
+                                                              ESM=Cantidad (base);
+                                                              FRC=Quantit‚ (base);
+                                                              ENC=Quantity (Base)];
+                                                   DecimalPlaces=0:5;
+                                                   MinValue=0 }
+    { 7   ;   ;Shelf No.           ;Code40        ;OnValidate=BEGIN
+
+
+                                                                IF ( Rec."Shelf No." <> xRec."Shelf No." ) THEN BEGIN
+                                                                  testRecount();
+                                                                END;
+
+                                                                testLicensePlate;
+
+                                                                IF xRec."Tag No."<>0 THEN BEGIN //if not a new record
+                                                                  cuInvCountMgmt.updateKitCountLines(xRec, -xRec."Quantity (Base)");  // remove items from old shelf
+                                                                  cuInvCountMgmt.updateKitCountLines(Rec, "Quantity (Base)"); // add new shelf items
+                                                                END;//if
+                                                              END;
+
+                                                   CaptionML=[ENU=Shelf No.;
+                                                              ESM=N£mero Estanter¡a;
+                                                              FRC=Nombre Shelf;
+                                                              ENC=Shelf No.] }
+    { 8   ;   ;Bin Code            ;Code20        ;TableRelation=Bin.Code WHERE (Location Code=FIELD(Location Code));
+                                                   OnValidate=BEGIN
+                                                                IF ( Rec."Bin Code" <> xRec."Bin Code" ) THEN BEGIN
+                                                                  testRecount;
+
+                                                                  setBinUOM; //<IW author="MH" date="3/14/2018" issue="TFS3844" />
+
+                                                                END;
+
+
+                                                                testLicensePlate;
+
+                                                                calcDifference;
+                                                              END;
+
+                                                   ValidateTableRelation=No;
+                                                   TestTableRelation=No;
+                                                   CaptionML=[ENU=Bin Code;
+                                                              ESM=C¢d. ubicaci¢n;
+                                                              FRC=Code emplacement;
+                                                              ENC=Bin Code];
+                                                   Description=The Bin the item was counted in }
+    { 9   ;   ;Counted             ;Boolean       ;CaptionML=[ENU=Counted;
+                                                              ESM=contados;
+                                                              FRC=D‚nombr‚;
+                                                              ENC=Counted];
+                                                   Description=Set to True once data has been entered for part }
+    { 10  ;   ;Serial No.          ;Code100       ;OnValidate=BEGIN
+
+                                                                IF xRec."Tag No."<>0 THEN BEGIN //if not a new record
+
+                                                                  IF "WHI Kit Item" THEN
+                                                                    ERROR(tcErrorKitItem);
+
+                                                                  IF "Serial No."<>xRec."Serial No." THEN BEGIN
+                                                                    testRecount;
+                                                                    testLicensePlate;
+
+                                                                    calcDifference;
+
+                                                                    cuInvCountMgmt.updateKitCountLines(xRec, -xRec."Quantity (Base)");  // remove items from old SN
+                                                                    IF cuInvCountMgmt.updateKitCountLines(Rec, "Quantity (Base)") THEN // add new serial number items
+                                                                      "WHI Kit Assembly" := TRUE
+                                                                    ELSE
+                                                                      "WHI Kit Assembly" := FALSE;
+                                                                  END;
+                                                                END; // if modifying existing rec
+                                                              END;
+
+                                                   CaptionML=[ENU=Serial No.;
+                                                              ESM=N§ serie;
+                                                              FRC=Nø de s‚rie;
+                                                              ENC=Serial No.];
+                                                   Description=The serial number if applicable }
+    { 13  ;   ;Posted              ;Boolean       ;CaptionML=[ENU=Posted;
+                                                              ESM=Al corriente;
+                                                              FRC=Publi‚;
+                                                              ENC=Posted];
+                                                   Description=Set to true when passed to phys. inv. jnl }
+    { 15  ;   ;Variant Code        ;Code10        ;TableRelation="Item Variant".Code WHERE (Item No.=FIELD(Item No.));
+                                                   OnValidate=BEGIN
+                                                                IF ( Rec."Variant Code" <> xRec."Variant Code" ) THEN BEGIN
+                                                                  testRecount();
+                                                                  setBinUOM; //<IW author="MH" date="3/14/2018" issue="TFS3844" />
+                                                                END;
+
+                                                                testLicensePlate;
+                                                              END;
+
+                                                   CaptionML=[ENU=Variant Code;
+                                                              ESM=C¢digo variante;
+                                                              FRC=code de la variante;
+                                                              ENC=Variant Code] }
+    { 40  ;   ;Prod. Order No.     ;Code20        ;TableRelation="Production Order".No. WHERE (Status=CONST(Released));
+                                                   OnValidate=BEGIN
+
+
+                                                                IF ( Rec."Prod. Order No." <> xRec."Prod. Order No." ) THEN BEGIN
+                                                                  testRecount();
+                                                                END;
+
+
+                                                                calcDifference;
+                                                              END;
+
+                                                   CaptionML=[ENU=Prod. Order No.;
+                                                              ESM=N§ orden producci¢n;
+                                                              FRC=Nø bon de prod.;
+                                                              ENC=Prod. Order No.];
+                                                   Description=Work order # for WIP }
+    { 41  ;   ;WIP Qty. (Base)     ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=-Sum("Item Ledger Entry".Quantity WHERE (Order No.=FIELD(Prod. Order No.),
+                                                                                                        Entry Type=CONST(Consumption),
+                                                                                                        Item No.=FIELD(Item No.),
+                                                                                                        Variant Code=FIELD(Variant Code),
+                                                                                                        Location Code=FIELD(Location Code),
+                                                                                                        Posting Date=FIELD(Date Filter),
+                                                                                                        Lot No.=FIELD(Lot No.)));
+                                                   OnValidate=BEGIN
+                                                                // 2013::CalcFormBegin
+                                                                {
+                                                                CalcFormula=-Sum("Item Ledger Entry".Quantity WHERE (Order No.=FIELD(Prod. Order No.),
+                                                                  Entry Type=CONST(Consumption),
+                                                                  Item No.=FIELD(Item No.),
+                                                                  Variant Code=FIELD(Variant Code),
+                                                                  Location Code=FIELD(Location Code),
+                                                                  Posting Date=FIELD(Date Filter),
+                                                                  Lot No.=FIELD(FILTER(Lot No.))));
+                                                                }
+                                                                // 2013::CalcFormEnd
+
+                                                                // 2009::CalcFormBegin
+                                                                {
+                                                                CalcFormula=-Sum("Item Ledger Entry".Quantity WHERE (Prod. Order No.=FIELD(Prod. Order No.),
+                                                                  Entry Type=CONST(Consumption),
+                                                                  Item No.=FIELD(Item No.),
+                                                                  Variant Code=FIELD(Variant Code),
+                                                                  Location Code=FIELD(Location Code),
+                                                                  Posting Date=FIELD(Date Filter),
+                                                                  Lot No.=FIELD(FILTER(Lot No.))))
+                                                                }
+                                                                // 2009::CalcFormEnd
+                                                              END;
+
+                                                   CaptionML=[ENU=WIP Qty. (Base);
+                                                              ESM=Cantidad (base) del WIP;
+                                                              FRC=Qt‚. (base) du WIP;
+                                                              ENC=WIP Qty. (Base)];
+                                                   DecimalPlaces=0:5;
+                                                   Description=Flowfield to get WIP qty issued;
+                                                   Editable=No }
+    { 42  ;   ;Is WIP              ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("Item Ledger Entry" WHERE (Order No.=FIELD(Prod. Order No.),
+                                                                                                Entry Type=CONST(Consumption),
+                                                                                                Item No.=FIELD(Item No.),
+                                                                                                Variant Code=FIELD(Variant Code),
+                                                                                                Location Code=FIELD(Location Code)));
+                                                   OnValidate=BEGIN
+                                                                // 2013::CalcFormBegin
+                                                                {
+                                                                CalcFormula=Exist("Item Ledger Entry" WHERE (Order No.=FIELD(Prod. Order No.),
+                                                                  Entry Type=CONST(Consumption),
+                                                                  Item No.=FIELD(Item No.),
+                                                                  Variant Code=FIELD(Variant Code),
+                                                                  Location Code=FIELD(Location Code)));
+                                                                }
+                                                                // 2013::CalcFormEnd
+
+                                                                // 2009::CalcFormBegin
+                                                                {
+                                                                CalcFormula=Exist("Item Ledger Entry" WHERE (Prod. Order No.=FIELD(Prod. Order No.),
+                                                                  Entry Type=CONST(Consumption),
+                                                                  Item No.=FIELD(Item No.),
+                                                                  Variant Code=FIELD(Variant Code),
+                                                                  Location Code=FIELD(Location Code)))
+                                                                }
+                                                                // 2009::CalcFormEnd
+                                                              END;
+
+                                                   CaptionML=[ENU=Is WIP;
+                                                              ESM=Es WIP;
+                                                              FRC=Est WIP;
+                                                              ENC=Is WIP];
+                                                   Description=True when this item has already been issued to W/O;
+                                                   Editable=No }
+    { 49  ;   ;Tracked On Hand Qty. (Base);Decimal;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Item Ledger Entry".Quantity WHERE (Item No.=FIELD(Item No.),
+                                                                                                       Location Code=FIELD(Location Code),
+                                                                                                       Variant Code=FIELD(Variant Code),
+                                                                                                       Posting Date=FIELD(Date Filter),
+                                                                                                       Lot No.=FIELD(Lot No.),
+                                                                                                       Serial No.=FIELD(Serial No.)));
+                                                   CaptionML=[ENU=Tracked On Hand Qty. (Base);
+                                                              ESM=Cantidad (Base) en la mano Tracked;
+                                                              FRC=Quantit‚ (Base) Sous La Main Tracked;
+                                                              ENC=Tracked On Hand Qty. (Base)];
+                                                   DecimalPlaces=0:5;
+                                                   Description=flowfield to get on-hand by location;
+                                                   Editable=No }
+    { 50  ;   ;On Hand Quantity (Base);Decimal    ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Item Ledger Entry".Quantity WHERE (Item No.=FIELD(Item No.),
+                                                                                                       Location Code=FIELD(Location Code),
+                                                                                                       Variant Code=FIELD(Variant Code),
+                                                                                                       Posting Date=FIELD(Date Filter)));
+                                                   CaptionML=[ENU=On Hand Quantity (Base);
+                                                              ESM=Cantidad (Base) en la mano;
+                                                              FRC=Quantit‚ (Base) Sous La Main;
+                                                              ENC=On Hand Quantity (Base)];
+                                                   DecimalPlaces=0:5;
+                                                   Description=flowfield to get on-hand by location;
+                                                   Editable=No }
+    { 51  ;   ;Difference Qty. (Base);Decimal     ;CaptionML=[ENU=Difference Qty. (Base);
+                                                              ESM=Diferencia Cant. (Base);
+                                                              FRC=Diff‚rence Qt‚. (Base);
+                                                              ENC=Difference Qty. (Base)];
+                                                   DecimalPlaces=0:5;
+                                                   Description=Calculated diff between qty and expected;
+                                                   Editable=No }
+    { 52  ;   ;Difference Qty. (ABS) (Base);Decimal;
+                                                   CaptionML=[ENU=Difference Qty. (ABS) (Base);
+                                                              ESM=Diferencia Cant. (ABS) (Base);
+                                                              FRC=Diff‚rence Qt‚. (ABS) (Base);
+                                                              ENC=Difference Qty. (ABS) (Base)];
+                                                   DecimalPlaces=0:5;
+                                                   Description=Absolute qty difference;
+                                                   Editable=No }
+    { 55  ;   ;Difference Amount   ;Decimal       ;CaptionML=[ENU=Difference Amount;
+                                                              ESM=importe de la diferencia;
+                                                              FRC=Montant de la diff‚rence;
+                                                              ENC=Difference Amount];
+                                                   Description=Gets calculated on validate - difference * unit cost;
+                                                   Editable=No }
+    { 56  ;   ;Difference Amount (ABS);Decimal    ;CaptionML=[ENU=Difference Amount (ABS);
+                                                              ESM=importe de la diferencia (ABS);
+                                                              FRC=Montant de la diff‚rence (ABS);
+                                                              ENC=Difference Amount (ABS)];
+                                                   Description=Absolute value of difference amount;
+                                                   Editable=No }
+    { 57  ;   ;Difference Qty.     ;Decimal       ;CaptionML=[ENU=Difference Qty.;
+                                                              ESM=Diferencia de Cant.;
+                                                              FRC=Diff‚rence de Qt‚.;
+                                                              ENC=Difference Qty.];
+                                                   DecimalPlaces=0:5;
+                                                   Description=TFS1895 - Qty diff in current UOM;
+                                                   Editable=No }
+    { 58  ;   ;Difference Qty. (ABS);Decimal      ;CaptionML=[ENU=Difference Qty. (ABS);
+                                                              ESM=Diferencia de Cant. (ABS);
+                                                              FRC=Diff‚rence de Qt‚. (ABS);
+                                                              ENC=Difference Qty. (ABS)];
+                                                   DecimalPlaces=0:5;
+                                                   Description=TFS1895 - Absolute qty diff in current UOM;
+                                                   Editable=No }
+    { 60  ;   ;Difference Qty. Pct. (ABS);Decimal ;CaptionML=[ENU=Difference Qty. Pct. (ABS);
+                                                              ESM=Diferencia de Cant. Pct. (ABS);
+                                                              FRC=Diff‚rence de Qt‚. Pct. (ABS);
+                                                              ENC=Difference Qty. Pct. (ABS)];
+                                                   DecimalPlaces=0:2;
+                                                   Description=Calculated diff between qty and on-hand as percentage  TFS1854 }
+    { 97  ;   ;Auto Generated      ;Boolean       ;CaptionML=[ENU=Auto Generated;
+                                                              ESM=Auto generado;
+                                                              FRC=G‚n‚r ‚ Automatiquement;
+                                                              ENC=Auto Generated];
+                                                   Description=Is true if line created by report;
+                                                   Editable=No }
+    { 98  ;   ;User ID             ;Code50        ;CaptionML=[ENU=User ID;
+                                                              ESM=Id. usuario;
+                                                              FRC=Code utilisateur;
+                                                              ENC=User ID];
+                                                   Editable=No }
+    { 99  ;   ;Date Entered        ;DateTime      ;CaptionML=[ENU=Date Entered;
+                                                              ESM=Fecha ingresada;
+                                                              FRC=Date Ins‚r‚e;
+                                                              ENC=Date Entered];
+                                                   Editable=No }
+    { 100 ;   ;Date Filter         ;Date          ;FieldClass=FlowFilter;
+                                                   CaptionML=[ENU=Date Filter;
+                                                              ESM=Filtro de Fecha;
+                                                              FRC=Filtre de Date;
+                                                              ENC=Date Filter];
+                                                   Description=IW2.4 - allows as-at date functionality }
+    { 101 ;   ;Unit of Measure Filter;Code10      ;FieldClass=FlowFilter;
+                                                   CaptionML=[ENU=Unit of Measure Filter;
+                                                              ESM=Filtro de unidad de medida;
+                                                              FRC=Filtre d'unit‚ de mesure;
+                                                              ENC=Unit of Measure Filter];
+                                                   Description=IW18.03 }
+    { 102 ;   ;Unit Cost           ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Item."Unit Cost" WHERE (No.=FIELD(Item No.)));
+                                                   CaptionML=[ENU=Unit Cost;
+                                                              ESM=Costo Unitario;
+                                                              FRC=Co–t Unitaire;
+                                                              ENC=Unit Cost];
+                                                   Editable=No }
+    { 103 ;   ;Total Count Quantity (Base);Decimal;FieldClass=FlowField;
+                                                   CalcFormula=Sum("IWX Count Sheet Line"."Quantity (Base)" WHERE (Count No.=FIELD(Count No.),
+                                                                                                                   Item No.=FIELD(Item No.),
+                                                                                                                   Location Code=FIELD(Location Code),
+                                                                                                                   Variant Code=FIELD(Variant Code),
+                                                                                                                   Prod. Order No.=FIELD(Prod. Order No.)));
+                                                   CaptionML=[ENU=Total Count Quantity (Base);
+                                                              ESM=Recuento total Cantidad (Base);
+                                                              FRC=Quantit‚ (Base) de D‚nombrement total;
+                                                              ENC=Total Count Quantity (Base)];
+                                                   DecimalPlaces=0:5;
+                                                   Description=Sum of counted quantity by item, variant, location, prod order;
+                                                   Editable=No }
+    { 104 ;   ;Bin Quantity (Base) ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Warehouse Entry"."Qty. (Base)" WHERE (Location Code=FIELD(Location Code),
+                                                                                                          Bin Code=FIELD(Bin Code),
+                                                                                                          Item No.=FIELD(Item No.),
+                                                                                                          Variant Code=FIELD(Variant Code),
+                                                                                                          Registering Date=FIELD(Date Filter),
+                                                                                                          Unit of Measure Code=FIELD(FILTER(Unit of Measure Filter))));
+                                                   CaptionML=[ENU=Bin Quantity (Base);
+                                                              ESM=Cantidad (Base) de Bin;
+                                                              FRC=Quantit‚ (Base) du Bin;
+                                                              ENC=Bin Quantity (Base)];
+                                                   DecimalPlaces=0:5;
+                                                   Description=Content of bin;
+                                                   Editable=No }
+    { 105 ;   ;Lot No.             ;Code100       ;OnValidate=BEGIN
+                                                                // Set expected quantity based on lot number if required
+
+                                                                // Only test for recount if the lot number is different.
+                                                                IF ( Rec."Lot No." <> xRec."Lot No." ) THEN BEGIN
+                                                                  testRecount();
+                                                                END;
+
+                                                                testLicensePlate;
+                                                                calcDifference;
+
+                                                                IF ("Lot No."<>'') AND ("Lot No."<>xRec."Lot No.") THEN BEGIN
+                                                                  setExpirationDate;
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Lot No.;
+                                                              ESM=N§ lote;
+                                                              FRC=Nø de lot;
+                                                              ENC=Lot No.];
+                                                   Description=Lot No. if applicable }
+    { 106 ;   ;Expected Quantity (Base);Decimal   ;CaptionML=[ENU=Expected Quantity (Base);
+                                                              ESM=Cantidad (Base) esperada;
+                                                              FRC=Quantit‚ (Base) pr‚vue;
+                                                              ENC=Expected Quantity (Base)];
+                                                   DecimalPlaces=0:5;
+                                                   Description=The quantity expected to be counted in a bin, prod order, or on-hand;
+                                                   Editable=No }
+    { 107 ;   ;Expected Quantity   ;Decimal       ;CaptionML=[ENU=Expected Quantity;
+                                                              ESM=Cantidad esperada;
+                                                              FRC=Quantit‚ pr‚vue;
+                                                              ENC=Expected Quantity];
+                                                   DecimalPlaces=0:5;
+                                                   Description=TFS1895 - expected qty in current UOM;
+                                                   Editable=No }
+    { 108 ;   ;Recount Tag No.     ;Integer       ;TableRelation="IWX Count Sheet Line"."Tag No.";
+                                                   CaptionML=[ENU=Recount Tag No.;
+                                                              ESM=Recuento N£mero de marca;
+                                                              FRC=Recompter Tag No.;
+                                                              ENC=Recount Tag No.];
+                                                   Description=IW2.4 - Identifies tag no. of the recount line;
+                                                   Editable=No }
+    { 109 ;   ;Recount Source Tag No.;Integer     ;TableRelation="IWX Count Sheet Line"."Tag No.";
+                                                   OnValidate=VAR
+                                                                lrecCountLine@1000000000 : Record 23044301;
+                                                                lrecCurCountLine@1000000001 : Record 23044301;
+                                                              BEGIN
+                                                                // Sets current line as a recount
+
+                                                                // disconnect source line this line if it's already a recount line
+                                                                IF lrecCountLine.GET("Count No.", xRec."Recount Source Tag No.") THEN BEGIN
+                                                                  lrecCountLine."Recount Tag No." := 0;
+                                                                  lrecCountLine.MODIFY;
+                                                                END;//if
+
+                                                                IF "Recount Source Tag No."<>0 THEN BEGIN
+                                                                  lrecCountLine.GET("Count No.", "Recount Source Tag No.");
+                                                                  IF "Item No."<>'' THEN
+                                                                    lrecCountLine.TESTFIELD("Item No.", "Item No.");
+
+                                                                  lrecCountLine."Recount Tag No." := "Tag No.";
+                                                                  lrecCountLine.MODIFY;
+
+                                                                  lrecCurCountLine := Rec;
+                                                                  TRANSFERFIELDS(lrecCountLine, FALSE);
+                                                                  "Recount Tag No." := 0;
+                                                                  "Sheet Name" := lrecCurCountLine."Sheet Name";
+                                                                  "Recount Source Tag No." := lrecCurCountLine."Recount Source Tag No.";
+                                                                  resetLine;
+                                                                END;//if non-zero
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              lrecCountLine@1000000000 : Record 23044301;
+                                                            BEGIN
+                                                              // Show all lines that could be used for a recount
+                                                              lrecCountLine.SETRANGE("Count No.", "Count No.");
+                                                              lrecCountLine.SETFILTER("Item No.", "Item No.");
+                                                              lrecCountLine.SETRANGE("Recount Tag No.", 0);
+
+                                                              IF PAGE.RUNMODAL(PAGE::"IWX Count Sheet Lines", lrecCountLine) = ACTION::LookupOK THEN
+                                                                VALIDATE("Recount Source Tag No.", lrecCountLine."Tag No.");
+                                                            END;
+
+                                                   CaptionML=[ENU=Recount Source Tag No.;
+                                                              ESM=Recuento Origen de N£mero de marca;
+                                                              FRC=Recompter la Source du No. de Tag;
+                                                              ENC=Recount Source Tag No.];
+                                                   Description=IW2.4 - Identifies tag no. being recounted }
+    { 110 ;   ;Expiration Date     ;Date          ;CaptionML=[ENU=Expiration Date;
+                                                              ESM=Fecha de caducidad;
+                                                              FRC=Date d'Expiration;
+                                                              ENC=Expiration Date];
+                                                   Description=INV2.1 - Lot No. Expiration date }
+    { 111 ;   ;Tracked Bin Quantity (Base);Decimal;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Warehouse Entry"."Qty. (Base)" WHERE (Location Code=FIELD(Location Code),
+                                                                                                          Bin Code=FIELD(Bin Code),
+                                                                                                          Item No.=FIELD(Item No.),
+                                                                                                          Variant Code=FIELD(Variant Code),
+                                                                                                          Registering Date=FIELD(Date Filter),
+                                                                                                          Lot No.=FIELD(Lot No.),
+                                                                                                          Serial No.=FIELD(Serial No.),
+                                                                                                          Unit of Measure Code=FIELD(FILTER(Unit of Measure Filter))));
+                                                   CaptionML=[ENU=Tracked Bin Quantity (Base);
+                                                              ESM=Seguido Bin Cantidad (Base);
+                                                              FRC=Quantit‚ (Base) Suivie du Bin;
+                                                              ENC=Tracked Bin Quantity (Base)];
+                                                   DecimalPlaces=0:5;
+                                                   Description=Content of bin;
+                                                   Editable=No }
+    { 112 ;   ;Quantity            ;Decimal       ;OnValidate=BEGIN
+                                                                VALIDATE("Quantity (Base)", Quantity * "Qty. per Unit of Measure");
+                                                              END;
+
+                                                   CaptionML=[ENU=Quantity;
+                                                              ESM=Cantidad;
+                                                              FRC=Quantit‚;
+                                                              ENC=Quantity];
+                                                   DecimalPlaces=0:5;
+                                                   Description=TFS1895 - Counted quantity in current UOM }
+    { 113 ;   ;Unit of Measure Code;Code10        ;TableRelation="Item Unit of Measure".Code WHERE (Item No.=FIELD(Item No.));
+                                                   OnValidate=VAR
+                                                                ldOldQtyPer@1000000000 : Decimal;
+                                                              BEGIN
+                                                                ldOldQtyPer := "Qty. per Unit of Measure";
+
+                                                                IF "Unit of Measure Code" = '' THEN
+                                                                  "Qty. per Unit of Measure" := 1
+                                                                ELSE BEGIN
+                                                                  getItemUOM("Item No.", "Unit of Measure Code");
+                                                                  "Qty. per Unit of Measure" := recItemUOM."Qty. per Unit of Measure";
+                                                                  IF "Qty. per Unit of Measure"=0 THEN
+                                                                    "Qty. per Unit of Measure" := 1
+                                                                END;//if
+
+                                                                IF (ldOldQtyPer <> "Qty. per Unit of Measure") AND (xRec."Item No."<>'')
+                                                                THEN
+                                                                  VALIDATE(Quantity);
+                                                              END;
+
+                                                   CaptionML=[ENU=Unit of Measure Code;
+                                                              ESM=C¢d. unidad medida;
+                                                              FRC=Code unit‚ de mesure;
+                                                              ENC=Unit of Measure Code];
+                                                   Description=TFS1895 - Current UOM }
+    { 114 ;   ;Qty. per Unit of Measure;Decimal   ;FieldClass=Normal;
+                                                   CaptionML=[ENU=Qty. per Unit of Measure;
+                                                              ESM=Cdad. por unidad medida;
+                                                              FRC=Quantit‚ par unit‚ de mesure;
+                                                              ENC=Qty. per Unit of Measure];
+                                                   DecimalPlaces=0:5;
+                                                   Description=TFS1895 - Conversion to base UOM;
+                                                   Editable=No }
+    { 115 ;   ;Whse. Qty. to Take  ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Warehouse Activity Line"."Qty. Outstanding" WHERE (Action Type=CONST(Take),
+                                                                                                                       Item No.=FIELD(Item No.),
+                                                                                                                       Location Code=FIELD(Location Code),
+                                                                                                                       Variant Code=FIELD(Variant Code),
+                                                                                                                       Bin Code=FIELD(Bin Code),
+                                                                                                                       Unit of Measure Code=FIELD(Unit of Measure Code)));
+                                                   CaptionML=[ENU=Whse. Qty. to Take;
+                                                              ESM=Cantidad de almac‚n para llevar;
+                                                              FRC=Quantit‚ d'entrep“t … prendre;
+                                                              ENC=Whse. Qty. to Take];
+                                                   DecimalPlaces=0:5;
+                                                   Description=TFS3443 - Quantity on whse docs to take;
+                                                   Editable=No }
+    { 116 ;   ;Whse. Qty. to Place ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Warehouse Activity Line"."Qty. Outstanding" WHERE (Action Type=CONST(Place),
+                                                                                                                       Item No.=FIELD(Item No.),
+                                                                                                                       Location Code=FIELD(Location Code),
+                                                                                                                       Variant Code=FIELD(Variant Code),
+                                                                                                                       Bin Code=FIELD(Bin Code),
+                                                                                                                       Unit of Measure Code=FIELD(Unit of Measure Code)));
+                                                   CaptionML=[ENU=Whse. Qty. to Place;
+                                                              ESM=Cantidad de almac‚n a colocar;
+                                                              FRC=Quantit‚ d'entrep“t … placer;
+                                                              ENC=Whse. Qty. to Place];
+                                                   DecimalPlaces=0:5;
+                                                   Description=TFS3443 - Quantity on whse docs to place;
+                                                   Editable=No }
+    { 117 ;   ;Whse. Qty. on Journal;Decimal      ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Warehouse Journal Line".Quantity WHERE (Item No.=FIELD(Item No.),
+                                                                                                            Location Code=FIELD(Location Code),
+                                                                                                            Variant Code=FIELD(Variant Code),
+                                                                                                            Bin Code=FIELD(Bin Code),
+                                                                                                            Unit of Measure Code=FIELD(Unit of Measure Code)));
+                                                   CaptionML=[ENU=Whse. Qty. on Journal;
+                                                              ESM=Cantidad de almac‚n en el diario;
+                                                              FRC=Quantit‚ d'entrep“t dans le journal;
+                                                              ENC=Whse. Qty. on Journal];
+                                                   DecimalPlaces=0:5;
+                                                   Description=TFS3443 - Quantity on whse journal;
+                                                   Editable=No }
+    { 200 ;   ;Comment             ;Text30        ;CaptionML=[ENU=Comment;
+                                                              ESM=Commentario;
+                                                              FRC=Commentaire;
+                                                              ENC=Comment];
+                                                   Description=IW2.4 }
+    { 201 ;   ;WHI Kit Item        ;Boolean       ;CaptionML=[ENU=WHI Kit Item;
+                                                              ESM=Kit Articulo WHI;
+                                                              FRC=Kit Article WHI;
+                                                              ENC=WHI Kit Item];
+                                                   Description=IW2.4 - Identifies a kit item;
+                                                   Editable=No }
+    { 202 ;   ;WHI Kit Assembly    ;Boolean       ;CaptionML=[ENU=WHI Kit Assembly;
+                                                              ESM=WHI Kit Assembly;
+                                                              FRC=WHI Kit Assembly;
+                                                              ENC=WHI Kit Assembly];
+                                                   Description=IW2.4 - Identifies a kit assembly that holds kit items;
+                                                   Editable=No }
+    { 203 ;   ;Reason Code         ;Code10        ;TableRelation="Reason Code".Code;
+                                                   CaptionML=[ENU=Reason Code;
+                                                              ESM=C¢digo de raz¢n;
+                                                              FRC=Code de raison;
+                                                              ENC=Reason Code];
+                                                   Description=INV2.0 - allows user to set reason code on count line }
+    { 204 ;   ;No. of Recount Lines;Integer       ;FieldClass=FlowField;
+                                                   CalcFormula=Count("IWX Count Sheet Line" WHERE (Count No.=FIELD(Count No.),
+                                                                                                   Item No.=FIELD(Item No.),
+                                                                                                   Location Code=FIELD(Location Code),
+                                                                                                   Bin Code=FIELD(Bin Code),
+                                                                                                   Recount Source Tag No.=FILTER(<>0)));
+                                                   CaptionML=[ENU=No. of Recount Lines;
+                                                              ESM=N£mero de L¡neas de Recuento;
+                                                              FRC=No.de Lignes de recompte;
+                                                              ENC=No. of Recount Lines];
+                                                   Description=INV2.0 - total # of recount lines for this item/location/bin;
+                                                   Editable=No }
+    { 205 ;   ;License Plate No.   ;Code20        ;CaptionML=[ENU=License Plate No.;
+                                                              ESM=Placa de matr¡cula N§;
+                                                              FRC=Plaque d'immatriculation No.;
+                                                              ENC=License Plate No.];
+                                                   Description=License plate ID for this item - for WHI;
+                                                   Editable=No }
+    { 206 ;   ;Scanned by Device   ;Code20        ;CaptionML=[ENU=Scanned byDevice;
+                                                              ESM=Escaneado por Device;
+                                                              FRC=Scann‚ par Device;
+                                                              ENC=Scanned by Device];
+                                                   Description=IW14.12, TFS1565 }
+    { 207 ;   ;Scanned DateTime    ;DateTime      ;CaptionML=[ENU=Scanned DateTime;
+                                                              ESM=Fecha y hora escaneada;
+                                                              FRC=Date et heure num‚ris‚e;
+                                                              ENC=Scanned DateTime];
+                                                   Description=IW14.12, TFS1565 }
+    { 208 ;   ;Description         ;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Item.Description WHERE (No.=FIELD(Item No.)));
+                                                   CaptionML=[ENU=Description;
+                                                              ESM=Descripci¢n;
+                                                              FRC=Description;
+                                                              ENC=Description];
+                                                   Description=IW15.05,TFS1699 }
+    { 209 ;   ;Description 2       ;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Item."Description 2" WHERE (No.=FIELD(Item No.)));
+                                                   CaptionML=[ENU=Description 2;
+                                                              ESM=Descripci¢n 2;
+                                                              FRC=Description 2;
+                                                              ENC=Description 2];
+                                                   Description=IW15.05,TFS1699 }
+    { 50000;  ;Sheet Posting Status;Option        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("IWX Count Sheet Configuration"."Posting Status" WHERE (Count No.=FIELD(Count No.),
+                                                                                                                              Sheet Name=FIELD(Sheet Name)));
+                                                   OptionString=[ ,Copied] }
+    { 50001;  ;Vendor Item No.     ;Text20        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Item."Vendor Item No." WHERE (No.=FIELD(Item No.)));
+                                                   Description=TPZ1811;
+                                                   Editable=No }
+    { 50200;  ;Shortcut Dimension 5 Code;Code20   ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Item."Shortcut Dimension 5 Code" WHERE (No.=FIELD(Item No.)));
+                                                   CaptionML=ENU=Division Code;
+                                                   Description=TPZ2560 DC1.00;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Count No.,Tag No.                       ;Clustered=Yes }
+    {    ;Count No.,Sheet Name,Item No.,Variant Code,Location Code,Prod. Order No.;
+                                                   SumIndexFields=Quantity (Base) }
+    {    ;Difference Qty. (Base)                   }
+    {    ;Difference Amount                        }
+    {    ;Item No.                                 }
+    {    ;Item No.,Variant Code,Location Code,Bin Code,Lot No.,Serial No.,Prod. Order No. }
+    {    ;Item No.,Variant Code,Location Code,Lot No.,Serial No. }
+    {    ;Difference Amount (ABS)                  }
+    {    ;Difference Qty. (ABS) (Base)             }
+    {    ;Prod. Order No.                          }
+    {    ;Shelf No.,Tag No.                        }
+    {    ;Bin Code,Item No.                        }
+    {    ;Bin Code,Shelf No.,Item No.              }
+    {    ;Recount Tag No.,Item No.,Variant Code,Location Code }
+    {    ;License Plate No.,Item No.,Serial No.,Location Code,Bin Code }
+    {    ;Counted,Item No.,Variant Code,Location Code,Bin Code,Lot No. }
+    {    ;Item No.,Variant Code,Location Code,Lot No.,Recount Tag No. }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      tcErrNoNegativeQty@1000000000 : TextConst 'ENC=You cannot enter a negative inventory count';
+      recCountCfg@1000000001 : Record 23044300;
+      recLocation@1000000002 : Record 14;
+      recInvCountSetup@1000000009 : Record 23044305;
+      tcErrorKitItem@1000000004 : TextConst 'ENC=You cannot directly edit or delete a torqued item.  Edit or delete the main serialized item.';
+      recItem@1000000005 : Record 27;
+      tcErrNoEditLP@1000000007 : TextConst 'ENU=You cannot edit an item that is part of a license plate.;FRC=Vous ne pouvez modifier un article faisant partie d''un no. de palette.';
+      recItemUOM@1000000008 : Record 5404;
+      cuInvCountMgmt@1000000003 : Codeunit 23044300;
+      bConfirmDelete@1000000006 : Boolean;
+
+    PROCEDURE calcDifference@1000000000();
+    VAR
+      lrecCountSheetLine@1000000001 : Record 23044301;
+    BEGIN
+      // Calculates the difference between entered quantity and expected quantity
+      //  For inventory, difference is quantity - inventory
+      //  For WIP, difference is counted - consumption
+      //  For unconsumed WIP (items on bill, but not consumed), difference is quantity
+
+      IF "Item No."<>'' THEN BEGIN
+        IF "Recount Source Tag No."<>0 THEN  BEGIN
+          lrecCountSheetLine.GET("Count No.","Recount Source Tag No.");
+          "Expected Quantity (Base)" := lrecCountSheetLine."Quantity (Base)";
+        END ELSE BEGIN
+          getLocation;
+          IF recLocation."Directed Put-away and Pick" THEN
+            SETFILTER("Unit of Measure Filter", "Unit of Measure Code");
+
+          IF recLocation."Bin Mandatory" THEN BEGIN
+            IF ("Lot No."<>'') OR ("Serial No."<>'')
+            THEN BEGIN
+              IF cuInvCountMgmt.isLotWhseTracked("Item No.")
+                 OR cuInvCountMgmt.isSNWhseTracked("Item No.")
+              THEN BEGIN
+                // lot/sn # specified, and is warehouse lot/sn tracked - expected qty is bin content by tracking
+                CALCFIELDS("Tracked Bin Quantity (Base)");
+                "Expected Quantity (Base)" := "Tracked Bin Quantity (Base)";
+              END ELSE BEGIN
+                // not whse tracked - expected qty is on-hand by lot #, not bin content
+                CALCFIELDS("Tracked On Hand Qty. (Base)");
+                "Expected Quantity (Base)" := "Tracked On Hand Qty. (Base)";
+              END;
+            END ELSE BEGIN
+              // no lot/sn # specified - expected qty is bin qty
+              CALCFIELDS("Bin Quantity (Base)");
+              "Expected Quantity (Base)" := "Bin Quantity (Base)";
+            END;//if lot
+
+          END ELSE BEGIN
+            IF cuInvCountMgmt.isItemTracked("Item No.") THEN BEGIN
+              CALCFIELDS("Tracked On Hand Qty. (Base)");
+              "Expected Quantity (Base)" := "Tracked On Hand Qty. (Base)";
+            END ELSE BEGIN
+              CALCFIELDS("On Hand Quantity (Base)");
+              "Expected Quantity (Base)" := "On Hand Quantity (Base)";
+            END;//if
+          END;//if
+        END;//if recount //
+
+        IF "Prod. Order No."<>'' THEN BEGIN
+          CALCFIELDS("Is WIP");
+          IF "Is WIP" THEN BEGIN
+            CALCFIELDS("WIP Qty. (Base)");
+            "Expected Quantity (Base)" := "WIP Qty. (Base)";
+            "Difference Qty. (Base)" := "Quantity (Base)" - "WIP Qty. (Base)"
+          END ELSE BEGIN
+            "Expected Quantity (Base)" := 0;
+            "Difference Qty. (Base)" := "Quantity (Base)";
+          END;//if is wip
+        END ELSE BEGIN
+          "Difference Qty. (Base)" := "Quantity (Base)" - "Expected Quantity (Base)";
+        END;//if not prod order
+
+        getItem("Item No.");
+        "Difference Amount" := "Difference Qty. (Base)" * recItem."Unit Cost";
+        "Difference Amount (ABS)" := ABS("Difference Amount");
+        "Difference Qty. (ABS) (Base)" := ABS("Difference Qty. (Base)");
+
+        IF ( "Expected Quantity (Base)" <> 0 ) THEN BEGIN
+          // round to nearest integer
+          "Difference Qty. Pct. (ABS)" := ROUND( 100 * ("Difference Qty. (ABS) (Base)" / ABS("Expected Quantity (Base)") ), 1,'>' );
+        END ELSE BEGIN
+          IF "Quantity (Base)" = 0 THEN
+            "Difference Qty. Pct. (ABS)" := 0
+          ELSE
+            "Difference Qty. Pct. (ABS)" := 100; // if absolute diff <>0, and expected quantity is 0 then the 'difference' is 100%
+        END;
+
+        "Difference Qty." := "Difference Qty. (Base)" / "Qty. per Unit of Measure";
+        "Difference Qty. (ABS)" := ABS("Difference Qty.");
+        "Expected Quantity" :=  "Expected Quantity (Base)" / "Qty. per Unit of Measure";
+
+        SETRANGE("Unit of Measure Filter"); //<IW author="MH" date="3/14/2018" issue="TFS3844" />
+      END;//if
+    END;
+
+    PROCEDURE recalcAllDifferences@1000000001() rbFoundDiff : Boolean;
+    VAR
+      lrecCountLine@1000000000 : Record 23044301;
+      ldOldDiff@1000000001 : Decimal;
+    BEGIN
+      lrecCountLine.SETFILTER("Item No.", '<>%1', '');
+      lrecCountLine.COPYFILTERS(Rec);
+
+      IF lrecCountLine.FIND('-') THEN
+        REPEAT
+          ldOldDiff := lrecCountLine."Difference Qty. (Base)";
+          lrecCountLine.calcDifference;
+          lrecCountLine.MODIFY;
+
+          rbFoundDiff := rbFoundDiff OR (ldOldDiff <> lrecCountLine."Difference Qty. (Base)");
+        UNTIL lrecCountLine.NEXT = 0;
+    END;
+
+    PROCEDURE setLocationCode@1000000002();
+    VAR
+      lrecLocation@1000000000 : Record 14;
+    BEGIN
+      IF "Location Code"<>'' THEN
+        EXIT;
+
+      getConfig;
+
+      IF lrecLocation.GET(recCountCfg."Location Code") THEN
+        "Location Code" := recCountCfg."Location Code";
+    END;
+
+    LOCAL PROCEDURE getConfig@1000000003();
+    BEGIN
+      IF ( (recCountCfg."Count No."<>"Count No.") OR (recCountCfg."Sheet Name"<>"Sheet Name") ) THEN BEGIN
+        IF "Count No."='' THEN
+          recCountCfg.INIT
+        ELSE
+          recCountCfg.GET("Count No.","Sheet Name");
+      END;
+    END;
+
+    LOCAL PROCEDURE getLocation@1000000007();
+    BEGIN
+      // Returns location record
+      IF recLocation.Code<>"Location Code" THEN
+        recLocation.GET("Location Code");
+    END;
+
+    PROCEDURE resetLine@1000000004();
+    BEGIN
+      // Resets count line to uncounted
+      VALIDATE(Quantity, 0);
+      Counted := FALSE;
+      "User ID" := '';
+      "Date Entered" := 0DT;
+    END;
+
+    PROCEDURE testRecount@1000000006();
+    VAR
+      ltcErrHasRecountLine@1000000001 : TextConst 'ENU=You cannot be modify lines that have recount lines associated with them.\This item is on recount Count No. %1, Sheet %2 with Tag %3.;FRC=Vous ne pouvez modifier des lignes qui sont associ‚es … des lignes de recomptage.\Cet article est sur le recomptage %1, Feuille %2 avec Tag %3.';
+      ltcErrIsRecountLine@1000000000 : TextConst 'ENU=You can only modify Quantity on recount lines.\This item is a recount for Tag %3 on Count No: %1, Sheet %2.;FRC=Vous pouvez seulement modifier la quantit‚ sur les lignes de recomptage .\Cet article est un recomptage pour l''‚tiquette %3 sur le no. d‚compte: %1, Feuille %2.';
+      lrecCountLine@1000000002 : Record 23044301;
+    BEGIN
+      // Checks to see if this is a recount line or has a recount line and errors out if it is
+
+      IF "Recount Tag No."<>0 THEN BEGIN
+        lrecCountLine.GET("Count No.","Recount Tag No.");
+        ERROR(ltcErrHasRecountLine, lrecCountLine."Count No.", lrecCountLine."Sheet Name", "Recount Tag No.");
+      END;//if
+
+      IF "Recount Source Tag No."<>0 THEN BEGIN
+        lrecCountLine.GET("Count No.","Recount Source Tag No.");
+        ERROR(ltcErrIsRecountLine, lrecCountLine."Count No.",lrecCountLine."Sheet Name","Recount Source Tag No.");
+      END;//if
+    END;
+
+    LOCAL PROCEDURE getCountSetup@1000000012();
+    BEGIN
+      // Gets count setup
+      IF recInvCountSetup."Inventory Count Nos." = '' THEN
+        recInvCountSetup.GET('');
+    END;
+
+    PROCEDURE getItem@1000000005(pcodItem@1000000000 : Text);
+    BEGIN
+      IF recItem."No."<>pcodItem THEN
+        recItem.GET(pcodItem);
+    END;
+
+    PROCEDURE getItemUOM@1000000013(pcodItemNo@1000000000 : Text;pcodUOM@1000000001 : Code[10]);
+    BEGIN
+      // Gets UOM for item
+      IF (recItemUOM."Item No." <> pcodItemNo) OR (recItemUOM.Code<>pcodUOM) THEN
+        IF NOT recItemUOM.GET(pcodItemNo, pcodUOM) THEN
+          CLEAR(recItemUOM);
+    END;
+
+    PROCEDURE getLastUnitCost@1000000008() : Decimal;
+    BEGIN
+      // Returns unit cost for item on this line
+      getItem("Item No.");
+      EXIT(recItem."Unit Cost");
+    END;
+
+    PROCEDURE disableConfirmDelete@1000000009(pbConfirmDelete@1000000000 : Boolean);
+    BEGIN
+      // Sets flag to allow deletes without user confirmations.
+      // Used when generating count sheets
+
+      bConfirmDelete := pbConfirmDelete;
+    END;
+
+    PROCEDURE performOnDelete@1000000011();
+    VAR
+      ltcDeleteRecount@1000000000 : TextConst 'ENU=A recount line exists for %1 %2\Delete this recount line?;FRC=Une ligne de recomptage existe pour %1 %2\Supprimer cette ligne de recomptage?';
+      lrecCountSheetLine@1000000001 : Record 23044301;
+      ltcErrRecountExists@1000000002 : TextConst 'ENU=You cannot delete a count line when recount lines exist for it.;FRC=Vous ne pouvez supprimer une ligne de d‚compte s''il existe des lignes de recomptage pour celle-ci.';
+    BEGIN
+      // Does validation logic for OnDelete
+
+      IF "WHI Kit Item" THEN
+        ERROR(tcErrorKitItem);
+
+      IF ("Recount Source Tag No." = 0) AND "WHI Kit Assembly" THEN // if not a recount, delete any kit lines
+        cuInvCountMgmt.updateKitCountLines(Rec, -"Quantity (Base)");
+
+      IF "Recount Tag No."<>0 THEN BEGIN
+        IF NOT bConfirmDelete THEN
+          bConfirmDelete := CONFIRM(ltcDeleteRecount, FALSE, FIELDCAPTION("Tag No."), "Tag No.");
+
+        IF bConfirmDelete THEN BEGIN
+          lrecCountSheetLine.SETRANGE("Recount Source Tag No.", "Tag No.");
+          lrecCountSheetLine.DELETEALL(TRUE);
+        END ELSE
+          ERROR(ltcErrRecountExists);
+
+
+        SETCURRENTKEY("Count No.","Tag No.");
+        GET("Count No.","Tag No.");
+      END;//if
+
+      IF "Recount Source Tag No."<>0 THEN BEGIN
+        IF "WHI Kit Assembly" THEN BEGIN
+          // if this is a kit assembly, delete all kit items associated with it
+          lrecCountSheetLine.SETRANGE("Recount Source Tag No.", "Recount Source Tag No.");
+          lrecCountSheetLine.SETRANGE("WHI Kit Item", TRUE);
+          lrecCountSheetLine.DELETEALL;
+        END;//if kit assembly
+
+        // disconnect source line from deleted recount line
+        IF lrecCountSheetLine.GET("Count No.", "Recount Source Tag No.") THEN BEGIN
+          lrecCountSheetLine."Recount Tag No." := 0;
+          lrecCountSheetLine.MODIFY;
+        END;//if
+      END;//if
+    END;
+
+    PROCEDURE testLicensePlate@1000000018();
+    BEGIN
+      IF "License Plate No."<>'' THEN
+        ERROR(tcErrNoEditLP);
+    END;
+
+    PROCEDURE setExpirationDate@1000000010();
+    VAR
+      lrecItemLedger@1000000000 : Record 32;
+    BEGIN
+      // Sets the expiration date based on current lot #
+      IF ("Lot No."<>'') THEN BEGIN
+        lrecItemLedger.SETCURRENTKEY("Item No.",Open,"Variant Code",Positive,"Location Code","Posting Date","Expiration Date");
+        lrecItemLedger.SETRANGE("Item No.", "Item No.");
+        lrecItemLedger.SETRANGE("Location Code", "Location Code");
+        lrecItemLedger.SETRANGE("Lot No.", "Lot No.");
+        lrecItemLedger.SETFILTER("Expiration Date", '<>%1', 0D);
+        IF lrecItemLedger.FINDLAST THEN
+          "Expiration Date" := lrecItemLedger."Expiration Date";
+      END;//if
+    END;
+
+    PROCEDURE setBinUOM@1000000015();
+    VAR
+      lrecBinContent@1000000000 : Record 7302;
+    BEGIN
+      // Sets the bin UoM for directed pick locations
+      {"Bin Unit of Measure Code" := '';
+
+      getItem("Item No.");
+      getLocation;
+      IF recLocation."Directed Put-away and Pick" THEN BEGIN
+        IF lrecBinContent.GET("Location Code","Bin Code","Item No.","Variant Code","Unit of Measure Code") THEN
+          IF recItem."Base Unit of Measure" <> "Unit of Measure Code" THEN
+            "Bin Unit of Measure Code" := "Unit of Measure Code";
+      END;//if directed
+
+
+      }
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+    }
+    END.
+  }
+}
+

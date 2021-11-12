@@ -1,0 +1,170 @@
+OBJECT Codeunit 50099 Table7012EventSubscribers
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/15/21;
+    Time=[ 9:04:20 AM];
+    Modified=Yes;
+    Version List=TPZ000.00.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ExclWkshTemplateName@1000000002 : Code[10];
+      ExclWkshBatchName@1000000001 : Code[10];
+      ExclWkshLineNo@1000000000 : Integer;
+
+    [EventSubscriber(Table,7012,OnBeforeInsertEvent)]
+    LOCAL PROCEDURE Tb7012_OnInsert@1000000000(VAR Rec@1000000000 : Record 7012;RunTrigger@1000000001 : Boolean);
+    BEGIN
+      //<TPZ443>
+      IF NOT(RunTrigger) THEN
+        EXIT;
+      WITH Rec DO BEGIN
+        "User ID" := USERID;
+        "Modified Date" := TODAY;
+        "Modified Time" := TIME;
+      END;
+      //</TPZ443>
+    END;
+
+    [EventSubscriber(Table,7012,OnBeforeModifyEvent)]
+    LOCAL PROCEDURE Tb7012_OnModify@1000000001(VAR Rec@1000000000 : Record 7012;VAR xRec@1000000001 : Record 7012;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      IF NOT(RunTrigger) THEN
+        EXIT;
+      WITH Rec DO BEGIN
+        "User ID" := USERID;
+        "Modified Date" := TODAY;
+        "Modified Time" := TIME;
+      END;
+    END;
+
+    [EventSubscriber(Table,7012,OnAfterValidateEvent,"Item No.")]
+    LOCAL PROCEDURE Tb7012_ItemNo_OnValidate@1000000003(VAR Rec@1000000000 : Record 7012;VAR xRec@1000000001 : Record 7012;CurrFieldNo@1000000003 : Integer);
+    VAR
+      Item@1000000002 : Record 27;
+    BEGIN
+      WITH Rec DO BEGIN
+      // <TPZ135>
+        IF Item.GET("Item No.") THEN
+          "Unit of Measure Code" := Item."Purch. Unit of Measure"
+        ELSE
+          "Unit of Measure Code" := '';
+      // </TPZ135>
+      END;
+    END;
+
+    [EventSubscriber(Table,7012,OnBeforeValidateEvent,"Direct Unit Cost")]
+    LOCAL PROCEDURE Tb7012_DirectUnitCost_OnValidate@1000000004(VAR Rec@1000000000 : Record 7012;VAR xRec@1000000001 : Record 7012;CurrFieldNo@1000000003 : Integer);
+    VAR
+      ReqLine@1000000002 : Record 246;
+    BEGIN
+      //<TPZ2733>
+      {
+      WITH Rec DO BEGIN
+        ReqLine.RESET;
+        ReqLine.SETRANGE(Type,ReqLine.Type::Item);
+        ReqLine.SETRANGE("No.","Item No.");
+        ReqLine.SETRANGE("Variant Code","Variant Code");
+        ReqLine.SETRANGE("Vendor No.","Vendor No.");
+        IF ReqLine.FIND('-') THEN
+          REPEAT
+            IF NOT
+                 ((ReqLine."Worksheet Template Name" = ExclWkshTemplateName) AND
+                  (ReqLine."Journal Batch Name" = ExclWkshBatchName) AND
+                  (ReqLine."Line No." = ExclWkshLineNo))
+            THEN BEGIN
+              ReqLine.SetSkipPurchPriceUpdate(TRUE);
+              ReqLine.VALIDATE("Direct Unit Cost","Direct Unit Cost");
+              ReqLine.MODIFY;
+            END;
+          UNTIL ReqLine.NEXT = 0;
+      END;
+      }//</TPZ2733>
+    END;
+
+    [EventSubscriber(Codeunit,50098,Tb7012_OnSetReqWkshLineException)]
+    PROCEDURE Tb7012_SetReqWkshLineException@1000000002(VAR Sender@1000000000 : Codeunit 50098;NewExclWkshTemplateName@1000000001 : Code[10];NewExclWkshBatchName@1000000002 : Code[10];NewExclWkshLineNo@1000000003 : Integer);
+    BEGIN
+      // <TPZ135>
+      ExclWkshTemplateName := NewExclWkshTemplateName;
+      ExclWkshBatchName := NewExclWkshBatchName;
+      ExclWkshLineNo := NewExclWkshLineNo;
+      // </TPZ135>
+    END;
+
+    [EventSubscriber(Codeunit,50098,Tb7012_OnValidateItemCrossRef)]
+    LOCAL PROCEDURE Tb7012_ValidateItemCrossRef@1000000005(VAR Sender@1000000000 : Codeunit 50098;VAR ItemCrossRef@1000000010 : Record 5717);
+    VAR
+      PurchLine@1000000001 : Record 39;
+      ExclDocType@1000000008 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';
+      ExclDocNo@1000000007 : Code[20];
+      ExclDocLineNo@1000000006 : Integer;
+      ExclWkshTemplateName@1000000005 : Code[10];
+      ExclWkshBatchName@1000000004 : Code[10];
+      ExclWkshLineNo@1000000003 : Integer;
+      ExclItemNo@1000000002 : Code[20];
+      ReqLine@1000000009 : Record 246;
+    BEGIN
+      //<TPZ2598>
+      WITH ItemCrossRef DO BEGIN
+         IF "Cross-Reference Type" = "Cross-Reference Type"::Vendor THEN BEGIN
+          PurchLine.RESET;
+          PurchLine.SETRANGE(Type,PurchLine.Type::Item);
+          PurchLine.SETRANGE("No.","Item No.");
+          PurchLine.SETRANGE("Variant Code","Variant Code");
+          PurchLine.SETRANGE("Buy-from Vendor No.","Cross-Reference Type No.");
+          IF PurchLine.FIND('-') THEN
+            REPEAT
+              IF NOT
+                   ((PurchLine."Document Type" = ExclDocType) AND
+                    (PurchLine."Document No." = ExclDocNo) AND
+                    (PurchLine."Line No." = ExclDocLineNo))
+              THEN BEGIN
+                PurchLine."Vendor Item Description" := Description;
+                PurchLine.MODIFY;
+              END;
+            UNTIL PurchLine.NEXT = 0;
+
+          ReqLine.RESET;
+          ReqLine.SETRANGE(Type,ReqLine.Type::Item);
+          ReqLine.SETRANGE("No.","Item No.");
+          ReqLine.SETRANGE("Variant Code","Variant Code");
+          ReqLine.SETRANGE("Vendor No.","Cross-Reference Type No.");
+          IF ReqLine.FIND('-') THEN
+            REPEAT
+              IF NOT
+                   ((ReqLine."Worksheet Template Name" = ExclWkshTemplateName) AND
+                    (ReqLine."Journal Batch Name" = ExclWkshBatchName) AND
+                    (ReqLine."Line No." = ExclWkshLineNo))
+              THEN BEGIN
+                ReqLine."Vendor Item Description" := Description;
+                ReqLine.MODIFY;
+              END;
+            UNTIL ReqLine.NEXT = 0;
+         END;
+      END;
+      //</TPZ2598>
+    END;
+
+    BEGIN
+    {
+      2019-03-15 TPZVSO2544 RTIWARI
+        New Codeunit created to subscribe the events in order to move all the custom code of Table 7012 to Events
+
+      2019-06-12 TPZ2598 VAHAMAD
+        New function Tb7012_ValidateItemCrossRef added
+      2020-01-10 TPZ2733 UCHOUHAN
+        Commented code to remove updatedion req line from Purchase price.
+    }
+    END.
+  }
+}
+

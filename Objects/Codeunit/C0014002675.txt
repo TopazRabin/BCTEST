@@ -1,0 +1,1030 @@
+OBJECT Codeunit 14002675 Create AFP Prod. Plan
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AFPProdTemplate@1240030001 : Record 14002677;
+      Location@1240030031 : Record 14;
+      ProdItemGroup@1240030036 : Record 14002676;
+      InvMgtSetup@1240030047 : Record 14000551;
+      AdvForcSetup@1240020001 : Record 14002651;
+      CompanyInfo@1240020005 : Record 79;
+      AFPProdSetup@1240020006 : Record 14002675;
+      TempProcUnit@1240020003 : TEMPORARY Record 14000555;
+      ProgressWindow@1240030004 : Dialog;
+      Text001@1240030030 : TextConst 'ENU=Calculating Production Item';
+      Text003@1240030043 : TextConst 'ENU=There is not a partially completed Production Plan.';
+      Text004@1240030051 : TextConst 'ENU=Location';
+      Text005@1240030052 : TextConst 'ENU=Item';
+      Text006@1240030053 : TextConst 'ENU=Plan Level';
+      Text007@1240020007 : TextConst 'ENU=Base Calendar Code is not setup.';
+      Text008@1240020010 : TextConst 'ENU=Max Level %1 exceeded.\Process could not fully complete!';
+      Text009@1240020011 : TextConst 'ENU=%1 is turned off on Inventory Mgt. Setup.  AFP Production Plan cannot execute!';
+      PlanLines@1240020002 : Decimal;
+      ProdLineNo@1240020000 : Integer;
+      AssyLineNo@1240020004 : Integer;
+      ParentAssyLineNo@1240020008 : Integer;
+      DisplayCounter@1240020009 : Integer;
+      OverrideExecutionModeProd@1240020013 : Boolean;
+      OverrideExecutionModeAssy@1240020012 : Boolean;
+      MainPlanningDuration@1240020014 : Duration;
+      ProdOrderDuration@1240020015 : Duration;
+      Text010@1240020016 : TextConst 'ENU=Duration: Plan Forcecast. %1';
+      Text011@1240020017 : TextConst 'ENU=Duration: Create Production Orders. %1';
+
+    PROCEDURE ByLocation@1240030000(CurrLocation@1240030000 : Record 14;Restart@1240020002 : Boolean);
+    VAR
+      ProcUnit@1240020000 : Record 14000555;
+      LocationInvPeriod@1240020001 : Record 14000553;
+      AFPProdPlanLine@1240020003 : Record 14002679;
+      ProdOrder@1240020004 : Record 5405;
+      SourceTypeFilter@1240020005 : Text[50];
+      OrigRefAssyEnabled@1240020006 : Boolean;
+      OrigRefProdEnabled@1240020007 : Boolean;
+      InvMgt@1240020008 : Codeunit 14000553;
+      LogEntryNo@1240020009 : Integer;
+    BEGIN
+      GetInitPlanningVariables;
+      Location.GET(CurrLocation.Code);
+
+      // ran from production planning page
+      OrigRefAssyEnabled := Location."Enable Assembly Forecast";
+      IF OverrideExecutionModeProd THEN
+        Location."Enable Assembly Forecast" := FALSE;
+
+      // ran from assembly planning page
+      OrigRefProdEnabled := Location."Enable AFP Production";
+      IF OverrideExecutionModeAssy THEN
+        Location."Enable AFP Production" := FALSE;
+
+      IF NOT Location."Enable Adv. Forecasting" THEN
+        EXIT;
+
+      // check license
+      IF NOT AFPProdSetup.READPERMISSION THEN
+        Location."Enable AFP Production" := FALSE;
+
+      IF Location."Enable AFP Production" THEN BEGIN
+      // check setup
+      IF AFPProdSetup.ISEMPTY THEN
+        Location."Enable AFP Production" := FALSE;
+      END;
+
+      IF NOT (Location."Enable Assembly Forecast" OR Location."Enable AFP Production")  THEN
+        EXIT;
+
+      IF Location."Enable AFP Production" THEN
+        SourceTypeFilter := FORMAT(ProcUnit."Replenishment Source Type"::Production);
+
+      IF Location."Enable Assembly Forecast" THEN BEGIN
+        IF SourceTypeFilter <> '' THEN
+          SourceTypeFilter := SourceTypeFilter + '|';
+        SourceTypeFilter := SourceTypeFilter + FORMAT(ProcUnit."Replenishment Source Type"::Assembly);
+      END;
+      ProcUnit.SETFILTER("Replenishment Source Type", SourceTypeFilter);
+
+      LocationInvPeriod.RESET;
+      LocationInvPeriod.SETRANGE("Location Code",Location.Code);
+      LocationInvPeriod.SETRANGE("Period End Closed",TRUE);
+      IF NOT LocationInvPeriod.FINDLAST THEN
+        EXIT;
+
+      IF Location."Enable AFP Production" THEN BEGIN
+        GetInitProdVariables;
+      END;
+
+      IF Location."Enable Assembly Forecast" THEN BEGIN
+        GetInitAssemblyVariables;
+      END;
+
+      // Delete all Simulated Orders
+      IF NOT Restart THEN BEGIN
+        IF Location."Enable AFP Production" THEN BEGIN
+          DeletePlanningLines(FORMAT(Location.Code));
+          COMMIT;
+          IF AFPProdTemplate."Remove Curr. Simulated Orders" THEN BEGIN
+            DeleteProdOrders(ProdOrder.Status::Simulated, Location.Code);
+            COMMIT;
+          END;
+        END;
+        IF Location."Enable Assembly Forecast" THEN BEGIN
+          DeleteAssemblyPlanningLines(FORMAT(Location.Code));
+        END;
+        ProcUnit.MODIFYALL("Completed Prod. Plan Level",0);
+        COMMIT;
+      END;
+
+      ProcUnit.SETRANGE("Location Code",Location.Code);
+      ProcUnit.SETRANGE("Bypass Production Plan",FALSE);
+      ProcUnit.SETRANGE("Exclude From Replenishment", FALSE);
+      // Completed Low Level code used as boolean filter but still int
+      IF Restart THEN
+        ProcUnit.SETFILTER("Completed Prod. Plan Level", '>%1', 0);
+      ProcUnit.SETCURRENTKEY("Low-Level Code");
+      IF ProcUnit.FINDSET THEN BEGIN
+        ProdLineNo := 0;
+        AssyLineNo := 0;
+        ParentAssyLineNo := 0;
+        PlanLines := 0;
+        DisplayCounter := 0;
+        IF GUIALLOWED THEN
+          ProgressWindow.OPEN(
+            Text001 + '\' +
+            PADSTR(Text004,15,' ') + '#1########\' +
+            PADSTR(Text005,15,' ') + '#2##################\' +
+            PADSTR(Text006,15,' ') + '#3##################');
+        REPEAT
+          CASE ProcUnit."Replenishment Source Type" OF
+            ProcUnit."Replenishment Source Type"::Production:
+            BEGIN
+              CreateProdPlan(ProcUnit);
+            END;
+            ProcUnit."Replenishment Source Type"::Assembly:
+            BEGIN
+              CreateAssemblyForecast(ProcUnit);
+            END;
+          END;
+          DisplayCounter += 1;
+          IF (DisplayCounter = 1) OR ((DisplayCounter MOD 300) = 0) THEN BEGIN
+            IF GUIALLOWED THEN BEGIN
+              ProgressWindow.UPDATE(1,ProcUnit."Location Code");
+              ProgressWindow.UPDATE(2,ProcUnit."Item No.");
+              ProgressWindow.UPDATE(3,ProcUnit."Low-Level Code");
+            END;
+          END;
+        UNTIL ProcUnit.NEXT = 0;
+        IF GUIALLOWED THEN
+          ProgressWindow.CLOSE;
+      END;
+
+      Location."Enable Assembly Forecast" := OrigRefAssyEnabled;
+      CreateProcUnitFromTemp;
+
+      IF Location."Enable AFP Production" THEN BEGIN
+        CheckModifiedOrders;
+        COMMIT;
+
+        Location."Enable AFP Production" := OrigRefProdEnabled;
+        Location."Last Prod. Order Review" := WORKDATE;
+        Location.MODIFY(FALSE);
+      END;
+
+      InvMgt.CreateLogEntry(Location.Code,STRSUBSTNO('Duration: Plan Forcecast. %1',MainPlanningDuration),LogEntryNo);
+      InvMgt.CloseLogEntry(LogEntryNo,'');
+      InvMgt.CreateLogEntry(Location.Code,STRSUBSTNO('Duration: Create Prod Orders. %1',ProdOrderDuration),LogEntryNo);
+      InvMgt.CloseLogEntry(LogEntryNo,'');
+    END;
+
+    LOCAL PROCEDURE CreateProdPlan@1240030003(VAR ProcUnit@1240020009 : Record 14000555);
+    VAR
+      InvMgt@1240020000 : Codeunit 14000553;
+      LogEntryNo@1240020001 : Integer;
+      Ok@1240020002 : Boolean;
+      IncrementDays@1240020004 : Integer;
+      Increments@1240020003 : Integer;
+      PlanQty@1240020007 : Decimal;
+      AccumulatedQty@1240020006 : Decimal;
+      OrderMultipleQty@1240020005 : Decimal;
+      BaseCalendarCode@1240020008 : Code[10];
+      LastProdOrderDate@1240020010 : Date;
+      LastLevel@1240020011 : Integer;
+      OverrideLTHDate@1240020013 : Date;
+      MinSOQ@1240020014 : Decimal;
+      CalendarManagement@1240020016 : Codeunit 7600;
+      CalendarDescr@1240020020 : Text[50];
+      StartDate@1240020018 : Date;
+      OrigStartDate@1240020024 : Date;
+      EndDate@1240020023 : Date;
+      AFPProdPlanLine@1240020012 : Record 14002679;
+      UBP@1240020015 : Codeunit 14000564;
+      MainPlanningEndTime@1240020017 : DateTime;
+      MainPlanningBeginTime@1240020019 : DateTime;
+      ProdOrderBeginTime@1240020021 : DateTime;
+      ProdOrderEndTime@1240020022 : DateTime;
+      MaxEndDate@1240020025 : Date;
+    BEGIN
+      MainPlanningBeginTime := CURRENTDATETIME;
+      StartDate := WORKDATE;
+      MaxEndDate := StartDate + (AFPProdTemplate."Planning Increment (Days)" * AFPProdTemplate."Maximum Planning Increments");
+      UBP.CheckMaxLTHDate(ProcUnit, MaxEndDate);
+
+      IF Location."Prod. Plan Locked Through" > StartDate THEN
+        StartDate := CALCDATE('<+1D>',Location."Prod. Plan Locked Through");
+      OrigStartDate := StartDate;
+
+      LastProdOrderDate := GetLastProdOrderDate(ProcUnit);
+      IF LastProdOrderDate < OrigStartDate THEN BEGIN
+        LastProdOrderDate := 0D;
+      END;
+      IF LastProdOrderDate <> 0D THEN BEGIN
+        LastProdOrderDate := LastProdOrderDate + 1;
+        OrigStartDate := LastProdOrderDate;
+        StartDate := CALCDATE('<+' + FORMAT(AFPProdTemplate."Planning Increment (Days)") + 'D>', LastProdOrderDate);
+      END;
+      EndDate := StartDate + (AFPProdTemplate."Planning Increment (Days)" * AFPProdTemplate."Maximum Planning Increments");
+
+      IF EndDate > MaxEndDate THEN
+        EndDate := MaxEndDate;
+
+      UBP.CheckMaxLTHDate(ProcUnit, EndDate);
+
+      IF (StartDate <= EndDate) THEN BEGIN
+        OverrideLTHDate := 0D;
+        Increments := 0;
+        AccumulatedQty := 0;
+        // Max Horizon and Current
+        IF CheckNeed(ProcUnit,EndDate) OR CheckNeed(ProcUnit,StartDate) THEN BEGIN
+          REPEAT
+            IF OverrideLTHDate = 0D THEN
+              OverrideLTHDate := StartDate
+            ELSE BEGIN
+              Increments := Increments + 1;
+              IncrementDays := Increments * AFPProdTemplate."Planning Increment (Days)";
+              OverrideLTHDate := CALCDATE(STRSUBSTNO('<+%1D>',IncrementDays),StartDate);
+            END;
+            BaseCalendarCode := CompanyInfo."Base Calendar Code";
+            IF Location."Base Calendar Code" <> '' THEN
+              BaseCalendarCode := Location."Base Calendar Code";
+            Ok := FALSE;
+            IF BaseCalendarCode <> '' THEN BEGIN
+              REPEAT
+                IF CalendarManagement.CheckDateStatus(
+                  BaseCalendarCode,OverrideLTHDate,CalendarDescr)
+                THEN BEGIN
+                  OverrideLTHDate := OverrideLTHDate - 1;
+                END ELSE
+                  Ok := TRUE;
+              UNTIL Ok;
+            END;
+
+            IF OverrideLTHDate <= EndDate THEN BEGIN
+              // call into roll-up to use production plan qty
+              // call into forecast to use the production plan qty
+              MinSOQ := CalcLocInvRollUpSOQ(ProcUnit, OverrideLTHDate);
+              PlanQty := ROUND(MinSOQ,1.0,'<');
+              IF PlanQty > 0 THEN BEGIN
+                IF ProcUnit."Order Multiple" <> 0 THEN BEGIN
+                  OrderMultipleQty := PlanQty MOD ProcUnit."Order Multiple";
+                  IF OrderMultipleQty <> 0 THEN
+                    PlanQty := PlanQty + ProcUnit."Order Multiple" - OrderMultipleQty;
+                END;
+                IF PlanQty < ProcUnit."Order Minimum" THEN
+                  PlanQty := ProcUnit."Order Minimum";
+                AFPProdPlanLine.INIT;
+                AFPProdPlanLine."Template Name" := AFPProdTemplate.Name;
+                IF ProdLineNo = 0 THEN
+                  ProdLineNo := GetNextProdPlanLineNo
+                ELSE
+                  ProdLineNo := ProdLineNo + 1;
+                AFPProdPlanLine."Line No." := ProdLineNo;
+                AFPProdPlanLine.VALIDATE("Location Code",ProcUnit."Location Code");;
+                AFPProdPlanLine.VALIDATE("Item No.",ProcUnit."Item No.");
+                AFPProdPlanLine.VALIDATE("Variant Code",ProcUnit."Variant Code");
+                AFPProdPlanLine.VALIDATE("Quantity (Base)", PlanQty);
+                AFPProdPlanLine."Incremental Quantity" := PlanQty;
+                AFPProdPlanLine.VALIDATE("Planning Date", WORKDATE);
+                AFPProdPlanLine.VALIDATE("Horizon Date", OverrideLTHDate);
+                AFPProdPlanLine.VALIDATE("Required Date", GetSafetyStockDate(ProcUnit, OverrideLTHDate, OrigStartDate));
+                AFPProdPlanLine."Level No." := ProcUnit."Low-Level Code";
+                AFPProdPlanLine."Created DateTime" := CURRENTDATETIME;
+                AFPProdPlanLine.INSERT(TRUE);
+                PlanLines := PlanLines + 1;
+                AccumulatedQty := AccumulatedQty + PlanQty;
+              END;
+            END;
+          UNTIL OverrideLTHDate >= EndDate;
+        END;
+
+        MainPlanningEndTime := CURRENTDATETIME;
+        MainPlanningDuration += MainPlanningEndTime - MainPlanningBeginTime;
+
+        RollUpProdPlan(ProcUnit);
+
+        ProdOrderBeginTime := CURRENTDATETIME;
+        CreateProdOrders(ProcUnit);
+        ProdOrderEndTime := CURRENTDATETIME;
+        ProdOrderDuration += (ProdOrderEndTime - ProdOrderBeginTime);
+        COMMIT;
+
+        ProcUnit."Completed Prod. Plan Level" := 1;
+        ProcUnit.MODIFY(FALSE);
+        COMMIT;
+      END;
+    END;
+
+    LOCAL PROCEDURE RollUpProdPlan@1240030002(VAR ProcUnit@1240020000 : Record 14000555);
+    VAR
+      LocAFPProdPlanLine@1240030000 : Record 14002679;
+      ProdItemGroup@1240030003 : Record 14002676;
+      BeginDate@1240030001 : Date;
+      AFPProdPlanLine2@1240020001 : Record 14002679;
+      RollUpEndDate@1240020002 : Date;
+    BEGIN
+      IF (ProcUnit."Replenishment Source Code" <> '') THEN
+        IF (ProdItemGroup.Code <> ProcUnit."Replenishment Source Code") THEN
+          IF NOT ProdItemGroup.GET(ProcUnit."Replenishment Source Code") THEN
+            ProdItemGroup.INIT;
+      IF ProdItemGroup."Prod. Order Consolidation Days" = 0 THEN
+        EXIT;
+
+      AFPProdPlanLine2.SETCURRENTKEY("Location Code","Item No.","Variant Code");
+      LocAFPProdPlanLine.SETCURRENTKEY("Location Code","Item No.","Variant Code");
+
+      LocAFPProdPlanLine.SETRANGE("Location Code",ProcUnit."Location Code");
+      LocAFPProdPlanLine.SETRANGE("Item No.",ProcUnit."Item No.");
+      LocAFPProdPlanLine.SETRANGE("Variant Code",ProcUnit."Variant Code");
+      LocAFPProdPlanLine.SETRANGE("Prod. Order Created",FALSE);
+      IF LocAFPProdPlanLine.FINDSET THEN
+        REPEAT
+          IF LocAFPProdPlanLine."Quantity (Base)" <> 0 THEN BEGIN
+            BeginDate := LocAFPProdPlanLine."Required Date";
+            RollUpEndDate := CALCDATE(STRSUBSTNO('<+%1D>',ProdItemGroup."Prod. Order Consolidation Days"),BeginDate);
+
+            AFPProdPlanLine2.SETFILTER("Line No.",'>%1',LocAFPProdPlanLine."Line No.");
+            AFPProdPlanLine2.SETRANGE("Location Code",LocAFPProdPlanLine."Location Code");
+            AFPProdPlanLine2.SETRANGE("Item No.",LocAFPProdPlanLine."Item No.");
+            AFPProdPlanLine2.SETRANGE("Variant Code",LocAFPProdPlanLine."Variant Code");
+            AFPProdPlanLine2.SETRANGE("Required Date",BeginDate,RollUpEndDate);
+            IF AFPProdPlanLine2.FINDSET THEN
+              REPEAT
+                LocAFPProdPlanLine."Quantity (Base)" := LocAFPProdPlanLine."Quantity (Base)" + AFPProdPlanLine2."Quantity (Base)";
+                AFPProdPlanLine2."Quantity (Base)" := 0;
+                AFPProdPlanLine2.MODIFY;
+              UNTIL AFPProdPlanLine2.NEXT = 0;
+            LocAFPProdPlanLine.MODIFY(FALSE);
+          END;
+        UNTIL LocAFPProdPlanLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CreateProdOrders@1240030004(VAR ProcUnit@1240020001 : Record 14000555);
+    VAR
+      LocAFPProdPlanLine@1240030000 : Record 14002679;
+      ProdOrderCreated@1240030001 : Integer;
+      ProdOrderLine@1240020000 : Record 5406;
+    BEGIN
+      ProdOrderCreated := 0;
+      LocAFPProdPlanLine.SETRANGE("Location Code",ProcUnit."Location Code");
+      LocAFPProdPlanLine.SETRANGE("Item No.",ProcUnit."Item No.");
+      LocAFPProdPlanLine.SETRANGE("Variant Code",ProcUnit."Variant Code");
+      LocAFPProdPlanLine.SETRANGE("Prod. Order Created",FALSE);
+      IF LocAFPProdPlanLine.FINDSET THEN
+        REPEAT
+          IF LocAFPProdPlanLine."Quantity (Base)" <> 0 THEN BEGIN
+            InsertProdOrder(LocAFPProdPlanLine);
+            LocAFPProdPlanLine.MODIFY;
+            ProdOrderCreated := ProdOrderCreated + 1;
+            COMMIT;
+
+            CalcRefreshProdOrder(LocAFPProdPlanLine."Prod. Order Status", LocAFPProdPlanLine."Prod. Order No.");
+            COMMIT;
+
+            //CalcReplanProdOrder(LocAFPProdPlanLine."Prod. Order Status", LocAFPProdPlanLine."Prod. Order No.", LocAFPProdPlanLine.
+            //  "Required Date");
+
+          END;
+        UNTIL LocAFPProdPlanLine.NEXT = 0;
+
+      LocAFPProdPlanLine.MODIFYALL("Prod. Order Created",TRUE);
+    END;
+
+    LOCAL PROCEDURE InsertProdOrder@1240030005(VAR CurrAFPProdPlanLine@1240030000 : Record 14002679);
+    VAR
+      ProdOrder@1240030002 : Record 5405;
+    BEGIN
+
+      ProdOrder.INIT;
+      ProdOrder.Status := ProdOrder.Status::Simulated;
+      ProdOrder."No." := '';
+      ProdOrder.INSERT(TRUE);
+      ProdOrder."Source Type" := ProdOrder."Source Type"::Item;
+      ProdOrder.VALIDATE("Location Code",CurrAFPProdPlanLine."Location Code");
+      ProdOrder.VALIDATE("Source No.",CurrAFPProdPlanLine."Item No.");
+      ProdOrder.VALIDATE(Quantity,CurrAFPProdPlanLine."Quantity (Base)");
+
+
+
+      ProdOrder.SetUpdateEndDate;
+      ProdOrder.VALIDATE("Due Date", CurrAFPProdPlanLine."Required Date");
+      ProdOrder.MODIFY(FALSE);
+
+      CurrAFPProdPlanLine."Prod. Order Status" := ProdOrder.Status;
+      CurrAFPProdPlanLine."Prod. Order No." := ProdOrder."No.";
+      CurrAFPProdPlanLine."Orig. Prod. Order Start Date" := ProdOrder."Starting Date";
+    END;
+
+    LOCAL PROCEDURE CheckModifiedOrders@1240030007();
+    VAR
+      CreateProcUnit@1240020000 : Codeunit 14000575;
+      ProcUnit@1240020001 : Record 14000555;
+      ProdOrder@1240020002 : Record 5405;
+      ProdOrderComponent@1240020003 : Record 5407;
+      ProgWindow@1240030004 : Dialog;
+      RevCompCount@1240030002 : Integer;
+      RevOrderCount@1240030003 : Integer;
+      TmpProcUnitCount@1240030001 : Integer;
+      Text001@1240030005 : TextConst 'ENU=Checking Production Orders for New Proc. Units';
+      Text002@1240030009 : TextConst 'ENU=Prod. Item';
+      Text003@1240030006 : TextConst 'ENU=New or Modified Orders';
+      Text004@1240030007 : TextConst 'ENU=Components';
+      Text005@1240030008 : TextConst 'ENU=Created Proc. Units';
+      Skip@1240020004 : Boolean;
+    BEGIN
+      IF GUIALLOWED THEN
+        ProgWindow.OPEN(
+          Text001 + '\' +
+          PADSTR(Text002,30,' ') + '#1##################\' +
+          PADSTR(Text003,30,' ') + '#2######\' +
+          PADSTR(Text004,30,' ') + '#3######\' +
+          PADSTR(Text005,30,' ') + '#4######');
+
+      TmpProcUnitCount := 0;
+
+      ProdOrder.RESET;
+      ProdOrder.SETFILTER(Status,'<>%1',ProdOrder.Status::Finished);
+      ProdOrder.SETRANGE("Location Code", Location.Code);
+      ProdOrder.SETRANGE("Source Type",ProdOrder."Source Type"::Item);
+      ProdOrder.SETFILTER("Source No.",'<>%1','');
+      IF ProdOrder.FINDSET THEN
+        REPEAT
+          IF GUIALLOWED THEN BEGIN
+            RevOrderCount := RevOrderCount + 1;
+            ProgWindow.UPDATE(1,ProdOrder."Source No.");
+            ProgWindow.UPDATE(2,RevOrderCount);
+          END;
+          IF NOT ProcUnit.GET(
+                   ProdOrder."Location Code",
+                   ProdOrder."Source No.",'') THEN BEGIN
+
+             IF CheckLocation(ProdOrder."Location Code") THEN BEGIN
+               ProcUnit.INIT;
+               ProcUnit."Location Code" := ProdOrder."Location Code";
+               ProcUnit."Item No." := ProdOrder."Source No.";
+               ProcUnit."Variant Code" := '';
+               ProcUnit.SetAutoInsert;
+               ProcUnit.INSERT(TRUE);
+               CreateProcUnit.CheckReplPath(ProcUnit);
+               TmpProcUnitCount := TmpProcUnitCount + 1;
+             END;
+            TmpProcUnitCount := TmpProcUnitCount + 1;
+          END;
+
+          ProdOrderComponent.SETRANGE("Prod. Order No.",ProdOrder."No.");
+          ProdOrderComponent.SETRANGE(Status, ProdOrder.Status);
+          ProdOrderComponent.SETFILTER("Item No.",'<>%1','');
+          ProdOrderComponent.SETFILTER("Location Code",'<>%1','');
+          IF ProdOrderComponent.FINDSET THEN
+            REPEAT
+              IF NOT ProcUnit.GET(
+                       ProdOrderComponent."Location Code",
+                       ProdOrderComponent."Item No.",
+                       ProdOrderComponent."Variant Code") THEN BEGIN
+                Skip := FALSE;
+                IF (ProdOrderComponent."Location Code" <> ProdOrder."Location Code") THEN
+                  IF NOT CheckLocation(ProdOrderComponent."Location Code") THEN
+                    Skip := TRUE;
+                IF NOT Skip THEN BEGIN
+                  ProcUnit.INIT;
+                  ProcUnit."Location Code" := ProdOrderComponent."Location Code";
+                  ProcUnit."Item No." := ProdOrderComponent."Item No.";
+                  ProcUnit."Variant Code" := ProdOrderComponent."Variant Code";
+                  ProcUnit.SetAutoInsert;
+                  ProcUnit.INSERT(TRUE);
+                  CreateProcUnit.CheckReplPath(ProcUnit);
+                  TmpProcUnitCount := TmpProcUnitCount + 1;
+                END;
+              END;
+              RevCompCount := RevCompCount + 1;
+            UNTIL ProdOrderComponent.NEXT = 0;
+            IF GUIALLOWED THEN BEGIN
+              ProgWindow.UPDATE(3,RevCompCount);
+              ProgWindow.UPDATE(4,TmpProcUnitCount);
+            END;
+        UNTIL ProdOrder.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        ProgWindow.CLOSE;
+    END;
+
+    LOCAL PROCEDURE GetSafetyStockDate@1240030009(VAR ProcUnit@1240020000 : Record 14000555;CurrOverrideLTHDate@1240020001 : Date;OrigStartDate@1240020002 : Date) Resp : Date;
+    VAR
+      ModifiedDate@1240030000 : Date;
+      SafetyStockDays@1240020003 : Decimal;
+    BEGIN
+      IF (ProcUnit."Safety Stock Calc. Method" <> ProcUnit."Safety Stock Calc. Method"::Fixed) THEN
+        SafetyStockDays := 0
+      ELSE
+        SafetyStockDays := ProcUnit."Safety Stock Days";
+
+      CASE ProcUnit."Replenishment Source Type" OF
+        ProcUnit."Replenishment Source Type"::Production:
+        BEGIN
+          ModifiedDate :=
+            CurrOverrideLTHDate - (SafetyStockDays + AFPProdTemplate."Planning Increment (Days)");
+        END;
+        ProcUnit."Replenishment Source Type"::Assembly:
+        BEGIN
+          ModifiedDate :=
+            CurrOverrideLTHDate - (SafetyStockDays + AdvForcSetup."Assembly Increment Days");
+        END;
+      END;
+      IF ModifiedDate < OrigStartDate THEN
+        ModifiedDate := OrigStartDate;
+      EXIT(ModifiedDate);
+    END;
+
+    LOCAL PROCEDURE CheckNeed@1240030008(VAR ProcUnit@1240020001 : Record 14000555;DateToCheck@1240020000 : Date) CalculateNeed : Boolean;
+    VAR
+      MinSOQ@1240020002 : Decimal;
+    BEGIN
+      MinSOQ := CalcLocInvRollUpSOQ(ProcUnit, DateToCheck);
+      IF MinSOQ > 0 THEN
+        CalculateNeed := TRUE
+      ELSE
+        CalculateNeed := FALSE;
+
+      EXIT(CalculateNeed);
+    END;
+
+    LOCAL PROCEDURE CalcLocInvRollUpSOQ@1240020002(VAR ProcUnit@1240020003 : Record 14000555;LTHDate@1240020000 : Date) MinSOQ : Decimal;
+    VAR
+      CreateLocInvRollUP@1240020004 : Codeunit 14000574;
+      MinimumSOQ@1240020001 : Decimal;
+      MaximumSOQ@1240020002 : Decimal;
+    BEGIN
+      MinSOQ := 0;
+      CLEAR(CreateLocInvRollUP);
+      CreateLocInvRollUP.SetCalcProductionPlanninglines(TRUE);
+      CreateLocInvRollUP.CalcRollUp(ProcUnit,FALSE,0,LTHDate);
+      CreateLocInvRollUP.GetMinMaxSOQ(MinimumSOQ,MaximumSOQ);
+      CASE Location."Roll Up Order Quantity Rule" OF
+        Location."Roll Up Order Quantity Rule"::MinSOQ:
+          MinSOQ := MinimumSOQ;
+        Location."Roll Up Order Quantity Rule"::MaxSOQ:
+          MinSOQ := MaximumSOQ;
+      END;
+      EXIT(MinSOQ);
+    END;
+
+    LOCAL PROCEDURE CheckLocation@1240020000(CurrLocation@1240020000 : Code[10]) : Boolean;
+    BEGIN
+      IF (Location.Code <> CurrLocation) AND (CurrLocation <> '') THEN
+        Location.GET(CurrLocation);
+      EXIT(Location."Enable Adv. Forecasting")
+    END;
+
+    LOCAL PROCEDURE GetInitPlanningVariables@1240020014();
+    VAR
+      ModifyRec@1240020000 : Boolean;
+    BEGIN
+      InvMgtSetup.GET;
+      AdvForcSetup.GET;
+      CompanyInfo.GET;
+
+      IF NOT InvMgtSetup."Include Simulated Orders" THEN BEGIN
+        InvMgtSetup."Include Simulated Orders" := TRUE;
+        ModifyRec := TRUE;
+      END;
+
+      IF NOT InvMgtSetup."Inc. Qty. on Assy. Forecast" THEN BEGIN
+        InvMgtSetup."Inc. Qty. on Assy. Forecast" := TRUE;
+        ModifyRec := TRUE;
+      END;
+
+      IF ModifyRec THEN
+        InvMgtSetup.MODIFY(FALSE);
+    END;
+
+    LOCAL PROCEDURE GetInitProdVariables@1240020015();
+    BEGIN
+      Location.TESTFIELD("AFP Prod. Template Name");
+      AFPProdTemplate.GET(Location."AFP Prod. Template Name");
+
+      AFPProdSetup.GET;
+    END;
+
+    PROCEDURE GetLastProdOrderDate@1240020047(VAR CurrProcUnit@1240020000 : Record 14000555) LastProdOrderDate : Date;
+    VAR
+      ProdOrderLine2@1240020001 : Record 5406;
+    BEGIN
+      LastProdOrderDate := 0D;
+      ProdOrderLine2.SETCURRENTKEY("Item No.","Variant Code","Location Code",Status,"Due Date");
+      ProdOrderLine2.SETRANGE("Item No.",CurrProcUnit."Item No.");
+      ProdOrderLine2.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+      ProdOrderLine2.SETRANGE("Location Code",CurrProcUnit."Location Code");
+      ProdOrderLine2.SETRANGE(Status,ProdOrderLine2.Status::Planned);
+      IF ProdOrderLine2.FINDLAST THEN
+        LastProdOrderDate := ProdOrderLine2."Due Date";
+      ProdOrderLine2.SETRANGE(Status,ProdOrderLine2.Status::"Firm Planned");
+      IF ProdOrderLine2.FINDLAST THEN
+        IF ProdOrderLine2."Due Date" > LastProdOrderDate THEN
+          LastProdOrderDate := ProdOrderLine2."Due Date";
+      ProdOrderLine2.SETRANGE(Status,ProdOrderLine2.Status::Released);
+      IF ProdOrderLine2.FINDLAST THEN
+        IF ProdOrderLine2."Due Date" > LastProdOrderDate THEN
+          LastProdOrderDate := ProdOrderLine2."Due Date";
+      EXIT(LastProdOrderDate);
+    END;
+
+    PROCEDURE CalcRefreshProdOrder@12(ProdOrderStatus@1001 : Option;ProdOrderNo@1002 : Code[20]);
+    VAR
+      ProdOrder@1004 : Record 5405;
+      rptRefreshProdOrder@1240020000 : Report 14002672;
+    BEGIN
+      // Refresh Production Orders
+      ProdOrder.RESET;
+      ProdOrder.SetHideValidationDialog(TRUE);
+      ProdOrder.SETRANGE(Status, ProdOrderStatus);
+      ProdOrder.SETRANGE("No.", ProdOrderNo);
+
+      CLEAR(rptRefreshProdOrder);
+      rptRefreshProdOrder.InitializeRequest(1,TRUE,TRUE,TRUE,FALSE);
+      IF GUIALLOWED THEN
+        rptRefreshProdOrder.USEREQUESTPAGE(FALSE);
+      rptRefreshProdOrder.SETTABLEVIEW(ProdOrder);
+      rptRefreshProdOrder.RUNMODAL;
+    END;
+
+    PROCEDURE CalcReplanProdOrder@11(ProdOrderStatus@1002 : Option;ProdOrderNo@1001 : Code[20];RequiredDate@1003 : Date);
+    VAR
+      ProdOrderLine@1240020000 : Record 5406;
+      ProdOrder@1005 : Record 5405;
+      rptReplanProdOrder@1240020001 : Report 99001026;
+    BEGIN
+      // Based on Routings - check required date against ending date - Replan Orders
+      IF NOT ProdOrder.GET(ProdOrderStatus, ProdOrderNo) THEN
+        EXIT;
+
+      ProdOrder.SetHideValidationDialog(TRUE);
+      IF (ProdOrder."Due Date" <> RequiredDate) THEN BEGIN
+        ProdOrder.VALIDATE("Due Date", RequiredDate);
+        ProdOrder.MODIFY(FALSE);
+        ProdOrderLine.SETCURRENTKEY(Status,"Prod. Order No.","Planning Level Code");
+        ProdOrderLine.SETRANGE(Status, ProdOrder.Status);
+        ProdOrderLine.SETRANGE("Prod. Order No.",ProdOrder."No.");
+        ProdOrderLine.SETFILTER("Item No.",'<>%1','');
+        IF ProdOrderLine.FINDSET THEN BEGIN
+          REPEAT
+            ProdOrderLine."Ending Date" := CALCDATE('<-1D>', RequiredDate);
+            ProdOrderLine."Due Date" := ProdOrder."Due Date";
+            ProdOrderLine.MODIFY(FALSE);
+          UNTIL ProdOrderLine.NEXT = 0;
+        END;
+        COMMIT;
+        ProdOrder.SETRANGE(Status,ProdOrderStatus);
+        ProdOrder.SETRANGE("No.", ProdOrderNo);
+
+        // Replan Production Orders
+        CLEAR(rptReplanProdOrder);
+        // backward, no levels - AFP loops 1 extra time for demand
+        rptReplanProdOrder.InitializeRequest(1, 0);
+        IF GUIALLOWED THEN
+          rptReplanProdOrder.USEREQUESTPAGE(FALSE);
+        rptReplanProdOrder.SETTABLEVIEW(ProdOrder);
+        rptReplanProdOrder.RUNMODAL;
+        COMMIT;
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteProdOrders@1240020024(ProdOrderStatus@1240020001 : Option;CurrLocationFilter@1240020002 : Text[250]);
+    VAR
+      ProdOrder@1240020000 : Record 5405;
+    BEGIN
+      ProdOrder.SETRANGE(Status,ProdOrderStatus);
+      ProdOrder.SETFILTER("Location Code", CurrLocationFilter);
+      ProdOrder.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE DeletePlanningLines@1240020004(CurrLocationFilter@1240020000 : Text[250]);
+    VAR
+      AFPProdPlanLine@1240020001 : Record 14002679;
+    BEGIN
+      AFPProdPlanLine.SETFILTER("Location Code", CurrLocationFilter);
+      AFPProdPlanLine.DELETEALL(FALSE);
+    END;
+
+    PROCEDURE GetNextProdPlanLineNo@1240020048() NextLineNo : Integer;
+    VAR
+      LocAFPProdPlanLine@1240020000 : Record 14002679;
+    BEGIN
+      LocAFPProdPlanLine.LOCKTABLE;
+      IF LocAFPProdPlanLine.FINDLAST THEN
+        NextLineNo := LocAFPProdPlanLine."Line No." + 1
+      ELSE
+        NextLineNo := 1;
+      EXIT(NextLineNo);
+    END;
+
+    LOCAL PROCEDURE CreateAssemblyForecast@1(VAR ProcUnit@1240020005 : Record 14000555);
+    VAR
+      AccumulatedQty@1240020000 : Decimal;
+      PlanQty@1240020001 : Decimal;
+      OrderMultipleQty@1000 : Decimal;
+      AssyFCLine@1240020004 : Record 14002667;
+      AssyCompFCLine@1240020003 : Record 14002666;
+      BOMComponent@1240020002 : Record 90;
+      OverrideLTHDate@1240020007 : Date;
+      MinSOQ@1240020006 : Decimal;
+      IncrementDays@1240020009 : Integer;
+      Increments@1240020008 : Integer;
+      Item@1240020010 : Record 27;
+      ItemUOM@1240020011 : Record 5404;
+      ItemUOM2@1240020018 : Record 5404;
+      ParentLineNo@1240020012 : Integer;
+      Multiplier@1240020013 : Decimal;
+      StartDate@1240020014 : Date;
+      EndDate@1240020017 : Date;
+      ProcUnit2@1240020015 : Record 14000555;
+      UBP@1240020016 : Codeunit 14000564;
+      OrigStartDate@1240020020 : Date;
+      LastAssyOrderDate@1240020021 : Date;
+    BEGIN
+      AccumulatedQty := 0;
+      PlanQty := 0;
+      StartDate := WORKDATE;
+      OrigStartDate := StartDate;
+      LastAssyOrderDate := GetLastAssemblyOrderDate(ProcUnit);
+      IF LastAssyOrderDate < StartDate THEN
+        LastAssyOrderDate := 0D;
+      IF LastAssyOrderDate <> 0D THEN BEGIN
+        LastAssyOrderDate := LastAssyOrderDate + 1;
+        StartDate := LastAssyOrderDate;
+        OrigStartDate := StartDate;
+      END;
+      StartDate := StartDate + AdvForcSetup."Assembly Increment Days";
+      EndDate :=  StartDate + (AdvForcSetup."Assembly Increment Days" * AdvForcSetup."Assembly Max. Increments");
+      UBP.CheckMaxLTHDate(ProcUnit, EndDate);
+
+      Increments := 0;
+      OverrideLTHDate := StartDate;
+      IF (StartDate <= EndDate) THEN BEGIN
+        REPEAT
+          MinSOQ := CalcLocInvRollUpSOQ(ProcUnit, OverrideLTHDate);
+          IF Item."No." <> ProcUnit."Item No." THEN
+            Item.GET(ProcUnit."Item No.");
+          IF (Item."No." <> ItemUOM."Item No.") OR (ItemUOM.Code <> Item."Base Unit of Measure") THEN
+            ItemUOM.GET(ProcUnit."Item No.",Item."Base Unit of Measure");
+          MinSOQ := ROUND(MinSOQ/ItemUOM."Qty. per Unit of Measure",1.0,'>');
+          PlanQty := MinSOQ;
+          IF PlanQty > 0 THEN BEGIN
+            IF ProcUnit."Order Multiple" <> 0 THEN BEGIN
+              OrderMultipleQty := PlanQty MOD ProcUnit."Order Multiple";
+              IF OrderMultipleQty <> 0 THEN
+                PlanQty := PlanQty + ProcUnit."Order Multiple" - OrderMultipleQty;
+            END;
+            IF PlanQty < ProcUnit."Order Minimum" THEN
+              PlanQty := ProcUnit."Order Minimum";
+
+            PlanLines := PlanLines + 1;
+
+            BOMComponent.RESET;
+            BOMComponent.SETRANGE(BOMComponent."Parent Item No.",ProcUnit."Item No.");
+            BOMComponent.SETRANGE(Type,BOMComponent.Type::Item);
+            BOMComponent.SETFILTER("No.",'<>%1','');
+            BOMComponent.SETFILTER("Quantity per",'<>%1',0);
+            BOMComponent.SETAUTOCALCFIELDS("Assembly BOM");
+            IF BOMComponent.FINDSET THEN BEGIN
+              IF ParentAssyLineNo = 0 THEN
+                ParentAssyLineNo := GetNextAssyPlanParentLineNo
+              ELSE
+                ParentAssyLineNo := ParentAssyLineNo + 1;
+
+              AssyFCLine.INIT;
+              AssyFCLine."Entry No." := ParentAssyLineNo;
+              AssyFCLine."Assy. Location Code" := ProcUnit."Location Code";
+              AssyFCLine."Assy. Item No." := ProcUnit."Item No.";
+              AssyFCLine."Assy. Variant Code" := ProcUnit."Variant Code";
+              AssyFCLine.VALIDATE("Required Date", GetSafetyStockDate(ProcUnit, OverrideLTHDate, OrigStartDate));
+              AssyFCLine."Horizon Date" := OverrideLTHDate;
+              AssyFCLine."Quantity (Base)" := PlanQty;
+              AssyFCLine."Created DateTime" := CURRENTDATETIME;
+              AssyFCLine.Level := ProcUnit."Low-Level Code";
+              AssyFCLine.INSERT(TRUE);
+              REPEAT
+                IF BOMComponent."Unit of Measure Code" <> '' THEN BEGIN
+                  ItemUOM2.GET(BOMComponent."No.",BOMComponent."Unit of Measure Code");
+                  Multiplier := ItemUOM2."Qty. per Unit of Measure";
+                END ELSE
+                  Multiplier := 1;
+
+                IF AssyLineNo = 0 THEN
+                  AssyLineNo := GetNextAssyPlanLineNo
+                ELSE
+                  AssyLineNo := AssyLineNo  + 1;
+
+                AssyCompFCLine.INIT;
+                AssyCompFCLine."Entry No." := AssyLineNo;
+                AssyCompFCLine."Comp. Location Code" := ProcUnit."Location Code";
+                AssyCompFCLine."Comp. Item No." := BOMComponent."No.";
+                AssyCompFCLine."Comp. Variant Code" := BOMComponent."Variant Code";
+                AssyCompFCLine."Required Date" := AssyFCLine."Required Date";
+                AssyCompFCLine."Quantity (Base)" := PlanQty * Multiplier * BOMComponent."Quantity per";
+                AssyCompFCLine."Created DateTime" := CURRENTDATETIME;
+                AssyCompFCLine."Assy. Parent Location Code" := ProcUnit."Location Code";
+                AssyCompFCLine."Assy. Parent Item No." := ProcUnit."Item No.";
+                AssyCompFCLine."Assy. Parent Variant Code" := ProcUnit."Variant Code";
+                AssyCompFCLine.Level := ProcUnit."Low-Level Code";
+                AssyCompFCLine.Assembly := BOMComponent."Assembly BOM";
+                AssyCompFCLine.INSERT(TRUE);
+
+                IF NOT ProcUnit2.GET(AssyCompFCLine."Comp. Location Code", AssyCompFCLine."Comp. Item No.", AssyCompFCLine."Comp. Variant Code") THEN BEGIN
+                  IF NOT TempProcUnit.GET(AssyCompFCLine."Comp. Location Code", AssyCompFCLine."Comp. Item No.", AssyCompFCLine."Comp. Variant Code") THEN BEGIN
+                    TempProcUnit.INIT;
+                    TempProcUnit."Location Code" := AssyCompFCLine."Comp. Location Code";
+                    TempProcUnit."Item No." := AssyCompFCLine."Comp. Item No.";
+                    TempProcUnit."Variant Code" := AssyCompFCLine."Comp. Variant Code";
+                    IF TempProcUnit.INSERT(FALSE) THEN;
+                  END;
+                END;
+
+              UNTIL BOMComponent.NEXT = 0;
+              AccumulatedQty := AccumulatedQty + PlanQty;
+            END;
+          END;
+          Increments := Increments + 1;
+          IncrementDays := Increments * AdvForcSetup."Assembly Increment Days";
+          OverrideLTHDate := StartDate + IncrementDays;
+        UNTIL Increments > AdvForcSetup."Assembly Max. Increments";
+      END;
+    END;
+
+    PROCEDURE GetInitAssemblyVariables@1240020005();
+    BEGIN
+      TempProcUnit.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE DeleteAssemblyPlanningLines@1240020006(CurrLocationFilter@1240020000 : Text[250]);
+    VAR
+      AssyFCLine@1240020002 : Record 14002667;
+      AssyCompFCLine@1240020001 : Record 14002666;
+    BEGIN
+      AssyFCLine.SETCURRENTKEY("Assy. Item No.","Assy. Variant Code","Assy. Location Code");
+      AssyFCLine.SETFILTER("Assy. Location Code", CurrLocationFilter);
+      AssyFCLine.DELETEALL(FALSE);
+
+      AssyCompFCLine.SETFILTER("Comp. Location Code", CurrLocationFilter);
+      AssyCompFCLine.DELETEALL(FALSE);
+    END;
+
+    PROCEDURE GetNextAssyPlanParentLineNo@1240020009() NextLineNo : Integer;
+    VAR
+      LocAssyFCLine@1240020000 : Record 14002667;
+    BEGIN
+      LocAssyFCLine.LOCKTABLE;
+      IF LocAssyFCLine.FINDLAST THEN
+        NextLineNo := LocAssyFCLine."Entry No." + 1
+      ELSE
+        NextLineNo := 1;
+      EXIT(NextLineNo);
+    END;
+
+    PROCEDURE GetNextAssyPlanLineNo@1240020007() NextLineNo : Integer;
+    VAR
+      LocAssyCompFCLine@1240020000 : Record 14002666;
+    BEGIN
+      LocAssyCompFCLine.LOCKTABLE;
+      IF LocAssyCompFCLine.FINDLAST THEN
+        NextLineNo := LocAssyCompFCLine."Entry No." + 1
+      ELSE
+        NextLineNo := 1;
+      EXIT(NextLineNo);
+    END;
+
+    PROCEDURE CreateProcUnitFromTemp@1240020019();
+    VAR
+      ProcUnit@1240020000 : Record 14000555;
+      UBP@1240020003 : Codeunit 14000564;
+      CreateProcUnit@1240020002 : Codeunit 14000575;
+    BEGIN
+      IF TempProcUnit.FINDSET THEN BEGIN
+        ProcUnit.INIT;
+        ProcUnit."Location Code" := TempProcUnit."Location Code";
+        ProcUnit."Item No." := TempProcUnit."Item No.";
+        ProcUnit."Variant Code" := TempProcUnit."Variant Code";
+        ProcUnit."First Stocked Date" := UBP.GetFirstStockedDate(ProcUnit, '');
+        ProcUnit.INSERT(TRUE);
+        CreateProcUnit.CheckReplPath(ProcUnit);
+      END;
+    END;
+
+    PROCEDURE SetOverrideExecutionModeProd@1240020003();
+    BEGIN
+      OverrideExecutionModeProd := TRUE;
+    END;
+
+    PROCEDURE SetOverrideExecutionModeAssy@1240020008();
+    BEGIN
+      OverrideExecutionModeAssy := TRUE;
+    END;
+
+    PROCEDURE InsertAsmOrderFromForecast@1240020001(VAR CurrAssyFCLine@1240020001 : Record 14002667) counter : Integer;
+    VAR
+      AsmHeader@1240020002 : Record 900;
+      TempAssyFCLine@1240020005 : TEMPORARY Record 14002667;
+      BOMComponent@1240020003 : Record 90;
+    BEGIN
+      // combine all filtered lines per required date and create a Assembly order
+      CombineAssemblyFCLines(CurrAssyFCLine, TempAssyFCLine);
+      counter := 0;
+      TempAssyFCLine.SETCURRENTKEY("Assy. Item No.","Assy. Variant Code","Assy. Location Code","Required Date");
+      TempAssyFCLine.SETFILTER("Quantity (Base)", '<>%1', 0);
+      IF TempAssyFCLine.FINDSET THEN BEGIN
+        REPEAT
+          counter := counter + 1;
+          InsertAsmHeader(TempAssyFCLine, AsmHeader);
+        UNTIL TempAssyFCLine.NEXT = 0;
+        DeletePlannedAssemblyFC(CurrAssyFCLine);
+      END;
+      EXIT(counter);
+    END;
+
+    LOCAL PROCEDURE CombineAssemblyFCLines@1240020027(VAR CurrAssyFCLine@1240020000 : Record 14002667;VAR TotalAssyFCLine@1240020001 : Record 14002667);
+    VAR
+      AssyFCLine@1240020002 : Record 14002667;
+    BEGIN
+      AssyFCLine.COPY(CurrAssyFCLine);
+      AssyFCLine.SETCURRENTKEY("Assy. Item No.","Assy. Variant Code","Assy. Location Code","Required Date");
+      IF AssyFCLine.FINDSET THEN BEGIN
+        REPEAT
+          TotalAssyFCLine.SETRANGE("Assy. Item No.", AssyFCLine."Assy. Item No.");
+          TotalAssyFCLine.SETRANGE("Assy. Variant Code", AssyFCLine."Assy. Variant Code");
+          TotalAssyFCLine.SETRANGE("Assy. Location Code", AssyFCLine."Assy. Location Code");
+          IF TotalAssyFCLine.FINDFIRST THEN BEGIN
+            TotalAssyFCLine."Quantity (Base)" := TotalAssyFCLine."Quantity (Base)" + AssyFCLine."Quantity (Base)";
+            TotalAssyFCLine.MODIFY(FALSE);
+          END ELSE BEGIN
+            TotalAssyFCLine.INIT;
+            TotalAssyFCLine := AssyFCLine;
+            TotalAssyFCLine.INSERT(FALSE);
+          END;
+        UNTIL AssyFCLine.NEXT = 0;
+        TotalAssyFCLine.RESET;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertAsmHeader@1240020012(VAR CurrAssyFCLine@1240020001 : Record 14002667;VAR AsmHeader@1240020002 : Record 900);
+    BEGIN
+      AsmHeader.INIT;
+      AsmHeader."Document Type" := AsmHeader."Document Type"::Order;
+      AsmHeader."No." := '';
+      AsmHeader.INSERT(TRUE);
+      AsmHeader.SetWarningsOff;
+      AsmHeader."Due Date" := CurrAssyFCLine."Required Date";
+      AsmHeader."Location Code" := CurrAssyFCLine."Assy. Location Code";
+      // each field below causes an update to assembly lines
+      AsmHeader.VALIDATE("Item No.", CurrAssyFCLine."Assy. Item No.");
+      IF (CurrAssyFCLine."Assy. Variant Code" <> '') THEN
+        AsmHeader.VALIDATE("Variant Code", CurrAssyFCLine."Assy. Variant Code");
+      AsmHeader.VALIDATE(Quantity, CurrAssyFCLine."Quantity (Base)");
+      AsmHeader."Planned Assembly Item" := TRUE;
+      AsmHeader.MODIFY(FALSE);
+    END;
+
+    LOCAL PROCEDURE DeletePlannedAssemblyFC@1240020017(VAR CurrAssyFCLine@1240020000 : Record 14002667);
+    VAR
+      AssyCompFCLine@1240020002 : Record 14002666;
+      AssyFCLine@1240020001 : Record 14002667;
+    BEGIN
+      IF CurrAssyFCLine.FINDSET THEN BEGIN
+        REPEAT
+          AssyCompFCLine.SETRANGE("Assy. Parent Item No.", CurrAssyFCLine."Assy. Item No.");
+          AssyCompFCLine.SETRANGE("Assy. Parent Location Code", CurrAssyFCLine."Assy. Location Code");
+          AssyCompFCLine.SETRANGE("Assy. Parent Variant Code", CurrAssyFCLine."Assy. Variant Code");
+          AssyCompFCLine.SETRANGE("Required Date", CurrAssyFCLine."Required Date");
+          AssyCompFCLine.SETRANGE(Level, CurrAssyFCLine.Level);
+          AssyCompFCLine.DELETEALL(TRUE);
+        UNTIL CurrAssyFCLine.NEXT = 0;
+        CurrAssyFCLine.DELETEALL(TRUE);
+      END;
+    END;
+
+    PROCEDURE GetLastAssemblyOrderDate@1240020010(VAR CurrProcUnit@1240020000 : Record 14000555) LastAssyOrderDate : Date;
+    VAR
+      AssyOrderHeader@1240020001 : Record 900;
+    BEGIN
+      LastAssyOrderDate := 0D;
+      AssyOrderHeader.SETCURRENTKEY("Document Type","Item No.","Variant Code","Location Code","Due Date");
+      AssyOrderHeader.SETRANGE("Item No.",CurrProcUnit."Item No.");
+      AssyOrderHeader.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+      AssyOrderHeader.SETRANGE("Location Code",CurrProcUnit."Location Code");
+      IF AssyOrderHeader.FINDLAST THEN
+        LastAssyOrderDate := AssyOrderHeader."Due Date";
+      EXIT(LastAssyOrderDate);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

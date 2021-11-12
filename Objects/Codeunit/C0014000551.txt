@@ -1,0 +1,363 @@
+OBJECT Codeunit 14000551 Vendor Performance Calculation
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/18;
+    Time=12:00:00 PM;
+    Version List=UBP2.99;
+  }
+  PROPERTIES
+  {
+    TableNo=14;
+    OnRun=VAR
+            InvMgmtSetup@14000500 : Record 14000551;
+            Item@1240030001 : Record 27;
+            ItemLedgerEntry@1240030002 : Record 32;
+            Location@14000501 : Record 14;
+            PostedVendPerfLine@1240030004 : Record 14000562;
+            PostedVendPerfLine2@1240030010 : Record 14000562;
+            PurchLine@14000502 : Record 39;
+            PurchRcptHdr@1240030000 : Record 120;
+            PurchRcptHdrTmp@1240030011 : TEMPORARY Record 120;
+            PurchRcptLine@14000503 : Record 121;
+            PurchRcptLine2@1240030003 : Record 121;
+            ProcUnit@14000505 : Record 14000555;
+            VendPerfLine@14000506 : Record 14000561;
+            VendPerfLine2@1240030007 : Record 14000561;
+            VendPerfLine3@1240030008 : Record 14000561;
+            VendPerfLineTmp@1240030006 : TEMPORARY Record 14000561;
+            CreateProcUnit@1240020000 : Codeunit 14000575;
+            Window@14000507 : Dialog;
+            EntryNo@14000508 : Integer;
+            FirstReceipt@1240030009 : Boolean;
+            LastEntryNo@1240030005 : Integer;
+            VarianceDays@14000511 : Decimal;
+          BEGIN
+            InvMgt.CreateLogEntry(Code,Text000,UBPLogEntryNo);
+
+            Location.GET(Code);
+            InvMgmtSetup.GET;
+
+            IF GUIALLOWED THEN BEGIN
+              Window.OPEN(
+               '#3########################################\' +
+                PADSTR(Text001,10) + '#1##################\' +
+                PADSTR(Text002,10) + '#2##################');
+              Window.UPDATE(1,Code);
+              Window.UPDATE(3,Text000);
+            END;
+
+            ItemLedgerEntry.RESET;
+            ItemLedgerEntry.SETFILTER("Entry No.",'>%1',Location."Last Item Rcpt. Entry No.");
+            ItemLedgerEntry.SETRANGE("Location Code",Code);
+            ItemLedgerEntry.SETRANGE("Entry Type",ItemLedgerEntry."Entry Type"::Purchase);
+            ItemLedgerEntry.SETFILTER("Posting Date",'>=%1',InvMgmtSetup."Usage Start Date");
+            IF ItemLedgerEntry.FIND('-') THEN
+              REPEAT
+                IF GUIALLOWED THEN
+                  Window.UPDATE(2,ItemLedgerEntry."Item No.");
+                PurchRcptHdrTmp."No." := ItemLedgerEntry."Document No.";
+                IF PurchRcptHdrTmp.INSERT THEN;
+                Location."Last Item Rcpt. Entry No." := ItemLedgerEntry."Entry No.";
+              UNTIL ItemLedgerEntry.NEXT = 0;
+            Location.MODIFY;
+
+            IF GUIALLOWED THEN
+              Window.UPDATE(3,Text005);
+            IF PurchRcptHdrTmp.FIND('-') THEN BEGIN
+              VendPerfLine.LOCKTABLE;
+              PostedVendPerfLine.LOCKTABLE;
+              LastEntryNo := 0;
+              IF VendPerfLine.FIND('+') THEN
+                LastEntryNo := VendPerfLine."Entry No.";
+              IF PostedVendPerfLine.FIND('+') THEN
+                IF LastEntryNo < PostedVendPerfLine."Entry No." THEN
+                  LastEntryNo := PostedVendPerfLine."Entry No.";
+
+              PurchRcptLine.RESET;
+              PurchRcptLine.SETCURRENTKEY("Document No.","Line No.");
+
+              PurchRcptLine2.RESET;
+              PurchRcptLine2.SETCURRENTKEY("Order No.","Order Line No.");
+
+              REPEAT
+                PurchRcptLine.SETRANGE("Document No.",PurchRcptHdrTmp."No.");
+                PurchRcptLine.SETRANGE("Location Code",Code);
+                PurchRcptLine.SETRANGE(Type,PurchRcptLine.Type::Item);
+                PurchRcptLine.SETFILTER("No.",'<>%1','');
+                PurchRcptLine.SETFILTER("Order No.",'<>%1','');
+                PurchRcptLine.SETFILTER(Quantity,'<>%1',0);
+                IF PurchRcptLine.FIND('-') THEN
+                  REPEAT
+                    IF GUIALLOWED THEN
+                      Window.UPDATE(2,PurchRcptLine."No.");
+                    IF Item.GET(PurchRcptLine."No.") AND NOT Item.Blocked THEN BEGIN
+                      VendPerfLine.INIT;
+                      LastEntryNo := LastEntryNo + 1;
+                      VendPerfLine."Entry No." := LastEntryNo;
+                      VendPerfLine."Location Code" := PurchRcptLine."Location Code";
+                      VendPerfLine.Vendor := PurchRcptLine."Buy-from Vendor No.";
+                      VendPerfLine."Document No." := PurchRcptLine."Document No.";
+                      VendPerfLine."Document Line No." := PurchRcptLine."Line No.";
+                      VendPerfLine."Item No." := PurchRcptLine."No.";
+                      VendPerfLine."Variant Code" := PurchRcptLine."Variant Code";
+                      VendPerfLine."Order No." := PurchRcptLine."Order No.";
+                      VendPerfLine."Order Line No." := PurchRcptLine."Order Line No.";
+
+                      PurchRcptHdr.GET(PurchRcptLine."Document No.");
+                      VendPerfLine."Order Date" := PurchRcptHdr."Order Date";
+
+                      IF PurchRcptLine."Posted at Date" = 0D THEN
+                        VendPerfLine."Date Received" := PurchRcptHdr."Posting Date"
+                      ELSE
+                        VendPerfLine."Date Received" := PurchRcptLine."Posted at Date";
+                      VendPerfLine."Time Received" := PurchRcptLine."Posted at Time";
+                      VendPerfLine."Date Promised" := PurchRcptLine."Promised Receipt Date";
+                      IF VendPerfLine."Date Received" <> 0D THEN BEGIN
+                        IF VendPerfLine."Order Date" <> 0D THEN
+                          VendPerfLine."No. of Delivery Days" :=
+                            (VendPerfLine."Date Received" - VendPerfLine."Order Date")
+                        ELSE
+                          VendPerfLine."No. of Delivery Days" := 0;
+                        IF VendPerfLine."Date Promised" <> 0D THEN
+                          VendPerfLine."No. of Days Overdue" :=
+                            (VendPerfLine."Date Promised" - VendPerfLine."Date Received");
+                      END;
+                      VendPerfLine."Exclude From Performance" := PurchRcptLine."Exclude From Performance";
+                      VendPerfLine."Unit of Measure Code" := PurchRcptLine."Unit of Measure";
+
+                      IF PurchRcptLine."Order No." <> '' THEN BEGIN
+                        IF PurchLine.GET(
+                          PurchLine."Document Type"::Order,PurchRcptLine."Order No.",PurchRcptLine."Order Line No.") THEN BEGIN
+                          VendPerfLine."Order Qty." := PurchLine.Quantity;
+                          VendPerfLine."Order Qty. (Base)" := PurchLine."Quantity (Base)";
+                        END ELSE BEGIN
+                          PurchRcptLine2.SETRANGE("Order No.",PurchRcptLine."Order No.");
+                          PurchRcptLine2.SETRANGE("Order Line No.",PurchRcptLine."Order Line No.");
+                          IF PurchRcptLine2.FIND('-') THEN
+                            REPEAT
+                              VendPerfLine."Order Qty." := VendPerfLine."Order Qty." + PurchRcptLine2.Quantity;
+                              VendPerfLine."Order Qty. (Base)" :=
+                                VendPerfLine."Order Qty. (Base)" + PurchRcptLine2."Quantity (Base)";
+                            UNTIL PurchRcptLine2.NEXT = 0;
+                        END;
+                      END ELSE BEGIN
+                        VendPerfLine."Order Qty." := PurchRcptLine.Quantity;
+                        VendPerfLine."Order Qty. (Base)" := PurchRcptLine."Quantity (Base)";
+                        VendPerfLine."First Receipt" := TRUE;
+                      END;
+
+                      VendPerfLine."Received Qty." := PurchRcptLine.Quantity;
+                      VendPerfLine."Received Qty. (Base)" := PurchRcptLine."Quantity (Base)";
+                      VendPerfLine."Exclude From Performance" := PurchRcptLine."Exclude From Performance";
+
+                      IF VendPerfLine."No. of Delivery Days" < InvMgmtSetup."Min. Lead Time Days" THEN BEGIN
+                        VendPerfLine.Review := TRUE;
+                        VendPerfLine."Min. Lead Time Days" := TRUE;
+                      END;
+                      IF NOT ProcUnit.GET(
+                        VendPerfLine."Location Code",VendPerfLine."Item No.",VendPerfLine."Variant Code") THEN BEGIN
+                        ProcUnit.INIT;
+                        ProcUnit."Location Code" := VendPerfLine."Location Code";
+                        ProcUnit."Item No." := VendPerfLine."Item No.";
+                        ProcUnit."Variant Code" := VendPerfLine."Variant Code";
+                        ProcUnit.INSERT(TRUE);
+                        CreateProcUnit.CheckReplPath(ProcUnit);
+                      END;
+                      IF (ProcUnit."Replenishment Source Type" = ProcUnit."Replenishment Source Type"::Vendor) AND
+                         (ProcUnit."Replenishment Source Code" = VendPerfLine.Vendor) THEN BEGIN
+                        IF ProcUnit."Average Lead Time (Days)" <> 0 THEN BEGIN
+                          VarianceDays := (ProcUnit."Average Lead Time (Days)" * (InvMgmtSetup."Lead Time Review %" / 100));
+                          IF (VendPerfLine."No. of Delivery Days" < (ProcUnit."Average Lead Time (Days)" - VarianceDays)) OR
+                             (VendPerfLine."No. of Delivery Days" > (ProcUnit."Average Lead Time (Days)" + VarianceDays)) THEN
+                            VendPerfLine.Review := TRUE;
+                            VendPerfLine."Lead Time Review %" := TRUE;
+                        END;
+                        VendPerfLine."Ave. Lead Time (Days)" := ProcUnit."Average Lead Time (Days)";
+                        VendPerfLine."Primary Vendor" := TRUE;
+                      END;
+
+                      IF VendPerfLine."No. of Delivery Days" < 1 THEN
+                        VendPerfLine."Exclude From Performance" := TRUE;
+
+                      IF VendPerfLine."Date Received" >= VendPerfLine."Order Date" THEN
+                        IF VendPerfLine.INSERT THEN;
+                    END;
+                  UNTIL PurchRcptLine.NEXT = 0;
+              UNTIL PurchRcptHdrTmp.NEXT = 0;
+            END;
+
+            IF GUIALLOWED THEN
+              Window.UPDATE(3,Text006);
+
+            PostedVendPerfLine.RESET;
+            PostedVendPerfLine.SETCURRENTKEY(
+              "Order No.","Order Line No.","Date Received","Time Received");
+            VendPerfLine2.RESET;
+            VendPerfLine2.SETCURRENTKEY(
+              "Order No.","Order Line No.","Date Received","Time Received");
+
+            VendPerfLine.RESET;
+            VendPerfLine.SETRANGE("Location Code",Code);
+            IF VendPerfLine.FIND('-') THEN
+              REPEAT
+                IF GUIALLOWED THEN
+                  Window.UPDATE(2,VendPerfLine."Item No.");
+                VendPerfLineTmp.DELETEALL;
+                PostedVendPerfLine.SETRANGE("Order No.",VendPerfLine."Order No.");
+                PostedVendPerfLine.SETRANGE("Order Line No.",VendPerfLine."Order Line No.");
+                IF PostedVendPerfLine.FIND('-') THEN
+                  REPEAT
+                    VendPerfLineTmp.TRANSFERFIELDS(PostedVendPerfLine);
+                    VendPerfLineTmp.Posted := TRUE;
+                    VendPerfLineTmp.INSERT;
+                  UNTIL PostedVendPerfLine.NEXT = 0;
+                VendPerfLine2.SETRANGE("Order No.",VendPerfLine."Order No.");
+                VendPerfLine2.SETRANGE("Order Line No.",VendPerfLine."Order Line No.");
+                IF VendPerfLine2.FIND('-') THEN
+                  REPEAT
+                    VendPerfLineTmp.TRANSFERFIELDS(VendPerfLine2);
+                    VendPerfLineTmp.Posted := FALSE;
+                    VendPerfLineTmp.INSERT;
+                  UNTIL VendPerfLine2.NEXT = 0;
+                IF VendPerfLineTmp.FIND('-') THEN BEGIN
+                  FirstReceipt := TRUE;
+                  REPEAT
+                    VendPerfLineTmp."First Receipt" := FirstReceipt;
+                    VendPerfLineTmp.MODIFY;
+                    FirstReceipt := FALSE;
+                  UNTIL VendPerfLineTmp.NEXT = 0;
+                END;
+                IF VendPerfLineTmp.FIND('-') THEN
+                  REPEAT
+                    IF VendPerfLineTmp.Posted THEN BEGIN
+                      PostedVendPerfLine2.GET(VendPerfLineTmp."Entry No.");
+                      PostedVendPerfLine2."First Receipt" := VendPerfLineTmp."First Receipt";
+                      PostedVendPerfLine2.MODIFY;
+                    END ELSE BEGIN
+                      VendPerfLine3.GET(VendPerfLineTmp."Entry No.");
+                      VendPerfLine3."First Receipt" := VendPerfLineTmp."First Receipt";
+                      VendPerfLine3.MODIFY;
+                    END;
+                  UNTIL VendPerfLineTmp.NEXT = 0;
+              UNTIL VendPerfLine.NEXT = 0;
+
+            IF GUIALLOWED THEN
+              Window.CLOSE;
+
+            InvMgt.CloseLogEntry(UBPLogEntryNo,'');
+
+            IF InvMgmtSetup."Auto Post Vendor Performance" THEN
+              PostVendPerf(Location);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@14000500 : TextConst 'ENU=Evaluating Purchase Receipts';
+      Text001@14000501 : TextConst 'ENU=Location';
+      Text002@14000502 : TextConst 'ENU=Item';
+      Text003@1001 : TextConst 'ENU="Unable to calc lead time with Delivery Days less than 1 day. "';
+      Text004@1002 : TextConst 'ENU=Location %1 Vendor %2 Item %3 Variant %4';
+      InvMgt@1240030000 : Codeunit 14000553;
+      UBPLogEntryNo@1240030001 : Integer;
+      Text005@1240030002 : TextConst 'ENU=Creating Vendor Performance Lines';
+      Text006@1240030003 : TextConst 'ENU=Updating Vendor Performance Lines';
+      Text007@1240030004 : TextConst 'ENU=Posting Vendor Performance Lines';
+
+    PROCEDURE PostVendPerf@1(VAR Location2@14000500 : Record 14);
+    VAR
+      VendPerfLine@14000501 : Record 14000561;
+      PostedVendPerfLine@14000502 : Record 14000562;
+      ProcUnit@14000503 : Record 14000555;
+      TempProcUnit@14000504 : TEMPORARY Record 14000555;
+    BEGIN
+      InvMgt.CreateLogEntry(Location2.Code,Text007,UBPLogEntryNo);
+
+      TempProcUnit.DELETEALL;
+      VendPerfLine.RESET;
+      VendPerfLine.SETRANGE("Location Code",Location2.Code);
+      IF VendPerfLine.FIND('-') THEN
+        REPEAT
+          IF (VendPerfLine."No. of Delivery Days" < 1) AND
+             (VendPerfLine."Exclude From Performance" = FALSE) THEN
+            ERROR(
+              Text003 +
+              Text004,
+              VendPerfLine."Location Code",VendPerfLine.Vendor,
+              VendPerfLine."Item No.",VendPerfLine."Variant Code");
+          PostedVendPerfLine.TRANSFERFIELDS(VendPerfLine,TRUE);
+          PostedVendPerfLine.INSERT;
+          IF (VendPerfLine."Primary Vendor" = TRUE) AND
+             (VendPerfLine."Exclude From Performance" = FALSE) AND
+             (VendPerfLine."First Receipt" = TRUE) THEN BEGIN
+            TempProcUnit."Location Code" := VendPerfLine."Location Code";
+            TempProcUnit."Item No." := VendPerfLine."Item No.";
+            TempProcUnit."Variant Code" := VendPerfLine."Variant Code";
+            TempProcUnit."Replenishment Source Code" := VendPerfLine.Vendor;
+            IF TempProcUnit.INSERT THEN;
+          END;
+        UNTIL VendPerfLine.NEXT = 0;
+      IF TempProcUnit.FIND('-') THEN
+        REPEAT
+          ProcUnit.GET(TempProcUnit."Location Code",TempProcUnit."Item No.",TempProcUnit."Variant Code");
+          CalcAveLeadTime(ProcUnit);
+          ProcUnit.MODIFY;
+        UNTIL TempProcUnit.NEXT = 0;
+      VendPerfLine.DELETEALL;
+
+      InvMgt.CloseLogEntry(UBPLogEntryNo,'');
+    END;
+
+    PROCEDURE CalcAveLeadTime@2(VAR ProcUnit@14000500 : Record 14000555);
+    VAR
+      InvMgtSetup@14000501 : Record 14000551;
+      PostedVendPerfLine2@14000502 : Record 14000562;
+      CalcFormula@14000503 : Text[10];
+      RecCount@14000504 : Integer;
+      TotalDays@14000505 : Integer;
+      High@1240030000 : Integer;
+      Low@1240030001 : Integer;
+    BEGIN
+      InvMgtSetup.GET;
+      PostedVendPerfLine2.RESET;
+      PostedVendPerfLine2.SETCURRENTKEY(
+        "Location Code",Vendor,"Item No.","Variant Code","Exclude From Performance","Date Received");
+      PostedVendPerfLine2.SETRANGE("Location Code",ProcUnit."Location Code");
+      PostedVendPerfLine2.SETRANGE(Vendor,ProcUnit."Replenishment Source Code");
+      PostedVendPerfLine2.SETRANGE("Item No.",ProcUnit."Item No.");
+      PostedVendPerfLine2.SETRANGE("Variant Code",ProcUnit."Variant Code");
+      PostedVendPerfLine2.SETRANGE("Exclude From Performance",FALSE);
+      CalcFormula := '<-' + FORMAT(InvMgtSetup."Lead Time Calc. (Months)") + 'M>';
+      PostedVendPerfLine2.SETFILTER("Date Received",'%1..%2',CALCDATE(CalcFormula,WORKDATE),WORKDATE);
+      PostedVendPerfLine2.SETRANGE("First Receipt",TRUE);
+      ProcUnit."Average Lead Time (Days)" := 0;
+      IF PostedVendPerfLine2.FIND('+') THEN BEGIN
+        RecCount := 0;
+        TotalDays := 0;
+        High := 0;
+        Low := 999;
+        REPEAT
+          RecCount := RecCount + 1;
+          TotalDays := TotalDays + PostedVendPerfLine2."No. of Delivery Days";
+          IF High < PostedVendPerfLine2."No. of Delivery Days" THEN
+            High := PostedVendPerfLine2."No. of Delivery Days";
+          IF Low > PostedVendPerfLine2."No. of Delivery Days" THEN
+            Low := PostedVendPerfLine2."No. of Delivery Days";
+        UNTIL (PostedVendPerfLine2.NEXT(-1) = 0) OR
+              (RecCount = InvMgtSetup."Lead Times to Average");
+        IF RecCount < 3 THEN
+          ProcUnit."Average Lead Time (Days)" := ROUND(TotalDays / RecCount,1.0)
+        ELSE BEGIN
+          TotalDays := TotalDays - (Low + High);
+          ProcUnit."Average Lead Time (Days)" := ROUND(TotalDays / (RecCount - 2),1.0)
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

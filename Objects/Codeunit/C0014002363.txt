@@ -1,0 +1,1247 @@
+OBJECT Codeunit 14002363 E.D.I. Update Purchase Order
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/25/19;
+    Time=12:00:00 PM;
+    Version List=SE0.61,TPZEDI,TPZ1964,TPZ2753;
+  }
+  PROPERTIES
+  {
+    TableNo=14002358;
+    OnRun=VAR
+            EDIRecDocFld@1240020001 : Record 14002359;
+            EDIRecDocFld2@1240020000 : Record 14002359;
+            SegmentGroup@1240020002 : Integer;
+            EDIRecDocFieldsICN@1000000001 : Record 14002359;
+            PurchaseLineICN@1000000000 : Record 39;
+          BEGIN
+            IF ("Navision Document" <> 'U_PURWSA') AND
+               ("Navision Document" <> 'I_PURINV') AND
+               ("Navision Document" <> 'U_PURORD') AND
+               ("Navision Document" <> 'I_PURORD')
+            THEN
+              ERROR(Text001,"Navision Document");
+
+            EDITemplate.GET("EDI Template Code");
+            EDIRecDocHdr2.GET("Internal Doc. No.");
+            PostingErrorReprocess := FALSE;
+            IF EDIRecDocHdr2."Company Name" <> COMPANYNAME THEN
+              ERROR(
+                Text002 +
+                Text003,EDIRecDocHdr2."Internal Doc. No.",
+                EDIRecDocHdr2."Company Name",COMPANYNAME);
+
+            IF EDIRecDocHdr2."Purchase Order Updated" THEN BEGIN
+              IF GUIALLOWED THEN
+                ERROR(Text004)
+              ELSE BEGIN
+                IF (EDIRecDocHdr2."Data Error") AND (EDIRecDocHdr2."Receipt Posting Error") THEN BEGIN
+                  PostingErrorReprocess := TRUE;
+                  PostPurchaseDocument;
+                  COMMIT;
+                  EXIT;
+                END ELSE
+                  ERROR(Text004);
+              END;
+            END;
+
+            EDIDocument.GET(
+              EDIRecDocHdr2."Trade Partner No.",EDIRecDocHdr2."Navision Document",
+              EDIRecDocHdr2."EDI Document No.",EDIRecDocHdr2."EDI Version",
+              EDIDocument.Type::Import);
+
+            EDISetup.GET;
+
+            EDITradePartner.GET(EDIRecDocHdr2."Trade Partner No.");
+
+            EvaluateGenCrossRef := FALSE;
+            MapGenCrossRef := FALSE;
+
+            IF (EDISetup."Enable General Cross Ref.") THEN BEGIN
+              IF (EDITradePartner."Disable General Cross Ref.") THEN
+                EvaluateGenCrossRef := FALSE
+              ELSE BEGIN
+                MapGenCrossRef := TRUE;
+                IF (EDISetup."Eval. XRef at Doc. Import") THEN BEGIN
+                  IF EDIRecDocHdr2."Gen. XRef Processed On Import" = FALSE THEN
+                    EvaluateGenCrossRef := TRUE
+                END ELSE
+                  EvaluateGenCrossRef := TRUE;
+                IF EvaluateGenCrossRef THEN BEGIN
+                  CLEAR(EvaluateCrossReference);
+                  EvaluateCrossReference.AssignNAVCrossReference(EDIRecDocHdr2);
+                END;
+              END;
+            END ELSE
+                EvaluateGenCrossRef := FALSE;
+
+            IF EvaluateGenCrossRef THEN BEGIN
+              EDIRecDocHdr2.CALCFIELDS("General Cross Reference Error");
+              IF EDIRecDocHdr2."General Cross Reference Error" THEN
+                ERROR(Text019);
+            END;
+
+            IF GUIALLOWED THEN BEGIN
+              ProgressWindow.OPEN(
+                Text005 +
+                Text006 +
+                Text007 +
+                Text008 +
+                Text009 +
+                Text010);
+              ProgressWindow.UPDATE(1,EDIRecDocHdr2."Trade Partner No.");
+              ProgressWindow.UPDATE(3,EDIRecDocHdr2."Internal Doc. No.");
+              ProgressWindow.UPDATE(4,EDIRecDocHdr2."Vendor No.");
+            END;
+
+            EDIRecDocFields.RESET;
+            EDIRecDocFields.SETRANGE("Internal Doc. No.","Internal Doc. No.");
+            EDIRecDocFields.FIND('-');
+            EDIRecDocFields.MODIFYALL("Segment Group",0);
+            EDIRecDocFields.RESET;
+            EDIRecDocFields.SETRANGE("Internal Doc. No.","Internal Doc. No.");
+            EDIRecDocFields.FIND('-');
+            SegmentGroup := 0;
+            REPEAT
+              IF (EDIRecDocFields."New Segment") AND
+                 (EDIRecDocFields.Segment = 'HL')
+              THEN
+                SegmentGroup := SegmentGroup + 1;
+              EDIRecDocFields."Segment Group" := SegmentGroup;
+              EDIRecDocFields.MODIFY;
+            UNTIL EDIRecDocFields.NEXT = 0;
+
+            NoOfDocs := 0;
+            OrderCount := 0;
+            POBeginLineNo := 0;
+
+            EDIRecDocFld.RESET;
+            EDIRecDocFld.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+            EDIRecDocFld.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            EDIRecDocFld.SETRANGE("NAV Table No.",38);
+            EDIRecDocFld.SETRANGE("Nav Field No.",PurchaseHeader.FIELDNO("No."));
+            IF NOT EDIRecDocFld.FIND('-') THEN
+              ERROR(Text011);
+            NoOfDocs := EDIRecDocFld.COUNT;
+            REPEAT
+              OrderCount := OrderCount + 1;
+              CurrentLineNo := EDIRecDocFld."Line No.";
+              EDIRecDocFld2.RESET;
+              EDIRecDocFld2.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+              EDIRecDocFld2.SETRANGE(Segment,EDIRecDocFld.Segment);
+              EDIRecDocFld2.SETFILTER("Line No.",'<%1',EDIRecDocFld."Line No.");
+              EDIRecDocFld2.SETRANGE(Segment,EDIRecDocFld.Segment);
+              EDIRecDocFld2.SETRANGE("New Segment",TRUE);
+              EDIRecDocFld2.FIND('+');
+              POBeginLineNo := EDIRecDocFld2."Line No.";
+
+              IF NOT PurchaseHeader.GET(
+                PurchaseHeader."Document Type"::Order,COPYSTR(EDIRecDocFld."Field Text Value",1,20))
+              THEN
+                ERROR(Text012,COPYSTR(EDIRecDocFld."Field Text Value",1,20));
+
+              IF PurchaseHeader."EDI Internal Doc. No." = '' THEN BEGIN
+                EDISetup.GET;
+                EDISetup."Last Internal Doc. No." := INCSTR(EDISetup."Last Internal Doc. No.");
+                PurchaseHeader."EDI Internal Doc. No." := EDISetup."Last Internal Doc. No.";
+                EDISetup.MODIFY;
+              END;
+
+              EDIRecDocHdr.LOCKTABLE;
+              PurchaseLine.LOCKTABLE;
+              PurchaseHeader.LOCKTABLE;
+
+              MapPurchaseHeader(EDIRecDocFld);
+
+              EDIRecDocFld2.RESET;
+              EDIRecDocFld2.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+              EDIRecDocFld2.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+              EDIRecDocFld2.SETRANGE("NAV Table No.",DATABASE::"Purchase Line");
+              EDIRecDocFld2.SETRANGE("Nav Field No.");
+              IF EDIRecDocFld2.FIND('-') THEN
+                MapPurchaseLines;
+            UNTIL EDIRecDocFld.NEXT = 0;
+
+            //<TPZ2753>
+            {
+            //<TPZ2436>
+                        //utkars
+
+                        EDIRecDocFieldsICN.RESET;
+                        EDIRecDocFieldsICN.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+                        EDIRecDocFieldsICN.SETRANGE("NAV Table No.",DATABASE::"Purchase Line");
+                        EDIRecDocFieldsICN.SETRANGE("Nav Field No.",14099202);
+                        IF EDIRecDocFieldsICN.FINDFIRST THEN BEGIN
+                          PurchaseLineICN.RESET;
+                          PurchaseLineICN.SETRANGE("Document Type",PurchaseHeader."Document Type");
+                          PurchaseLineICN.SETRANGE("Document No.",PurchaseHeader."No.");
+                          PurchaseLineICN.SETFILTER("Shipping Agent Code",'<>%1',''); //UTKARSH
+                          IF PurchaseLineICN.FINDSET THEN
+                            REPEAT
+                              PurchaseLineICN.VALIDATE("Inbound Container Number",EDIRecDocFieldsICN."Field Text Value");
+                              PurchaseLineICN.MODIFY;
+                            UNTIL PurchaseLineICN.NEXT = 0;
+                        END;
+                        //</TPZ2436>
+                      }
+                      //</TPZ2753>
+            IF OrderWasReleased THEN
+              ReleasePurchDoc.RUN(PurchaseHeader);
+
+            EDIRecDocHdr2."Purchase Order Updated" := TRUE;
+            EDIRecDocHdr2."Purch. Order Updated Date" := TODAY;
+            EDIRecDocHdr2."Purch. Order Updated Time" := TIME;
+            EDIRecDocHdr2."Data Error" := FALSE;
+            EDIRecDocHdr2."Document Processed" := TRUE;
+            EDIRecDocHdr2."Vendor No." := EDITradePartner."Vendor No."; //TPZEDI
+            EDIRecDocHdr2."Vendor Name" := PurchaseHeader."Buy-from Vendor Name";
+            IF OrderCount = 1 THEN BEGIN
+              EDIRecDocHdr2."Vendor Invoice No." := PurchaseHeader."Vendor Invoice No.";
+              EDIRecDocHdr2."Vendor Shipment No." := PurchaseHeader."Vendor Shipment No.";
+              EDIRecDocHdr2."Vendor Order No." := PurchaseHeader."Vendor Order No.";
+            END;
+            EDIRecDocHdr2.MODIFY;
+
+            CreateEDIAlert.UpdateAlertStatus(EDIRecDocHdr2);
+
+            PostDocument := FALSE;
+            IF EDITemplate."Auto. Post Whse Receive Advice" THEN BEGIN
+              PostDocument := TRUE;
+              EDIRecDocHdr2."Data Error" := TRUE;
+              EDIRecDocHdr2."Receipt Posting Error" := TRUE;
+              EDIRecDocHdr2."Document Processed" := FALSE;
+              EDIRecDocHdr2.MODIFY;
+            END;
+            IF PostDocument THEN
+              PostPurchaseDocument;
+
+            IF GUIALLOWED THEN
+              ProgressWindow.CLOSE;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EDITemplate@1240030000 : Record 14002350;
+      EDIDocument@1240030001 : Record 14002353;
+      EDIRecDocHdr@1240030002 : Record 14002358;
+      EDIRecDocHdr2@1240030003 : Record 14002358;
+      EDIRecDocFields@1240030004 : Record 14002359;
+      PurchaseHeader@1240030005 : Record 38;
+      PurchaseLine@1240030006 : Record 39;
+      EDISetup@1240030023 : Record 14002367;
+      EDITradePartner@1240030024 : Record 14002360;
+      ItemCrossReference@1240020003 : Record 5717;
+      ItemTmp@1240020010 : TEMPORARY Record 27;
+      PurchCommentLine@1240020009 : Record 43;
+      Item@1240020014 : Record 27;
+      PurchaseLineTmp@1240020029 : TEMPORARY Record 39;
+      ReleasePurchDoc@1240030014 : Codeunit 415;
+      EDIRecordAssocDoc@1240030019 : Codeunit 14002380;
+      EvaluateCrossReference@1240030021 : Codeunit 14000380;
+      CreateEDIAlert@1240020008 : Codeunit 14000375;
+      EDIMapComments@1240020021 : Codeunit 14002397;
+      ProgressWindow@1240030007 : Dialog;
+      LastItemNo@1240030008 : Code[20];
+      LastQty@1240030009 : Decimal;
+      LastRecQty@1240030010 : Decimal;
+      LastInvQty@1240030011 : Decimal;
+      LastOutstandingQty@1240030012 : Decimal;
+      LineUpdated@1240030013 : Boolean;
+      Text001@1001 : TextConst 'ENU=EDI Navision Document %1 does not match this function.';
+      Text002@1002 : TextConst 'ENU=The receive document %1 is for company %2.\';
+      Text003@1003 : TextConst 'ENU=You are currently in company %3.';
+      Text004@1004 : TextConst 'ENU=Purchase Order not updated.';
+      Text005@1005 : TextConst 'ENU=Updating Purchase Orders......\';
+      Text006@1006 : TextConst 'ENU=Trading Partner   #1##################\';
+      Text007@1007 : TextConst 'ENU=Purchase Order No.#2##################\';
+      Text008@1008 : TextConst 'ENU=Internal Doc No.  #3########\';
+      Text009@1009 : TextConst 'ENU=Vendor No.        #4##################\';
+      Text010@1010 : TextConst 'ENU=Ship-To No.       #5##################';
+      Text011@1011 : TextConst 'ENU=Unable to find an EDI field mapped to the Purchase Order No.';
+      Text012@1012 : TextConst 'ENU=Purchase order %1 not found.';
+      Text013@1013 : TextConst 'ENU=Unable to find appropriate purchase line on purchase order %1 for Item %2 on EDI Document %3.';
+      Text014@1014 : TextConst 'ENU=Purchase Order not updated.';
+      LastVendItemNo@1240030015 : Code[20];
+      LastExpRecDate@1240030018 : Date;
+      LastDirUnitCost@1240030017 : Decimal;
+      LastEDIUnitCost@1240020023 : Decimal;
+      LastSegGroup@1240030016 : Integer;
+      Text015@1015 : TextConst 'ENU=Unable to find appropriate purchase line on purchase order %1 for Item %2 %3 on EDI Document %4.';
+      Text016@1240030022 : TextConst 'ENU=Unable to find appropriate purchase line on purchase order %1 for Cross Reference No. %2 on EDI Document %3.';
+      EvaluateGenCrossRef@1240030025 : Boolean;
+      LastItemCrossRefNo@1240020000 : Code[20];
+      LastUOMCode@1240020002 : Code[10];
+      NewItem@1240020004 : Boolean;
+      PostDocument@1240020017 : Boolean;
+      LastLineNo@1240020005 : Integer;
+      i@1240020006 : Integer;
+      SummarizeQuantity@1240020007 : Boolean;
+      Text017@1240020001 : TextConst 'ENU=Trigger not found in Receive Document Field.';
+      Text019@1240020016 : TextConst 'ENU=EDI Cross references are not setup. \Check Receive Document Status for details.';
+      LastEDICode@1240020012 : Code[20];
+      OrderWasReleased@1240020015 : Boolean;
+      DiscountUnitCost@1240020024 : Decimal;
+      MappedCost@1240020027 : Boolean;
+      PurchaseLineFound@1240020030 : Boolean;
+      PostingErrorReprocess@1240020031 : Boolean;
+      MapGenCrossRef@1240020011 : Boolean;
+      NoOfDocs@1240020013 : Integer;
+      CurrentLineNo@1240020018 : Integer;
+      NextLineNo@1240020019 : Integer;
+      OrderCount@1240020020 : Integer;
+      LastPackageTrackingNo@1000000006 : Text;
+      LastShippingAgentCode@1000000005 : Text;
+      LastTPZEDIQtyAck@1000000004 : Decimal;
+      LastTPZEDILineItemStatus@1000000003 : Text;
+      LastTPZEDIDateAck@1000000002 : Date;
+      LastTPZEDIUOMAck@1000000001 : Text;
+      LastTPZEDIBaseUnitPriceType@1000000000 : Text;
+      LastInboundContainerNo@1000000007 : Text;
+      POBeginLineNo@1240020022 : Integer;
+
+    PROCEDURE MapPurchaseHeader@1240020008(EDIRecDocFld@1240020002 : Record 14002359);
+    VAR
+      EDIRecDocFields@1240020000 : Record 14002359;
+      Finished@1240020001 : Boolean;
+      DocumentDate@1240060002 : Date;
+    BEGIN
+      EDIRecDocFields.RESET;
+      EDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocFields.SETFILTER("NAV Table No.",'%1|%2',DATABASE::"Purch. Comment Line",10043);
+      EDIRecDocFields.SETRANGE("Nav Field No.",PurchCommentLine.FIELDNO(Comment));
+      EDIRecDocFields.SETRANGE("Segment Group",EDIRecDocFld."Segment Group");
+      IF EDIRecDocFields.FIND('-') THEN
+        EDIMapComments.MapPurchCommentLine(
+          EDIRecDocHdr2,PurchaseHeader,PurchaseLine,FALSE,EDIRecDocFields,TRUE);
+
+      Finished := FALSE;
+      DocumentDate := 0D;
+      IF PurchaseHeader.Status = PurchaseHeader.Status::Released THEN
+        OrderWasReleased := TRUE
+      ELSE
+        OrderWasReleased := FALSE;
+      IF OrderWasReleased THEN
+        ReleasePurchDoc.Reopen(PurchaseHeader);
+
+      PurchaseHeader.SetRunFromEDI(TRUE);
+
+      EDIRecDocFields.RESET;
+      EDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      IF NoOfDocs <> 0 THEN
+        EDIRecDocFields.SETFILTER("Line No.",'>=%1',POBeginLineNo);
+      EDIRecDocFields.SETRANGE("Nav Field No.");
+      EDIRecDocFields.FIND('-');
+      REPEAT
+        CASE EDIRecDocFields."Nav Field No." OF
+          PurchaseHeader.FIELDNO("Order Date"):
+            IF EDIRecDocFields."Field Date Value" <> 0D THEN
+              PurchaseHeader.VALIDATE("Order Date",EDIRecDocFields."Field Date Value");
+          PurchaseHeader.FIELDNO("Posting Date"):
+            IF EDIRecDocFields."Field Date Value" <> 0D THEN BEGIN
+               PurchaseHeader.VALIDATE("Posting Date",EDIRecDocFields."Field Date Value");
+                 IF DocumentDate <> 0D THEN
+                   PurchaseHeader.VALIDATE("Document Date",DocumentDate);
+            END;
+          PurchaseHeader.FIELDNO("Document Date"):
+            IF EDIRecDocFields."Field Date Value" <> 0D THEN BEGIN
+              DocumentDate := EDIRecDocFields."Field Date Value";
+              PurchaseHeader.VALIDATE("Document Date",DocumentDate);
+            END;
+          PurchaseHeader.FIELDNO("Requested Receipt Date"):
+            IF EDIRecDocFields."Field Date Value" <> 0D THEN
+              PurchaseHeader.VALIDATE("Requested Receipt Date",EDIRecDocFields."Field Date Value");
+          PurchaseHeader.FIELDNO("Promised Receipt Date"):
+            IF EDIRecDocFields."Field Date Value" <> 0D THEN
+              PurchaseHeader.VALIDATE("Promised Receipt Date",EDIRecDocFields."Field Date Value");
+          PurchaseHeader.FIELDNO("Expected Receipt Date"):
+            IF EDIRecDocFields."Field Date Value" <> 0D THEN
+              PurchaseHeader.VALIDATE("Expected Receipt Date",EDIRecDocFields."Field Date Value");
+          PurchaseHeader.FIELDNO("Vendor Order No."):
+            IF EDIRecDocFields."Field Text Value" <> '' THEN
+              PurchaseHeader.VALIDATE("Vendor Order No.",EDIRecDocFields."Field Text Value");
+          PurchaseHeader.FIELDNO("Shipment Method Code"):
+            IF (EDIRecDocFields."Field Text Value" <> '') AND
+               (EDIRecDocFields."General EDI Cross Reference" = FALSE) THEN
+                 PurchaseHeader.VALIDATE("Shipment Method Code",EDIRecDocFields."Field Text Value");
+          PurchaseHeader.FIELDNO("Ship-to Code"):
+            IF EDIRecDocFields."Field Text Value" <> '' THEN
+              PurchaseHeader.VALIDATE("Ship-to Code",EDIRecDocFields."Field Text Value");
+          PurchaseHeader.FIELDNO("Pmt. Discount Date"):
+            IF EDIRecDocFields."Field Date Value" <> 0D THEN
+              PurchaseHeader.VALIDATE("Pmt. Discount Date",EDIRecDocFields."Field Date Value");
+          PurchaseHeader.FIELDNO("Due Date"):
+            IF EDIRecDocFields."Field Date Value" <> 0D THEN
+              PurchaseHeader.VALIDATE("Due Date",EDIRecDocFields."Field Date Value");
+          PurchaseHeader.FIELDNO("Vendor Invoice No."):
+            IF EDIRecDocFields."Field Text Value" <> '' THEN
+              PurchaseHeader.VALIDATE("Vendor Invoice No.",EDIRecDocFields."Field Text Value");
+              //<TPZEDI>
+              PurchaseHeader.FIELDNO("Expected Receipt Date"):
+              IF EDIRecDocFields."Field Date Value" <> 0D THEN
+                PurchaseHeader.VALIDATE("Expected Receipt Date", EDIRecDocFields."Field Date Value");
+              //</TPZEDI>
+
+        END;
+        IF (NoOfDocs > 1) AND (EDIRecDocFields."Nav Field No." = PurchaseHeader.FIELDNO("No.")) THEN
+          Finished := TRUE;
+      UNTIL (EDIRecDocFields.NEXT = 0) OR (Finished);
+
+      IF MapGenCrossRef THEN
+        MapGeneralEDICrossRef;
+
+      IF NoOfDocs <> 0 THEN
+        IF NoOfDocs <> OrderCount THEN BEGIN
+          EDIRecDocFields.RESET;
+          EDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+          EDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+          EDIRecDocFields.SETRANGE("NAV Table No.",38);
+          EDIRecDocFields.SETRANGE("Nav Field No.",PurchaseHeader.FIELDNO("No."));
+          EDIRecDocFields.SETFILTER("Line No.",'>%1',CurrentLineNo);
+          IF EDIRecDocFields.FIND('-') THEN
+            NextLineNo := EDIRecDocFields."Line No."
+          ELSE
+            NextLineNo := CurrentLineNo;
+        END ELSE
+          NextLineNo := 0;
+
+      PurchaseHeader."EDI Update Int. Doc. No." := EDIRecDocHdr2."Internal Doc. No.";
+      //<TPZEDI>
+      IF NOT PurchaseHeader."TPZ E.D.I. 855 Processed" THEN
+        PurchaseHeader."TPZ E.D.I. 855 Processed" := (EDIDocument."EDI Document No." = '855');
+      IF NOT PurchaseHeader."TPZ E.D.I. 856 Processed" THEN
+        PurchaseHeader."TPZ E.D.I. 856 Processed" := (EDIDocument."EDI Document No." = '856');
+      IF NOT PurchaseHeader."TPZ E.D.I. 810 Processed" THEN
+        PurchaseHeader."TPZ E.D.I. 810 Processed" := (EDIDocument."EDI Document No." = '810');
+      //</TPZEDI>
+      PurchaseHeader.MODIFY;
+      PurchaseHeader.SetRunFromEDI(FALSE);
+    END;
+
+    PROCEDURE MapPurchaseLines@1240020003();
+    VAR
+      EDIRecDocFields@1240020000 : Record 14002359;
+      EDIRecDocFields2@1240020002 : Record 14002359;
+      EDIRecDocFields3@1240020003 : Record 14002359;
+      Finished@1240020001 : Boolean;
+      EDIRecDocFieldsICN@1000000001 : Record 14002359;
+      PurchaseLineICN@1000000000 : Record 39;
+    BEGIN
+      Finished := FALSE;
+      PurchaseLine.RESET;
+      PurchaseLine.SETRANGE("Document Type",PurchaseHeader."Document Type");
+      PurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+      IF PurchaseLine.FIND('-') THEN
+        PurchaseLine.SetRunFromEDI(TRUE)
+      ELSE
+        EXIT;
+
+      IF EDIDocument."Summarize Receive Advice Data" THEN BEGIN
+        PurchaseLineTmp.RESET;
+        PurchaseLineTmp.DELETEALL;
+        ItemTmp.RESET;
+        ItemTmp.DELETEALL;
+        i := 1;
+        SummarizeQuantity := TRUE;
+      END ELSE
+        SummarizeQuantity := FALSE;
+
+      PurchaseLine.RESET;
+      PurchaseLine.SETRANGE("Document Type",PurchaseHeader."Document Type");
+      PurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+      IF PurchaseLine.FIND('-') THEN
+        REPEAT
+          PurchaseLine.VALIDATE("Qty. to Receive",0);
+          PurchaseLine.MODIFY;
+        UNTIL PurchaseLine.NEXT = 0;
+
+      PurchaseLine.RESET;
+      PurchaseLine.SETRANGE("Document Type",PurchaseHeader."Document Type");
+      PurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+      IF PurchaseLine.FIND('-') THEN
+        REPEAT
+          PurchaseLine.VALIDATE("Qty. to Invoice",0);
+          PurchaseLine.MODIFY;
+        UNTIL PurchaseLine.NEXT = 0;
+
+      EDIRecDocFields.RESET;
+      EDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocFields.SETRANGE("NAV Table No.",DATABASE::"Purchase Line");
+      EDIRecDocFields.SETRANGE("Nav Field No.");
+      EDIRecDocFields.SETRANGE(Trigger,TRUE);
+      IF NOT EDIRecDocFields.FIND('-') THEN
+        ERROR(Text017);
+      {
+      //<TPZ2436>
+      EDIRecDocFieldsICN.RESET;
+      EDIRecDocFieldsICN.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocFieldsICN.SETRANGE("NAV Table No.",DATABASE::"Purchase Line");
+      EDIRecDocFieldsICN.SETRANGE("Nav Field No.",14099202);
+      IF EDIRecDocFieldsICN.FINDFIRST THEN BEGIN
+        PurchaseLineICN.RESET;
+        PurchaseLineICN.SETRANGE("Document Type",PurchaseHeader."Document Type");
+        PurchaseLineICN.SETRANGE("Document No.",PurchaseHeader."No.");
+        PurchaseLineICN.SETFILTER("Shipping Agent Code",'<>%1',''); //UTKARSH
+        IF PurchaseLineICN.FIND('-') THEN
+          REPEAT
+            PurchaseLineICN.VALIDATE("Inbound Container Number",EDIRecDocFieldsICN."Field Text Value");
+            PurchaseLineICN.MODIFY;
+          UNTIL PurchaseLineICN.NEXT = 0;
+      END;
+      //</TPZ2436>
+      }
+      EDIRecDocFields.RESET;
+      EDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      IF NoOfDocs <> 0 THEN BEGIN
+        EDIRecDocFields.SETFILTER("Line No.",'>%1',CurrentLineNo);
+        IF NextLineNo <> 0 THEN
+          EDIRecDocFields.SETFILTER("Line No.",'<%1',NextLineNo);
+      END;
+      EDIRecDocFields.SETRANGE("NAV Table No.",DATABASE::"Purchase Line");
+      EDIRecDocFields.SETRANGE("Nav Field No.");
+
+      LastItemNo := '';
+      LastVendItemNo := '';
+      LastQty := 0;
+      LastInvQty := 0;
+      LastRecQty := 0;
+      LastOutstandingQty := 0;
+      LastExpRecDate := 0D;
+      LastEDIUnitCost := 0;
+      LastDirUnitCost := 0;
+      LastSegGroup := 0;
+      LastUOMCode := '';
+      LastItemCrossRefNo := '';
+      LastLineNo := 0;
+      LastEDICode := '';
+      MappedCost := FALSE;
+      LastPackageTrackingNo := ''; //TPZEDI
+      LastInboundContainerNo := '';//TPZ2436
+
+      //<TPZ1762>
+      LastTPZEDIQtyAck := 0;
+      LastTPZEDILineItemStatus := '';
+      LastTPZEDIDateAck := 0D;
+      LastTPZEDIUOMAck := '';
+      LastTPZEDIBaseUnitPriceType  := '';
+      //</TPZ1762>
+
+
+      IF EDIRecDocFields.FIND('-') THEN
+        REPEAT
+          CASE EDIRecDocFields."Nav Field No." OF
+            PurchaseLine.FIELDNO("Vendor Item No."):
+              BEGIN
+                LastVendItemNo := COPYSTR(EDIRecDocFields."Field Text Value",1,20);
+                LastItemCrossRefNo := '';
+              END;
+            PurchaseLine.FIELDNO("No."):
+              BEGIN
+                LastItemNo := COPYSTR(EDIRecDocFields."Field Text Value",1,20);
+                LastItemCrossRefNo := '';
+              END;
+            PurchaseLine.FIELDNO(PurchaseLine."Cross-Reference No."):
+              BEGIN
+                LastItemCrossRefNo := COPYSTR(EDIRecDocFields."Field Text Value",1,20);
+                LastItemNo := '';
+                LastVendItemNo := '';
+              END;
+            PurchaseLine.FIELDNO(Quantity):
+              LastQty := EDIRecDocFields."Field Dec. Value";
+            PurchaseLine.FIELDNO("Qty. to Invoice"):
+              LastInvQty := EDIRecDocFields."Field Dec. Value";
+            PurchaseLine.FIELDNO("Qty. to Receive"):
+              LastRecQty := EDIRecDocFields."Field Dec. Value";
+            PurchaseLine.FIELDNO("Expected Receipt Date"):
+              LastExpRecDate := EDIRecDocFields."Field Date Value";
+            PurchaseLine.FIELDNO("Direct Unit Cost"):
+              BEGIN
+                MappedCost := TRUE;
+                LastDirUnitCost := EDIRecDocFields."Field Dec. Value";
+              END;
+            PurchaseLine.FIELDNO("EDI Unit Cost"):
+              LastEDIUnitCost := EDIRecDocFields."Field Dec. Value";
+            PurchaseLine.FIELDNO("EDI Segment Group"):
+              LastSegGroup := EDIRecDocFields."Field Integer Value";
+            PurchaseLine.FIELDNO("Unit of Measure"):
+              LastUOMCode := EDIRecDocFields."Field Text Value";
+            PurchaseLine.FIELDNO("Line No."):
+              LastLineNo := EDIRecDocFields."Field Integer Value";
+            //TPZEDI
+            PurchaseLine.FIELDNO("Package Tracking No."):
+              LastPackageTrackingNo := EDIRecDocFields."Field Text Value";
+            //TPZEDI
+           //<TPZ2753>
+            //<TPZ2436>
+           // PurchaseLine.FIELDNO("Inbound Container Number"):
+             //LastInboundContainerNo := EDIRecDocFields."Field Text Value";
+            //</TPZ2436>
+          //</TPZ2753>
+            //<TPZEDI1762>
+            PurchaseLine.FIELDNO("TPZEDI Qty. Acknowledged"):
+              LastTPZEDIQtyAck := EDIRecDocFields."Field Dec. Value";
+            PurchaseLine.FIELDNO("TPZEDI Line Item Status Code"):
+              LastTPZEDILineItemStatus := EDIRecDocFields."Field Text Value";
+            PurchaseLine.FIELDNO("TPZEDI Date Acknowledged"):
+              LastTPZEDIDateAck := EDIRecDocFields."Field Date Value";
+            PurchaseLine.FIELDNO("TPZEDI UOM Acknowledged"):
+              LastTPZEDIUOMAck := EDIRecDocFields."Field Text Value";
+            //</TPZEDI1762>
+
+          END;
+          //<TPZEDI1762>
+          IF EDIRecDocFields."Field Name" = 'Basis of Unit Price Code' THEN
+            LastTPZEDIBaseUnitPriceType := EDIRecDocFields."Field Text Value";
+          //</TPZEDI1762>
+
+          IF (EDIRecDocFields.Trigger) AND
+             (EDIRecDocFields."NAV Table No." <> DATABASE::"Purch. Comment Line")
+          THEN BEGIN
+            PurchaseLine.RESET;
+            PurchaseLine.SETRANGE("Document Type",PurchaseHeader."Document Type");
+            PurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+            IF LastLineNo <> 0 THEN
+              PurchaseLine.SETRANGE("Line No.",LastLineNo);
+            //<TPZEDI>
+            IF NOT PurchaseLine.FINDFIRST THEN
+              PurchaseLine.SETRANGE("Line No.");
+            //</TPZEDI>
+
+            IF LastSegGroup <> 0 THEN
+              PurchaseLine.SETRANGE("EDI Segment Group",LastSegGroup);
+
+            IF LastItemCrossRefNo <> '' THEN BEGIN
+              PurchaseLine.SETRANGE("Cross-Reference No.",LastItemCrossRefNo);
+              IF NOT PurchaseLine.FIND('-') THEN BEGIN
+                PurchaseLine.SETRANGE("Cross-Reference No.");
+                CLEAR(ItemCrossReference);
+                WITH ItemCrossReference DO BEGIN
+                  RESET;
+                  SETCURRENTKEY(
+                    "Cross-Reference No.","Cross-Reference Type","Cross-Reference Type No.",
+                    "Discontinue Bar Code");
+                  SETFILTER("Cross-Reference Type",'<>%1',"Cross-Reference Type"::Customer);
+                  SETRANGE("Discontinue Bar Code",FALSE);
+                  SETFILTER("Cross-Reference Type No.",'%1|%2',PurchaseHeader."Buy-from Vendor No.",'');
+                  SETRANGE("Cross-Reference No.",LastItemCrossRefNo);
+                  IF LastUOMCode <> '' THEN
+                    SETRANGE("Unit of Measure",LastUOMCode);
+                  IF NOT FIND('-') THEN
+                    SETRANGE("Cross-Reference Type No.",'');
+                  PurchaseLine.SETRANGE("No.","Item No.");
+                  PurchaseLine.SETRANGE("Variant Code","Variant Code");
+                END;
+              END;
+            END ELSE BEGIN
+              IF LastItemNo <> '' THEN
+                PurchaseLine.SETRANGE("No.",LastItemNo);
+              IF LastVendItemNo <> '' THEN
+                PurchaseLine.SETRANGE("Vendor Item No.",LastVendItemNo);
+            END;
+            LineUpdated := FALSE;
+            PurchaseLineFound := FALSE;
+            IF PurchaseLine.FIND('-') THEN BEGIN
+              PurchaseLineFound := TRUE;
+              IF SummarizeQuantity THEN
+                CASE TRUE OF
+                  LastItemNo <> '':
+                    NewItem := SummarizeItemQuantity(LastItemNo,0);
+                  LastItemCrossRefNo <> '':
+                    NewItem := SummarizeItemQuantity(LastItemCrossRefNo,1);
+                END;
+              IF (SummarizeQuantity AND NewItem) OR (SummarizeQuantity = FALSE) THEN
+                REPEAT
+                  //<TPZEDI> - commented out per discussion with Tony: Due to E-Receive problem
+                  {PurchaseLine.VALIDATE("Qty. to Receive",LastRecQty);
+                  IF LastInvQty <> 0 THEN BEGIN
+                    IF SummarizeQuantity THEN
+                      PurchaseLine.VALIDATE(PurchaseLine."Qty. to Invoice",LastRecQty)
+                    ELSE
+                      PurchaseLine.VALIDATE(PurchaseLine."Qty. to Invoice",LastInvQty);
+                  END;}
+                  IF MappedCost THEN
+                    PurchaseLine.VALIDATE("Direct Unit Cost",LastDirUnitCost);
+                  //<TPZEDI>
+                  //PurchaseLine.VALIDATE("EDI Unit Cost",LastEDIUnitCost);
+                  //<TPZEDI>
+                  IF PurchaseLine."Direct Unit Cost" <> PurchaseLine."EDI Unit Cost" THEN BEGIN
+                    IF PurchaseLine."Line Discount %" = 0 THEN
+                      PurchaseLine."EDI Cost Discrepancy" := TRUE
+                    ELSE BEGIN
+                      DiscountUnitCost :=
+                        PurchaseLine."Direct Unit Cost" -
+                          (PurchaseLine."Direct Unit Cost" * (PurchaseLine."Line Discount %" / 100));
+                      DiscountUnitCost := ROUND(DiscountUnitCost,0.01);
+                      IF DiscountUnitCost <> PurchaseLine."EDI Unit Cost" THEN
+                        PurchaseLine."EDI Cost Discrepancy" := TRUE;
+                    END;
+                  END;
+                  //TPZEDI
+                  IF (LastPackageTrackingNo <> '') AND (LastLineNo = PurchaseLine."Line No.") THEN
+                    PurchaseLine.VALIDATE("Package Tracking No.", LastPackageTrackingNo);
+                  //TPZEDI
+                  //<TPZ2753>
+                  //<TPZ2436>
+                 // IF (LastInboundContainerNo <> '') AND (LastLineNo = PurchaseLine."Line No.") THEN
+                   // PurchaseLine.VALIDATE("Inbound Container Number", LastInboundContainerNo);
+                  //</TPZ2436>
+                  //</TPZ2753>
+
+                  IF LastExpRecDate <> 0D THEN
+                    PurchaseLine.VALIDATE("Expected Receipt Date",LastExpRecDate);
+                  //TPZEDI
+                  IF MapGenCrossRef THEN
+                    MapGeneralEDICrossRef2;
+                  //TPZEDI
+
+                  //<TPZEDI1762>
+                  IF LastTPZEDIQtyAck <> 0 THEN
+                    PurchaseLine."TPZEDI Qty. Acknowledged" := LastTPZEDIQtyAck;
+
+                  IF LastTPZEDILineItemStatus <> '' THEN BEGIN
+                    CASE LastTPZEDILineItemStatus OF
+                      'AC': PurchaseLine."TPZEDI Line Item Status Code" := PurchaseLine."TPZEDI Line Item Status Code"::"AC-Item Accepted and Shipped";
+                      'AR': PurchaseLine."TPZEDI Line Item Status Code" := PurchaseLine."TPZEDI Line Item Status Code"::"AR-Item Accepted and Released for Shipment";
+                      'DR': PurchaseLine."TPZEDI Line Item Status Code" := PurchaseLine."TPZEDI Line Item Status Code"::"DR-Item Accepted - Date";
+                      'IA': PurchaseLine."TPZEDI Line Item Status Code" := PurchaseLine."TPZEDI Line Item Status Code"::"IA-Item Accered";
+                      'IB': PurchaseLine."TPZEDI Line Item Status Code" := PurchaseLine."TPZEDI Line Item Status Code"::"IB-Item Backordered";
+                      'IC': PurchaseLine."TPZEDI Line Item Status Code" := PurchaseLine."TPZEDI Line Item Status Code"::"IC-Item Accepted - Changes Made";
+                      'ID': PurchaseLine."TPZEDI Line Item Status Code" := PurchaseLine."TPZEDI Line Item Status Code"::"ID-Item Deleted";
+                      'IH': PurchaseLine."TPZEDI Line Item Status Code" := PurchaseLine."TPZEDI Line Item Status Code"::"IH-Item on Hold";
+                      'IP': PurchaseLine."TPZEDI Line Item Status Code" := PurchaseLine."TPZEDI Line Item Status Code"::"IP-Item Accepted - Price Changed";
+                      'IQ': PurchaseLine."TPZEDI Line Item Status Code" := PurchaseLine."TPZEDI Line Item Status Code"::"IQ-Item Accepted - Quantity Changed";
+                      'IR': PurchaseLine."TPZEDI Line Item Status Code" := PurchaseLine."TPZEDI Line Item Status Code"::"IR-Item Rejected";
+                      'IS': PurchaseLine."TPZEDI Line Item Status Code" := PurchaseLine."TPZEDI Line Item Status Code"::"IS-Item Accepted - Substitution Made";
+                    END;
+                  END;
+                  IF LastTPZEDIDateAck <> 0D THEN
+                    PurchaseLine."TPZEDI Date Acknowledged" := LastTPZEDIDateAck;
+                  IF LastTPZEDIUOMAck <> '' THEN BEGIN
+                    IF LastTPZEDIUOMAck = 'EA' THEN
+                      PurchaseLine."TPZEDI UOM Acknowledged" := 'PCS';
+                  END;
+                  //</TPZEDI1762>
+                  PurchaseLine.MODIFY;
+                  LineUpdated := TRUE;
+                UNTIL (PurchaseLine.NEXT = 0) OR LineUpdated = TRUE;
+              IF LineUpdated = FALSE THEN BEGIN
+                IF (LastItemNo <> '') OR (LastVendItemNo <> '') THEN
+                  ERROR(
+                  Text015,
+                  PurchaseHeader."No.",LastItemNo,LastVendItemNo,EDIRecDocHdr2."Internal Doc. No.");
+                IF LastItemCrossRefNo <> '' THEN
+                  ERROR(
+                  Text016,
+                  PurchaseHeader."No.",LastItemCrossRefNo,EDIRecDocHdr2."Internal Doc. No.");
+              END;
+            END ELSE BEGIN
+              IF (LastItemNo <> '') OR (LastVendItemNo <> '') THEN
+                ERROR(
+                Text015,
+                PurchaseHeader."No.",LastItemNo,LastVendItemNo,EDIRecDocHdr2."Internal Doc. No.");
+              IF LastItemCrossRefNo <> '' THEN
+                ERROR(
+                Text016,
+                PurchaseHeader."No.",LastItemCrossRefNo,EDIRecDocHdr2."Internal Doc. No.");
+            END;
+            IF (PurchaseLineFound = TRUE) AND (SummarizeQuantity) AND (LineUpdated = FALSE) THEN BEGIN
+              PurchaseLineTmp.RESET;
+              PurchaseLineTmp.SETRANGE("Document Type",PurchaseLine."Document Type");
+              PurchaseLineTmp.SETRANGE("Document No.",PurchaseLine."Document No.");
+              PurchaseLineTmp.SETRANGE("No.",PurchaseLine."No.");
+              IF LastSegGroup <> 0 THEN
+                PurchaseLineTmp.SETRANGE("EDI Segment Group",PurchaseLine."EDI Segment Group");
+              IF LastLineNo <> 0 THEN
+                PurchaseLineTmp.SETRANGE("Line No.",PurchaseLine."Line No.");
+              IF PurchaseLineTmp.FIND('-') THEN
+                LineUpdated := TRUE;
+            END;
+            IF LineUpdated THEN BEGIN
+              EDIRecDocFields3.RESET;
+              EDIRecDocFields3.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+              EDIRecDocFields3.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+              EDIRecDocFields3.SETRANGE("NAV Table No.",10043);
+              EDIRecDocFields3.SETRANGE("Nav Field No.",PurchCommentLine.FIELDNO(Comment));
+              EDIRecDocFields3.SETRANGE("Segment Group",EDIRecDocFields."Segment Group");
+              IF EDIRecDocFields3.FIND('-') THEN
+                EDIMapComments.MapPurchCommentLine(
+                  EDIRecDocHdr2,PurchaseHeader,PurchaseLine,FALSE,EDIRecDocFields3,FALSE);
+            END ELSE BEGIN
+              IF (LastItemNo <> '') OR (LastVendItemNo <> '') THEN
+                ERROR(
+                Text015,
+                PurchaseHeader."No.",LastItemNo,LastVendItemNo,EDIRecDocHdr2."Internal Doc. No.");
+              IF LastItemCrossRefNo <> '' THEN
+                ERROR(
+                Text016,
+                PurchaseHeader."No.",LastItemCrossRefNo,EDIRecDocHdr2."Internal Doc. No.");
+            END;
+            MappedCost :=FALSE;
+          END;
+          IF NoOfDocs  <> OrderCount THEN BEGIN
+            EDIRecDocFields2.COPY(EDIRecDocFields);
+            EDIRecDocFields2.NEXT;
+            IF EDIRecDocFields2."Line No." >= NextLineNo THEN
+              Finished := TRUE;
+          END;
+        UNTIL (EDIRecDocFields.NEXT = 0) OR (Finished);
+
+      InsertSAC;
+
+      EDIRecordAssocDoc.RecordAssocPurchDoc(EDIRecDocHdr2,PurchaseHeader,TRUE);
+
+      PurchaseLine.SetRunFromEDI(FALSE);
+
+      COMMIT;
+    END;
+
+    PROCEDURE UpdateAllOrders@6(TrNavDoc@1240030000 : Code[10]);
+    BEGIN
+      //
+      // Read each Document Header and create an updaate an order and lines for
+      // each ship-to encountered.
+      //
+      EDIRecDocHdr.RESET;
+      EDIRecDocHdr.SETCURRENTKEY(
+        "Company Name","Navision Document","EDI Document No.","Trade Partner No.","Internal Doc. No.");
+      EDIRecDocHdr.SETRANGE("Company Name",COMPANYNAME);
+      EDIRecDocHdr.SETRANGE("Navision Document",TrNavDoc);
+      EDIRecDocHdr.SETRANGE("Purchase Order Updated",FALSE);
+      EDIRecDocHdr.SETRANGE("Data Error",FALSE);
+      IF EDIRecDocHdr.FIND('-') THEN
+        REPEAT
+          UpdateOrdersForShipment(EDIRecDocHdr);
+        UNTIL EDIRecDocHdr.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateOrdersForShipment@8(CurrentEDIRecDocHdr@1240030000 : Record 14002358);
+    BEGIN
+      EDITemplate.GET(EDIDocument."EDI Template Code");
+      EDIRecDocHdr2.GET(CurrentEDIRecDocHdr."Internal Doc. No.");
+      IF EDIRecDocHdr2."Company Name" <> COMPANYNAME THEN
+        ERROR(
+          Text002 +
+          Text003,EDIRecDocHdr2."Internal Doc. No.",
+          EDIRecDocHdr2."Company Name",COMPANYNAME);
+      IF CurrentEDIRecDocHdr."Purchase Order Updated" THEN
+        ERROR(Text014);
+
+      IF GUIALLOWED THEN BEGIN
+        ProgressWindow.OPEN(
+          Text005 +
+          Text006 +
+          Text007 +
+          Text008 +
+          Text009 +
+          Text010);
+        ProgressWindow.UPDATE(1,CurrentEDIRecDocHdr."Trade Partner No.");
+        ProgressWindow.UPDATE(3,CurrentEDIRecDocHdr."Internal Doc. No.");
+        ProgressWindow.UPDATE(4,CurrentEDIRecDocHdr."Customer No.");
+      END;
+
+      EDIRecDocFields.RESET;
+      EDIRecDocFields.SETRANGE("Internal Doc. No.",CurrentEDIRecDocHdr."Internal Doc. No.");
+      EDIRecDocFields.SETRANGE("NAV Table No.",38);
+      EDIRecDocFields.SETRANGE("Nav Field No.",PurchaseHeader.FIELDNO("No."));
+      IF NOT EDIRecDocFields.FIND('-') THEN
+        ERROR(Text011);
+      IF NOT PurchaseHeader.GET(PurchaseHeader."Document Type"::Order,COPYSTR(EDIRecDocFields."Field Text Value",1,10)) THEN
+        ERROR(Text012,COPYSTR(EDIRecDocFields."Field Text Value",1,10));
+
+      EDIRecDocFields.SETRANGE("NAV Table No.",39);
+      EDIRecDocFields.SETRANGE("Nav Field No.");
+
+      LastItemNo := '';
+      LastQty := 0;
+      LastInvQty := 0;
+      LastRecQty := 0;
+      LastOutstandingQty := 0;
+
+      IF EDIRecDocFields.FIND('-') THEN
+        REPEAT
+          CASE EDIRecDocFields."Nav Field No." OF
+            PurchaseLine.FIELDNO("No."):
+              LastItemNo := COPYSTR(EDIRecDocFields."Field Text Value",1,20);
+            PurchaseLine.FIELDNO(Quantity):
+              LastQty := EDIRecDocFields."Field Dec. Value";
+            PurchaseLine.FIELDNO("Qty. to Invoice"):
+              LastInvQty := EDIRecDocFields."Field Dec. Value";
+            PurchaseLine.FIELDNO("Qty. to Receive"):
+              LastRecQty := EDIRecDocFields."Field Dec. Value";
+          END;
+          IF EDIRecDocFields.Trigger THEN BEGIN
+            PurchaseLine.SETRANGE("Document Type",PurchaseHeader."Document Type");
+            PurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+            PurchaseLine.SETRANGE("No.",LastItemNo);
+            LineUpdated := FALSE;
+            IF PurchaseLine.FIND('-') THEN
+              REPEAT
+                PurchaseLine.VALIDATE(PurchaseLine."Qty. to Invoice",LastInvQty);
+                PurchaseLine.MODIFY;
+              UNTIL (PurchaseLine.NEXT = 0) OR LineUpdated = TRUE;
+            IF LineUpdated = FALSE THEN
+              ERROR(
+                Text013,
+                PurchaseHeader."No.",LastItemNo,EDIRecDocHdr2."Internal Doc. No.");
+          END;
+        UNTIL EDIRecDocFields.NEXT = 0;
+
+      EDIRecDocHdr2."Purchase Order Updated" := TRUE;
+      EDIRecDocHdr2."Data Error" := FALSE;
+      EDIRecDocHdr2.MODIFY;
+
+      IF GUIALLOWED THEN
+        ProgressWindow.CLOSE;
+    END;
+
+    PROCEDURE InsertSAC@1000000004();
+    VAR
+      EDIRecDocFld@1000000001 : Record 14002359;
+      SACAmount@1000000006 : Decimal;
+      LineNo@1000000005 : Integer;
+      CurrentLineNo@1000000004 : Integer;
+      Multiplier@1000000008 : Integer;
+      SACFound@1240030002 : Boolean;
+      NewSegment@1240030001 : Boolean;
+      AccountNo@1240030000 : Code[20];
+      IsAscending@1240020000 : Boolean;
+    BEGIN
+      SACFound := FALSE;
+      NewSegment := FALSE;
+      Multiplier := 0;
+
+      EDIRecDocFields.RESET;
+      EDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+      EDIRecDocFields.SETRANGE("Segment Group",0);
+      EDIRecDocFields.SETRANGE(Segment,'SAC');
+      EDIRecDocFields.SETRANGE(Element,'01');
+      IF EDIRecDocFields.FIND('-') THEN
+        REPEAT
+         IF (EDIRecDocFields."Field Text Value" = 'A') OR
+            (EDIRecDocFields."Field Text Value" = 'C') THEN
+              SACFound := TRUE;
+        UNTIL (EDIRecDocFields.NEXT = 0) OR (SACFound = TRUE);
+
+      IF SACFound THEN BEGIN
+        EDIRecDocFields.RESET;
+        EDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+        EDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+        EDIRecDocFields.SETRANGE("Segment Group",0);
+        EDIRecDocFields.SETRANGE(Segment,'SAC');
+        EDIRecDocFields.SETRANGE("New Segment",TRUE);
+        IF EDIRecDocFields.FIND('-') THEN
+          REPEAT
+            SACFound := FALSE;
+            NewSegment := FALSE;
+            Multiplier := 0;
+            SACAmount := 0;
+            CurrentLineNo := EDIRecDocFields."Line No.";
+            EDIRecDocFld.RESET;
+            EDIRecDocFld.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            EDIRecDocFld.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+            EDIRecDocFld.SETRANGE("Segment Group",0);
+            IsAscending := EDIRecDocFld.ASCENDING;
+            IF EDIRecDocFld.FIND('-') THEN
+              REPEAT
+                IF (EDIRecDocFld."Line No." > CurrentLineNo) AND
+                  (EDIRecDocFld."New Segment" = FALSE) THEN
+                    IF (EDIRecDocFld.Segment = 'SAC') AND (EDIRecDocFld.Element = '01') THEN
+                      CASE EDIRecDocFld."Field Text Value" OF
+                        'A':
+                          Multiplier := -1;
+                        'C':
+                          Multiplier := 1;
+                      END;
+                IF (EDIRecDocFld.Segment = 'SAC') AND (EDIRecDocFld.Element = '05') THEN
+                  SACAmount := EDIRecDocFld."Field Dec. Value";
+                  IF SACAmount > 0 THEN
+                    SACFound := TRUE;
+                IF (EDIRecDocFld."Line No." > CurrentLineNo) AND
+                  (EDIRecDocFld."New Segment") THEN
+                    NewSegment := TRUE;
+              UNTIL (EDIRecDocFld.NEXT = 0) OR (NewSegment = TRUE);
+            IF SACFound THEN BEGIN
+              SACFound := FALSE;
+              NewSegment := FALSE;
+              EDIRecDocFld.RESET;
+            EDIRecDocFld.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            EDIRecDocFld.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+            EDIRecDocFld.SETRANGE("Segment Group",0);
+            IsAscending := EDIRecDocFld.ASCENDING;
+            IF EDIRecDocFld.FIND('-') THEN
+              REPEAT
+                IF (EDIRecDocFld."Line No." > CurrentLineNo) AND
+                   (EDIRecDocFld."New Segment" = FALSE) THEN
+                     IF (EDIRecDocFld.Segment = 'SAC') AND (EDIRecDocFld.Element = '02') THEN
+                       IF (EDIRecDocFld."NAV Cross Ref. Value-1" <> '') THEN BEGIN
+                         SACFound := TRUE;
+                         AccountNo := EDIRecDocFld."NAV Cross Ref. Value-1";
+                       END;
+                IF (EDIRecDocFld."Line No." > CurrentLineNo) AND
+                   (EDIRecDocFld."New Segment") THEN
+                     NewSegment := TRUE;
+              UNTIL (EDIRecDocFld.NEXT = 0) OR (NewSegment = TRUE);
+            END;
+          IF SACFound THEN BEGIN
+            SACAmount := Multiplier * SACAmount;
+            PurchaseLine.RESET;
+            PurchaseLine.SETRANGE("Document Type",PurchaseHeader."Document Type"::Order);
+            PurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+            IF PurchaseLine.FIND('+') THEN
+              LineNo := PurchaseLine."Line No." + 10000
+            ELSE
+              LineNo := 10000;
+            PurchaseLine.INIT;
+            PurchaseLine."Document Type" := PurchaseLine."Document Type"::Order;
+            PurchaseLine."Document No.":= PurchaseHeader."No.";
+            PurchaseLine.VALIDATE(Type,PurchaseLine.Type::"G/L Account");
+            PurchaseLine.VALIDATE("No.",AccountNo);
+            PurchaseLine."Line No." := LineNo;
+            PurchaseLine.VALIDATE(Quantity,1);
+            PurchaseLine.VALIDATE("Tax Area Code",PurchaseHeader."Tax Area Code");
+            PurchaseLine.VALIDATE("Direct Unit Cost",SACAmount);
+            PurchaseLine.VALIDATE("Location Code",PurchaseHeader."Location Code");
+            PurchaseLine.INSERT;
+          END;
+        UNTIL EDIRecDocFields.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE MapGeneralEDICrossRef@1240030004();
+    VAR
+      ShipPaymentType@1240030000 : 'Prepaid,Third Party,Freight Collect,Consignee';
+    BEGIN
+      EDIRecDocFields.RESET;
+      EDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocFields.SETRANGE(EDIRecDocFields."NAV Table No.",38);
+      EDIRecDocFields.SETRANGE(EDIRecDocFields."General EDI Cross Reference",TRUE);
+      IF EDIRecDocFields.FIND('-') THEN
+        REPEAT
+          CASE EDIRecDocFields."Nav Field No." OF
+            PurchaseHeader.FIELDNO("E-Ship Agent Code"):
+              IF EDIRecDocFields."NAV Cross Ref. Value-1" <> '' THEN
+                PurchaseHeader.VALIDATE("E-Ship Agent Code",EDIRecDocFields."NAV Cross Ref. Value-1");
+            PurchaseHeader.FIELDNO("E-Ship Agent Service"):
+              IF EDIRecDocFields."NAV Cross Ref. Value-2" <> '' THEN
+                PurchaseHeader.VALIDATE("E-Ship Agent Service",EDIRecDocFields."NAV Cross Ref. Value-2");
+            PurchaseHeader.FIELDNO("Payment Terms Code"):
+              IF EDIRecDocFields."NAV Cross Ref. Value-1" <> '' THEN
+                PurchaseHeader.VALIDATE("Payment Terms Code",EDIRecDocFields."NAV Cross Ref. Value-1");
+            PurchaseHeader.FIELDNO("Shipment Method Code"):
+              IF EDIRecDocFields."NAV Cross Ref. Value-1" <> '' THEN
+                PurchaseHeader.VALIDATE("Shipment Method Code",EDIRecDocFields."NAV Cross Ref. Value-1");
+            PurchaseHeader.FIELDNO("Shipping Payment Type"):
+              IF EDIRecDocFields."NAV Cross Ref. Value-1" <> '' THEN
+                BEGIN
+                  EVALUATE(ShipPaymentType,EDIRecDocFields."NAV Cross Ref. Value-1");
+                  PurchaseHeader.VALIDATE("Shipping Payment Type",ShipPaymentType);
+                END;
+          END;
+        UNTIL EDIRecDocFields.NEXT = 0;
+        PurchaseHeader.MODIFY;
+    END;
+
+    PROCEDURE SummarizeItemQuantity@1240020001(CurrentItem@1240030000 : Code[20];ItemType@1240030003 : 'ItemNo,ItemCrossReferenceNo') : Boolean;
+    VAR
+      EDIRecDocField@1240030004 : Record 14002359;
+      EDIRecDocField2@1240030006 : Record 14002359;
+      EDIRecDocField3@1240020000 : Record 14002359;
+      ItemFound@1240030002 : Boolean;
+    BEGIN
+      ItemFound := FALSE;
+      LastRecQty := 0;
+
+      IF i > 1 THEN BEGIN
+       PurchaseLineTmp.RESET;
+       PurchaseLineTmp.SETRANGE("Document Type",PurchaseLine."Document Type");
+       PurchaseLineTmp.SETRANGE("Document No.",PurchaseLine."Document No.");
+       PurchaseLineTmp.SETRANGE("No.",PurchaseLine."No.");
+       IF LastSegGroup <> 0 THEN
+         PurchaseLineTmp.SETRANGE("EDI Segment Group",PurchaseLine."EDI Segment Group");
+       IF LastLineNo <> 0 THEN
+         PurchaseLineTmp.SETRANGE("Line No.",PurchaseLine."Line No.");
+       IF PurchaseLineTmp.FIND('-') THEN
+         REPEAT
+           IF (LastSegGroup <> 0) OR  (LastLineNo <> 0) THEN BEGIN
+             CASE TRUE OF
+               LastSegGroup <> 0:
+                 IF LastSegGroup = PurchaseLine."EDI Segment Group" THEN
+                   ItemFound := TRUE;
+               LastLineNo <> 0:
+                IF LastLineNo = PurchaseLineTmp."Line No." THEN
+                 ItemFound := TRUE;
+             END;
+           END ELSE
+             ItemFound := TRUE;
+         UNTIL (PurchaseLineTmp.NEXT = 0) OR (ItemFound = TRUE);
+      END ELSE BEGIN
+        CLEAR(PurchaseLineTmp);
+        PurchaseLineTmp.TRANSFERFIELDS(PurchaseLine);
+        PurchaseLineTmp.INSERT;
+      END;
+
+      IF i > 1 THEN BEGIN
+        IF NOT ItemFound THEN BEGIN
+          CLEAR(PurchaseLineTmp);
+          PurchaseLineTmp.TRANSFERFIELDS(PurchaseLine);
+          PurchaseLineTmp.INSERT;
+        END ELSE BEGIN
+          LineUpdated := TRUE;
+          EXIT(FALSE);
+        END;
+      END;
+
+      i := i + 1;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField.SETRANGE("NAV Table No.",DATABASE::"Purchase Line");
+      IF ItemType = ItemType::ItemNo THEN
+        EDIRecDocField.SETRANGE("Nav Field No.",PurchaseLine.FIELDNO("No."))
+      ELSE
+        EDIRecDocField.SETRANGE("Nav Field No.",PurchaseLine.FIELDNO("Cross-Reference No."));
+      IF NoOfDocs <> 0 THEN BEGIN
+        EDIRecDocField.SETFILTER("Line No.",'>%1',CurrentLineNo);
+        IF NextLineNo <> 0 THEN
+          EDIRecDocField.SETFILTER("Line No.",'<%1',NextLineNo);
+      END;
+      IF EDIRecDocField.FIND('-') THEN
+        REPEAT
+          IF COPYSTR(EDIRecDocField."Field Text Value",1,20) = CurrentItem THEN BEGIN
+            IF (LastSegGroup <> 0) OR (LastLineNo <> 0) THEN BEGIN
+              EDIRecDocField3.RESET;
+              EDIRecDocField3.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+              EDIRecDocField3.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+              EDIRecDocField3.SETRANGE("Segment Group",EDIRecDocField."Segment Group");
+              EDIRecDocField3.SETRANGE("NAV Table No.",DATABASE::"Purchase Line");
+              IF LastSegGroup <> 0 THEN
+                EDIRecDocField3.SETRANGE("Nav Field No.",PurchaseLine.FIELDNO("EDI Segment Group"))
+              ELSE
+                EDIRecDocField3.SETRANGE("Nav Field No.",PurchaseLine.FIELDNO("Line No."));
+              IF EDIRecDocField3.FIND('-') THEN BEGIN
+                IF (EDIRecDocField3."Field Integer Value" = LastSegGroup) OR
+                   (EDIRecDocField3."Field Integer Value" = LastLineNo)
+                THEN BEGIN
+                  EDIRecDocField2.RESET;
+                  EDIRecDocField2.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+                  EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+                  EDIRecDocField2.SETRANGE("Segment Group",EDIRecDocField."Segment Group");
+                  EDIRecDocField2.SETRANGE("NAV Table No.",DATABASE::"Purchase Line");
+                  EDIRecDocField2.SETRANGE("Nav Field No.",PurchaseLine.FIELDNO("Qty. to Receive"));
+                  IF NoOfDocs <> 0 THEN BEGIN
+                    EDIRecDocField2.SETFILTER("Line No.",'>%1',CurrentLineNo);
+                    IF NextLineNo <> 0 THEN
+                      EDIRecDocField2.SETFILTER("Line No.",'<%1',NextLineNo);
+                  END;
+                  IF EDIRecDocField2.FIND('-') THEN
+                    LastRecQty := LastRecQty + EDIRecDocField2."Field Dec. Value";
+                END;
+              END;
+            END ELSE BEGIN
+              EDIRecDocField2.RESET;
+              EDIRecDocField2.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+              EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+              EDIRecDocField2.SETRANGE("Segment Group",EDIRecDocField."Segment Group");
+              EDIRecDocField2.SETRANGE("NAV Table No.",DATABASE::"Purchase Line");
+              EDIRecDocField2.SETRANGE("Nav Field No.",PurchaseLine.FIELDNO("Qty. to Receive"));
+              IF NoOfDocs <> 0 THEN BEGIN
+                EDIRecDocField2.SETFILTER("Line No.",'>%1',CurrentLineNo);
+                IF NextLineNo <> 0 THEN
+                  EDIRecDocField2.SETFILTER("Line No.",'<%1',NextLineNo);
+              END;
+              IF EDIRecDocField2.FIND('-') THEN
+                LastRecQty := LastRecQty + EDIRecDocField2."Field Dec. Value";
+            END;
+          END;
+        UNTIL EDIRecDocField.NEXT = 0;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE PostPurchaseDocument@1240020007();
+    VAR
+      EDIRecDocFields@1240020000 : Record 14002359;
+    BEGIN
+      EDIRecDocFields.RESET;
+      EDIRecDocFields.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocFields.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocFields.SETRANGE("NAV Table No.",38);
+      EDIRecDocFields.SETRANGE("Nav Field No.",PurchaseHeader.FIELDNO("No."));
+      IF NOT EDIRecDocFields.FIND('-') THEN
+        EXIT;
+      REPEAT
+        IF GetPurchaseHeader(COPYSTR(EDIRecDocFields."Field Text Value",1,20)) THEN BEGIN
+          PurchaseHeader.Receive := TRUE;
+          PurchaseHeader.MODIFY;
+          CODEUNIT.RUN(CODEUNIT::"Purch.-Post",PurchaseHeader);
+        END;
+      UNTIL EDIRecDocFields.NEXT = 0;
+      EDIRecDocHdr2."Shipment Posting Error" := FALSE;
+      EDIRecDocHdr2."Purchase Order Posted" := TRUE;
+      EDIRecDocHdr2."Purchase Order Posted Date" := TODAY;
+      EDIRecDocHdr2."Purchase Order Posted Time" := TIME;
+      EDIRecDocHdr2."Document Processed" := TRUE;
+      EDIRecDocHdr2."Data Error" := FALSE;
+      EDIRecDocHdr2.MODIFY;
+    END;
+
+    PROCEDURE GetPurchaseHeader@1240020006(PurchaseOrder@1240020000 : Code[20]) : Boolean;
+    BEGIN
+      IF PurchaseHeader.GET(PurchaseHeader."Document Type"::Order,PurchaseOrder) THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE MapGeneralEDICrossRef2@1000000001();
+    VAR
+      LocalEDIRecDocFields@1000000000 : Record 14002359;
+      EDIRecDocFieldsICN@1000000001 : Record 14002359;
+    BEGIN
+      //<TPZ1964> GenXrefforPurchaline
+      WITH LocalEDIRecDocFields DO BEGIN
+        RESET;
+        SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+        SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+        SETRANGE("NAV Table No.",39);
+        SETRANGE("General EDI Cross Reference",TRUE);
+        IF FIND('-') THEN
+          REPEAT
+            CASE "Nav Field No." OF
+              PurchaseLine.FIELDNO("Shipping Agent Code"):
+                IF ("NAV Cross Ref. Value-1" <> '') AND (LastLineNo = PurchaseLine."Line No.") THEN BEGIN //<TPZ2753>
+                  PurchaseLine.VALIDATE("Shipping Agent Code",LocalEDIRecDocFields."NAV Cross Ref. Value-1");
+                  //<TPZ2753>
+                  EDIRecDocFieldsICN.RESET;
+                  EDIRecDocFieldsICN.SETRANGE("Internal Doc. No.",LocalEDIRecDocFields."Internal Doc. No.");
+                  EDIRecDocFieldsICN.SETRANGE("NAV Table No.",DATABASE::"Purchase Line");
+                  EDIRecDocFieldsICN.SETRANGE("Nav Field No.",14099202);
+                  IF EDIRecDocFieldsICN.FINDFIRST THEN
+                    IF LastLineNo = PurchaseLine."Line No." THEN
+                      PurchaseLine.VALIDATE("Inbound Container Number",EDIRecDocFieldsICN."Field Text Value");
+                  //</TPZ2753>
+                END; //<TPZ2753>
+            END;
+          UNTIL(NEXT=0);
+      END;
+    END;
+
+    BEGIN
+    {
+      2018-10-24 TPZ2436 UCHOUHAN
+        Added code to update inbound tracking no. in PO Lines.
+      02-02-2020 TPZ2753 UCHOUHAN
+        -Commented old code to update Inbound container No.
+        -Added new code in Function MapGeneralEDICrossRef2 to update inbound container number according to lines.
+    }
+    END.
+  }
+}
+

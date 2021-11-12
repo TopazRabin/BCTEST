@@ -1,0 +1,418 @@
+OBJECT Codeunit 14002512 RF Pallet Bin Cont Card
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/21/18;
+    Time=12:00:00 PM;
+    Version List=RF1.50.13;
+  }
+  PROPERTIES
+  {
+    TableNo=7700;
+    OnRun=VAR
+            MiniformMgmt@1240020000 : Codeunit 7702;
+          BEGIN
+            MiniformMgmt.Initialize(
+              MiniformHeader,Rec,DOMxmlin,ReturnedNode,
+              RootNode,XMLDOMMgmt,ADCSCommunication,LoginID,
+              CurrentCode,StackCode,WhseEmpId,LocationFilter);
+
+            IF Code <> CurrentCode THEN
+              PrepareData
+            ELSE
+              ProcessInput;
+
+            CLEAR(DOMxmlin);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      MiniformHeader@1240020014 : Record 7700;
+      MiniformHeader2@1240020022 : Record 7700;
+      RFEmployeeSetup@1240020013 : Record 14002802;
+      XMLDOMMgmt@1240020012 : Codeunit 6224;
+      ADCSCommunication@1240020011 : Codeunit 7701;
+      ADCSNasStartup@1240020010 : Codeunit 7700;
+      DOMxmlin@1240020008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      ReturnedNode@1240020007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      RootNode@1240020006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      Remark@1240020005 : Text[250];
+      LoginID@1240020009 : Text[250];
+      WhseEmpId@1240020015 : Text[250];
+      LocationFilter@1240020004 : Text[250];
+      CurrentCode@1240020003 : Text[250];
+      StackCode@1240020002 : Text[250];
+      ActiveInputField@1240020001 : Integer;
+      RecRef@1240020000 : RecordRef;
+      Text001@1240020020 : TextConst 'ENU=Unknown function %1';
+      Text006@1240020019 : TextConst 'ENU=No input Node found';
+      Text007@1240020018 : TextConst 'ENU=Record not found';
+      Text008@1240020017 : TextConst 'ENU=End of Document';
+      Text010@1240020021 : TextConst 'ENU=No label defined in RF Setup';
+      Text012@1240020016 : TextConst 'ENU=No Lines available';
+
+    LOCAL PROCEDURE ProcessInput@10();
+    VAR
+      MiniformLine@1000 : Record 7701;
+      Bin@1002 : Record 7354;
+      Lookup@1240020000 : Record 14002971;
+      FuncGroup@1004 : Record 7702;
+      ItemIdentifier@1005 : Record 7704;
+      RFEmployeeMenuFilter@1240030001 : Record 14002806;
+      DynamicMoveLine@1240030000 : Record 14002872;
+      Item@1240030006 : Record 27;
+      RFSetup@1240020002 : Record 14002801;
+      BoxHandlingLineTmp@1240020003 : TEMPORARY Record 14002970;
+      WhseEmployee@1240020005 : Record 7301;
+      RFLabelMgt@1240020004 : Codeunit 14002851;
+      ReturnedNode2@1240020001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      FieldID@1008 : Text[250];
+      TextValue@1009 : Text[250];
+      TableNo@1010 : Integer;
+      RecordId@1011 : RecordID;
+      FldNo@1012 : Integer;
+      Command@1240030007 : Code[10];
+    BEGIN
+      IF XMLDOMMgmt.FindNode(RootNode,'Header/Input',ReturnedNode) THEN
+        TextValue := ReturnedNode.InnerText
+      ELSE
+        ERROR(Text006);
+
+      XMLDOMMgmt.FindNode(RootNode,'ExtraInfo',ReturnedNode2);
+      Bin.Code := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'BinCode');
+      ItemIdentifier."Item No." := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'ItemNo');
+      ItemIdentifier."Variant Code" := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'Variant');
+      ItemIdentifier."Unit of Measure Code" := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'UOM');
+      DynamicMoveLine.Name := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'Name');
+      DynamicMoveLine."Location Code" := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'Location');
+      EVALUATE(
+        DynamicMoveLine."Line No.",ADCSCommunication.GetNodeAttribute(ReturnedNode2,'LineNo'));
+      DynamicMoveLine."From Zone Code" := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'FromZone');
+      DynamicMoveLine."From Bin Code" := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'FromBin');
+
+      ADCSCommunication.SetExtraValue('BinCode',Bin.Code);
+      ADCSCommunication.SetExtraValue('ItemNo',ItemIdentifier."Item No.");
+      ADCSCommunication.SetExtraValue('Variant',ItemIdentifier."Variant Code");
+      ADCSCommunication.SetExtraValue('UOM',ItemIdentifier."Unit of Measure Code");
+      ADCSCommunication.SetExtraValue('Name',DynamicMoveLine.Name);
+      ADCSCommunication.SetExtraValue('Location',DynamicMoveLine."Location Code");
+      ADCSCommunication.SetExtraValue('LineNo',FORMAT(DynamicMoveLine."Line No."));
+      ADCSCommunication.SetExtraValue('FromZone',DynamicMoveLine."From Zone Code");
+      ADCSCommunication.SetExtraValue('FromBin',DynamicMoveLine."From Bin Code");
+
+      EVALUATE(TableNo,ADCSCommunication.GetNodeAttribute(ReturnedNode,'TableNo'));
+      RecRef.OPEN(TableNo);
+      EVALUATE(RecordId,ADCSCommunication.GetNodeAttribute(ReturnedNode,'RecordID'));
+      IF RecRef.GET(RecordId) THEN BEGIN
+        RecRef.SETTABLE(Lookup);
+        Lookup.RESET;
+        Lookup.SETFILTER(Location,LocationFilter);
+        IF ItemIdentifier."Item No." <> '' THEN BEGIN
+          Lookup.SETRANGE(Item,ItemIdentifier."Item No.");
+          IF ItemIdentifier."Variant Code" <> '' THEN
+            Lookup.SETRANGE(Variant,ItemIdentifier."Variant Code");
+          IF ItemIdentifier."Unit of Measure Code" <> '' THEN
+            Lookup.SETRANGE("UOM Code",ItemIdentifier."Unit of Measure Code");
+        END ELSE
+          Lookup.SETRANGE(Bin,Lookup.Bin);
+        RecRef.GETTABLE(Lookup);
+        ADCSCommunication.SetRecRef(RecRef);
+      END ELSE BEGIN
+        ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+        EXIT;
+      END;
+
+      FuncGroup.KeyDef := ADCSCommunication.GetFunctionKey(MiniformHeader.Code,TextValue);
+      ActiveInputField := 1;
+
+      CASE FuncGroup.KeyDef OF
+        FuncGroup.KeyDef::Esc:
+          ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+        FuncGroup.KeyDef::First:
+          ADCSCommunication.FindRecRef(0,MiniformHeader."No. of Records in List");
+        FuncGroup.KeyDef::LnDn:
+          IF NOT ADCSCommunication.FindRecRef(1,MiniformHeader."No. of Records in List") THEN
+            Remark := Text008;
+        FuncGroup.KeyDef::LnUp:
+          ADCSCommunication.FindRecRef(2,MiniformHeader."No. of Records in List");
+        FuncGroup.KeyDef::Last:
+          ADCSCommunication.FindRecRef(3,MiniformHeader."No. of Records in List");
+        FuncGroup.KeyDef::PgDn:
+          IF NOT ADCSCommunication.FindRecRef(4,MiniformHeader."No. of Records in List") THEN
+            Remark := Text008;
+        FuncGroup.KeyDef::PgUp:
+          ADCSCommunication.FindRecRef(5,MiniformHeader."No. of Records in List");
+        FuncGroup.KeyDef::Reset:
+          BEGIN
+            RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+            IF RFEmployeeSetup."Local Menu Button" IN
+               [RFEmployeeSetup."Local Menu Button"::F4,
+                RFEmployeeSetup."Local Menu Button"::"F4 (F3 Post)"]
+            THEN BEGIN
+              MiniformHeader.TESTFIELD("Local Menu Miniform Code");
+              ADCSCommunication.SetExtraValue('PrimaryMiniForm',MiniformHeader.Code);
+              MiniformHeader.GET(MiniformHeader."Local Menu Miniform Code");
+              IF RFEmployeeMenuFilter.GET(
+                   RFEmployeeSetup.Code,MiniformHeader.Code)
+              THEN
+                ADCSCommunication.SetRFFunctionFilter(
+                  RFEmployeeMenuFilter."RF Function Filter");
+              ADCSCommunication.EncodeMiniForm(MiniformHeader,StackCode,DOMxmlin,1,'',LoginID);
+              ADCSCommunication.GetReturnXML(DOMxmlin);
+              ADCSNasStartup.SendXMLReply(DOMxmlin);
+
+              EXIT;
+            END;
+          END;
+        FuncGroup.KeyDef::Register:
+          BEGIN
+            RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+            IF RFEmployeeSetup."Local Menu Button" IN [RFEmployeeSetup."Local Menu Button"::F3]
+            THEN BEGIN
+              MiniformHeader.TESTFIELD("Local Menu Miniform Code");
+              ADCSCommunication.SetExtraValue('PrimaryMiniForm',MiniformHeader.Code);
+              MiniformHeader.GET(MiniformHeader."Local Menu Miniform Code");
+              IF RFEmployeeMenuFilter.GET(
+                   RFEmployeeSetup.Code,MiniformHeader.Code)
+              THEN
+                ADCSCommunication.SetRFFunctionFilter(
+                  RFEmployeeMenuFilter."RF Function Filter");
+              ADCSCommunication.EncodeMiniForm(MiniformHeader,StackCode,DOMxmlin,1,'',LoginID);
+              ADCSCommunication.GetReturnXML(DOMxmlin);
+              ADCSNasStartup.SendXMLReply(DOMxmlin);
+
+              EXIT;
+            END;
+          END;
+        FuncGroup.KeyDef::Input:
+          BEGIN
+            FieldID := ADCSCommunication.GetNodeAttribute(ReturnedNode,'FieldID');
+            Command := '';
+            IF STRLEN(TextValue) >= 3 THEN
+              IF COPYSTR(TextValue,1,2) = '//' THEN
+                Command := COPYSTR(TextValue,3,MAXSTRLEN(Command));
+            IF (FieldID = '') OR (Command <> '') THEN BEGIN
+              RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+
+              IF Command <> '' THEN BEGIN
+                MiniformLine.RESET;
+                MiniformLine.SETRANGE("Miniform Code",MiniformHeader."Local Menu Miniform Code");
+                MiniformLine.SETRANGE(Hide,FALSE);
+                IF RFEmployeeMenuFilter.GET(
+                     RFEmployeeSetup.Code,MiniformHeader."Local Menu Miniform Code")
+                THEN
+                  MiniformLine.SETFILTER("RF Function No.",RFEmployeeMenuFilter."RF Function Filter");
+                MiniformLine.SETRANGE(MiniformLine."Command Text",Command);
+                MiniformLine.FIND('-');
+              END ELSE BEGIN
+                MiniformLine.RESET;
+                MiniformLine.SETRANGE("Miniform Code",MiniformHeader.Code);
+                MiniformLine.SETRANGE(Hide,FALSE);
+                IF RFEmployeeMenuFilter.GET(RFEmployeeSetup.Code,MiniformHeader.Code) THEN
+                  MiniformLine.SETFILTER("RF Function No.",RFEmployeeMenuFilter."RF Function Filter");
+                MiniformLine.SETRANGE(Text,ReturnedNode.InnerText);
+                MiniformLine.FIND('-');
+                XMLDOMMgmt.FindNode(RootNode,'ExtraInfo',ReturnedNode2);
+                MiniformHeader.Code :=
+                  ADCSCommunication.GetNodeAttribute(ReturnedNode2,'PrimaryMiniForm');
+                MiniformHeader.GET(MiniformHeader.Code);
+              END;
+              CASE MiniformLine."RF Function No." OF
+                0: // Escape or Return
+                  BEGIN
+                    ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+                    EXIT;
+                  END;
+                1,2,3: // Create Physical Inventory
+                  BEGIN
+                  END;
+                4,5: // Move Bin/Item
+                  BEGIN
+                  END;
+                6: // Create Replenishment
+                  BEGIN
+                  END;
+                7: // Reprint Label
+                  BEGIN
+                    RFSetup.GetRFSetup;
+                    IF RFSetup."Pallet Label (LP)" <> '' THEN BEGIN
+                      BoxHandlingLineTmp.RESET;
+                      BoxHandlingLineTmp."Line No." := Lookup."Line No.";
+                      BoxHandlingLineTmp."Pallet No." := Lookup.Pallet;
+                      BoxHandlingLineTmp."Box No." := Lookup.Box;
+                      BoxHandlingLineTmp.Location := Lookup.Location;
+                      BoxHandlingLineTmp."Bin Code" := Lookup.Bin;
+                      BoxHandlingLineTmp."Item No." := Lookup.Item;
+                      BoxHandlingLineTmp."Variant Code" := Lookup.Variant;
+                      BoxHandlingLineTmp."Unit of Measure Code" := Lookup."UOM Code";
+                      BoxHandlingLineTmp."Lot No." := Lookup.Lot;
+                      BoxHandlingLineTmp."Serial No." := Lookup."Serial No.";
+                      BoxHandlingLineTmp."Qty. per UOM" := Lookup."Qty per UOM";
+                      BoxHandlingLineTmp.Quantity := Lookup.Quantity;
+                      BoxHandlingLineTmp."Quantity (Base)" := Lookup."Quantity (Base)";
+
+                      IF BoxHandlingLineTmp.INSERT THEN BEGIN
+                        RFLabelMgt.PrintLPLabel(BoxHandlingLineTmp,WhseEmpId);
+                        ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+                      END ELSE
+                        ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+                    END ELSE
+                      ERROR(Text010);
+                  END;
+                8: // Main Menu
+                  BEGIN
+                    IF WhseEmployee.GET(WhseEmpId,LocationFilter) THEN
+                      IF WhseEmployee."ADCS Main Menu" <> '' THEN
+                        IF NOT MiniformHeader2.GET(WhseEmployee."ADCS Main Menu") THEN
+                          ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+
+                    MiniformHeader2.SaveXMLin(DOMxmlin);
+                    CODEUNIT.RUN(MiniformHeader2."Handling Codeunit",MiniformHeader2);
+                    EXIT;
+                  END;
+                ELSE
+                  Remark := STRSUBSTNO(Text001,MiniformLine."RF Function No.");
+              END;
+            END ELSE BEGIN
+              EVALUATE(FldNo,FieldID);
+              CASE FldNo OF
+                ELSE BEGIN
+                  ADCSCommunication.FieldSetvalue(RecRef,FldNo,TextValue);
+                  RecRef.SETTABLE(Lookup);
+                END;
+              END;
+            END;
+          END;
+      END;
+
+      ADCSCommunication.SetExtraValue('FromCard','Yes');
+      IF NOT (FuncGroup.KeyDef IN [FuncGroup.KeyDef::Esc]) THEN
+        SendForm(ActiveInputField);
+    END;
+
+    LOCAL PROCEDURE PrepareData@1();
+    VAR
+      Lookup@1000 : Record 14002971;
+      ItemIdentifier@1001 : Record 7704;
+      Bin@1002 : Record 7354;
+      DynamicMoveLine@1240030001 : Record 14002872;
+      ReturnedNode2@1240020002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      TableNo@1004 : Integer;
+      RecordId@1005 : RecordID;
+      BatchName@1240030000 : Code[20];
+      LotNo@1240020000 : Code[20];
+      SerialNo@1240020001 : Code[20];
+    BEGIN
+      XMLDOMMgmt.FindNode(RootNode,'Header/Input',ReturnedNode);
+
+      XMLDOMMgmt.FindNode(RootNode,'ExtraInfo',ReturnedNode2);
+      Bin.Code := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'BinCode');
+      ItemIdentifier."Item No." := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'ItemNo');
+      ItemIdentifier."Variant Code" := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'Variant');
+      ItemIdentifier."Unit of Measure Code" := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'UOM');
+      LotNo := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'LotNo');
+      SerialNo := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'SerialNo');
+      EVALUATE(TableNo,ADCSCommunication.GetNodeAttribute(ReturnedNode,'TableNo'));
+      RecRef.OPEN(TableNo);
+      EVALUATE(RecordId,ADCSCommunication.GetNodeAttribute(ReturnedNode,'RecordID'));
+      IF RecRef.GET(RecordId) THEN BEGIN
+        RecRef.SETTABLE(Lookup);
+        IF NOT Lookup.FIND THEN BEGIN
+          ADCSNasStartup.SendError(Text012);
+          EXIT;
+        END;
+        Lookup.RESET;
+        Lookup.SETFILTER(Location,LocationFilter);
+        IF LotNo <> '' THEN
+          Lookup.SETRANGE(Lot,LotNo);
+        IF SerialNo <> '' THEN
+          Lookup.SETRANGE("Serial No.",SerialNo);
+        IF ItemIdentifier."Item No." <> '' THEN BEGIN
+          Lookup.SETRANGE(Item,ItemIdentifier."Item No.");
+          IF ItemIdentifier."Variant Code" <> '' THEN
+            Lookup.SETRANGE(Variant,ItemIdentifier."Variant Code");
+          IF ItemIdentifier."Unit of Measure Code" <> '' THEN
+            Lookup.SETRANGE("UOM Code",ItemIdentifier."Unit of Measure Code");
+        END ELSE
+          Lookup.SETRANGE(Bin,Lookup.Bin);
+
+        BatchName := COPYSTR(WhseEmpId,1,5) + '1';
+        DynamicMoveLine.RESET;
+        DynamicMoveLine.SETRANGE(Name,BatchName);
+        WHILE DynamicMoveLine.FIND('-') DO BEGIN
+          BatchName := INCSTR(BatchName);
+          DynamicMoveLine.SETRANGE(Name,BatchName);
+        END;
+
+        DynamicMoveLine.Name := BatchName;
+        DynamicMoveLine."Location Code" := Lookup.Location;
+        DynamicMoveLine."Line No." := 1;
+        //DynamicMoveLine."From Zone Code" := lookup.Zone;
+        //DynamicMoveLine."From Bin Code" := lookup."Bin Code";
+
+        ADCSCommunication.SetExtraValue('BinCode',Bin.Code);
+        ADCSCommunication.SetExtraValue('ItemNo',ItemIdentifier."Item No.");
+        ADCSCommunication.SetExtraValue('Variant',ItemIdentifier."Variant Code");
+        ADCSCommunication.SetExtraValue('UOM',ItemIdentifier."Unit of Measure Code");
+        ADCSCommunication.SetExtraValue('Name',DynamicMoveLine.Name);
+        ADCSCommunication.SetExtraValue('Location',DynamicMoveLine."Location Code");
+        ADCSCommunication.SetExtraValue('LineNo',FORMAT(DynamicMoveLine."Line No."));
+        ADCSCommunication.SetExtraValue('FromZone',DynamicMoveLine."From Zone Code");
+        ADCSCommunication.SetExtraValue('FromBin',DynamicMoveLine."From Bin Code");
+
+        RecRef.GETTABLE(Lookup);
+        ADCSCommunication.SetRecRef(RecRef);
+        //ADCSCommunication.SetRFGroupFilter(GetRFGroupFilter(lookup));
+        ActiveInputField := 1;
+        ADCSCommunication.SetExtraValue('FromCard','Yes');
+        SendForm(ActiveInputField);
+      END ELSE
+        ERROR(Text007);
+    END;
+
+    LOCAL PROCEDURE SendForm@3(InputField@1000 : Integer);
+    BEGIN
+      // Prepare Miniform
+      ADCSCommunication.EncodeMiniForm(MiniformHeader,StackCode,DOMxmlin,InputField,Remark,LoginID);
+      ADCSCommunication.GetReturnXML(DOMxmlin);
+      ADCSNasStartup.SendXMLReply(DOMxmlin);
+    END;
+
+    [External]
+    PROCEDURE GetRFGroupFilter@103(BinContent@1000 : Record 7302) : Text[30];
+    VAR
+      RFGroupFilter@1001 : Text[30];
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020008::NodeInserting@93(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020008::NodeInserted@94(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020008::NodeRemoving@95(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020008::NodeRemoved@96(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020008::NodeChanging@97(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020008::NodeChanged@98(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

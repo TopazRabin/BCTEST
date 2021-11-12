@@ -1,0 +1,251 @@
+OBJECT Codeunit 23044604 DSHIP Freight Quoting
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/21/19;
+    Time=[ 9:02:34 AM];
+    Version List=DSHIP2.2.2;
+  }
+  PROPERTIES
+  {
+    TableNo=36;
+    OnRun=VAR
+            ltrecAPIParam@1000000008 : Record 23044623;
+            ltrecSelectedRate@1000000001 : TEMPORARY Record 23044603;
+            ltrecOrderBuffer@1000000010 : Record 23044601;
+            lpgRateQuote@1000000000 : Page 23044620;
+            lcuRateMgmt@1000000004 : Codeunit 23044602;
+            lasToAddress@1000000003 : ARRAY [12] OF Text[100];
+            ldTotalWeight@1000000002 : Decimal;
+            lbItemsHaveWeight@1000000005 : Boolean;
+            loptDocType@1000000009 : Option;
+            lcodShipAgent@1000000012 : Code[50];
+            lcodShipAgentService@1000000011 : Code[50];
+          BEGIN
+
+            IF ( Rec."Completely Shipped" ) THEN
+              ERROR(tcShipped);
+
+            // get address for display
+            lcuRateMgmt.getShipToAddressFromSalesHeader(Rec, TRUE, lasToAddress);
+            // calc total weight and whether an item had no weight
+            lbItemsHaveWeight := getSalesLineTotalWeight("Document Type", "No.", ldTotalWeight);
+
+            CASE Rec."Document Type" OF
+              Rec."Document Type"::Order:
+                loptDocType := ltrecAPIParam."Document Type"::"Sales Order";
+              Rec."Document Type"::Quote:
+                loptDocType := ltrecAPIParam."Document Type"::"Sales Quote";
+            END;
+            lpgRateQuote.initPage(loptDocType, Rec."No.", lasToAddress, ldTotalWeight, lbItemsHaveWeight);
+
+            // enables ok/cancel buttons
+            lpgRateQuote.LOOKUPMODE := TRUE;
+            IF (lpgRateQuote.RUNMODAL = ACTION::LookupOK) THEN BEGIN
+              lpgRateQuote.GETRECORD(ltrecSelectedRate);
+              // set carrier on header
+              lcuRateMgmt.getShipAgentAndServiceByCarrierIDAndService(ltrecSelectedRate."Carrier Account ID",
+                                                                      ltrecSelectedRate.Service,
+                                                                      lcodShipAgent,
+                                                                      lcodShipAgentService);
+              lcuRateMgmt.setShipAgentSalesOrder(Rec, lcodShipAgent, lcodShipAgentService, '', 0);
+              // add freight line to order
+              ltrecOrderBuffer.INIT();
+              ltrecOrderBuffer."Document Type" := ltrecOrderBuffer."Document Type"::"Sales Order";
+              ltrecOrderBuffer."Document No." := Rec."No.";
+              ltrecOrderBuffer."Document Subtype" := Rec."Document Type";
+              lcuRateMgmt.addRateToOrder(ltrecOrderBuffer, ltrecSelectedRate);
+            END; // if lpgRateQuote.RUNMODAL = ACTION::OK
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      recDShipSetup@1000000000 : Record 23044600;
+      tcShipped@1000000001 : TextConst 'ENU=This order has already been shipped.';
+
+    LOCAL PROCEDURE addRateToSalesHeader@1000000066(VAR precSalesHeader@1000000005 : Record 36;psCarrierAccID@1000000010 : Text[100];psCarrierService@1000000011 : Text[100];pdRate@1000000012 : Decimal);
+    VAR
+      lrecFreightQuote@1000000009 : Record 23044625;
+      lrecSalesLine@1000000000 : Record 37;
+      lrecResource@1000000003 : Record 156;
+      lrecGLAccount@1000000006 : Record 15;
+      lcuPackRateMgmt@1000000013 : Codeunit 23044602;
+      lcodTaxGroup@1000000008 : Code[10];
+      lcodShipAgent@1000000002 : Code[10];
+      lcodShipAgentService@1000000007 : Code[10];
+      liNextLineNo@1000000001 : Integer;
+      lbNewLine@1000000004 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Adds line for ship costs to sales header
+      //  Called From: This codeunit (23044604)
+      //  Side Effect: None
+      //  Note       : Based on addRateToSalesOrder (CU23044602), Author H.Zhao
+      //</FUNC>
+
+      recDShipSetup.GET;
+      IF (recDShipSetup."Freight Billing Type" <> recDShipSetup."Freight Billing Type"::None) THEN BEGIN
+        // set shipper and service in header
+        // this is so the rate is auto selected in order/package window
+        lcuPackRateMgmt.getShipAgentAndServiceByCarrierIDAndService(psCarrierAccID, psCarrierService, lcodShipAgent, lcodShipAgentService);
+        IF ( (lcodShipAgent <> '') AND (lcodShipAgentService <> '') ) THEN BEGIN
+          precSalesHeader."Shipping Agent Code" := lcodShipAgent;
+          precSalesHeader."Shipping Agent Service Code" := lcodShipAgentService;
+          precSalesHeader.MODIFY;
+        END;
+
+        lrecSalesLine.SETRANGE("Document Type", precSalesHeader."Document Type");
+        lrecSalesLine.SETRANGE("Document No.", precSalesHeader."No.");
+        lrecSalesLine.FINDLAST;
+        liNextLineNo := lrecSalesLine."Line No." + 10000;
+        //  If there is not an existing entry for shipping cost, create it
+        //  otherwise update the existing
+        lrecSalesLine.SETRANGE(Type, recDShipSetup."Freight Billing Type");
+        lrecSalesLine.SETRANGE("No.", recDShipSetup."Freight Billing No.");
+        IF ( NOT lrecSalesLine.FINDLAST ) THEN BEGIN
+          lrecSalesLine.RESET;
+          lrecSalesLine.INIT;
+          //changed to support quote or order
+          lrecSalesLine."Document Type" := precSalesHeader."Document Type";
+          lrecSalesLine."Document No." := precSalesHeader."No.";
+          lrecSalesLine."Line No." := liNextLineNo;
+          lbNewLine := TRUE;
+        END ELSE BEGIN
+          lbNewLine := FALSE;
+        END; // if not lrecSalesLine.FINDLAST
+
+        IF ( recDShipSetup."Freight Quote Update Behaviour" <> recDShipSetup."Freight Quote Update Behaviour"::Always ) THEN BEGIN
+          lrecFreightQuote.TRANSFERFIELDS(lrecSalesLine);
+          IF ( lrecFreightQuote.INSERT ) THEN ;
+        END; // if not recDShipSetup."Freight Quote Update Behaviour"::Always
+
+        IF (recDShipSetup."Freight Billing No." <> '') THEN BEGIN
+          IF (recDShipSetup."Freight Billing Type" = recDShipSetup."Freight Billing Type"::"G/L") THEN BEGIN
+            lrecGLAccount.GET(recDShipSetup."Freight Billing No.");
+            lrecSalesLine.Type := lrecSalesLine.Type::"G/L Account";
+            lrecSalesLine.Description := lrecGLAccount.Name;
+            lrecSalesLine."Tax Group Code" := lrecGLAccount."Tax Group Code";
+          END ELSE IF (recDShipSetup."Freight Billing Type" = recDShipSetup."Freight Billing Type"::Resource) THEN BEGIN
+            lrecResource.GET(recDShipSetup."Freight Billing No.");
+            lrecSalesLine.Type := lrecSalesLine.Type::Resource;
+            lrecSalesLine.Description := lrecResource.Name;
+            lrecSalesLine."Tax Group Code" := lrecResource."Tax Group Code";
+          END;
+        END; // if recDShipSetup."Rate Cost Handling Type" <> ::" "
+
+        lrecSalesLine."No." := recDShipSetup."Freight Billing No.";
+        lrecSalesLine."Location Code" := precSalesHeader."Location Code";
+        //  incorrect line data is being set
+        lrecSalesLine.Quantity := 1;
+        lrecSalesLine."Quantity (Base)" := 1;
+        lrecSalesLine."Qty. to Ship" := 1;
+        lrecSalesLine."Qty. to Invoice" := 1;
+        lrecSalesLine."Unit Price" := pdRate;
+        lrecSalesLine."Line Amount" := pdRate;
+
+        //  different action for new line vs old
+        IF ( lbNewLine ) THEN BEGIN
+          lrecSalesLine.INSERT;
+        END ELSE BEGIN
+          lrecSalesLine.MODIFY;
+        END; //if lbNewLine
+      END;
+    END;
+
+    LOCAL PROCEDURE getSalesLineTotalWeight@1000000005(poptDocType@1000000003 : Option;pcodDocNo@1000000001 : Code[20];VAR pdTotalWeight@1000000002 : Decimal) bAllWeightsValid : Boolean;
+    VAR
+      lrecSalesLine@1000000000 : Record 37;
+    BEGIN
+      //<FUNC>
+      //  Description: Iterates appropriate SalesLine and sums Item total weight
+      //  Called From: This codeunit (23044604)
+      //  Side Effect:
+      //  Returns    : TRUE if all items have a weight
+      //</FUNC>
+
+      bAllWeightsValid := TRUE;
+      pdTotalWeight := 0;
+      recDShipSetup.GET;
+
+      // get som of item weight from all related sales lines
+      lrecSalesLine.SETRANGE("Document No.", pcodDocNo);
+      lrecSalesLine.SETRANGE("Document Type", poptDocType);
+      IF ( lrecSalesLine.FINDSET ) THEN BEGIN
+        REPEAT
+          IF ( lrecSalesLine.Type = lrecSalesLine.Type::Item ) THEN BEGIN
+            IF ( lrecSalesLine."Gross Weight" = 0 ) THEN BEGIN
+              bAllWeightsValid := FALSE;
+            END ELSE BEGIN
+              pdTotalWeight += getItemWeight(lrecSalesLine);
+            END; // if lrecSalesLine."Gross Weight" = 0
+          END; // if lrecSalesLine.Type::"Item"
+        UNTIL lrecSalesLine.NEXT = 0;
+      END; // if lrecSalesLine.FINDSET
+
+      EXIT(bAllWeightsValid);
+    END;
+
+    LOCAL PROCEDURE getItemWeight@1000000011(VAR precSalesLine@1000000000 : Record 37) : Decimal;
+    VAR
+      lrecUOMFrom@1000000001 : Record 23044525;
+      lrecUOMTo@1000000002 : Record 23044525;
+      lcuWMDMComBase@1000000004 : Codeunit 23044519;
+    BEGIN
+      //<FUNC>
+      //  Description: Returns an item's weight in UoM of rate quote def weight (DShip Setup)
+      //  Called From: This codeunit (23044604)
+      //  Side Effect: None
+      //</FUNC>
+
+      recDShipSetup.GET;
+
+      IF ( checkUoM(precSalesLine."Unit of Measure Code") ) THEN BEGIN
+      // if the UoM exists, convert from that
+        lrecUOMFrom.GET(precSalesLine."Unit of Measure Code");
+      END ELSE BEGIN
+      // otherwise use the rate quote default
+        lrecUOMFrom.GET(recDShipSetup."Freight Quote Weight UOM Code");
+      END; // if checkUoM
+
+      // convert to package default uom
+      //lrecUOMTo.GET(recDShipSetup."Package Weight UOM Code");
+      lrecUOMTo.GET(recDShipSetup."Freight Quote Weight UOM Code");
+      EXIT(lcuWMDMComBase.ConvertUOMGeneric(
+                precSalesLine."Gross Weight",
+                lrecUOMFrom."Qty. per Unit of Measure",
+                lrecUOMTo."Qty. per Unit of Measure") * precSalesLine.Quantity);
+                // Gross weight = item weight * qty per UoM
+                // For total per line still need to multiply by qty
+    END;
+
+    LOCAL PROCEDURE checkUoM@1000000008(VAR pcodItemUoM@1000000000 : Code[20]) : Boolean;
+    VAR
+      lrecWMDMUoM@1000000001 : Record 23044525;
+    BEGIN
+      //<FUNC>
+      //  Description: Checks if the Item's Unit of Measure exists in WMDM UoM
+      //  Called From: This codeunit (23044604)
+      //  Side Effect:
+      //</FUNC>
+
+      lrecWMDMUoM.SETRANGE(Code, pcodItemUoM);
+      IF ( lrecWMDMUoM.FINDFIRST ) THEN
+        EXIT(TRUE);
+
+      EXIT(FALSE);
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+    }
+    END.
+  }
+}
+

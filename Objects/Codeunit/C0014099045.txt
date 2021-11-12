@@ -1,0 +1,2097 @@
+OBJECT Codeunit 14099045 RF Setup Codeunit
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/23/18;
+    Time=12:00:00 PM;
+    Version List=RF1.50.14;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ConfirmSetEmpCodeAll@1240020000 : TextConst 'ENU=Add the DEFAULT Employee Setup Code to all Warehouse Employees?';
+      ConfirmPickRequest@1240020012 : TextConst 'ENU=Do you wish to enable the Pick Request functionality for %1? If not, then you can always manually enable it at a later time from OWR Location Setup.';
+      ConfirmSetOWREmpCodeDefault@1240020013 : TextConst 'ENU=Do you wish to set the %1 Code as the default configuration? This would apply to all Warehouse Employees who do not have a specified RF Employee Code defined, and NAV users who do not have a Warehouse Employee code.';
+      ConfirmAssignEmpCode@1240020016 : TextConst 'ENU=Do you wish to assign %1 Code to specific Warehouse Employees? If yes, select each Warehouse Employee record on the next screen, and then click Close.';
+      ConfirmToteUsage@1240020018 : TextConst 'ENU=Will the Tote functionality be used? This requires the customer be licensed for the ACE Warehousing Pick Pack module.';
+      ConfirmDataCapture@1240020019 : TextConst 'ENU=Will the Data Capture functionality be used? This requires the customer be licensed for the ACE Warehousing Data Capture Processing module.';
+      ConfirmDataCaptProcImport@1240020021 : TextConst 'ENU=Do you wish to import a Data Capture Processing file for custom Miniform Codes?';
+      OWRConfirmation@1240020015 : TextConst 'ENU=Will the customer be using Outbound Warehouse Request? This requires they be licensed for the Outbound Warehouse Request module.';
+      DefaultNoSeriesSet@1240020011 : TextConst 'ENU=The default Outbound Warehouse Request No. Series have been setup.';
+      DefaultWorksheetsSet@1240020006 : TextConst 'ENU=The default Outbound Warehouse Request Warehouse Worksheets have been setup.';
+      DefaultOWRActionsSet@1240020005 : TextConst 'ENU=The default Outbound Warehouse Request Action Codes have been setup.';
+      DefaultOWRLocationsSet@1240020004 : TextConst 'ENU=The Outbound Warehouse Request Location Setup codes have been setup.';
+      DefaultRFLocationsSet@1240020020 : TextConst 'ENU=The RF Location Setup codes have been setup.';
+      DefaultRolesSet@1240020003 : TextConst 'ENU=The default ACE Warehousing Roles and Permission Sets have been setup.';
+      MessageDefaultOWRCodeSet@1240020014 : TextConst 'ENU=A default RF Employee Code has been set.';
+      MessageAssignEmpCodeSet@1240020017 : TextConst 'ENU=The RF Employee Code has been set.';
+      DeleteSetupMessage@1240020007 : TextConst 'ENU=ACE Warehousing setup has been deleted.';
+      DeleteBaseSetupMessage@1240020008 : TextConst 'ENU=ACE Warehousing base system setup has been deleted.';
+      DeleteApplicationMessage@1240020009 : TextConst 'ENU=ACE Warehousing processing, registering, and archive related tables have been deleted.';
+      DeletePermissionsMessage@1240020010 : TextConst 'ENU=ACE Warehousing user permissions and permission sets have been deleted.';
+      DeleteAllSetupMessage@1240020002 : TextConst 'ENU=All ACE Warehousing related system setup, tables, and permissions have been deleted.';
+      TestOverride@1240020001 : Boolean;
+      PalletPickBinNotEmptyError@1240020022 : TextConst 'ENU=All Bins with a Bin Type set with Pallet Pick must be empty before the Bin Type can be changed for the Bin and the Bin Type deleted. Additionally, all pending warehouse documents must not reference a Pallet Pick Bin Type code.';
+
+    [External]
+    PROCEDURE ExportExistingMiniforms@1240020016();
+    BEGIN
+      XMLPORT.RUN(14002801,TRUE,FALSE);
+    END;
+
+    [External]
+    PROCEDURE DeleteOldMiniformData@1240020008();
+    VAR
+      MiniformHeader@1240020000 : Record 7700;
+      MiniformFunctionGroup@1240020001 : Record 7702;
+    BEGIN
+      MiniformHeader.DELETEALL(TRUE);
+      MiniformFunctionGroup.DELETEALL;
+    END;
+
+    [External]
+    PROCEDURE CreateRFFunctionGroups@1240020015();
+    BEGIN
+      CODEUNIT.RUN(CODEUNIT::"RF CreateMiniformFuncGroup");
+    END;
+
+    [External]
+    PROCEDURE ImportExistingMiniforms@1240020017();
+    BEGIN
+      XMLPORT.RUN(14002801,TRUE,TRUE);
+    END;
+
+    [External]
+    PROCEDURE InitiateRFSetup@1240020012();
+    VAR
+      Location@1240020000 : Record 14;
+      RFSetup@1240020001 : Record 14002801;
+      WhseActGroupNoSeriesCode@1240020002 : Code[20];
+      DataCaptNoSeriesCode@1240020012 : Code[20];
+      BinCntNoSeriesCode@1240020013 : Code[20];
+      BinCntLineNoSeriesCode@1240020014 : Code[10];
+      PalletNoSeriesCode@1240020016 : Code[20];
+      DefaultOWRReplenWhseWkst@1240020003 : Code[10];
+      DefaultMovementTemplate@1240020004 : Code[10];
+      DefaultMovementWkst@1240020005 : Code[10];
+      DefaultPutawayWkst@1240020006 : Code[10];
+      DefaultPutawayTemplate@1240020007 : Code[10];
+      DefaultItemJnlTemplate@1240020008 : Code[10];
+      DefaultItemJnlBatch@1240020009 : Code[10];
+      DefaultWhseJnlTemplate@1240020010 : Code[10];
+      DefaultWhseJnlBatch@1240020011 : Code[10];
+      Confirmed@1240020015 : Boolean;
+    BEGIN
+      IF NOT RFSetup.GET THEN BEGIN
+        RFSetup.INIT;
+        RFSetup."Enable RF" := TRUE;
+        IF NOT RFSetup.INSERT THEN RFSetup.MODIFY;
+      END;
+
+      CheckForTestOverride;
+
+      CreateNoSeries(RFSetup,WhseActGroupNoSeriesCode,DataCaptNoSeriesCode,
+        BinCntNoSeriesCode,BinCntLineNoSeriesCode,PalletNoSeriesCode,FALSE);
+      RFSetup."Enable RF" := TRUE;
+      RFSetup."Whse. Activity Group Nos." := WhseActGroupNoSeriesCode;
+      RFSetup."Data Capture Nos." := DataCaptNoSeriesCode;
+      RFSetup."Bin Count Nos." := BinCntNoSeriesCode;
+      RFSetup."Bin Count Line Nos." := BinCntLineNoSeriesCode;
+      RFSetup."Pallet Nos" := PalletNoSeriesCode;
+      RFSetup.MODIFY;
+
+      CreateWorksheets(DefaultOWRReplenWhseWkst,DefaultMovementWkst,
+        DefaultMovementTemplate,DefaultPutawayWkst,DefaultPutawayTemplate,FALSE);
+      IF DefaultOWRReplenWhseWkst <> '' THEN
+        RFSetup.VALIDATE("Replen Worksheet Name",DefaultOWRReplenWhseWkst);
+      RFSetup.VALIDATE("Movement Worksheet Template",DefaultMovementTemplate);
+      RFSetup.VALIDATE("Movement Worksheet Name",DefaultMovementWkst);
+      RFSetup.VALIDATE("Put-Away Worksheet Template",DefaultPutawayTemplate);
+      RFSetup.VALIDATE("Put-Away Worksheet Name",DefaultPutawayWkst);
+      RFSetup.MODIFY;
+
+      CreateWarehouseJournal(DefaultWhseJnlTemplate,DefaultWhseJnlBatch,FALSE);
+      RFSetup.VALIDATE("Whse. Phys. Inv. Jnl. Templ.",DefaultWhseJnlTemplate);
+      RFSetup.VALIDATE("Whse. Phys. Inv. Jnl. Name",DefaultWhseJnlBatch);
+      RFSetup.MODIFY;
+
+      CreateItemJournalBatch(DefaultItemJnlTemplate,DefaultItemJnlBatch,FALSE);
+      RFSetup.VALIDATE("Movement Item Journal Template",DefaultItemJnlTemplate);
+      RFSetup.VALIDATE("Movement Item Journal Name",DefaultItemJnlBatch);
+      RFSetup.MODIFY;
+
+      Confirmed := FALSE;
+      IF TestOverride THEN
+        Confirmed := TRUE
+      ELSE
+        Confirmed := CONFIRM(OWRConfirmation,FALSE);
+
+      IF Confirmed THEN
+        RFSetup."Enable OWR" := TRUE;
+
+      Confirmed := FALSE;
+      IF TestOverride THEN
+        Confirmed := TRUE
+      ELSE
+        Confirmed := CONFIRM(ConfirmDataCapture,FALSE);
+
+      IF Confirmed THEN
+        RFSetup."Use Registered Data Capture" := TRUE;
+
+      RFSetup."Availabilty Bin Order" := RFSetup."Availabilty Bin Order"::"Pick - Other - Receive";
+      RFSetup."Delete Shipment Lines Handled" := TRUE;
+      RFSetup."Auto Delete Warehouse Shipment" := TRUE;
+      RFSetup."Register Dyn. Move as One Move" := TRUE;
+      RFSetup."Enable Combined Picks" := TRUE;
+      RFSetup."Enable Extra Picks" := TRUE;
+      RFSetup."Enable Limits" := TRUE;
+      RFSetup."Enable Line Date Filters" := TRUE;
+      RFSetup."Enable Per Zone" := TRUE;
+      RFSetup."Enable Pick-from Filters" := TRUE;
+      RFSetup."Enable Priority Picks" := TRUE;
+      RFSetup."Enable Wave Picks" := TRUE;
+      RFSetup."Enable Whse. Activity Groups" := TRUE;
+      RFSetup.MODIFY;
+
+      CreateOutboundActions(FALSE);
+      CreateOWRLocationSetupRecords(FALSE);
+      CreateRFLocationSetupRecords(FALSE);
+      CreateDefaultEmployeeSetup;
+      CreateProfiles;
+    END;
+
+    [External]
+    PROCEDURE CreateNoSeries@1240020011(VAR RFSetup@1240020003 : Record 14002801;VAR WhseActGroupNoSeriesCode@1240020001 : Code[20];VAR DataCaptNoSeriesCode@1240020004 : Code[20];VAR BinCntNoSeriesCode@1240020005 : Code[20];VAR BinCntLineNoSeriesCode@1240020006 : Code[10];VAR PalletNoSeriesCode@1240020007 : Code[20];TriggerMessage@1240020002 : Boolean);
+    VAR
+      NoSeries@1240030000 : Record 308;
+      NoSeriesLine@1240030001 : Record 309;
+      Location@1240030002 : Record 14;
+      WhseWorksheetTemplate@1060000 : Record 7328;
+      ItemJournalTemplate@1060001 : Record 82;
+      WhseJnlBatch@1240020000 : Record 7310;
+    BEGIN
+      CheckForTestOverride;
+
+      IF NOT NoSeries.GET('WHSEACTGRP') THEN BEGIN
+        NoSeries.INIT;
+        NoSeries.VALIDATE(Code,'WHSEACTGRP');
+        NoSeries.VALIDATE(Description,'Default Warehouse Activity Group No. Series');
+        NoSeries.VALIDATE("Default Nos.",TRUE);
+        NoSeries.INSERT(TRUE);
+
+        NoSeriesLine.INIT;
+        NoSeriesLine.VALIDATE("Series Code",NoSeries.Code);
+        NoSeriesLine.VALIDATE("Line No.",10000);
+        NoSeriesLine.VALIDATE("Starting No.",'WAG0000001');
+        NoSeriesLine.VALIDATE("Ending No.",'WAG9999999');
+        NoSeriesLine.INSERT(TRUE);
+
+        WhseActGroupNoSeriesCode := NoSeries.Code;
+      END ELSE
+        WhseActGroupNoSeriesCode := NoSeries.Code;
+
+      IF NOT NoSeries.GET('OWRPICKRQST') THEN BEGIN
+        NoSeries.INIT;
+        NoSeries.VALIDATE(Code,'OWRPICKRQST');
+        NoSeries.VALIDATE(Description,'Default Pick Request No. Series');
+        NoSeries.VALIDATE("Default Nos.",TRUE);
+        NoSeries.INSERT(TRUE);
+
+        NoSeriesLine.INIT;
+        NoSeriesLine.VALIDATE("Series Code",NoSeries.Code);
+        NoSeriesLine.VALIDATE("Line No.",10000);
+        NoSeriesLine.VALIDATE("Starting No.",'PR00000001');
+        NoSeriesLine.VALIDATE("Ending No.",'PR99999999');
+        NoSeriesLine.INSERT(TRUE);
+      END;
+
+      IF NOT NoSeries.GET('DATACAPT') THEN BEGIN
+        NoSeries.INIT;
+        NoSeries.VALIDATE(Code,'DATACAPT');
+        NoSeries.VALIDATE(Description,'Data Capture');
+        NoSeries.VALIDATE("Default Nos.",TRUE);
+        NoSeries.INSERT(TRUE);
+
+        NoSeriesLine.INIT;
+        NoSeriesLine.VALIDATE("Series Code",NoSeries.Code);
+        NoSeriesLine.VALIDATE("Line No.",10000);
+        NoSeriesLine.VALIDATE("Starting No.",'DC00000001');
+        NoSeriesLine.VALIDATE("Ending No.",'DC99999999');
+        NoSeriesLine.INSERT(TRUE);
+        DataCaptNoSeriesCode := NoSeries.Code;
+      END ELSE
+        DataCaptNoSeriesCode := NoSeries.Code;
+
+      IF NOT NoSeries.GET('BINCNT') THEN BEGIN
+        NoSeries.INIT;
+        NoSeries.VALIDATE(Code,'BINCNT');
+        NoSeries.VALIDATE(Description,'Bin Count');
+        NoSeries.VALIDATE("Default Nos.",TRUE);
+        NoSeries.INSERT(TRUE);
+
+        NoSeriesLine.INIT;
+        NoSeriesLine.VALIDATE("Series Code",NoSeries.Code);
+        NoSeriesLine.VALIDATE("Line No.",10000);
+        NoSeriesLine.VALIDATE("Starting No.",'BC00000000');
+        NoSeriesLine.VALIDATE("Ending No.",'BC99999999');
+        NoSeriesLine.VALIDATE("Warning No.",'BC99990000');
+        NoSeriesLine.INSERT(TRUE);
+        BinCntNoSeriesCode := NoSeries.Code;
+      END ELSE
+        BinCntNoSeriesCode := NoSeries.Code;
+
+      IF NOT NoSeries.GET('BINCNTLINE') THEN BEGIN
+        NoSeries.INIT;
+        NoSeries.VALIDATE(Code,'BINCNTLINE');
+        NoSeries.VALIDATE(Description,'Bin Count Line');
+        NoSeries.VALIDATE("Default Nos.",TRUE);
+        NoSeries.INSERT(TRUE);
+
+        NoSeriesLine.INIT;
+        NoSeriesLine.VALIDATE("Series Code",NoSeries.Code);
+        NoSeriesLine.VALIDATE("Line No.",10000);
+        NoSeriesLine.VALIDATE("Starting No.",'BL00000000');
+        NoSeriesLine.VALIDATE("Ending No.",'BL99999999');
+        NoSeriesLine.VALIDATE("Warning No.",'BL99900000');
+        NoSeriesLine.INSERT(TRUE);
+        BinCntLineNoSeriesCode := NoSeries.Code;
+      END ELSE
+        BinCntLineNoSeriesCode := NoSeries.Code;
+
+      IF NOT NoSeries.GET('RFPALLETNO') THEN BEGIN
+        NoSeries.INIT;
+        NoSeries.VALIDATE(Code,'RFPALLET');
+        NoSeries.VALIDATE(Description,'RF Pallet');
+        NoSeries.VALIDATE("Default Nos.",TRUE);
+        NoSeries.INSERT(TRUE);
+
+        NoSeriesLine.INIT;
+        NoSeriesLine.VALIDATE("Series Code",NoSeries.Code);
+        NoSeriesLine.VALIDATE("Line No.",10000);
+        NoSeriesLine.VALIDATE("Starting No.",'RF00000000');
+        NoSeriesLine.INSERT(TRUE);
+        PalletNoSeriesCode := NoSeries.Code;
+      END ELSE
+        PalletNoSeriesCode := NoSeries.Code;
+
+      IF TriggerMessage THEN
+        MESSAGE(DefaultNoSeriesSet);
+    END;
+
+    [External]
+    PROCEDURE CreateWorksheets@1240020009(VAR DefaultOWRReplenWhseWkst@1240020002 : Code[10];VAR DefaultMovementWkst@1240020007 : Code[10];VAR DefaultMovementTemplate@1240020004 : Code[10];VAR DefaultPutawayWkst@1240020006 : Code[10];VAR DefaultPutawayTemplate@1240020005 : Code[10];TriggerMessage@1240020003 : Boolean);
+    VAR
+      Location@1240020001 : Record 14;
+      WhseWorksheetTemplate@1240030000 : Record 7328;
+      WhseWorksheetName@14097700 : Record 7327;
+      WhseWorksheetName2@1240020000 : Record 7327;
+    BEGIN
+      CheckForTestOverride;
+
+      Location.RESET;
+      Location.SETRANGE("Directed Put-away and Pick",TRUE);
+      IF Location.FIND('-') THEN
+        REPEAT
+          WhseWorksheetTemplate.RESET;
+          WhseWorksheetTemplate.SETRANGE(Type,WhseWorksheetTemplate.Type::Movement);
+          IF WhseWorksheetTemplate.FIND('-') THEN BEGIN
+            DefaultOWRReplenWhseWkst := 'OWR-REPLEN';
+            DefaultMovementWkst := 'ZZZ-ADCS';
+
+            IF NOT WhseWorksheetName.GET(WhseWorksheetTemplate.Name,DefaultOWRReplenWhseWkst,Location.Code) THEN BEGIN
+              WhseWorksheetName.INIT;
+              WhseWorksheetName.VALIDATE("Worksheet Template Name",WhseWorksheetTemplate.Name);
+              WhseWorksheetName.VALIDATE(Name,DefaultOWRReplenWhseWkst);
+              WhseWorksheetName.VALIDATE("Location Code",Location.Code);
+              WhseWorksheetName.VALIDATE(Description,'OWR Worksheet');
+              WhseWorksheetName.INSERT(TRUE);
+            END;
+
+            DefaultMovementTemplate := WhseWorksheetTemplate.Name;
+
+            IF NOT WhseWorksheetName.GET(WhseWorksheetTemplate.Name,DefaultMovementWkst,Location.Code) THEN BEGIN
+              WhseWorksheetName.INIT;
+              WhseWorksheetName.VALIDATE("Worksheet Template Name",WhseWorksheetTemplate.Name);
+              WhseWorksheetName.VALIDATE(Name,DefaultMovementWkst);
+              WhseWorksheetName.VALIDATE("Location Code",Location.Code);
+              WhseWorksheetName.VALIDATE(Description,'ADCS Worksheet');
+              WhseWorksheetName.INSERT(TRUE);
+            END;
+          END;
+
+          WhseWorksheetTemplate.RESET;
+          WhseWorksheetTemplate.SETRANGE(Type,WhseWorksheetTemplate.Type::"Put-away");
+          IF WhseWorksheetTemplate.FIND('-') THEN BEGIN
+            DefaultPutawayWkst := 'ZZZ-ADCS';
+            IF NOT WhseWorksheetName.GET(WhseWorksheetTemplate.Name,DefaultPutawayWkst,Location.Code) THEN BEGIN
+              WhseWorksheetName.INIT;
+              WhseWorksheetName.VALIDATE("Worksheet Template Name",WhseWorksheetTemplate.Name);
+              WhseWorksheetName.VALIDATE(Name,DefaultPutawayWkst);
+              WhseWorksheetName.VALIDATE("Location Code",Location.Code);
+              WhseWorksheetName.VALIDATE(Description,'ADCS Worksheet');
+              WhseWorksheetName.INSERT(TRUE);
+            END;
+
+            DefaultPutawayTemplate := WhseWorksheetTemplate.Name;
+          END;
+        UNTIL Location.NEXT = 0;
+
+      IF TriggerMessage THEN
+        MESSAGE(DefaultWorksheetsSet);
+    END;
+
+    [External]
+    PROCEDURE CreateItemJournalBatch@1240030000(VAR DefaultItemJnlTemplate@1240020003 : Code[10];VAR DefaultItemJnlBatch@1240020002 : Code[10];TriggerMessage@1240020001 : Boolean);
+    VAR
+      ItemJournalTemplate@1240030000 : Record 82;
+      ItemJournalBatch@14002800 : Record 233;
+      ItemJournalBatch2@1240020000 : Record 233;
+    BEGIN
+      CheckForTestOverride;
+
+      ItemJournalTemplate.RESET;
+      ItemJournalTemplate.SETRANGE(Type,ItemJournalTemplate.Type::Transfer);
+      IF ItemJournalTemplate.FIND('-') THEN BEGIN
+        DefaultItemJnlBatch := 'ZZZ-ADCS';
+
+        IF NOT ItemJournalBatch.GET(ItemJournalTemplate.Name,DefaultItemJnlBatch) THEN BEGIN
+          ItemJournalBatch.INIT;
+          ItemJournalBatch.VALIDATE("Journal Template Name",ItemJournalTemplate.Name);
+          ItemJournalBatch.VALIDATE(Name,DefaultItemJnlBatch);
+          ItemJournalBatch.VALIDATE("No. Series",'');
+          ItemJournalBatch.INSERT(TRUE);
+        END;
+
+        DefaultItemJnlTemplate := ItemJournalTemplate.Name;
+      END;
+    END;
+
+    [External]
+    PROCEDURE CreateWarehouseJournal@1240020018(VAR DefaultWhseJnlTemplate@1240020006 : Code[10];VAR DefaultWhseJnlBatch@1240020005 : Code[10];TriggerMessage@1240020004 : Boolean);
+    VAR
+      Location@1240020001 : Record 14;
+      WhseJnlBatch@1240020000 : Record 7310;
+      WhseJnlTemplate@1240020002 : Record 7309;
+    BEGIN
+      CheckForTestOverride;
+
+      Location.RESET;
+      Location.SETRANGE("Directed Put-away and Pick",TRUE);
+      IF Location.FIND('-') THEN
+        REPEAT
+          WhseJnlTemplate.RESET;
+          WhseJnlTemplate.SETRANGE(Type,WhseJnlTemplate.Type::"Physical Inventory");
+          IF WhseJnlTemplate.FIND('-') THEN BEGIN
+            DefaultWhseJnlBatch := 'ZZZ-ADCS';
+            IF NOT WhseJnlBatch.GET(WhseJnlTemplate.Name,DefaultWhseJnlBatch,Location.Code) THEN BEGIN
+              WhseJnlBatch.INIT;
+              WhseJnlBatch.VALIDATE("Journal Template Name",WhseJnlTemplate.Name);
+              WhseJnlBatch.VALIDATE(Name,DefaultWhseJnlBatch);
+              WhseJnlBatch.VALIDATE("Location Code",Location.Code);
+              WhseJnlBatch.INSERT(TRUE);
+            END;
+
+            DefaultWhseJnlTemplate := WhseJnlTemplate.Name;
+          END;
+        UNTIL Location.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE CreateOutboundActions@1240020013(TriggerMessage@1240020000 : Boolean);
+    VAR
+      OutboundWhseRequestAction@1240040000 : Record 14002864;
+    BEGIN
+      CheckForTestOverride;
+
+      IF NOT OutboundWhseRequestAction.GET('MOVE') THEN BEGIN
+        OutboundWhseRequestAction.INIT;
+        OutboundWhseRequestAction.Code := 'MOVE';
+        OutboundWhseRequestAction.Description := 'Move Created';
+        OutboundWhseRequestAction.INSERT(TRUE);
+      END;
+
+      IF NOT OutboundWhseRequestAction.GET('WAITRECEIV') THEN BEGIN
+        OutboundWhseRequestAction.INIT;
+        OutboundWhseRequestAction.Code := 'WAITRECEIV';
+        OutboundWhseRequestAction.Description := 'Waiting for Receive';
+        OutboundWhseRequestAction.INSERT(TRUE);
+      END;
+
+      IF NOT OutboundWhseRequestAction.GET('OUTSTAND') THEN BEGIN
+        OutboundWhseRequestAction.INIT;
+        OutboundWhseRequestAction.Code := 'OUTSTAND';
+        OutboundWhseRequestAction.Description := 'Outstanding Quantity';
+        OutboundWhseRequestAction."Outstanding Quantity" := TRUE;
+        OutboundWhseRequestAction.INSERT(TRUE);
+      END;
+
+      IF NOT OutboundWhseRequestAction.GET('AVAIL') THEN BEGIN
+        OutboundWhseRequestAction.INIT;
+        OutboundWhseRequestAction.Code := 'AVAIL';
+        OutboundWhseRequestAction.Description := 'Available Quantity';
+        OutboundWhseRequestAction."Available Quantity" := TRUE;
+        OutboundWhseRequestAction.INSERT(TRUE);
+      END;
+
+      IF NOT OutboundWhseRequestAction.GET('TOTALAVAIL') THEN BEGIN
+        OutboundWhseRequestAction.INIT;
+        OutboundWhseRequestAction.Code := 'TOTALAVAIL';
+        OutboundWhseRequestAction.Description := 'Total Available Quantity';
+        OutboundWhseRequestAction."Total Available Quantity" := TRUE;
+        OutboundWhseRequestAction.INSERT(TRUE);
+      END;
+
+      IF NOT OutboundWhseRequestAction.GET('ALLAVAIL') THEN BEGIN
+        OutboundWhseRequestAction.INIT;
+        OutboundWhseRequestAction.Code := 'ALLAVAIL';
+        OutboundWhseRequestAction.Description := 'All Available Quantity';
+        OutboundWhseRequestAction."All Available Quantity" := TRUE;
+        OutboundWhseRequestAction.INSERT(TRUE);
+      END;
+
+      IF NOT OutboundWhseRequestAction.GET('MOVEREQ') THEN BEGIN
+        OutboundWhseRequestAction.INIT;
+        OutboundWhseRequestAction.Code := 'MOVEREQ';
+        OutboundWhseRequestAction.Description := 'Total > Available Quantity';
+        OutboundWhseRequestAction."Total > Available Quantity" := TRUE;
+        OutboundWhseRequestAction.INSERT(TRUE);
+      END;
+
+      IF NOT OutboundWhseRequestAction.GET('RESERVED') THEN BEGIN
+        OutboundWhseRequestAction.INIT;
+        OutboundWhseRequestAction.Code := 'RESERVED';
+        OutboundWhseRequestAction.Description := 'Reserved Items on Order';
+        OutboundWhseRequestAction."Reserved Inventory" := TRUE;
+        OutboundWhseRequestAction.INSERT(TRUE);
+      END;
+
+      IF NOT OutboundWhseRequestAction.GET('NEW') THEN BEGIN
+        OutboundWhseRequestAction.INIT;
+        OutboundWhseRequestAction.Code := 'NEW';
+        OutboundWhseRequestAction.Description := 'New Orders';
+        OutboundWhseRequestAction."New Orders" := TRUE;
+        OutboundWhseRequestAction.INSERT(TRUE);
+      END;
+
+      IF NOT OutboundWhseRequestAction.GET('BACKORDER') THEN BEGIN
+        OutboundWhseRequestAction.INIT;
+        OutboundWhseRequestAction.Code := 'BACKORDER';
+        OutboundWhseRequestAction.Description := 'Back Order';
+        OutboundWhseRequestAction."Back Orders" := TRUE;
+        OutboundWhseRequestAction.INSERT(TRUE);
+      END;
+
+      IF NOT OutboundWhseRequestAction.GET('ATO ORDERS') THEN BEGIN
+        OutboundWhseRequestAction.INIT;
+        OutboundWhseRequestAction.Code := 'ATO ORDERS';
+        OutboundWhseRequestAction.Description := 'ATO Orders';
+        OutboundWhseRequestAction."ATO Orders" := TRUE;
+        OutboundWhseRequestAction.INSERT(TRUE);
+      END;
+
+      IF TriggerMessage THEN
+        MESSAGE(DefaultOWRActionsSet);
+    END;
+
+    [External]
+    PROCEDURE CreateOWRLocationSetupRecords@1240020006(TriggerMessage@1240020002 : Boolean);
+    VAR
+      Location@1240020000 : Record 14;
+      OWRLocationSetup@1240020001 : Record 14099030;
+      Confirmed@1240020003 : Boolean;
+    BEGIN
+      CheckForTestOverride;
+
+      Location.RESET;
+      Location.SETRANGE("Use As In-Transit",FALSE);
+      IF Location.FINDSET(FALSE) THEN
+        REPEAT
+          OWRLocationSetup.RESET;
+          IF NOT OWRLocationSetup.GET(Location.Code) THEN BEGIN
+            OWRLocationSetup.INIT;
+            OWRLocationSetup.Code := Location.Code;
+            OWRLocationSetup.Description := Location.Name;
+            OWRLocationSetup.INSERT;
+            IF (NOT Location."Require Pick") AND (NOT Location."Require Shipment") THEN BEGIN
+              Confirmed := FALSE;
+              IF TestOverride THEN
+                Confirmed := TRUE
+              ELSE
+                Confirmed := CONFIRM(STRSUBSTNO(ConfirmPickRequest,Location.Code),FALSE);
+
+              IF Confirmed THEN
+                IF OWRLocationSetup.GET(Location.Code) THEN BEGIN
+                  OWRLocationSetup."Create Outbound Whse. Requests" := TRUE;
+                  OWRLocationSetup."Use Pick Requests" := TRUE;
+                  OWRLocationSetup."Pick Request No. Series" := 'OWRPICKRQST';
+                  OWRLocationSetup.VALIDATE("Pick Request Report ID",REPORT::"OWR Pick Request Line Report");
+                  OWRLocationSetup.MODIFY;
+                END;
+            END;
+          END;
+        UNTIL Location.NEXT = 0;
+
+      IF TriggerMessage THEN
+        MESSAGE(DefaultOWRLocationsSet);
+    END;
+
+    [External]
+    PROCEDURE CreateRFLocationSetupRecords@1240020020(TriggerMessage@1240020002 : Boolean);
+    VAR
+      Location@1240020000 : Record 14;
+      RFLocationSetup@1240020001 : Record 14099031;
+      Confirmed@1240020003 : Boolean;
+    BEGIN
+      CheckForTestOverride;
+
+      Location.RESET;
+      Location.SETRANGE("Use As In-Transit",FALSE);
+      IF Location.FINDSET(FALSE) THEN
+        REPEAT
+          RFLocationSetup.RESET;
+          IF NOT RFLocationSetup.GET(Location.Code) THEN BEGIN
+            RFLocationSetup.INIT;
+            RFLocationSetup.Code := Location.Code;
+            RFLocationSetup.Description := Location.Name;
+            RFLocationSetup.INSERT;
+          END;
+        UNTIL Location.NEXT = 0;
+
+      IF TriggerMessage THEN
+        MESSAGE(DefaultRFLocationsSet);
+    END;
+
+    [External]
+    PROCEDURE CreateDefaultEmployeeSetup@14097703();
+    VAR
+      RFSetup@1240020001 : Record 14002801;
+      RFEmployeeSetup@14097700 : Record 14002802;
+      Location@1240030000 : Record 14;
+      WarehouseEmployee@1240030001 : Record 7301;
+      WarehouseEmployee2@1240030002 : Record 7301;
+      WhseEmpSelectionList@1240020003 : Page 14099045;
+      RFEmpCode@1240020000 : Code[50];
+      WhseEmpAssignComplete@1240020002 : Boolean;
+      Confirmed@1240020004 : Boolean;
+    BEGIN
+      CheckForTestOverride;
+
+      RFEmpCode := 'DEFAULT';
+
+      RFEmployeeSetup.INIT;
+      RFEmployeeSetup.VALIDATE(Code,RFEmpCode);
+      RFEmployeeSetup.VALIDATE("Local Menu Button",RFEmployeeSetup."Local Menu Button"::F3);
+      RFEmployeeSetup.VALIDATE("Item Priority",3);
+      RFEmployeeSetup.VALIDATE("Item Cross Reference Priority",1);
+      RFEmployeeSetup.VALIDATE("Item Identifier Priority",2);
+      RFEmployeeSetup.VALIDATE("Allow Change Place Bin",TRUE);
+      RFEmployeeSetup.VALIDATE("Bin Priority",3);
+      RFEmployeeSetup.VALIDATE("Lot No. Priority",1);
+
+      Confirmed := FALSE;
+      IF TestOverride THEN
+        Confirmed := TRUE
+      ELSE
+        Confirmed := CONFIRM(ConfirmToteUsage,FALSE);
+
+      IF Confirmed THEN BEGIN
+        RFEmployeeSetup.VALIDATE("Keep Last Tote No.",TRUE);
+        RFEmployeeSetup.VALIDATE("Show Tote in Line",TRUE);
+        RFEmployeeSetup.VALIDATE("Verify Tote by Scanning",TRUE);
+      END;
+
+      RFEmployeeSetup.VALIDATE("Select Unassigned Picks",TRUE);
+      RFEmployeeSetup.VALIDATE("Select Unassigned Put-aways",TRUE);
+      RFEmployeeSetup.VALIDATE("Select Unassigned Movements",TRUE);
+      RFEmployeeSetup.VALIDATE("Select Unassigned Phys. Invt.",TRUE);
+      RFEmployeeSetup.VALIDATE("Scan Only Takes on Picks",TRUE);
+      RFEmployeeSetup.VALIDATE("Scan Only Places on Put-aways",TRUE);
+      RFEmployeeSetup.VALIDATE("Reset Qty in New Lines on Open",TRUE);
+      RFEmployeeSetup.VALIDATE("Stay on Line if not Complete",TRUE);
+      RFEmployeeSetup.VALIDATE("Show No Breakbulk Lines",TRUE);
+      RFEmployeeSetup.VALIDATE("Show New Line when Split",TRUE);
+      RFEmployeeSetup.VALIDATE("Post Shipment Action",RFEmployeeSetup."Post Shipment Action"::Ship);
+      RFEmployeeSetup.VALIDATE("Strict Dynamic Unit Handling",TRUE);
+      RFEmployeeSetup.VALIDATE("Receive Put-away Multiple Item",TRUE);
+      RFEmployeeSetup.VALIDATE(RFEmployeeSetup."Outbound Whse. Request Type",
+         RFEmployeeSetup."Outbound Whse. Request Type"::Advanced);
+
+      IF NOT RFEmployeeSetup.INSERT(TRUE) THEN RFEmployeeSetup.MODIFY(TRUE);
+
+      Confirmed := FALSE;
+      IF TestOverride THEN
+        Confirmed := TRUE
+      ELSE
+        Confirmed := CONFIRM(ConfirmSetEmpCodeAll,FALSE);
+
+      WhseEmpAssignComplete := FALSE;
+      IF Confirmed THEN BEGIN
+        WarehouseEmployee.RESET;
+        IF WarehouseEmployee.FIND('-') THEN
+          REPEAT
+            IF WarehouseEmployee."RF Employee Setup Code" = '' THEN BEGIN
+              WarehouseEmployee2 := WarehouseEmployee;
+              WarehouseEmployee2."RF Employee Setup Code" := RFEmployeeSetup.Code;
+              WarehouseEmployee2.MODIFY(TRUE);
+            END;
+          UNTIL WarehouseEmployee.NEXT = 0;
+
+        WhseEmpAssignComplete := TRUE;
+      END;
+
+      IF NOT WhseEmpAssignComplete THEN
+        IF CONFIRM(STRSUBSTNO(ConfirmAssignEmpCode,RFEmpCode),FALSE) THEN BEGIN
+          WhseEmpSelectionList.Initialize(RFEmpCode);
+          WhseEmpSelectionList.RUN;
+        END;
+    END;
+
+    [External]
+    PROCEDURE CreateProfiles@1240020019();
+    VAR
+      Profile@1240020000 : Record 2000000072;
+    BEGIN
+      Profile.RESET;
+      IF NOT Profile.GET('BIN COUNT MANAGER') THEN BEGIN
+        Profile.INIT;
+        Profile."Profile ID" := 'BIN COUNT MANAGER';
+        Profile.Description := 'Bin Count Manager';
+        Profile."Role Center ID" := PAGE::"Bin Count Role Center";
+        Profile.INSERT;
+      END;
+    END;
+
+    [External]
+    PROCEDURE CreateDataCaptureSetup@1240020023(TriggerMessage@1240020000 : Boolean);
+    VAR
+      DataCaptureProcessingSetup@1240020001 : Record 14002982;
+      Confirmed@1240020002 : Boolean;
+    BEGIN
+      CheckForTestOverride;
+
+      IF NOT DataCaptureProcessingSetup.GET THEN BEGIN
+        DataCaptureProcessingSetup.INIT;
+        DataCaptureProcessingSetup."Next RF Receipt No." := 'RFR00001';
+        DataCaptureProcessingSetup."Delete Data Capture on Esc" := TRUE;
+        DataCaptureProcessingSetup.INSERT(TRUE);
+        COMMIT;
+      END;
+
+      CreateDefaultDataCaptureTypes;
+
+      CreateDefaultDataCaptureProc;
+
+      Confirmed := FALSE;
+      IF TestOverride THEN
+        Confirmed := FALSE
+      ELSE
+        Confirmed := CONFIRM(ConfirmDataCaptProcImport,FALSE);
+
+      IF Confirmed THEN
+        XMLPORT.RUN(14002802,TRUE,TRUE);
+    END;
+
+    LOCAL PROCEDURE CreateDefaultDataCaptureTypes@1240020026();
+    VAR
+      DataCaptureType@1240020000 : Record 14002986;
+      MiniformHeader@1240020001 : Record 7700;
+    BEGIN
+      IF MiniformHeader.GET('DATACAPHDR') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::General,
+          TRUE,TRUE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DATACAPLINE') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::General,
+          FALSE,TRUE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DATACAPTCROSSREF') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::General,
+          FALSE,FALSE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DATACAPTURE') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::General,
+          FALSE,TRUE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCH CONSUMPTION') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::Consumption,
+          TRUE,FALSE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCH MISC PACKAGE') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Misc Package",
+          TRUE,FALSE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCH PO RECEIPTS') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Purchase Receipt",
+          TRUE,FALSE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCH PROD OUTPUT') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::Output,
+          TRUE,FALSE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCH SRO RECEIPTS') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Sales Return Receipt",
+          TRUE,FALSE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCH TO RECEIPTS') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Transfer Receipt",
+          TRUE,FALSE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCL CONSUMPTION') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::Consumption,
+          FALSE,FALSE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCL MISC PACKAGE') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Misc Package",
+          FALSE,FALSE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCL PO RECEIPTS') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Purchase Receipt",
+          FALSE,FALSE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCL PROD OUTPUT') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::Output,
+          FALSE,FALSE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCL SRO RECEIPTS') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Sales Return Receipt",
+          FALSE,FALSE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCL TO RECEIPTS') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Transfer Receipt",
+          FALSE,FALSE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('GL BINSORTING') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::Setup,
+          FALSE,FALSE,TRUE,FALSE,FALSE,'GL BINSORTING','',0,0);
+
+      IF MiniformHeader.GET('GL LP CAPTURE') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::Setup,
+          FALSE,FALSE,TRUE,FALSE,FALSE,'GL LP CAPTURE','',0,0);
+
+      IF MiniformHeader.GET('GL LP CAPTURE BIN') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::Setup,
+          FALSE,FALSE,TRUE,FALSE,FALSE,'GL LP CAPTURE BIN','',0,0);
+
+      IF MiniformHeader.GET('DCH PURCH RECEIPTS') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Purchase Receipt",
+          TRUE,TRUE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCH RETURNS RECEIPT') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Sales Return Receipt",
+          TRUE,TRUE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCH TRANSF RECEIPT') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Transfer Receipt",
+          TRUE,TRUE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCL PURCH RECEIPTS') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Purchase Receipt",
+          FALSE,TRUE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCL RETURNS RECEIPTS') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Sales Return Receipt",
+          FALSE,TRUE,FALSE,FALSE,FALSE,'','',0,0);
+
+      IF MiniformHeader.GET('DCL TRANS RECEIPTS') THEN
+        InsertDefaultDataCaptureTypes(MiniformHeader,DataCaptureType."Data Capture Type"::"Transfer Receipt",
+          FALSE,TRUE,FALSE,FALSE,FALSE,'','',0,0);
+
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE InsertDefaultDataCaptureTypes@1240020003(MiniformHeader@1240020000 : Record 7700;DCType@1240020001 : ',Custom,Purchase Receipt,Transfer Receipt,Sales Return Receipt,Consumption,Output,Assembly,Misc Package,Setup,General';DCHeader@1240020002 : Boolean;RegisterBeforePosting@1240020003 : Boolean;GoLiveOnly@1240020004 : Boolean;DCBoolean1@1240020005 : Boolean;DCBoolean2@1240020006 : Boolean;DCCode1@1240020007 : Code[20];DCCode2@1240020008 : Code[20];DCInteger1@1240020009 : Integer;DCInteger2@1240020010 : Integer);
+    VAR
+      DataCaptureType@1240020011 : Record 14002986;
+    BEGIN
+      IF NOT DataCaptureType.GET(MiniformHeader.Code) THEN BEGIN
+        DataCaptureType.INIT;
+        DataCaptureType.VALIDATE("Miniform Code",MiniformHeader.Code);
+        DataCaptureType."Data Capture Type" := DCType;
+        DataCaptureType.Header := DCHeader;
+        DataCaptureType."Register before Posting" := RegisterBeforePosting;
+        DataCaptureType."Go-Live Only" := GoLiveOnly;
+        DataCaptureType."Boolean 1" := DCBoolean1;
+        DataCaptureType."Boolean 2" := DCBoolean2;
+        DataCaptureType."Code 1" := DCCode1;
+        DataCaptureType."Code 2" := DCCode2;
+        DataCaptureType."Integer 1" := DCInteger1;
+        DataCaptureType."Integer 2" := DCInteger2;
+        DataCaptureType.INSERT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateDefaultDataCaptureProc@1240020025();
+    VAR
+      DataCaptureProcessing@1240020000 : Record 14002981;
+      MiniformHeader@1240020001 : Record 7700;
+    BEGIN
+      IF MiniformHeader.GET('DATACAPTCROSSREF') THEN
+        InsertDefaultDataCaptureProc(MiniformHeader,14002981);
+
+      IF MiniformHeader.GET('DCL CONSUMPTION') THEN
+        InsertDefaultDataCaptureProc(MiniformHeader,14002986);
+
+      IF MiniformHeader.GET('DCL PO RECEIPTS') THEN
+        InsertDefaultDataCaptureProc(MiniformHeader,14002983);
+
+      IF MiniformHeader.GET('DCL PROD OUTPUT') THEN
+        InsertDefaultDataCaptureProc(MiniformHeader,14002987);
+
+      IF MiniformHeader.GET('DCL SRO RECEIPTS') THEN
+        InsertDefaultDataCaptureProc(MiniformHeader,14002985);
+
+      IF MiniformHeader.GET('DCL TO RECEIPTS') THEN
+        InsertDefaultDataCaptureProc(MiniformHeader,14002984);
+
+      IF MiniformHeader.GET('DCL PURCH RECEIPTS') THEN
+        InsertDefaultDataCaptureProc(MiniformHeader,14002983);
+
+      IF MiniformHeader.GET('DCL RETURNS RECEIPTS') THEN
+        InsertDefaultDataCaptureProc(MiniformHeader,14002985);
+
+      IF MiniformHeader.GET('DCL TRANS RECEIPTS') THEN
+        InsertDefaultDataCaptureProc(MiniformHeader,14002984);
+
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE InsertDefaultDataCaptureProc@1240020024(MiniformHeader@1240020000 : Record 7700;ProcessingCodeunitID@1240020001 : Integer);
+    VAR
+      DataCaptureProcessing@1240020003 : Record 14002981;
+    BEGIN
+      IF NOT DataCaptureProcessing.GET(MiniformHeader.Code) THEN BEGIN
+        DataCaptureProcessing.INIT;
+        DataCaptureProcessing."Miniform Code" := MiniformHeader.Code;
+        DataCaptureProcessing.Description := MiniformHeader.Description;
+        DataCaptureProcessing."Processing Codeunit ID" := ProcessingCodeunitID;
+        DataCaptureProcessing.INSERT;
+      END;
+    END;
+
+    [External]
+    PROCEDURE UpdateWhseCompletelyHandled@1240020028(TriggerMessage@1240020000 : Boolean);
+    VAR
+      WhseRqst@1240020006 : Record 5765;
+      WhseRqst2@1240020005 : Record 5765;
+      TransferHeader@1240020004 : Record 5740;
+      RFSetup@1240020003 : Record 14002801;
+      OutboundWhseRequestMgt@1240020002 : Codeunit 14002863;
+      AssemblyOrderNo@1240020001 : Code[20];
+    BEGIN
+      WhseRqst.RESET;
+      WhseRqst.SETRANGE(Type,WhseRqst.Type::Outbound);
+      IF WhseRqst.FIND('-') THEN
+        REPEAT
+          WhseRqst2 := WhseRqst;
+          OutboundWhseRequestMgt.UpdateWarehouseRequest(WhseRqst2);
+          IF WhseRqst."Source Type" = 5741 THEN
+            IF TransferHeader.GET(WhseRqst2."Source No.") THEN
+              WhseRqst2."Shipment Date" := TransferHeader."Shipment Date";
+
+          RFSetup.GetRFSetup;
+          IF RFSetup.GetFirstAssemblyOrderNo(WhseRqst2,AssemblyOrderNo) THEN BEGIN
+            WhseRqst2."First Assembly Order No." := AssemblyOrderNo;
+            WhseRqst2."ATO Pick Required" := TRUE;
+          END;
+
+          WhseRqst2.MODIFY;
+        UNTIL WhseRqst.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE CreateRoles@1240020001(TriggerMessage@1240020007 : Boolean);
+    VAR
+      UserRole@1240020006 : Record 2000000004;
+      User@1240020005 : Record 2000000120;
+      Permission@1240020004 : Record 2000000005;
+      AllObj@1240020003 : Record 2000000038;
+      WindowsAccessControl@1240020002 : Record 2000000053;
+      MemberOf@1240020001 : Record 2000000053;
+      TableType@1240020000 : ' ,Setup,Work,Post,Limited';
+      Confirmed@1240020008 : Boolean;
+    BEGIN
+      CheckForTestOverride;
+
+      UserRole."Role ID" := 'ADCS-ALL';
+      UserRole.Name := 'Required for all users';
+      IF NOT UserRole.INSERT THEN ;
+      AllObj.RESET;
+      AllObj.SETRANGE("Object Type",AllObj."Object Type"::TableData);
+      AllObj.SETFILTER("Object ID",'14002500..14002600|14002801..14002999|14099001..14099050|14097681..14097800');
+      IF AllObj.FIND('-') THEN
+        REPEAT
+          Permission."Role ID" := UserRole."Role ID";
+          Permission."Object Type" := AllObj."Object Type";
+          Permission."Object ID" := AllObj."Object ID";
+
+          CASE GetTableType(AllObj."Object ID") OF
+            TableType::Setup,TableType::Work,TableType::Post:
+              BEGIN
+                Permission."Read Permission" := Permission."Read Permission"::Yes;
+                Permission."Insert Permission" := Permission."Insert Permission"::" ";
+                Permission."Modify Permission" := Permission."Modify Permission"::" ";
+                Permission."Delete Permission" := Permission."Delete Permission"::" ";
+                Permission."Execute Permission" := Permission."Execute Permission"::" ";
+                IF NOT Permission.INSERT THEN ;
+              END;
+          END;
+        UNTIL AllObj.NEXT = 0;
+
+      UserRole."Role ID" := 'ADCS-SUPER';
+      UserRole.Name := 'Super user ADCS';
+      IF NOT UserRole.INSERT THEN ;
+      AllObj.RESET;
+      AllObj.SETRANGE("Object Type",AllObj."Object Type"::TableData);
+      AllObj.SETFILTER("Object ID",'14002500..14002600|14002801..14002999|14099001..14099050|14097681..14097800');
+      IF AllObj.FIND('-') THEN
+        REPEAT
+          Permission."Role ID" := UserRole."Role ID";
+          Permission."Object Type" := AllObj."Object Type";
+          Permission."Object ID" := AllObj."Object ID";
+
+          CASE GetTableType(AllObj."Object ID") OF
+            TableType::Setup,TableType::Work,TableType::Post:
+              BEGIN
+                Permission."Read Permission" := Permission."Read Permission"::Yes;
+                Permission."Insert Permission" := Permission."Insert Permission"::Yes;
+                Permission."Modify Permission" := Permission."Modify Permission"::Yes;
+                Permission."Delete Permission" := Permission."Delete Permission"::Yes;
+                Permission."Execute Permission" := Permission."Execute Permission"::Yes;
+                IF NOT Permission.INSERT THEN ;
+              END;
+          END;
+        UNTIL AllObj.NEXT = 0;
+
+      UserRole."Role ID" := 'ADCS-WORK';
+      UserRole.Name := 'Required for using ADCS';
+      IF NOT UserRole.INSERT THEN ;
+      AllObj.RESET;
+      AllObj.SETRANGE("Object Type",AllObj."Object Type"::TableData);
+      AllObj.SETFILTER("Object ID",'14002500..14002600|14002801..14002999|14099001..14099050|14097681..14097800');
+      IF AllObj.FIND('-') THEN
+        REPEAT
+          Permission."Role ID" := UserRole."Role ID";
+          Permission."Object Type" := AllObj."Object Type";
+          Permission."Object ID" := AllObj."Object ID";
+
+          CASE GetTableType(AllObj."Object ID") OF
+            TableType::Work:
+              BEGIN
+                Permission."Read Permission" := Permission."Read Permission"::Yes;
+                Permission."Insert Permission" := Permission."Insert Permission"::Yes;
+                Permission."Modify Permission" := Permission."Modify Permission"::Yes;
+                Permission."Delete Permission" := Permission."Delete Permission"::Yes;
+                Permission."Execute Permission" := Permission."Execute Permission"::Yes;
+                IF NOT Permission.INSERT THEN ;
+              END;
+            TableType::Post:
+              BEGIN
+                Permission."Read Permission" := Permission."Read Permission"::Yes;
+                Permission."Insert Permission" := Permission."Insert Permission"::Yes;
+                Permission."Modify Permission" := Permission."Modify Permission"::" ";
+                Permission."Delete Permission" := Permission."Delete Permission"::" ";
+                Permission."Execute Permission" := Permission."Execute Permission"::" ";
+                IF NOT Permission.INSERT THEN ;
+              END;
+          END;
+        UNTIL AllObj.NEXT = 0;
+
+      COMMIT;
+
+      Confirmed := FALSE;
+      IF TestOverride THEN
+        Confirmed := TRUE
+      ELSE
+        Confirmed := CONFIRM('Add ADCS-ALL to all users?',FALSE);
+
+      IF Confirmed THEN BEGIN
+        UserRole.GET('ADCS-ALL');
+        IF User.FIND('-') THEN
+          REPEAT
+            IF NOT MemberOf.GET(User."User Security ID",'SUPER','') THEN BEGIN
+              MemberOf.INIT;
+              MemberOf."User Security ID" := User."User Security ID";
+              MemberOf."Role ID" := UserRole."Role ID";
+              MemberOf."User Name" := User."User Name";
+              MemberOf."Role Name" := UserRole.Name;
+              IF NOT MemberOf.INSERT THEN ;
+            END;
+          UNTIL User.NEXT = 0;
+      END;
+
+      IF TriggerMessage THEN
+        MESSAGE(DefaultRolesSet);
+    END;
+
+    [External]
+    PROCEDURE GetTableType@1240020005(TableID@1240030000 : Integer) : Integer;
+    VAR
+      Object@1240030001 : Record 2000000001;
+      TableType@1240020000 : ' ,Setup,Work,Post,Limited';
+    BEGIN
+      IF NOT Object.GET(Object.Type::Table,'',TableID) THEN
+        EXIT(0);
+
+      CASE TableID OF
+        DATABASE::"RF Setup":
+          EXIT(TableType::Setup);
+        DATABASE::"RF Employee Setup":
+          EXIT(TableType::Setup);
+        DATABASE::"Whse. Employee Activity Entry":
+          EXIT(TableType::Post);
+        DATABASE::"RF Statistics Entry":
+          EXIT(TableType::Work);
+        DATABASE::"RF Bin Content":
+          EXIT(TableType::Work);
+        DATABASE::"RF Employee Menu Filter":
+          EXIT(TableType::Setup);
+        DATABASE::"Miniform Structure Entry":
+          EXIT(TableType::Work);
+        DATABASE::"Warehouse Employee Password":
+          EXIT(TableType::Setup);
+        DATABASE::"RF Processing Entry":
+          EXIT(TableType::Work);
+        DATABASE::"RF Message Header":
+          EXIT(TableType::Work);
+        DATABASE::"RF Message Receiver":
+          EXIT(TableType::Work);
+        DATABASE::"Miniform Translate Token":
+          EXIT(TableType::Setup);
+        DATABASE::"Miniform Translate Language":
+          EXIT(TableType::Setup);
+        DATABASE::"Computer Plug-in Type":
+          EXIT(TableType::Setup);
+        DATABASE::"RF Message Comment Line":
+          EXIT(TableType::Work);
+        DATABASE::"Whse. Activity Group Header":
+          EXIT(TableType::Work);
+        DATABASE::"Whse. Activity Group Line":
+          EXIT(TableType::Work);
+        DATABASE::"Outbound Whse. Request Filter":
+          EXIT(TableType::Setup);
+        DATABASE::"Outbound Whse. Request Action":
+          EXIT(TableType::Setup);
+        DATABASE::"Outb. Whse. Req. Action Entry":
+          EXIT(TableType::Work);
+        DATABASE::"Data Capture Line":
+          EXIT(TableType::Work);
+        DATABASE::"Dynamic Move Line":
+          EXIT(TableType::Work);
+        DATABASE::"Select Document":
+          EXIT(TableType::Work);
+        DATABASE::"Registered Data Capture Line":
+          EXIT(TableType::Post);
+        DATABASE::"Registered Data Capture Hdr.":
+          EXIT(TableType::Post);
+        DATABASE::"Data Capture Header":
+          EXIT(TableType::Work);
+        DATABASE::"Pallet Bin":
+          EXIT(TableType::Work);
+        DATABASE::"Tote Line":
+          EXIT(TableType::Work);
+        DATABASE::"Registered Tote Line":
+          EXIT(TableType::Post);
+        DATABASE::"Wave Pick Warehouse Request":
+          EXIT(TableType::Work);
+        DATABASE::"Reg. Wave Pick Whse. Request":
+          EXIT(TableType::Post);
+        DATABASE::"Data Capture Processing":
+          EXIT(TableType::Setup);
+        DATABASE::"Data Capture Processing Setup":
+          EXIT(TableType::Setup);
+        DATABASE::"Pallet QA Entry":
+          EXIT(TableType::Work);
+        DATABASE::"Pallet Count Statistic":
+          EXIT(TableType::Work);
+        DATABASE::"Pallet Bin Content":
+          EXIT(TableType::Work);
+        DATABASE::"License Plate Entry":
+          EXIT(TableType::Work);
+        DATABASE::"Pallet Journal Batch":
+          EXIT(TableType::Work);
+        DATABASE::"Pallet Journal Line":
+          EXIT(TableType::Work);
+        DATABASE::"License Plate Activity Line":
+          EXIT(TableType::Work);
+        DATABASE::"Pallet Journal Template":
+          EXIT(TableType::Work);
+        DATABASE::"Box Handling Line":
+          EXIT(TableType::Work);
+        DATABASE::Lookup:
+          EXIT(TableType::Work);
+        DATABASE::"Storage ID":
+          EXIT(TableType::Work);
+        DATABASE::"Pallet Cycle Count Periods":
+          EXIT(TableType::Work);
+        DATABASE::"LP QA Status Option":
+          EXIT(TableType::Work);
+        DATABASE::"Warehouse Employee Group":
+          EXIT(TableType::Work);
+        DATABASE::"RF Flowrack Handling":
+          EXIT(TableType::Work);
+        DATABASE::"Box Type":
+          EXIT(TableType::Work);
+        DATABASE::"RF Flow Rack Activity Detail":
+          EXIT(TableType::Work);
+        DATABASE::"RF Receive":
+          EXIT(TableType::Work);
+        DATABASE::"RF Receive Line":
+          EXIT(TableType::Work);
+        DATABASE::"Data Capture Type":
+          EXIT(TableType::Setup);
+        DATABASE::"Bin Count":
+          EXIT(TableType::Work);
+        DATABASE::"Bin Count Line":
+          EXIT(TableType::Work);
+        DATABASE::"Bin Count Template":
+          EXIT(TableType::Setup);
+        DATABASE::"Bin Count Cue":
+          EXIT(TableType::Work);
+        DATABASE::"Bin Count Archive":
+          EXIT(TableType::Post);
+        DATABASE::"Bin Count Line Archive":
+          EXIT(TableType::Post);
+        DATABASE::"Lot Expiration by Bin Buffer":
+          EXIT(TableType::Post);
+        DATABASE::"Replenishment Rule":
+          EXIT(TableType::Work);
+        DATABASE::"Pick Request Header":
+          EXIT(TableType::Work);
+        DATABASE::"Pick Request Line":
+          EXIT(TableType::Work);
+        DATABASE::"Reg. Pick Request Header":
+          EXIT(TableType::Post);
+        DATABASE::"Reg. Pick Request Line":
+          EXIT(TableType::Post);
+        DATABASE::"Archive Pick Request Header":
+          EXIT(TableType::Post);
+        DATABASE::"Archive Pick Request Line":
+          EXIT(TableType::Post);
+        DATABASE::"OWR Location Setup":
+          EXIT(TableType::Setup);
+        DATABASE::"RF Location Setup":
+          EXIT(TableType::Setup);
+        DATABASE::"OWR Assisted Setup":
+          EXIT(TableType::Setup);
+        DATABASE::"RF Assisted Setup":
+          EXIT(TableType::Setup);
+        DATABASE::"OWR Menus":
+          EXIT(TableType::Work);
+        ELSE
+          EXIT(0);
+      END;
+    END;
+
+    [External]
+    PROCEDURE DeleteAllSetup@1240020010(TriggerMessage@1240020000 : Boolean);
+    BEGIN
+      CheckForTestOverride;
+      IF TestOverride THEN
+        EXIT;
+
+      DeleteBaseRelatedSetupAndBaseAppData(FALSE);
+      DeleteApplicationData(FALSE);
+      DeleteSetup(FALSE);
+      DeletePermissions(FALSE);
+
+      IF TriggerMessage THEN
+        MESSAGE(DeleteAllSetupMessage);
+    END;
+
+    [External]
+    PROCEDURE DeleteSetup@1240020000(TriggerMessage@1240020010 : Boolean);
+    VAR
+      Location@1240020009 : Record 14;
+      RFSetup@1240020000 : Record 14002801;
+      RFEmployeeSetup@1240020001 : Record 14002802;
+      OWRAction@1240020002 : Record 14002864;
+      OWRLocationSetup@1240020003 : Record 14099030;
+      RFLocationSetup@1240020011 : Record 14099031;
+      OWRFilter@1240020004 : Record 14002863;
+      ReplenishmentRule@1240020005 : Record 14002867;
+      NoSeries@1240020006 : Record 308;
+      WhseWorksheetTemplate@1240020007 : Record 7328;
+      WhseWorksheetName@1240020008 : Record 7327;
+      ItemJournalTemplate@1240020012 : Record 82;
+      ItemJournalBatch@1240020013 : Record 233;
+      WhseJnlTemplate@1240020014 : Record 7309;
+      WhseJnlBatch@1240020015 : Record 7310;
+      DataCaptProcSetup@1240020016 : Record 14002982;
+      DataCaptProcessing@1240020017 : Record 14002981;
+      DataCaptType@1240020018 : Record 14002986;
+      BinCountTemplate@1240020019 : Record 14002582;
+      RFEmployeeMenuFilter@1240020020 : Record 14002806;
+    BEGIN
+      CheckForTestOverride;
+      IF TestOverride THEN
+        EXIT;
+
+      DeleteOldMiniformData;
+
+      OWRAction.DELETEALL(TRUE);
+      OWRFilter.DELETEALL(TRUE);
+      ReplenishmentRule.DELETEALL(TRUE);
+      RFEmployeeSetup.DELETEALL(TRUE);
+
+      OWRLocationSetup.RESET;
+      IF OWRLocationSetup.FINDSET(FALSE) THEN
+        REPEAT
+          IF NoSeries.GET(OWRLocationSetup."Pick Request No. Series") THEN
+            NoSeries.DELETE(TRUE);
+        UNTIL OWRLocationSetup.NEXT = 0;
+
+      OWRLocationSetup.RESET;
+      OWRLocationSetup.DELETEALL(TRUE);
+
+      RFLocationSetup.RESET;
+      RFLocationSetup.DELETEALL(TRUE);
+
+      DataCaptProcSetup.DELETEALL(TRUE);
+      DataCaptProcessing.DELETEALL(TRUE);
+      DataCaptType.DELETEALL(TRUE);
+      BinCountTemplate.DELETEALL(TRUE);
+      RFEmployeeMenuFilter.DELETEALL(TRUE);
+
+      IF RFSetup.GET('') THEN BEGIN
+        IF RFSetup."Whse. Activity Group Nos." <> '' THEN
+          IF NoSeries.GET(RFSetup."Whse. Activity Group Nos.") THEN
+            NoSeries.DELETE(TRUE);
+
+        IF RFSetup."Data Capture Nos." <> '' THEN
+          IF NoSeries.GET(RFSetup."Data Capture Nos.") THEN
+            NoSeries.DELETE(TRUE);
+
+        IF RFSetup."Bin Count Nos." <> '' THEN
+          IF NoSeries.GET(RFSetup."Bin Count Nos.") THEN
+            NoSeries.DELETE(TRUE);
+
+        IF RFSetup."Bin Count Line Nos." <> '' THEN
+          IF NoSeries.GET(RFSetup."Bin Count Line Nos.") THEN
+            NoSeries.DELETE(TRUE);
+
+        IF RFSetup."Pallet Nos" <> '' THEN
+          IF NoSeries.GET(RFSetup."Pallet Nos") THEN
+            NoSeries.DELETE(TRUE);
+
+        IF RFSetup."Movement Worksheet Name" <> '' THEN BEGIN
+          Location.RESET;
+          Location.SETRANGE("Directed Put-away and Pick",TRUE);
+          IF Location.FINDSET(FALSE) THEN
+            REPEAT
+              WhseWorksheetTemplate.RESET;
+              WhseWorksheetTemplate.SETRANGE(Type,WhseWorksheetTemplate.Type::Movement);
+              IF WhseWorksheetTemplate.FIND('-') THEN
+                IF WhseWorksheetName.GET(WhseWorksheetTemplate.Name,RFSetup."Movement Worksheet Name",Location.Code) THEN
+                  WhseWorksheetName.DELETE(TRUE);
+            UNTIL Location.NEXT = 0;
+        END;
+
+        IF RFSetup."Put-Away Worksheet Name" <> '' THEN BEGIN
+          Location.RESET;
+          Location.SETRANGE("Directed Put-away and Pick",TRUE);
+          IF Location.FINDSET(FALSE) THEN
+            REPEAT
+              WhseWorksheetTemplate.RESET;
+              WhseWorksheetTemplate.SETRANGE(Type,WhseWorksheetTemplate.Type::Movement);
+              IF WhseWorksheetTemplate.FIND('-') THEN
+                IF WhseWorksheetName.GET(WhseWorksheetTemplate.Name,RFSetup."Put-Away Worksheet Name",Location.Code) THEN
+                  WhseWorksheetName.DELETE(TRUE);
+            UNTIL Location.NEXT = 0;
+        END;
+
+        IF RFSetup."Replen Worksheet Name" <> '' THEN BEGIN
+          Location.RESET;
+          Location.SETRANGE("Directed Put-away and Pick",TRUE);
+          IF Location.FINDSET(FALSE) THEN
+            REPEAT
+              WhseWorksheetTemplate.RESET;
+              WhseWorksheetTemplate.SETRANGE(Type,WhseWorksheetTemplate.Type::Movement);
+              IF WhseWorksheetTemplate.FIND('-') THEN
+                IF WhseWorksheetName.GET(WhseWorksheetTemplate.Name,RFSetup."Replen Worksheet Name",Location.Code) THEN
+                  WhseWorksheetName.DELETE(TRUE);
+            UNTIL Location.NEXT = 0;
+        END;
+
+        IF RFSetup."Whse. Phys. Inv. Jnl. Name" <> '' THEN BEGIN
+          Location.RESET;
+          Location.SETRANGE("Directed Put-away and Pick",TRUE);
+          IF Location.FINDSET(FALSE) THEN
+            REPEAT
+              WhseJnlTemplate.RESET;
+              WhseJnlTemplate.SETRANGE(Type,WhseJnlTemplate.Type::"Physical Inventory");
+              IF WhseJnlTemplate.FIND('-') THEN
+                IF WhseJnlBatch.GET(WhseJnlTemplate.Name,RFSetup."Whse. Phys. Inv. Jnl. Name",Location.Code) THEN
+                  WhseJnlBatch.DELETE(TRUE);
+            UNTIL Location.NEXT = 0;
+        END;
+
+        IF RFSetup."Movement Item Journal Name" <> '' THEN BEGIN
+          ItemJournalTemplate.RESET;
+          ItemJournalTemplate.SETRANGE(Type,ItemJournalTemplate.Type::Transfer);
+          IF ItemJournalTemplate.FIND('-') THEN
+            IF ItemJournalBatch.GET(ItemJournalTemplate.Name,RFSetup."Movement Item Journal Name") THEN
+              ItemJournalBatch.DELETE(TRUE);
+        END;
+      END;
+
+      RFSetup.DELETEALL(TRUE);
+
+      IF TriggerMessage THEN
+        MESSAGE(DeleteSetupMessage);
+    END;
+
+    [External]
+    PROCEDURE DeleteBaseRelatedSetupAndBaseAppData@1240020002(TriggerMessage@1240020000 : Boolean);
+    VAR
+      ReplenishmentRule@1240020004 : Record 14002867;
+      RFSetup@1240020015 : Record 14002801;
+      RFEmployeeSetup@1240020006 : Record 14002802;
+      BinContent@1240020003 : Record 7302;
+      Bin@1240020002 : Record 7354;
+      BinTemplate@1240020011 : Record 7335;
+      BinCreationWkstLine@1240020012 : Record 7338;
+      BinType@1240020020 : Record 7303;
+      BinType2@1240020023 : Record 7303;
+      Zone@1240020001 : Record 7300;
+      WhseEmployee@1240020005 : Record 7301;
+      OWRLocationSetup@1240020014 : Record 14099030;
+      Location@1240020010 : Record 14;
+      NoSeries@1240020009 : Record 308;
+      WhseRqst@1240020013 : Record 5765;
+      WhseWorksheetTemplate@1240020008 : Record 7328;
+      WhseWorksheetName@1240020007 : Record 7327;
+      ItemJournalTemplate@1240020019 : Record 82;
+      ItemJournalBatch@1240020018 : Record 233;
+      WhseJnlTemplate@1240020017 : Record 7309;
+      WhseJnlBatch@1240020016 : Record 7310;
+      WhseActHeader@1240020029 : Record 5766;
+      WhseActLine@1240020024 : Record 5767;
+      RegWhseActHeader@1240020030 : Record 5772;
+      RegWhseActLine@1240020031 : Record 5773;
+      ItemJnlLine@1240020026 : Record 83;
+      ItemJnlBatch@1240020027 : Record 233;
+      ItemUnitOfMeasure@1240020028 : Record 5404;
+      WhseJnlLine@1240020032 : Record 7311;
+      WhseEntry@1240020033 : Record 7312;
+      WhseWkstLine@1240020034 : Record 7326;
+      PostInvPickLine@1240020035 : Record 7343;
+      PurchaseHeader@1240020036 : Record 38;
+      PutPickBinTypeCode@1240020021 : Code[10];
+      PickBinTypeCode@1240020022 : Code[10];
+      SkipDelete@1240020025 : Boolean;
+    BEGIN
+      CheckForTestOverride;
+      IF TestOverride THEN
+        EXIT;
+
+      BinType.RESET;
+      BinType.SETRANGE("Pallet Pick",TRUE);
+      IF BinType.FIND('-') THEN BEGIN
+        Bin.RESET;
+        Bin.SETRANGE("Bin Type Code",BinType.Code);
+        Bin.SETRANGE(Empty,FALSE);
+        IF NOT Bin.ISEMPTY THEN
+          ERROR(PalletPickBinNotEmptyError);
+      END;
+
+      PurchaseHeader.RESET;
+      PurchaseHeader.SETRANGE("Show Order",TRUE);
+      IF PurchaseHeader.FINDSET(FALSE) THEN
+        PurchaseHeader.MODIFYALL("Show Order",FALSE);
+
+      ItemJnlLine.RESET;
+      IF ItemJnlLine.FINDSET(FALSE) THEN
+        REPEAT
+          ItemJnlLine."First Scan Date" := 0D;
+          ItemJnlLine."First Scan Time" := 0T;
+          ItemJnlLine."Last Scan Date" := 0D;
+          ItemJnlLine."Last Scan Time" := 0T;
+          ItemJnlLine.Cubage := 0;
+          ItemJnlLine.Weight := 0;
+          ItemJnlLine."Warehouse Employee Code" := '';
+          ItemJnlLine."Added From RF" := FALSE;
+          ItemJnlLine."Bin Sorting" := 0;
+          ItemJnlLine."Original Qty. (Calculated)" := 0;
+          ItemJnlLine."Qty. (Phys. Inventory, Hide)" := 0;
+          ItemJnlLine."Pallet Code" := '';
+          ItemJnlLine."Box Code" := '';
+          ItemJnlLine."Pallet Action" := 0;
+          ItemJnlLine.MODIFY(TRUE);
+        UNTIL ItemJnlLine.NEXT = 0;
+
+      ItemJnlBatch.RESET;
+      IF ItemJnlBatch.FINDSET(FALSE) THEN
+        REPEAT
+          ItemJnlBatch."Assigned User ID" := '';
+          ItemJnlBatch."Location Code" := '';
+          ItemJnlBatch."Ready to Register" := FALSE;
+          ItemJnlBatch."Starting Date" := 0D;
+          ItemJnlBatch."Starting Time" := 0T;
+          ItemJnlBatch."Ending Date" := 0D;
+          ItemJnlBatch."Ending Time" := 0T;
+          ItemJnlBatch."Lines Exist" := FALSE;
+          ItemJnlBatch."Ready at Date" := 0D;
+          ItemJnlBatch."Ready at Time" := 0T;
+          ItemJnlBatch."Ready by UserId" := '';
+          ItemJnlBatch."Delete Batch after Post" := FALSE;
+          ItemJnlBatch.MODIFY(TRUE);
+        UNTIL ItemJnlBatch.NEXT = 0;
+
+      ItemUnitOfMeasure.RESET;
+      ItemUnitOfMeasure.SETFILTER("Max. Adjust Qty",'<>%1',0);
+      IF ItemUnitOfMeasure.FINDSET(FALSE) THEN
+        ItemUnitOfMeasure.MODIFYALL("Max. Adjust Qty",0);
+
+      WhseActHeader.RESET;
+      IF WhseActHeader.FINDSET(FALSE) THEN
+        REPEAT
+          WhseActHeader."Receive No." := '';
+          WhseActHeader."Warehouse Employee Group" := '';
+          WhseActHeader.MODIFY(TRUE);
+        UNTIL WhseActHeader.NEXT = 0;
+
+      WhseActLine.RESET;
+      IF WhseActLine.FINDSET(FALSE) THEN
+        REPEAT
+          WhseActLine."First Scan Date" := 0D;
+          WhseActLine."First Scan Time" := 0T;
+          WhseActLine."Last Scan Date" := 0D;
+          WhseActLine."Last Scan Time" := 0T;
+          WhseActLine."Warehouse Employee Code" := '';
+          WhseActLine."Tote No." := '';
+          WhseActLine."Bin Sorting" := 0;
+          WhseActLine."Lot No. Scanned" := FALSE;
+          WhseActLine."License Plate Pick" := FALSE;
+          WhseActLine."Pick License Plate No." := '';
+          WhseActLine."Remaining Qty" := 0;
+          WhseActLine.Comment1 := '';
+          WhseActLine.Comment2 := '';
+          WhseActLine.Cubage2 := 0;
+          WhseActLine."Remaining Cubage" := 0;
+          WhseActLine."Temporary Tote Applied" := FALSE;
+          WhseActLine."Temporary Tote No" := '';
+          WhseActLine."Box Type" := '';
+          WhseActLine."Scanned Item No" := '';
+          WhseActLine."Pallet Code" := '';
+          WhseActLine."Box Code" := '';
+          WhseActLine."Pallet Action" := 0;
+          WhseActLine."Dynamic Pallet No." := '';
+          WhseActLine.MODIFY(TRUE);
+        UNTIL WhseActLine.NEXT = 0;
+
+      RegWhseActHeader.RESET;
+      IF RegWhseActHeader.FINDSET(FALSE) THEN
+        REPEAT
+          RegWhseActHeader."RF Register Date" := 0D;
+          RegWhseActHeader."RF Register Time" := 0T;
+          RegWhseActHeader."Receive No." := '';
+          RegWhseActHeader."Warehouse Employee Group" := '';
+          RegWhseActHeader.MODIFY(TRUE);
+        UNTIL RegWhseActHeader.NEXT = 0;
+
+      RegWhseActLine.RESET;
+      IF RegWhseActLine.FINDSET(FALSE) THEN
+        REPEAT
+          RegWhseActLine."First Scan Date" := 0D;
+          RegWhseActLine."First Scan Time" := 0T;
+          RegWhseActLine."Last Scan Date" := 0D;
+          RegWhseActLine."Last Scan Time" := 0T;
+          RegWhseActLine."Warehouse Employee Code" := '';
+          RegWhseActLine."Bin Sorting" := 0;
+          RegWhseActLine."Lot No. Scanned" := FALSE;
+          RegWhseActLine."License Plate Pick" := FALSE;
+          RegWhseActLine."Pick License Plate No." := '';
+          RegWhseActLine."Remaining Qty" := 0;
+          RegWhseActLine.Comment1 := '';
+          RegWhseActLine.Comment2 := '';
+          RegWhseActLine.Cubage2 := 0;
+          RegWhseActLine."Remaining Cubage" := 0;
+          RegWhseActLine."Temporary Tote Applied" := FALSE;
+          RegWhseActLine."Temporary Tote No" := '';
+          RegWhseActLine."Box Type" := '';
+          RegWhseActLine."Scanned Item No" := '';
+          RegWhseActLine."Pallet Code" := '';
+          RegWhseActLine."Box Code" := '';
+          RegWhseActLine."Pallet Action" := 0;
+          RegWhseActLine.MODIFY(TRUE);
+        UNTIL RegWhseActLine.NEXT = 0;
+
+      OWRLocationSetup.RESET;
+      IF OWRLocationSetup.FINDSET(FALSE) THEN
+        REPEAT
+          IF NoSeries.GET(OWRLocationSetup."Pick Request No. Series") THEN
+            NoSeries.DELETE(TRUE);
+        UNTIL OWRLocationSetup.NEXT = 0;
+
+      IF RFSetup.GET('') THEN BEGIN
+        IF RFSetup."Whse. Activity Group Nos." <> '' THEN
+          IF NoSeries.GET(RFSetup."Whse. Activity Group Nos.") THEN
+            NoSeries.DELETE(TRUE);
+
+        IF RFSetup."Data Capture Nos." <> '' THEN
+          IF NoSeries.GET(RFSetup."Data Capture Nos.") THEN
+            NoSeries.DELETE(TRUE);
+
+        IF RFSetup."Bin Count Nos." <> '' THEN
+          IF NoSeries.GET(RFSetup."Bin Count Nos.") THEN
+            NoSeries.DELETE(TRUE);
+
+        IF RFSetup."Bin Count Line Nos." <> '' THEN
+          IF NoSeries.GET(RFSetup."Bin Count Line Nos.") THEN
+            NoSeries.DELETE(TRUE);
+
+        IF RFSetup."Pallet Nos" <> '' THEN
+          IF NoSeries.GET(RFSetup."Pallet Nos") THEN
+            NoSeries.DELETE(TRUE);
+
+        IF RFSetup."Movement Worksheet Name" <> '' THEN BEGIN
+          Location.RESET;
+          Location.SETRANGE("Directed Put-away and Pick",TRUE);
+          IF Location.FINDSET(FALSE) THEN
+            REPEAT
+              WhseWorksheetTemplate.RESET;
+              WhseWorksheetTemplate.SETRANGE(Type,WhseWorksheetTemplate.Type::Movement);
+              IF WhseWorksheetTemplate.FIND('-') THEN
+                IF WhseWorksheetName.GET(WhseWorksheetTemplate.Name,RFSetup."Movement Worksheet Name",Location.Code) THEN
+                  WhseWorksheetName.DELETE(TRUE);
+            UNTIL Location.NEXT = 0;
+        END;
+
+        IF RFSetup."Put-Away Worksheet Name" <> '' THEN BEGIN
+          Location.RESET;
+          Location.SETRANGE("Directed Put-away and Pick",TRUE);
+          IF Location.FINDSET(FALSE) THEN
+            REPEAT
+              WhseWorksheetTemplate.RESET;
+              WhseWorksheetTemplate.SETRANGE(Type,WhseWorksheetTemplate.Type::Movement);
+              IF WhseWorksheetTemplate.FIND('-') THEN
+                IF WhseWorksheetName.GET(WhseWorksheetTemplate.Name,RFSetup."Put-Away Worksheet Name",Location.Code) THEN
+                  WhseWorksheetName.DELETE(TRUE);
+            UNTIL Location.NEXT = 0;
+        END;
+
+        IF RFSetup."Replen Worksheet Name" <> '' THEN BEGIN
+          Location.RESET;
+          Location.SETRANGE("Directed Put-away and Pick",TRUE);
+          IF Location.FINDSET(FALSE) THEN
+            REPEAT
+              WhseWorksheetTemplate.RESET;
+              WhseWorksheetTemplate.SETRANGE(Type,WhseWorksheetTemplate.Type::Movement);
+              IF WhseWorksheetTemplate.FIND('-') THEN
+                IF WhseWorksheetName.GET(WhseWorksheetTemplate.Name,RFSetup."Replen Worksheet Name",Location.Code) THEN
+                  WhseWorksheetName.DELETE(TRUE);
+            UNTIL Location.NEXT = 0;
+        END;
+
+        IF RFSetup."Whse. Phys. Inv. Jnl. Name" <> '' THEN BEGIN
+          Location.RESET;
+          Location.SETRANGE("Directed Put-away and Pick",TRUE);
+          IF Location.FINDSET(FALSE) THEN
+            REPEAT
+              WhseJnlTemplate.RESET;
+              WhseJnlTemplate.SETRANGE(Type,WhseJnlTemplate.Type::"Physical Inventory");
+              IF WhseJnlTemplate.FIND('-') THEN
+                IF WhseJnlBatch.GET(WhseJnlTemplate.Name,RFSetup."Whse. Phys. Inv. Jnl. Name",Location.Code) THEN
+                  WhseJnlBatch.DELETE(TRUE);
+            UNTIL Location.NEXT = 0;
+        END;
+
+        IF RFSetup."Movement Item Journal Name" <> '' THEN BEGIN
+          ItemJournalTemplate.RESET;
+          ItemJournalTemplate.SETRANGE(Type,ItemJournalTemplate.Type::Transfer);
+          IF ItemJournalTemplate.FIND('-') THEN
+            IF ItemJournalBatch.GET(ItemJournalTemplate.Name,RFSetup."Movement Item Journal Name") THEN
+              ItemJournalBatch.DELETE(TRUE);
+        END;
+      END;
+
+      WhseEmployee.RESET;
+      IF WhseEmployee.FINDSET(FALSE) THEN
+        REPEAT
+          WhseEmployee."RF Employee Setup Code" := '';
+          WhseEmployee."ADCS Main Menu" := '';
+          WhseEmployee."Next Tote No." := '';
+          WhseEmployee."Receipt Bin Code" := '';
+          WhseEmployee."Shipment Bin Code" := '';
+          WhseEmployee."Zone Code Filter" := '';
+          WhseEmployee."Special Equipment Filter" := '';
+          WhseEmployee."Pick-from Bin Filter" := '';
+          WhseEmployee."Pick-from Zone Filter" := '';
+          WhseEmployee."RF Label Printing" := FALSE;
+          WhseEmployee."RF Label Folder" := '';
+          WhseEmployee."Warehouse Employee Group" := '';
+          IF WhseEmployee."User Bin Count Line Nos." <> '' THEN
+            IF NoSeries.GET(WhseEmployee."User Bin Count Line Nos.") THEN
+              NoSeries.DELETE(TRUE);
+          WhseEmployee."User Bin Count Line Nos." := '';
+          WhseEmployee.MODIFY(TRUE);
+        UNTIL WhseEmployee.NEXT = 0;
+
+      WhseJnlBatch.RESET;
+      IF WhseJnlBatch.FINDSET(FALSE) THEN
+        REPEAT
+          WhseJnlBatch."Ready to Register" := FALSE;
+          WhseJnlBatch."Ready at Date" := 0D;
+          WhseJnlBatch."Ready at Time" := 0T;
+          WhseJnlBatch."Ready by Warehouse Employee" := '';
+          WhseJnlBatch."Delete Batch after Post" := FALSE;
+          WhseJnlBatch.MODIFY(TRUE);
+        UNTIL WhseJnlBatch.NEXT = 0;
+
+      WhseJnlLine.RESET;
+      IF WhseJnlLine.FINDSET(FALSE) THEN
+        REPEAT
+          WhseJnlLine."First Scan Date" := 0D;
+          WhseJnlLine."First Scan Time" := 0T;
+          WhseJnlLine."Last Scan Date" := 0D;
+          WhseJnlLine."Last Scan Time" := 0T;
+          WhseJnlLine."Warehouse Employee Code" := '';
+          WhseJnlLine."Original Qty. (Calculated)" := 0;
+          WhseJnlLine."Added From RF" := FALSE;
+          WhseJnlLine."Qty. (Phys. Inventory, Hide)" := 0;
+          WhseJnlLine."Bin Sorting" := 0;
+          WhseJnlLine."Lot No. Scanned" := FALSE;
+          WhseJnlLine."Serial No. Scanned" := FALSE;
+          WhseJnlLine."Pallet Code" := '';
+          WhseJnlLine."Box Code" := '';
+          WhseJnlLine."Pallet Action" := 0;
+          WhseJnlLine.MODIFY(TRUE);
+        UNTIL WhseJnlLine.NEXT = 0;
+
+      WhseEntry.RESET;
+      IF WhseEntry.FINDSET(FALSE) THEN
+        REPEAT
+          WhseEntry."First Scan Date" := 0D;
+          WhseEntry."First Scan Time" := 0T;
+          WhseEntry."Last Scan Date" := 0D;
+          WhseEntry."Last Scan Time" := 0T;
+          WhseEntry."Warehouse Employee Code" := '';
+          WhseEntry."Pallet Code" := '';
+          WhseEntry."Box Code" := '';
+          WhseEntry."Pallet Action" := 0;
+          WhseEntry.MODIFY(TRUE);
+        UNTIL WhseEntry.NEXT = 0;
+
+      WhseWkstLine.RESET;
+      IF WhseWkstLine.FINDSET(FALSE) THEN
+        REPEAT
+          WhseWkstLine."First Scan Date" := 0D;
+          WhseWkstLine."First Scan Time" := 0T;
+          WhseWkstLine."Last Scan Date" := 0D;
+          WhseWkstLine."Last Scan Time" := 0T;
+          WhseWkstLine."Warehouse Employee Code" := '';
+          WhseWkstLine."Pallet Code" := '';
+          WhseWkstLine."Box Code" := '';
+          WhseWkstLine."Pallet Action" := 0;
+          WhseWkstLine.MODIFY(TRUE);
+        UNTIL WhseWkstLine.NEXT = 0;
+
+      PostInvPickLine.RESET;
+      IF PostInvPickLine.FINDSET(FALSE) THEN
+        REPEAT
+          PostInvPickLine."First Scan Date" := 0D;
+          PostInvPickLine."First Scan Time" := 0T;
+          PostInvPickLine."Last Scan Date" := 0D;
+          PostInvPickLine."Last Scan Time" := 0T;
+          PostInvPickLine."Warehouse Employee Code" := '';
+          PostInvPickLine.MODIFY(TRUE);
+        UNTIL PostInvPickLine.NEXT = 0;
+
+      ReplenishmentRule.RESET;
+      IF ReplenishmentRule.FINDSET(FALSE) THEN
+        REPEAT
+          BinContent.RESET;
+          BinContent.SETRANGE("Replenishment Rule",ReplenishmentRule."Replenishment Rule");
+          IF BinContent.FINDSET(FALSE) THEN
+            BinContent.MODIFYALL("Replenishment Rule",'');
+
+          Bin.RESET;
+          Bin.SETRANGE("Default Replenishment Rule",ReplenishmentRule."Replenishment Rule");
+          IF Bin.FINDSET(FALSE) THEN
+            Bin.MODIFYALL("Default Replenishment Rule",'');
+
+          Zone.RESET;
+          Zone.SETRANGE("Default Replenishment Rule",ReplenishmentRule."Replenishment Rule");
+          IF Zone.FINDSET(FALSE) THEN
+            Zone.MODIFYALL("Default Replenishment Rule",'');
+        UNTIL ReplenishmentRule.NEXT = 0;
+
+      BinTemplate.RESET;
+      BinTemplate.SETRANGE("Wave Pick Bin",TRUE);
+      IF BinTemplate.FINDSET(FALSE) THEN
+        BinTemplate.MODIFYALL("Wave Pick Bin",FALSE);
+
+      BinTemplate.RESET;
+      BinTemplate.SETFILTER("Bin Sorting",'<>%1',0);
+      IF BinTemplate.FINDSET(FALSE) THEN
+        BinTemplate.MODIFYALL("Bin Sorting",0);
+
+      BinCreationWkstLine.RESET;
+      IF BinCreationWkstLine.FINDSET(FALSE) THEN
+        REPEAT
+          BinCreationWkstLine."Wave Pick Bin" := FALSE;
+          BinCreationWkstLine."Bin Sorting" := 0;
+          BinCreationWkstLine."Pallet Bin" := FALSE;
+          BinCreationWkstLine."Included in Quick Count" := FALSE;
+          BinCreationWkstLine."Quick Count Ranking" := 0;
+          BinCreationWkstLine.MODIFY(TRUE);
+        UNTIL BinCreationWkstLine.NEXT = 0;
+
+      Bin.RESET;
+      IF Bin.FINDSET(FALSE) THEN
+        REPEAT
+          Bin."Wave Pick Bin" := FALSE;
+          Bin."Bin Sorting" := 0;
+          Bin."Pallet Bin" := FALSE;
+          Bin."Pallet Counting Period" := '';
+          Bin."Last Counted Date" := 0D;
+          Bin."Pallet Count Ranking" := 0;
+          Bin."Included in Quick Count" := FALSE;
+          Bin."Drop Bin" := FALSE;
+          Bin."Linked to Drop Bin" := '';
+          Bin."Last Counted DateTime" := 0DT;
+          Bin."Default Replenishment Rule" := '';
+          Bin.MODIFY(TRUE);
+        UNTIL Bin.NEXT = 0;
+
+      Zone.RESET;
+      IF Zone.FINDSET(FALSE) THEN
+        REPEAT
+          Zone."Wave Pick Zone" := FALSE;
+          Zone."Zone Sorting" := 0;
+          Zone."Flow Rack Zone" := FALSE;
+          Zone."Default Replenishment Rule" := '';
+        UNTIL Zone.NEXT = 0;
+
+      CLEAR(PickBinTypeCode);
+      BinType.RESET;
+      BinType.SETRANGE(Pick,TRUE);
+      BinType.SETRANGE("Put Away",FALSE);
+      BinType.SETRANGE("Pallet Pick",FALSE);
+      IF BinType.FIND('-') THEN
+        PickBinTypeCode := BinType.Code;
+
+      CLEAR(PutPickBinTypeCode);
+      BinType.RESET;
+      BinType.SETRANGE(Pick,TRUE);
+      BinType.SETRANGE("Put Away",TRUE);
+      BinType.SETRANGE("Pallet Pick",FALSE);
+      IF BinType.FIND('-') THEN
+        PutPickBinTypeCode := BinType.Code;
+
+      BinType.RESET;
+      BinType.SETRANGE("Pallet Pick",TRUE);
+      IF BinType.FIND('-') THEN
+        REPEAT
+          SkipDelete := FALSE;
+
+          IF BinType.Pick AND BinType."Put Away" THEN BEGIN
+            Bin.RESET;
+            Bin.SETRANGE("Bin Type Code",BinType.Code);
+            Bin.SETRANGE(Empty,FALSE);
+            IF NOT Bin.ISEMPTY THEN
+              SkipDelete := TRUE;
+
+            Bin.RESET;
+            Bin.SETRANGE("Bin Type Code",BinType.Code);
+            IF Bin.FINDSET(FALSE) THEN
+              REPEAT
+                Bin."Bin Type Code" := PutPickBinTypeCode;
+                Bin.MODIFY(TRUE);
+              UNTIL Bin.NEXT = 0;
+
+            Zone.RESET;
+            Zone.SETRANGE("Bin Type Code",BinType.Code);
+            IF Zone.FINDSET(FALSE) THEN
+              REPEAT
+                Zone."Bin Type Code" := PutPickBinTypeCode;
+                Zone.MODIFY(TRUE);
+              UNTIL Zone.NEXT = 0;
+          END;
+
+          IF BinType.Pick AND (NOT BinType."Put Away") THEN BEGIN
+            Bin.RESET;
+            Bin.SETRANGE("Bin Type Code",BinType.Code);
+            Bin.SETRANGE(Empty,FALSE);
+            IF NOT Bin.ISEMPTY THEN
+              SkipDelete := TRUE;
+
+            Bin.RESET;
+            Bin.SETRANGE("Bin Type Code",BinType.Code);
+            IF Bin.FINDSET(FALSE) THEN
+              REPEAT
+                Bin."Bin Type Code" := PickBinTypeCode;
+                Bin.MODIFY(TRUE);
+              UNTIL Bin.NEXT = 0;
+
+            Zone.RESET;
+            Zone.SETRANGE("Bin Type Code",BinType.Code);
+            IF Zone.FINDSET(FALSE) THEN
+              REPEAT
+                Zone."Bin Type Code" := PickBinTypeCode;
+                Zone.MODIFY(TRUE);
+              UNTIL Zone.NEXT = 0;
+          END;
+
+          IF NOT SkipDelete THEN BEGIN
+            BinType2.RESET;
+            IF BinType2.GET(BinType.Code) THEN
+              BinType2.DELETE(TRUE);
+          END;
+        UNTIL BinType.NEXT = 0;
+
+      WhseRqst.RESET;
+      IF WhseRqst.FINDSET(FALSE) THEN
+        REPEAT
+          WhseRqst."Whse. Completely Handled" := FALSE;
+          WhseRqst."Lines Shipped" := FALSE;
+          WhseRqst."Wave Pick Bin Code" := '';
+          WhseRqst."Picking Priority" := 0;
+          WhseRqst."E-Ship Agent Service" := '';
+          WhseRqst."EDI Order" := FALSE;
+          WhseRqst."Ship-to Code" := '';
+          WhseRqst."Ship-to Country Code" := '';
+          WhseRqst."First Assembly Order No." := '';
+          WhseRqst."Ship-for Code" := '';
+          WhseRqst."ATO Pick Required" := FALSE;
+          WhseRqst.MODIFY(TRUE);
+        UNTIL WhseRqst.NEXT = 0;
+
+      IF TriggerMessage THEN
+        MESSAGE(DeleteBaseSetupMessage);
+    END;
+
+    [External]
+    PROCEDURE DeleteApplicationData@1240020004(TriggerMessage@1240020000 : Boolean);
+    VAR
+      RFStatisticsEntry@1240020001 : Record 14002804;
+      RFBinContent@1240020002 : Record 14002805;
+      WhseActGroupHeader@1240020003 : Record 14002861;
+      OWRActionEntry@1240020005 : Record 14002864;
+      LotExpBinBuffer@1240020006 : Record 14002866;
+      WavePickWhseRqst@1240020007 : Record 14002961;
+      RegWavePickWhseRqst@1240020008 : Record 14002962;
+      PickRqstHeader@1240020009 : Record 14099020;
+      RegPickRqstHeader@1240020010 : Record 14099022;
+      ArchPickRqstHeader@1240020011 : Record 14099024;
+      PalletQAEntry@1240020004 : Record 14002501;
+      PalletCountStatistic@1240020012 : Record 14002502;
+      BinCount@1240020013 : Record 14002580;
+      BinCountLine@1240020014 : Record 14002581;
+      BinCountCue@1240020015 : Record 14002583;
+      BinCountArchive@1240020016 : Record 14002588;
+      BinCountLineArchive@1240020017 : Record 14002589;
+      WhseEmpActEntry@1240020018 : Record 14002803;
+      MiniformStructureEntry@1240020019 : Record 14002807;
+      WhseEmpPassword@1240020020 : Record 14002808;
+      RFProcEntry@1240020021 : Record 14002809;
+      RFMessageHeader@1240020022 : Record 14002810;
+      RFMessageReceiver@1240020023 : Record 14002811;
+      MiniformTranslateToken@1240020024 : Record 14002812;
+      MiniformTranslateLang@1240020025 : Record 14002813;
+      ComputerPluginType@1240020026 : Record 14002814;
+      RFFlowrackHandling@1240020027 : Record 14002815;
+      BoxType@1240020028 : Record 14002816;
+      RFFlowRackActDetail@1240020029 : Record 14002817;
+      RFMessageCommentLine@1240020030 : Record 14002818;
+      DataCaptureLine@1240020031 : Record 14002871;
+      DynMoveLine@1240020032 : Record 14002872;
+      SelectDocument@1240020033 : Record 14002873;
+      RegDataCaptureLine@1240020034 : Record 14002874;
+      RegDataCaptureHeader@1240020035 : Record 14002875;
+      DataCaptureHeader@1240020036 : Record 14002876;
+      PalletBin@1240020037 : Record 14002877;
+      ToteLine@1240020038 : Record 14002901;
+      RegToteLine@1240020039 : Record 14002902;
+      PalletBinContent@1240020040 : Record 14002963;
+      LicensePlateEntry@1240020041 : Record 14002964;
+      PalletJnlBatch@1240020042 : Record 14002965;
+      PalletJnlLine@1240020043 : Record 14002966;
+      LicensePlateActLine@1240020044 : Record 14002968;
+      PalletJnlTemplate@1240020045 : Record 14002969;
+      BoxHandlingLine@1240020046 : Record 14002970;
+      LookupRFTable@1240020047 : Record 14002971;
+      StorageID@1240020048 : Record 14002972;
+      PalletCycleCountPeriods@1240020049 : Record 14002983;
+      RFReceive@1240020050 : Record 14002984;
+      RFReceiveLine@1240020051 : Record 14002985;
+      LPQAStatusOption@1240020052 : Record 14099005;
+      WarehouseEmpGroup@1240020053 : Record 14099006;
+      OWRAssistedSetup@1240020054 : Record 14099040;
+      RFAssistedSetup@1240020055 : Record 14099041;
+    BEGIN
+      CheckForTestOverride;
+      IF TestOverride THEN
+        EXIT;
+
+      RFStatisticsEntry.DELETEALL(TRUE);
+      RFBinContent.DELETEALL(TRUE);
+      WhseActGroupHeader.DELETEALL(TRUE);
+      OWRActionEntry.DELETEALL(TRUE);
+      LotExpBinBuffer.DELETEALL(TRUE);
+      WavePickWhseRqst.DELETEALL(TRUE);
+      RegWavePickWhseRqst.DELETEALL(TRUE);
+      PickRqstHeader.DELETEALL(TRUE);
+      RegPickRqstHeader.DELETEALL(TRUE);
+      ArchPickRqstHeader.DELETEALL(TRUE);
+
+      PalletQAEntry.DELETEALL(TRUE);
+      PalletCountStatistic.DELETEALL(TRUE);
+      BinCount.DELETEALL(TRUE);
+      BinCountLine.DELETEALL(TRUE);
+      BinCountCue.DELETEALL(TRUE);
+      BinCountArchive.DELETEALL(TRUE);
+      BinCountLineArchive.DELETEALL(TRUE);
+      WhseEmpActEntry.DELETEALL(TRUE);
+      MiniformStructureEntry.DELETEALL(TRUE);
+      WhseEmpPassword.DELETEALL(TRUE);
+      RFProcEntry.DELETEALL(TRUE);
+      RFMessageHeader.DELETEALL(TRUE);
+      RFMessageReceiver.DELETEALL(TRUE);
+      MiniformTranslateToken.DELETEALL(TRUE);
+      MiniformTranslateLang.DELETEALL(TRUE);
+      ComputerPluginType.DELETEALL(TRUE);
+      RFFlowrackHandling.DELETEALL(TRUE);
+      BoxType.DELETEALL(TRUE);
+      RFFlowRackActDetail.DELETEALL(TRUE);
+      RFMessageCommentLine.DELETEALL(TRUE);
+      DataCaptureLine.DELETEALL(TRUE);
+      DynMoveLine.DELETEALL(TRUE);
+      SelectDocument.DELETEALL(TRUE);
+      RegDataCaptureLine.DELETEALL(TRUE);
+      RegDataCaptureHeader.DELETEALL(TRUE);
+      DataCaptureHeader.DELETEALL(TRUE);
+      PalletBin.DELETEALL(TRUE);
+      ToteLine.DELETEALL(TRUE);
+      RegToteLine.DELETEALL(TRUE);
+      PalletBinContent.DELETEALL(TRUE);
+      LicensePlateEntry.DELETEALL(TRUE);
+      PalletJnlBatch.DELETEALL(TRUE);
+      PalletJnlLine.DELETEALL(TRUE);
+      LicensePlateActLine.DELETEALL(TRUE);
+      PalletJnlTemplate.DELETEALL(TRUE);
+      BoxHandlingLine.DELETEALL(TRUE);
+      LookupRFTable.DELETEALL(TRUE);
+      StorageID.DELETEALL(TRUE);
+      PalletCycleCountPeriods.DELETEALL(TRUE);
+      RFReceive.DELETEALL(TRUE);
+      RFReceiveLine.DELETEALL(TRUE);
+      LPQAStatusOption.DELETEALL(TRUE);
+      WarehouseEmpGroup.DELETEALL(TRUE);
+      OWRAssistedSetup.DELETEALL(TRUE);
+      RFAssistedSetup.DELETEALL(TRUE);
+
+      IF TriggerMessage THEN
+        MESSAGE(DeleteApplicationMessage);
+    END;
+
+    [External]
+    PROCEDURE DeletePermissions@1240020007(TriggerMessage@1240020000 : Boolean);
+    VAR
+      PermissionSet@1240020007 : Record 2000000004;
+      User@1240020006 : Record 2000000120;
+      Permission@1240020005 : Record 2000000005;
+      Permission2@1240020001 : Record 2000000005;
+      AccessControl@1240020002 : Record 2000000053;
+    BEGIN
+      CheckForTestOverride;
+      IF TestOverride THEN
+        EXIT;
+
+      IF PermissionSet.GET('ADCS-ALL') THEN BEGIN
+        IF User.FINDSET(FALSE) THEN
+          REPEAT
+            AccessControl.RESET;
+            AccessControl.SETRANGE("User Security ID",User."User Security ID");
+            AccessControl.SETRANGE("Role ID",PermissionSet."Role ID");
+            IF AccessControl.FINDSET(FALSE) THEN
+              AccessControl.DELETE(TRUE);
+          UNTIL User.NEXT = 0;
+
+        Permission.RESET;
+        Permission.SETRANGE("Role ID",PermissionSet."Role ID");
+        IF Permission.FINDSET(FALSE) THEN
+          REPEAT
+            Permission2.RESET;
+            IF Permission2.GET(Permission."Role ID",Permission."Object Type",Permission."Object ID") THEN
+              Permission2.DELETE(TRUE);
+          UNTIL Permission.NEXT = 0;
+
+        Permission.RESET;
+        Permission.SETRANGE("Role ID",PermissionSet."Role ID");
+        IF Permission.ISEMPTY THEN
+          PermissionSet.DELETE(TRUE);
+      END;
+
+      IF PermissionSet.GET('ADCS-SUPER') THEN BEGIN
+        IF User.FIND('-') THEN
+          REPEAT
+            AccessControl.RESET;
+            AccessControl.SETRANGE("User Security ID",User."User Security ID");
+            AccessControl.SETRANGE("Role ID",PermissionSet."Role ID");
+            IF AccessControl.FINDSET(FALSE) THEN
+              AccessControl.DELETE(TRUE);
+          UNTIL User.NEXT = 0;
+
+        Permission.RESET;
+        Permission.SETRANGE("Role ID",PermissionSet."Role ID");
+        IF Permission.FINDSET(FALSE) THEN
+          REPEAT
+            Permission2.RESET;
+            IF Permission2.GET(Permission."Role ID",Permission."Object Type",Permission."Object ID") THEN
+              Permission2.DELETE(TRUE);
+          UNTIL Permission.NEXT = 0;
+
+        Permission.RESET;
+        Permission.SETRANGE("Role ID",PermissionSet."Role ID");
+        IF Permission.ISEMPTY THEN
+          PermissionSet.DELETE(TRUE);
+      END;
+
+      IF PermissionSet.GET('ADCS-WORK') THEN BEGIN
+        IF User.FIND('-') THEN
+          REPEAT
+            AccessControl.RESET;
+            AccessControl.SETRANGE("User Security ID",User."User Security ID");
+            AccessControl.SETRANGE("Role ID",PermissionSet."Role ID");
+            IF AccessControl.FINDSET(FALSE) THEN
+              AccessControl.DELETE(TRUE);
+          UNTIL User.NEXT = 0;
+
+        Permission.RESET;
+        Permission.SETRANGE("Role ID",PermissionSet."Role ID");
+        IF Permission.FINDSET(FALSE) THEN
+          REPEAT
+            Permission2.RESET;
+            IF Permission2.GET(Permission."Role ID",Permission."Object Type",Permission."Object ID") THEN
+              Permission2.DELETE(TRUE);
+          UNTIL Permission.NEXT = 0;
+
+        Permission.RESET;
+        Permission.SETRANGE("Role ID",PermissionSet."Role ID");
+        IF Permission.ISEMPTY THEN
+          PermissionSet.DELETE(TRUE);
+      END;
+
+      IF TriggerMessage THEN
+        MESSAGE(DeletePermissionsMessage);
+    END;
+
+    LOCAL PROCEDURE CheckForTestOverride@1240020014();
+    VAR
+      OWRSingleInstance@1240020000 : Codeunit 14002864;
+    BEGIN
+      TestOverride := OWRSingleInstance.GetTestCodeunitOverride;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

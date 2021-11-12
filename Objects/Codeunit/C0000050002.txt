@@ -1,0 +1,128 @@
+OBJECT Codeunit 50002 Transfer Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=TPZ000.00.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text00001@1000000000 : TextConst 'ENU=Transfer order for PO %1 already exists.';
+
+    PROCEDURE CreateAssemblyTransfer@1000000001(PurchHeader@1000000000 : Record 38) : Code[20];
+    VAR
+      TransferHeader@1000000001 : Record 5740;
+      TransferLine@1000000002 : Record 5741;
+      CrTrans@1000000003 : Boolean;
+      PurchLine@1000000004 : Record 39;
+      BOMComponent@1000000005 : Record 90;
+      Vendor@1000000006 : Record 23;
+      LineNo@1000000007 : Integer;
+      Item@1000000008 : Record 27;
+    BEGIN
+      //TM BEG 062915
+      PurchHeader.TESTFIELD(Status, PurchHeader.Status::Released);
+      TransferHeader.SETRANGE("No.", PurchHeader."No.");
+      IF TransferHeader.FIND('-') THEN
+       ERROR(Text00001, PurchHeader."No.");
+
+      Vendor.GET(PurchHeader."Buy-from Vendor No.");
+      Vendor.TESTFIELD("Assembly Location Code");
+
+      CrTrans := FALSE;
+      PurchLine.RESET;
+      PurchLine.SETCURRENTKEY("Document Type","Document No.","Line No.");
+      PurchLine.SETRANGE("Document No.",PurchHeader."No.");
+      PurchLine.SETRANGE(Type,PurchLine.Type::Item);
+      IF PurchLine.FIND('-') THEN
+      REPEAT
+        BOMComponent.RESET;
+        BOMComponent.SETRANGE("Parent Item No.",PurchLine."No.");
+        BOMComponent.SETRANGE(Type,BOMComponent.Type::Item);
+        IF BOMComponent.FIND('-') THEN
+          CrTrans := TRUE;
+      UNTIL (PurchLine.NEXT = 0) OR (CrTrans = TRUE);
+
+      IF CrTrans = FALSE THEN
+        EXIT('');
+
+      TransferHeader.INIT;
+      TransferHeader."No." := PurchHeader."No.";
+      TransferHeader."Shipment Date" := WORKDATE;
+      TransferHeader.INSERT;
+      TransferHeader.VALIDATE("Transfer-from Code",PurchHeader."Location Code");
+      TransferHeader.VALIDATE("Transfer-to Code",Vendor."Assembly Location Code");
+      TransferHeader.VALIDATE("Shortcut Dimension 1 Code", PurchHeader."Shortcut Dimension 1 Code");
+      TransferHeader.VALIDATE("Shortcut Dimension 2 Code", PurchHeader."Shortcut Dimension 2 Code");
+      TransferHeader.VALIDATE("Shortcut Dimension 5 Code", 'L');
+      TransferHeader."External Document No." := PurchHeader."No.";
+      TransferHeader."Assembly Transfer" := TRUE;
+      TransferHeader.VALIDATE("Shipping Agent Code", 'LOCAL');
+      TransferHeader.MODIFY;
+      LineNo := 0;
+      PurchLine.RESET;
+      PurchLine.SETCURRENTKEY("Document Type","Document No.","Line No.");
+      PurchLine.SETRANGE("Document No.",TransferHeader."No.");
+      PurchLine.SETRANGE(Type,PurchLine.Type::Item);
+      PurchLine.SETFILTER("Outstanding Qty. (Base)", '>0');
+      IF PurchLine.FIND('-') THEN
+      REPEAT
+        BOMComponent.RESET;
+        BOMComponent.SETCURRENTKEY("Parent Item No.","Line No.");
+        BOMComponent.SETRANGE("Parent Item No.",PurchLine."No.");
+        BOMComponent.SETRANGE(Type,BOMComponent.Type::Item);
+        IF BOMComponent.FIND('-') THEN BEGIN
+          Item.GET(PurchLine."No.");
+          Item.TESTFIELD("Costing Method", Item."Costing Method"::Standard);
+          REPEAT
+            LineNo += 10000;
+            TransferLine.INIT;
+            TransferLine."Document No." := TransferHeader."No.";
+            TransferLine."Line No." := LineNo;
+            TransferLine.VALIDATE("Item No.", BOMComponent."No.");
+            TransferLine.VALIDATE(Quantity, PurchLine."Outstanding Qty. (Base)" * BOMComponent."Quantity per");
+            TransferLine."Source Type" := DATABASE::"Purchase Line";
+            TransferLine."Source Subtype" := PurchLine."Document Type";
+            TransferLine."Source No." := PurchLine."Document No.";
+            TransferLine."Source Line No." := PurchLine."Line No.";
+            TransferLine."Quantity per" := BOMComponent."Quantity per";
+            TransferLine.INSERT;
+          UNTIL BOMComponent.NEXT = 0;
+        END;
+      UNTIL PurchLine.NEXT = 0;
+      PurchHeader."Assembly Transfer Order No." := TransferHeader."No.";
+      PurchHeader.MODIFY;
+
+      CODEUNIT.RUN(CODEUNIT::"Release Transfer Document", TransferHeader);
+      EXIT(TransferHeader."No.");
+      //TM END 062915
+    END;
+
+    PROCEDURE InsertPermission@1000000000(UserSecurityID@1000000000 : GUID;RoleID@1000000001 : Code[50]);
+    VAR
+      AccessControl@1000000003 : Record 2000000053;
+    BEGIN
+      AccessControl.INIT;
+      AccessControl."User Security ID" := UserSecurityID;
+      AccessControl."Role ID" := RoleID;
+      AccessControl."Company Name" := 'Topaz';
+      IF AccessControl.INSERT THEN;
+    END;
+
+    BEGIN
+    {
+      06/29/18 TMEI TPZ816
+    }
+    END.
+  }
+}
+

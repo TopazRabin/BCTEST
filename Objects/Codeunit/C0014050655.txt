@@ -1,0 +1,479 @@
+OBJECT Codeunit 14050655 EDI Base Table Validation
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/13/20;
+    Time=12:00:00 PM;
+    Version List=SE0.62;
+  }
+  PROPERTIES
+  {
+    EventSubscriberInstance=Static-Automatic;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EDIIntegration@1240020000 : Codeunit 14000363;
+      EDISalesOrderStatusSend@1240020001 : Codeunit 14002400;
+      EDITemp@1240020002 : Boolean;
+      RunFromEDI@1240020003 : Boolean;
+
+    [EventSubscriber(Table,14,OnBeforeValidateEvent,"EDI Trading Partner ID")]
+    LOCAL PROCEDURE "Location-EDITradingPartnerID-OnBeforeValidate"@1240020000(VAR Rec@1240020000 : Record 14;VAR xRec@1240020001 : Record 14;CurrFieldNo@1240020002 : Integer);
+    BEGIN
+      //<T14F14000350> Location - EDI Trading Partner ID  OnBeforeValidateEvent
+      WITH Rec DO BEGIN
+        EDIIntegration.TradePtnrValidateLoc(Rec);
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnBeforeValidateEvent,"EDI Trade Partner")]
+    LOCAL PROCEDURE "SalesHeader-EDITradePartner-OnBeforeValidate"@1240020002(VAR Rec@1240020000 : Record 36;VAR xRec@1240020001 : Record 36;CurrFieldNo@1240020002 : Integer);
+    BEGIN
+      //<T36F14000366> Sales Header - EDI Trade Partner  OnBeforeValidateEvent
+      WITH Rec DO BEGIN
+        EDIIntegration.TradePtnrValidateSalesHdr(Rec);
+        MODIFY;
+        IF "EDI Trade Partner" <> xRec."EDI Trade Partner" THEN BEGIN
+          VALIDATE("EDI Sell-to Code",'');
+          VALIDATE("EDI Ship-for Code",'');
+          VALIDATE("EDI Ship-to Code",'');
+          "External Sell-to No." := '';
+          "External Ship-to No." := '';
+          "External Ship-for No." := '';
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnBeforeValidateEvent,"EDI Sell-to Code")]
+    LOCAL PROCEDURE "SalesHeader-EDISell-toCode-OnBeforeValidate"@1240020004(VAR Rec@1240020000 : Record 36;VAR xRec@1240020001 : Record 36;CurrFieldNo@1240020002 : Integer);
+    BEGIN
+      //<T36F14000367> Sales Header - EDI Sell-to Code  OnBeforeValidateEvent
+      WITH Rec DO
+        EDIIntegration.SellToCodeValidate(Rec);
+    END;
+
+    [EventSubscriber(Table,36,OnBeforeValidateEvent,"EDI Ship-to Code")]
+    LOCAL PROCEDURE "SalesHeader-EDIShip-toCode-OnBeforeValidate"@1240020006(VAR Rec@1240020000 : Record 36;VAR xRec@1240020001 : Record 36;CurrFieldNo@1240020002 : Integer);
+    BEGIN
+      //<T36F14000368> Sales Header - EDI Ship-to Code  OnBeforeValidateEvent
+      WITH Rec DO
+        IF "EDI Ship-to Code" <> '' THEN
+          EDIIntegration.ShipToCodeValidate(Rec,CurrFieldNo);
+    END;
+
+    [EventSubscriber(Table,36,OnBeforeValidateEvent,"EDI Ship-for Code")]
+    LOCAL PROCEDURE "SalesHeader-EDIShip-forCode-OnBeforeValidate"@1240020008(VAR Rec@1240020000 : Record 36;VAR xRec@1240020001 : Record 36;CurrFieldNo@1240020002 : Integer);
+    BEGIN
+      //<T36F14000369> Sales Header - EDI Ship-for Code  OnBeforeValidateEvent
+      WITH Rec DO
+        IF "EDI Ship-for Code" <> '' THEN
+          EDIIntegration.ShipForCodeValidate(Rec);
+    END;
+
+    [EventSubscriber(Table,36,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE "SalesHeader-DeleteEDIDiscounts-OnAfterDelete"@1240020001(VAR Rec@1240020000 : Record 36;RunTrigger@1240020001 : Boolean);
+    VAR
+      EDIDiscount@1240020006 : Record 14002382;
+      EDILineDiscount@1240020005 : Record 14002383;
+      SalesHdr@1240020004 : Record 36;
+      SalesInvoiceHeader@1240020003 : Record 112;
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+      EDILineDiscount.RESET;
+      EDILineDiscount.SETRANGE("Internal Doc. No.",Rec."EDI Internal Doc. No.");
+      EDILineDiscount.SETRANGE("Document Type",Rec."Document Type");
+      EDILineDiscount.SETRANGE("Document No.",Rec."No.");
+      EDILineDiscount.DELETEALL;
+
+      EDIDiscount.RESET;
+      EDIDiscount.SETRANGE("Internal Doc. No.",Rec."EDI Internal Doc. No.");
+      IF EDIDiscount.FIND('-') THEN BEGIN
+        SalesHdr.RESET;
+        SalesHdr.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+        SalesHdr.SETRANGE("EDI Internal Doc. No.",Rec."EDI Internal Doc. No.");
+        SalesHdr.SETFILTER("No.",'<>%1',Rec."No.");
+        IF NOT SalesHdr.FIND('-') THEN BEGIN
+          SalesInvoiceHeader.RESET;
+          SalesInvoiceHeader.SETCURRENTKEY("EDI Internal Doc. No.");
+          SalesInvoiceHeader.SETRANGE("EDI Internal Doc. No.",Rec."EDI Internal Doc. No.");
+          IF NOT SalesInvoiceHeader.FIND('-') THEN BEGIN
+            EDIDiscount.RESET;
+            EDIDiscount.SETRANGE("Internal Doc. No.",Rec."EDI Internal Doc. No.");
+            EDIDiscount.DELETEALL;
+          END;
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnAfterValidateEvent,"Sell-to Customer No.")]
+    LOCAL PROCEDURE "SalesHeader-SelltoCustomerNo-OnAfterValidate"@1240020010(VAR Rec@1240020000 : Record 36;VAR xRec@1240020001 : Record 36;CurrFieldNo@1240020002 : Integer);
+    VAR
+      Customer@1240020003 : Record 18;
+    BEGIN
+      WITH Rec DO BEGIN
+        Customer.GET("Sell-to Customer No.");
+        CASE Customer."EDI Invoice" OF
+          Customer."EDI Invoice"::Always:
+            BEGIN
+              "EDI Order" := TRUE;
+              "EDI Invoice" := TRUE;
+            END;
+          Customer."EDI Invoice"::Never:
+            "EDI Order" := FALSE;
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,36,OnAfterCreateSalesLine)]
+    LOCAL PROCEDURE "SalesHeader-OnAfterCreateSalesLine"@1240020026(VAR SalesLine@1240020000 : Record 37;VAR TempSalesLine@1240020001 : TEMPORARY Record 37);
+    BEGIN
+      //<T36> Sales Header - OnAfterCreateSalesLine Integration Event
+      SalesLine."EDI Ship Confirmed" := TempSalesLine."EDI Ship Confirmed";
+      SalesLine."EDI Item Cross Ref." := TempSalesLine."EDI Item Cross Ref.";
+      SalesLine."EDI Unit of Measure" := TempSalesLine."EDI Unit of Measure";
+      SalesLine."EDI Unit Price" := TempSalesLine."EDI Unit Price";
+      SalesLine."EDI Price Discrepancy" := TempSalesLine."EDI Price Discrepancy";
+      SalesLine."EDI Segment Group" := TempSalesLine."EDI Segment Group";
+      SalesLine."EDI Original Qty." := TempSalesLine."EDI Original Qty.";
+      SalesLine."EDI Status Pending" := TempSalesLine."EDI Status Pending";
+      SalesLine."EDI Release No." := TempSalesLine."EDI Release No.";
+      SalesLine."EDI Ship Req. Date" := TempSalesLine."EDI Ship Req. Date";
+      SalesLine."EDI Kanban No." := TempSalesLine."EDI Kanban No.";
+      SalesLine."EDI Line Type" := TempSalesLine."EDI Line Type"::Recreate;
+      SalesLine."EDI Line Status" := TempSalesLine."EDI Line Status";
+      SalesLine."EDI Cumulative Quantity" := TempSalesLine."EDI Cumulative Quantity";
+      SalesLine."EDI Forecast Begin Date" := TempSalesLine."EDI Forecast Begin Date";
+      SalesLine."EDI Forecast End Date" := TempSalesLine."EDI Forecast End Date";
+      SalesLine."EDI Code" := TempSalesLine."EDI Code";
+      SalesLine."EDI ID" := TempSalesLine."EDI ID";
+      SalesLine."EDI Variant Code" := TempSalesLine."EDI Variant Code";
+      SalesLine."EDI DateTime" := TempSalesLine."EDI DateTime";
+      SalesLine."EDI Time" := TempSalesLine."EDI Time";
+      SalesLine.MODIFY;
+    END;
+
+    [EventSubscriber(Table,37,OnBeforeInsertEvent)]
+    LOCAL PROCEDURE "SalesLine-EDITradePartner-OnBeforeInsert"@1240020003(VAR Rec@1240020000 : Record 37;RunTrigger@1240020001 : Boolean);
+    VAR
+      SalesHeader@1240020004 : Record 36;
+    BEGIN
+      WITH Rec DO BEGIN
+        IF SalesHeader.GET("Document Type","Document No.") THEN
+          IF (SalesHeader."EDI Order") AND (SalesHeader."EDI Trade Partner" <> '') THEN
+            "EDI Trade Partner" := SalesHeader."EDI Trade Partner";
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"No.")]
+    LOCAL PROCEDURE "SalesLine-No-ValidateTradePartner-OnAfterValidate"@1240020005(VAR Rec@1240020000 : Record 37;VAR xRec@1240020001 : Record 37;CurrFieldNo@1240020002 : Integer);
+    VAR
+      SalesHeader@1240020003 : Record 36;
+    BEGIN
+      WITH Rec DO BEGIN
+        IF SalesHeader.GET("Document Type","Document No.") THEN
+          IF (SalesHeader."EDI Order") AND (SalesHeader."EDI Trade Partner" <> '') THEN
+            "EDI Trade Partner" := SalesHeader."EDI Trade Partner";
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"No.")]
+    LOCAL PROCEDURE "SalesLine-No-ResetEDIValues-OnAfterValidate"@1240020009(VAR Rec@1240020000 : Record 37;VAR xRec@1240020001 : Record 37;CurrFieldNo@1240020002 : Integer);
+    VAR
+      SalesHeader@1240020003 : Record 36;
+    BEGIN
+      IF CurrFieldNo = 0 THEN
+        EXIT;
+      IF SalesHeader.GET(Rec."Document Type",Rec."Document No.") THEN
+        IF (SalesHeader."EDI Order") THEN BEGIN
+          CLEAR(EDIIntegration);
+          EDIIntegration.ResetEDIValues(SalesHeader,Rec,xRec);
+        END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"Variant Code")]
+    LOCAL PROCEDURE "SalesLine-VariantCode-OnAfterValidate"@1240020007(VAR Rec@1240020000 : Record 37;VAR xRec@1240020001 : Record 37;CurrFieldNo@1240020002 : Integer);
+    VAR
+      SalesHeader@1240020003 : Record 36;
+    BEGIN
+      IF CurrFieldNo = 0 THEN
+        EXIT;
+      IF SalesHeader.GET(Rec."Document Type",Rec."Document No.") THEN
+        IF (SalesHeader."EDI Order") THEN BEGIN
+          CLEAR(EDIIntegration);
+          EDIIntegration.SetEDIVariantCode(SalesHeader,Rec);
+        END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"Unit of Measure Code")]
+    LOCAL PROCEDURE "SalesLine-UnitofMeasureCode-OnAfterValidate"@1240020011(VAR Rec@1240020000 : Record 37;VAR xRec@1240020001 : Record 37;CurrFieldNo@1240020002 : Integer);
+    VAR
+      SalesHeader@1240020003 : Record 36;
+    BEGIN
+      IF CurrFieldNo = 0 THEN
+        EXIT;
+      IF SalesHeader.GET(Rec."Document Type",Rec."Document No.") THEN
+        IF (SalesHeader."EDI Order") THEN BEGIN
+          CLEAR(EDIIntegration);
+          EDIIntegration.SetEDIItemCrossRef(SalesHeader,Rec);
+        END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterModifyEvent)]
+    LOCAL PROCEDURE "SalesLine-OnModify-OnAfterModifyEvent"@1240020016(VAR Rec@1240020000 : Record 37;VAR xRec@1240020001 : Record 37;RunTrigger@1240020002 : Boolean);
+    VAR
+      SalesHeader@1240020003 : Record 36;
+    BEGIN
+      WITH Rec DO BEGIN
+        // Order Status
+        SalesHeader.GET("Document Type","Document No.");
+        IF SalesHeader."Order Status Required" THEN
+          "EDI Status Pending" := TRUE;
+        // Order Status
+        "EDI Trade Partner" := SalesHeader."EDI Trade Partner";
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnBeforeDeleteEvent)]
+    LOCAL PROCEDURE "SalesLine-OnDelete-OnBeforeDeleteEvent"@1240020021(VAR Rec@1240020000 : Record 37;RunTrigger@1240020001 : Boolean);
+    VAR
+      SalesHeader@1240020003 : Record 36;
+      EDISalesOrderStatusSend@1240020002 : Codeunit 14002400;
+    BEGIN
+      WITH Rec DO BEGIN
+        // Order Status
+        IF SalesHeader.GET("Document Type","Document No.") THEN
+          IF SalesHeader."Order Status Required" THEN
+            EDISalesOrderStatusSend.CheckSalesLineDelete(SalesHeader,Rec);
+        // Order Status
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"EDI Item Cross Ref.")]
+    LOCAL PROCEDURE "SalesLine-EDIItemCrossRef--OnAfterValidate"@1240020017(VAR Rec@1240020000 : Record 37;VAR xRec@1240020001 : Record 37;CurrFieldNo@1240020002 : Integer);
+    VAR
+      SalesHeader@1240020003 : Record 36;
+      EDITradePartnerItem@1240020006 : Record 14002364;
+      EDIIntegration@1240020004 : Codeunit 14000363;
+      ManualOrder@1240020005 : Boolean;
+    BEGIN
+      WITH Rec DO BEGIN
+        SalesHeader.GET("Document Type","Document No.");
+        ManualOrder := EDIIntegration.ManualOrderCheck(SalesHeader);
+        IF ManualOrder THEN BEGIN
+          EDITradePartnerItem.RESET;
+          EDITradePartnerItem.SETRANGE("Trade Partner No.",SalesHeader."EDI Trade Partner");
+          EDITradePartnerItem.SETRANGE("Partner Item No.","EDI Item Cross Ref.");
+          EDITradePartnerItem.SETRANGE("Partner Variant Code","EDI Variant Code");
+          IF EDITradePartnerItem.FIND('-') THEN
+            VALIDATE("No.",EDITradePartnerItem."Navision Item No.");
+        END ELSE
+          VALIDATE("EDI Line Type","EDI Line Type"::Recreate);
+      END;
+    END;
+
+    [EventSubscriber(Table,38,OnBeforeValidateEvent,"EDI Buy-from Code")]
+    LOCAL PROCEDURE "PurchaseHeader-EDIBuy-fromCode-OnBeforeValidate"@1240020019(VAR Rec@1240020000 : Record 38;VAR xRec@1240020001 : Record 38;CurrFieldNo@1240020002 : Integer);
+    VAR
+      ReturnShipmentHdr@14000352 : Record 6650;
+      EDIIntegration@14000351 : Codeunit 14000363;
+    BEGIN
+      //<T38F14000365> Purchase Header - EDI Buy-from Code  OnBeforeValidateEvent
+      WITH Rec DO BEGIN
+        EDIIntegration.BuyFromCodeValidate(Rec);
+      END;
+    END;
+
+    [EventSubscriber(Table,38,OnAfterValidateEvent,"Buy-from Vendor No.")]
+    LOCAL PROCEDURE "PurchaseHeader-Buy-fromVendorNo-OnAfterValidate"@1240020013(VAR Rec@1240020000 : Record 38;VAR xRec@1240020001 : Record 38;CurrFieldNo@1240020002 : Integer);
+    VAR
+      Vendor@1240020003 : Record 23;
+    BEGIN
+      //<T38F2> Purchase Header - Buy-from Vendor No.  OnAfterValidateEvent
+      WITH Rec DO BEGIN
+        Vendor.GET("Buy-from Vendor No.");
+        "EDI Order" := Vendor."EDI Order";
+      END;
+    END;
+
+    [EventSubscriber(Table,112,OnBeforeValidateEvent,"EDI Order")]
+    LOCAL PROCEDURE "SalesInvoiceHeader-EDIOrder-OnBeforeValidate"@1240020023(VAR Rec@1240020000 : Record 112;VAR xRec@1240020001 : Record 112;CurrFieldNo@1240020002 : Integer);
+    BEGIN
+      //<T112F14000350> Sales Invoice Header - EDI Order  OnBeforeValidateEvent
+      WITH Rec DO BEGIN
+        TESTFIELD("EDI Invoice",TRUE);
+      END;
+    END;
+
+    [EventSubscriber(Table,112,OnBeforeValidateEvent,"EDI Trade Partner")]
+    LOCAL PROCEDURE "SalesInvoiceHeader-EDITradePartner-OnBeforeValidate"@1240020024(VAR Rec@1240020000 : Record 112;VAR xRec@1240020001 : Record 112;CurrFieldNo@1240020002 : Integer);
+    BEGIN
+      //<T112F14000366> Sales Invoice Header - EDI Trade Partner  OnBeforeValidateEvent
+      WITH Rec DO BEGIN
+        IF "EDI Trade Partner" <> '' THEN BEGIN
+          TESTFIELD("EDI Invoice");
+          TESTFIELD("EDI Invoice Generated",FALSE);
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,112,OnAfterDeleteEvent)]
+    LOCAL PROCEDURE "SalesInvoiceHeader-DeleteEDIDiscountSummary-OnAfterDelete"@1240020014(VAR Rec@1240020000 : Record 112;RunTrigger@1240020001 : Boolean);
+    VAR
+      EDIDiscountSummary@1240020002 : Record 14002384;
+    BEGIN
+      //>T112 OnDelete
+      IF NOT RunTrigger THEN
+        EXIT;
+      WITH Rec DO BEGIN
+        EDIDiscountSummary.RESET;
+        EDIDiscountSummary.SETRANGE("Internal Doc. No.","EDI Internal Doc. No.");
+        EDIDiscountSummary.SETRANGE("Document No.","No.");
+        EDIDiscountSummary.DELETEALL;
+      END;
+    END;
+
+    [EventSubscriber(Table,5740,OnBeforeValidateEvent,"EDI Order")]
+    LOCAL PROCEDURE "TransferHeader-EDIOrder-OnBeforeValidate"@1240020029(VAR Rec@1240020000 : Record 5740;VAR xRec@1240020001 : Record 5740;CurrFieldNo@1240020002 : Integer);
+    VAR
+      Location@14000351 : Record 14;
+    BEGIN
+      //<T5740F14000351> Transfer Header - EDI Order  OnBeforeValidateEvent
+      WITH Rec DO BEGIN
+        Location.GET("Transfer-to Code");
+        Location.TESTFIELD("EDI Transfer Trade Partner");
+      END;
+    END;
+
+    [EventSubscriber(Table,5740,OnBeforeValidateEvent,"EDI Transfer-from Code")]
+    LOCAL PROCEDURE "TransferHeader-EDITransfer-fromCode-OnBeforeValidate"@1240020030(VAR Rec@1240020000 : Record 5740;VAR xRec@1240020001 : Record 5740;CurrFieldNo@1240020002 : Integer);
+    VAR
+      EDIIntegration@14000351 : Codeunit 14000363;
+    BEGIN
+      //<T5740F14000356> Transfer Header - EDI Transfer-from Code  OnBeforeValidateEvent
+      WITH Rec DO BEGIN
+        EDIIntegration.TransferFromCodeValidate(Rec);
+      END;
+    END;
+
+    [EventSubscriber(Table,5740,OnBeforeValidateEvent,"EDI Transfer-to Code")]
+    LOCAL PROCEDURE "TransferHeader-EDITransfer-toCode-OnBeforeValidate"@1240020032(VAR Rec@1240020000 : Record 5740;VAR xRec@1240020001 : Record 5740;CurrFieldNo@1240020002 : Integer);
+    VAR
+      EDIIntegration@14000351 : Codeunit 14000363;
+    BEGIN
+      //<T5740F14000357> Transfer Header - EDI Transfer-to Code  OnBeforeValidateEvent
+      WITH Rec DO BEGIN
+        EDIIntegration.TransferToCodeValidate(Rec);
+      END;
+    END;
+
+    [EventSubscriber(Table,5740,OnBeforeValidateEvent,"EDI In-Transit Code")]
+    LOCAL PROCEDURE "TransferHeader-EDIIn-TransitCode-OnBeforeValidate"@1240020034(VAR Rec@1240020000 : Record 5740;VAR xRec@1240020001 : Record 5740;CurrFieldNo@1240020002 : Integer);
+    VAR
+      EDIIntegration@14000351 : Codeunit 14000363;
+    BEGIN
+      //<T5740F14000358> Transfer Header - EDI In-Transit Code  OnBeforeValidateEvent
+      WITH Rec DO BEGIN
+        EDIIntegration.TransferInTransitCodeValidate(Rec);
+      END;
+    END;
+
+    [EventSubscriber(Table,5740,OnAfterValidateEvent,"Transfer-from Code")]
+    LOCAL PROCEDURE "TransferHeader-Transfer-fromCode-OnAfterValidate"@1240020015(VAR Rec@1240020000 : Record 5740;VAR xRec@1240020001 : Record 5740;CurrFieldNo@1240020002 : Integer);
+    VAR
+      Location@1240020003 : Record 14;
+    BEGIN
+      //<T5740F2> Transfer Header - Transfer-from Code OnAfterValidateEvent
+      WITH Rec DO BEGIN
+        Location.GET("Transfer-from Code");
+        IF Location."EDI Transfer Trade Partner" <>'' THEN
+          "EDI Order" := TRUE
+        ELSE
+          "EDI Order" := FALSE;
+      END;
+    END;
+
+    [EventSubscriber(Table,5740,OnAfterValidateEvent,"Transfer-to Code")]
+    LOCAL PROCEDURE "TransferHeader-Transfer-toCode-OnAfterValidate"@1240020018(VAR Rec@1240020000 : Record 5740;VAR xRec@1240020001 : Record 5740;CurrFieldNo@1240020002 : Integer);
+    VAR
+      Location@1240020003 : Record 14;
+    BEGIN
+      //<T5740F11> Transfer Header - Transfer-to Code OnAfterValidateEvent
+      WITH Rec DO BEGIN
+        Location.GET("Transfer-to Code");
+        IF Location."EDI Transfer Trade Partner" <>'' THEN
+          "EDI Order" := TRUE
+        ELSE
+          "EDI Order" := FALSE;
+      END;
+    END;
+
+    [EventSubscriber(Table,5744,OnAfterCopyFromTransferHeader)]
+    LOCAL PROCEDURE "TransferShipmentHeader-OnAfterCopyTransferHeader"@1240020012(VAR TransferShipmentHeader@1240020000 : Record 5744;TransferHeader@1240020001 : Record 5740);
+    BEGIN
+      //<T5744> TransferShipmentHeader - OnAfterCopyFromTransferHeader
+      WITH TransferShipmentHeader DO BEGIN
+        "EDI Order" := TransferHeader."EDI Order";
+        "EDI Internal Doc. No." := TransferHeader."EDI Internal Doc. No.";
+        "EDI Trade Partner" := TransferHeader."EDI Trade Partner";
+        "EDI Transfer Order Generated" := TransferHeader."EDI Transfer Order Generated";
+        "EDI Transfer Order Gen. Date" := TransferHeader."EDI Transfer Order Gen. Date";
+        "EDI Transfer-from Code" := TransferHeader."EDI Transfer-from Code";
+        "EDI Transfer-to Code" := TransferHeader."EDI Transfer-to Code";
+        "EDI In-Transit Code" := TransferHeader."EDI In-Transit Code";
+      END;
+    END;
+
+    [EventSubscriber(Table,5745,OnAfterCopyFromTransferLine)]
+    LOCAL PROCEDURE "TransferShipmentLine=OnAfterCopyTransferLine"@1240020027(VAR TransferShipmentLine@1240020000 : Record 5745;TransferLine@1240020001 : Record 5741);
+    BEGIN
+      //<T5745> TransferShipmentLine - OnAfterCopyFromTransferLine
+      WITH TransferShipmentLine DO
+        "EDI Segment Group" := TransferLine."EDI Segment Group";
+    END;
+
+    [EventSubscriber(Table,5746,OnAfterCopyFromTransferHeader)]
+    LOCAL PROCEDURE "TransferReceipt-OnAfterCopyTransferHeader"@1240020020(VAR TransferReceiptHeader@1240020000 : Record 5746;TransferHeader@1240020001 : Record 5740);
+    BEGIN
+      //<T5746> TransferReceiptHeader - OnAfterCopyFromTransferLine
+      WITH TransferReceiptHeader DO BEGIN
+        "EDI Order" := TransferHeader."EDI Order";
+        "EDI Internal Doc. No." := TransferHeader."EDI Internal Doc. No.";
+        "EDI Trade Partner" := TransferHeader."EDI Trade Partner";
+        "EDI Transfer Order Generated" := TransferHeader."EDI Transfer Order Generated";
+        "EDI Transfer Order Gen. Date" := TransferHeader."EDI Transfer Order Gen. Date";
+        "EDI Transfer-from Code" := TransferHeader."EDI Transfer-from Code";
+        "EDI Transfer-to Code" := TransferHeader."EDI Transfer-to Code";
+        "EDI In-Transit Code" := TransferHeader."EDI In-Transit Code";
+      END;
+    END;
+
+    [EventSubscriber(Table,21,OnAfterCopyCustLedgerEntryFromGenJnlLine)]
+    LOCAL PROCEDURE "CustLedgerEntry-OnAfterCopyCustLedgerEntryFromGenJnlLine"@1240020022(VAR CustLedgerEntry@1240020000 : Record 21;GenJournalLine@1240020001 : Record 81);
+    BEGIN
+      // <T21> Subscriber function OnAfterCopyCustLedgerEntryFromGenJnlLine
+      CustLedgerEntry."EDI Payment" := GenJournalLine."EDI Payment";
+      CustLedgerEntry."EDI Internal Doc. No." := GenJournalLine."EDI Internal Doc. No.";
+    END;
+
+    [EventSubscriber(Table,25,OnAfterCopyVendLedgerEntryFromGenJnlLine)]
+    LOCAL PROCEDURE "VendLedgerEntry-OnAfterCopyVendLedgerEntryFromGenJnlLine"@1240020025(VAR VendorLedgerEntry@1240020000 : Record 25;GenJournalLine@1240020001 : Record 81);
+    BEGIN
+      // <T21> Subscriber function OnAfterCopyVendLedgerEntryFromGenJnlLine
+      VendorLedgerEntry."EDI Payment" := GenJournalLine."EDI Payment";
+      VendorLedgerEntry."EDI Internal Doc. No." := GenJournalLine."EDI Internal Doc. No.";
+    END;
+
+    BEGIN
+    {
+      Container codeunit for all E-Ship base object table triggers
+      Created on 07/19/17 at 11:11:51 AM
+    }
+    END.
+  }
+}
+

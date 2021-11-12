@@ -1,0 +1,277 @@
+OBJECT Table 14000751 Shipping Bill Recon. Header
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/28/17;
+    Time=12:00:00 PM;
+    Version List=SE0.60;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               IF "Shipping Bill No." = '' THEN BEGIN
+                 GetShippingSetup;
+                 ShippingSetup.TESTFIELD("Shipping Bill Nos.");
+                 "Shipping Bill No." :=
+                   NoSeriesMgt.GetNextNo(ShippingSetup."Shipping Bill Nos.",WORKDATE,TRUE);
+               END;
+             END;
+
+    OnDelete=BEGIN
+               IF "Purchase Invoice No." <> '' THEN
+                 CheckPurchaseHeaderDeleted("Purchase Invoice No.");
+
+               ShippingBillReconLine.RESET;
+               ShippingBillReconLine.SETRANGE("Shipping Bill No.","Shipping Bill No.");
+               ShippingBillReconLine.DELETEALL;
+
+               UPSBillLine.RESET;
+               UPSBillLine.SETRANGE("Shipping Bill No.","Shipping Bill No.");
+               IF UPSBillLine.FIND('-') THEN
+                 UPSBillLine.DELETEALL;
+             END;
+
+    CaptionML=ENU=Shipping Bill Recon. Header;
+    LookupPageID=Page14000753;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Shipping Bill No.   ;Code10        ;CaptionML=ENU=Shipping Bill No. }
+    { 11  ;   ;Shipping Agent Code ;Code10        ;TableRelation="Shipping Agent".Code;
+                                                   OnValidate=BEGIN
+                                                                IF "Shipping Agent Code" <> xRec."Shipping Agent Code" THEN
+                                                                  "Shipping Agent Service" := '';
+                                                              END;
+
+                                                   CaptionML=ENU=Shipping Agent Code }
+    { 12  ;   ;Date Filter         ;Date          ;FieldClass=FlowFilter;
+                                                   CaptionML=ENU=Date Filter }
+    { 13  ;   ;Amount              ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Shipping Bill Recon. Line"."Amount Calculated" WHERE (Shipping Bill No.=FIELD(Shipping Bill No.)));
+                                                   CaptionML=ENU=Amount;
+                                                   Editable=No }
+    { 14  ;   ;Invoice Amount      ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Shipping Bill Recon. Line"."Amount Invoiced" WHERE (Shipping Bill No.=FIELD(Shipping Bill No.)));
+                                                   CaptionML=ENU=Invoice Amount;
+                                                   Editable=No }
+    { 15  ;   ;Difference          ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Shipping Bill Recon. Line"."Amount Difference" WHERE (Shipping Bill No.=FIELD(Shipping Bill No.)));
+                                                   CaptionML=ENU=Difference;
+                                                   Editable=No }
+    { 16  ;   ;Shipping Agent Service;Code30      ;TableRelation="E-Ship Agent Service".Code WHERE (Shipping Agent Code=FIELD(Shipping Agent Code));
+                                                   CaptionML=ENU=Shipping Agent Service }
+    { 17  ;   ;Comment             ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("Shipping Comment Line" WHERE (Table ID=CONST(14000751),
+                                                                                                    Code=FIELD(Shipping Bill No.)));
+                                                   CaptionML=ENU=Comment;
+                                                   Editable=No }
+    { 18  ;   ;Shipping Agent Account No.;Code20  ;OnValidate=BEGIN
+                                                                IF "Shipping Agent Account No." = '' THEN
+                                                                  EXIT;
+
+                                                                TESTFIELD("Shipping Agent Code");
+                                                                ShippingAgent.GET("Shipping Agent Code");
+                                                                GetShippingSetup;
+                                                                ShipperTypeMgt.ShipBillReconHdrValidateAcctNo(Rec,ShippingAgent,ShippingSetup);
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              TESTFIELD("Shipping Agent Code");
+                                                              ShippingAgent.GET("Shipping Agent Code");
+                                                              GetShippingSetup;
+                                                              ShipperTypeMgt.ShipBillReconHdrLookupAcctNo(Rec,ShippingAgent,ShippingSetup);
+                                                            END;
+
+                                                   CaptionML=ENU=Shipping Agent Account No. }
+    { 21  ;   ;Description         ;Text30        ;CaptionML=ENU=Description }
+    { 22  ;   ;External Document No.;Code35       ;CaptionML=ENU=External Document No. }
+    { 23  ;   ;Purchase Invoice No.;Code20        ;TableRelation="Purchase Header".No. WHERE (Document Type=CONST(Invoice));
+                                                   OnValidate=BEGIN
+                                                                IF (xRec."Purchase Invoice No." <> '') AND
+                                                                   (xRec."Purchase Invoice No." <> "Purchase Invoice No.")
+                                                                THEN
+                                                                  CheckPurchaseHeaderDeleted(xRec."Purchase Invoice No.")
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              ShowPurchaseInvoice;
+                                                            END;
+
+                                                   CaptionML=ENU=Purchase Invoice No. }
+    { 31  ;   ;Total Invoice Amount;Decimal       ;CaptionML=ENU=Total Invoice Amount }
+    { 32  ;   ;Invoice Date        ;Date          ;CaptionML=ENU=Invoice Date }
+    { 33  ;   ;Shortcut Dimension 1 Code;Code20   ;TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(1));
+                                                   CaptionML=ENU=Shortcut Dimension 1 Code;
+                                                   CaptionClass='1,2,1' }
+    { 34  ;   ;Shortcut Dimension 2 Code;Code20   ;TableRelation="Dimension Value".Code WHERE (Global Dimension No.=CONST(2));
+                                                   CaptionML=ENU=Shortcut Dimension 2 Code;
+                                                   CaptionClass='1,2,2' }
+    { 35  ;   ;Set Blank Codes     ;Boolean       ;CaptionML=ENU=Set Blank Codes }
+  }
+  KEYS
+  {
+    {    ;Shipping Bill No.                       ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      ShippingBillReconLine@1240030000 : Record 14000752;
+      ShippingBillReconLine2@1240030001 : Record 14000752;
+      ShippingSetup@1240030002 : Record 14000707;
+      ShippingAgent@1240030003 : Record 291;
+      UPSBillLine@1240030011 : Record 14000772;
+      NoSeriesMgt@1240030010 : Codeunit 396;
+      Text001@1001 : TextConst 'ENU=Purchase Order %1 must be deleted first.';
+      ShipperTypeMgt@1240030004 : Codeunit 14000711;
+      ShippingSetupRetrieved@1240030013 : Boolean;
+
+    PROCEDURE SetAllLinesVerified@1();
+    BEGIN
+      ShippingBillReconLine.RESET;
+      ShippingBillReconLine.SETRANGE("Shipping Bill No.","Shipping Bill No.");
+      ShippingBillReconLine.SETRANGE(Verified,FALSE);
+      IF ShippingBillReconLine.FIND('-') THEN
+        REPEAT
+          ShippingBillReconLine2 := ShippingBillReconLine;
+          ShippingBillReconLine2.VALIDATE(Verified,TRUE);
+          ShippingBillReconLine2.MODIFY(TRUE);
+        UNTIL ShippingBillReconLine.NEXT = 0;
+    END;
+
+    PROCEDURE CreatePurchaseInvoice@2();
+    VAR
+      PurchaseHeader@1240030000 : Record 38;
+      LastShippingBillReconLine@1240030001 : Record 14000752;
+      VendorNo@1240030002 : Code[20];
+      AccountNo@1240030003 : Code[20];
+      InvoiceAmount@1240030004 : Decimal;
+      DiscountAmount@1240030006 : Decimal;
+      LastLineNo@1240030005 : Integer;
+    BEGIN
+      TESTFIELD("Shipping Agent Code");
+      TESTFIELD("Shipping Agent Account No.");
+      TESTFIELD("Purchase Invoice No.",'');
+
+      ShippingAgent.GET("Shipping Agent Code");
+      ShipperTypeMgt.ShipBillReconHdrLookupVendorNo(Rec,ShippingAgent,ShippingSetup,VendorNo,AccountNo);
+
+      ShippingBillReconLine.RESET;
+      ShippingBillReconLine.SETCURRENTKEY(
+        "Shipping Bill No.",Type,"Shipping Agent Code","Shipping Agent Service",
+        "Shortcut Dimension 1 Code","Shortcut Dimension 2 Code");
+      ShippingBillReconLine.SETRANGE("Shipping Bill No.","Shipping Bill No.");
+      IF ShippingBillReconLine.FIND('-') THEN BEGIN
+        CLEAR(PurchaseHeader);
+        PurchaseHeader.VALIDATE("Document Type",PurchaseHeader."Document Type"::Invoice);
+        PurchaseHeader.INSERT(TRUE);
+        PurchaseHeader.VALIDATE("Buy-from Vendor No.",VendorNo);
+        PurchaseHeader.VALIDATE("Vendor Invoice No.","External Document No.");
+        PurchaseHeader.VALIDATE("Posting Description",Description);
+        IF ("Shortcut Dimension 1 Code" <> '') OR "Set Blank Codes" THEN
+          PurchaseHeader.VALIDATE("Shortcut Dimension 1 Code","Shortcut Dimension 1 Code");
+        IF ("Shortcut Dimension 2 Code" <> '') OR "Set Blank Codes" THEN
+          PurchaseHeader.VALIDATE("Shortcut Dimension 2 Code","Shortcut Dimension 2 Code");
+        PurchaseHeader.MODIFY(TRUE);
+
+        CLEAR(LastShippingBillReconLine);
+        InvoiceAmount := 0;
+        DiscountAmount := 0;
+        LastLineNo := 0;
+        REPEAT
+          IF (LastShippingBillReconLine."Line No." <> 0) AND
+             ((LastShippingBillReconLine.Type <> ShippingBillReconLine.Type) OR
+              (LastShippingBillReconLine."Shipping Agent Code" <>
+               ShippingBillReconLine."Shipping Agent Code") OR
+              (LastShippingBillReconLine."Shipping Agent Service" <>
+               ShippingBillReconLine."Shipping Agent Service") OR
+              (LastShippingBillReconLine."Shortcut Dimension 1 Code" <>
+               ShippingBillReconLine."Shortcut Dimension 1 Code") OR
+              (LastShippingBillReconLine."Shortcut Dimension 2 Code" <>
+               ShippingBillReconLine."Shortcut Dimension 2 Code"))
+          THEN BEGIN
+            CreatePurchaseLine(
+              PurchaseHeader,LastShippingBillReconLine,AccountNo,
+              InvoiceAmount,DiscountAmount,LastLineNo);
+
+            InvoiceAmount := 0;
+            DiscountAmount := 0;
+          END;
+
+          InvoiceAmount := InvoiceAmount + ShippingBillReconLine."Amount Invoiced";
+          DiscountAmount := DiscountAmount + ShippingBillReconLine."Discount Invoiced";
+          LastShippingBillReconLine:= ShippingBillReconLine;
+        UNTIL ShippingBillReconLine.NEXT = 0;
+
+        CreatePurchaseLine(
+          PurchaseHeader,LastShippingBillReconLine,AccountNo,
+          InvoiceAmount,DiscountAmount,LastLineNo);
+      END;
+
+      "Purchase Invoice No." := PurchaseHeader."No.";
+      MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreatePurchaseLine@3(PurchaseHeader@1240030000 : Record 38;LastShippingBillReconLine@1240030001 : Record 14000752;AccountNo@1240030002 : Code[20];Amount@1240030003 : Decimal;Discount@1240030004 : Decimal;VAR LastLineNo@1240030006 : Integer);
+    VAR
+      PurchaseLine@1240030005 : Record 39;
+    BEGIN
+      CLEAR(PurchaseLine);
+      PurchaseLine.VALIDATE("Document Type",PurchaseHeader."Document Type");
+      PurchaseLine.VALIDATE("Document No.",PurchaseHeader."No.");
+      LastLineNo := LastLineNo + 10000;
+      PurchaseLine."Line No." := LastLineNo;
+      PurchaseLine.VALIDATE(Type,PurchaseLine.Type::"G/L Account");
+      PurchaseLine.VALIDATE("No.",AccountNo);
+      IF LastShippingBillReconLine.Type <> LastShippingBillReconLine.Type::"Other Charges" THEN
+        PurchaseLine.VALIDATE(
+          Description,
+          STRSUBSTNO(
+            '%1 %2',LastShippingBillReconLine."Shipping Agent Code",
+            LastShippingBillReconLine."Shipping Agent Service"));
+
+      IF (LastShippingBillReconLine."Shortcut Dimension 1 Code" <> '') OR "Set Blank Codes" THEN
+        PurchaseLine.VALIDATE("Shortcut Dimension 1 Code",LastShippingBillReconLine."Shortcut Dimension 1 Code");
+      IF (LastShippingBillReconLine."Shortcut Dimension 2 Code" <> '') OR "Set Blank Codes" THEN
+        PurchaseLine.VALIDATE("Shortcut Dimension 2 Code",LastShippingBillReconLine."Shortcut Dimension 2 Code");
+      PurchaseLine.VALIDATE(Quantity,1);
+      PurchaseLine.VALIDATE("Unit Cost (LCY)",Amount);
+      PurchaseLine.VALIDATE("Direct Unit Cost",Amount);
+      IF Discount <> 0 THEN
+        PurchaseLine.VALIDATE("Line Discount Amount",Discount);
+
+      PurchaseLine.INSERT(TRUE);
+    END;
+
+    PROCEDURE ShowPurchaseInvoice@4();
+    VAR
+      PurchaseHeader@1240030000 : Record 38;
+    BEGIN
+      TESTFIELD("Purchase Invoice No.");
+      PurchaseHeader.GET(PurchaseHeader."Document Type"::Invoice,"Purchase Invoice No.");
+      PAGE.RUNMODAL(PAGE::"Purchase Invoice",PurchaseHeader);
+    END;
+
+    PROCEDURE CheckPurchaseHeaderDeleted@5(PurchaseOrderNo@1240030000 : Code[20]);
+    VAR
+      PurchHeader@1240030001 : Record 38;
+    BEGIN
+      IF PurchHeader.GET(PurchHeader."Document Type"::Order,PurchaseOrderNo) THEN
+        ERROR(Text001,PurchaseOrderNo);
+    END;
+
+    LOCAL PROCEDURE GetShippingSetup@22();
+    BEGIN
+      IF NOT ShippingSetupRetrieved THEN BEGIN
+        ShippingSetup.GET;
+        ShippingSetupRetrieved := TRUE;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

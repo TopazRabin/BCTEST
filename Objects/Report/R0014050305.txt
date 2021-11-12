@@ -1,0 +1,167 @@
+OBJECT Report 14050305 Send Warehouse Sales Adv. Job
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/25/19;
+    Time=12:00:00 PM;
+    Version List=SE0.61;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 112=rimd;
+    CaptionML=ENU=Send Warehouse Sales Adv. Job;
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  CompanyInformation.GET;
+                END;
+
+    UseRequestPage=No;
+  }
+  DATASET
+  {
+    { 2284;    ;DataItem;                    ;
+               DataItemTable=Table14050305 }
+
+    { 6004;    ;DataItem;                    ;
+               DataItemTable=Table14;
+               DataItemTableView=WHERE(EDI Trading Partner ID=FILTER(<>''));
+               PrintOnlyIfDetail=Yes;
+               OnPreDataItem=BEGIN
+                               Location.SETFILTER(Code,"E.D.I. Job Routine"."Location Filter");
+                             END;
+
+               ReqFilterFields=Code }
+
+    { 6640;1   ;DataItem;                    ;
+               DataItemTable=Table36;
+               DataItemTableView=SORTING(Document Type,No.)
+                                 ORDER(Ascending)
+                                 WHERE(EDI Released=CONST(Yes),
+                                       EDI WHSE Shp. Gen=CONST(No));
+               OnAfterGetRecord=BEGIN
+                                  IF EDITradePartner.GET(Location."EDI Trading Partner ID") THEN BEGIN
+                                    EDIDocument.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+                                    EDIDocument.SETFILTER(Status,'%1|%2',EDIDocument.Status::Test,EDIDocument.Status::Production);
+                                    EDIDocument.SETRANGE(EDIDocument."Navision Document",'E_SLSWSA');
+                                    EDIDocument.SETRANGE("Export Zero Qty. Lines",FALSE);
+                                    IF EDIDocument.FIND('-') THEN BEGIN
+                                      SalesLine.RESET;
+                                      SalesLine.SETRANGE("Document Type","Sales Header"."Document Type");
+                                      SalesLine.SETRANGE(SalesLine."Document No.","Sales Header"."No.");
+                                      SalesLine.SETFILTER("No.",'<>%1','');
+                                      IF EDIDocument."Export Reserved Quantity Lines" THEN
+                                        SalesLine.SETFILTER("Reserved Quantity",'<>%1',0)
+                                      ELSE BEGIN
+                                        IF NOT EDIDocument."Export Zero Qty. Lines" THEN
+                                          SalesLine.SETFILTER("Qty. to Ship",'<>%1',0);
+                                      END;
+                                      IF NOT SalesLine.FIND('-') THEN
+                                        CurrReport.SKIP;
+                                    END;
+                                  END;
+
+                                  EDIManagement.CreateOutboundLogEntry(
+                                    Text001,LogEntryNo,'SALES ORDER',"Sales Header"."No.",EDITradePartner."No.",
+                                    EDIDocument."Navision Document",EDIDocument."EDI Document No.");
+                                  COMMIT;
+
+                                  CLEARLASTERROR;
+                                  CLEAR(EDISalesOrderSend);
+                                  EDISalesOrderSend.SetProcessID(2);
+                                  IF EDISalesOrderSend.RUN("Sales Header") THEN
+
+                                    DeleteLog := TRUE
+                                  ELSE
+                                    DeleteLog := FALSE;
+                                  COMMIT;
+
+                                  IF DeleteLog THEN
+                                    EDIManagement.DeleteOutboundLogEntry(LogEntryNo)
+                                  ELSE BEGIN
+                                    ErrorText := '';
+                                    ErrorText := COPYSTR(GETLASTERRORTEXT,1,250);
+                                    EDIManagement.CloseOutboundLogEntry(LogEntryNo,ErrorText);
+                                  END;
+                                  COMMIT;
+                                END;
+
+               ReqFilterFields=Sell-to Customer No.,Bill-to Customer No.,No.;
+               DataItemLink=Location Code=FIELD(Code) }
+
+    { 1534;1   ;DataItem;                    ;
+               DataItemTable=Table14002353;
+               DataItemTableView=SORTING(Trade Partner No.,Navision Document,EDI Document No.,Version,Type)
+                                 ORDER(Ascending)
+                                 WHERE(Navision Document=CONST(E_SLSWSA),
+                                       Type=CONST(Export),
+                                       Status=FILTER(Test|Production));
+               OnPreDataItem=BEGIN
+                               "E.D.I. Document".SETRANGE("Trade Partner No.",Location."EDI Trading Partner ID");
+                               "E.D.I. Document".SETFILTER("EDI Document No.","E.D.I. Job Routine"."EDI Document No. Filter");
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  EDISetup.GET;
+                                  IF EDISetup."Auto Export Send Doc." THEN BEGIN
+                                    EDIManagement.CreateOutboundLogEntry(Text002,LogEntryNo,'SEND DOCUMENT','',EDITradePartner."No.",
+                                    "E.D.I. Document"."Navision Document","E.D.I. Document"."EDI Document No.");
+                                    COMMIT;
+
+                                    CLEARLASTERROR;
+                                    IF EDISend.RUN("E.D.I. Document") THEN
+                                      DeleteLog := TRUE
+                                    ELSE
+                                     DeleteLog := FALSE;
+                                    COMMIT;
+
+                                    IF DeleteLog THEN
+                                      EDIManagement.DeleteOutboundLogEntry(LogEntryNo)
+                                    ELSE BEGIN
+                                      ErrorText := '';
+                                      ErrorText := COPYSTR(GETLASTERRORTEXT,1,250);
+                                      EDIManagement.CloseOutboundLogEntry(LogEntryNo,ErrorText);
+                                    END;
+                                    COMMIT;
+                                  END;
+                                END;
+
+               DataItemLink=Trade Partner No.=FIELD(EDI Trading Partner ID) }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      CompanyInformation@1240030000 : Record 79;
+      EDISetup@1240030001 : Record 14002367;
+      SalesLine@1240020000 : Record 37;
+      EDITradePartner@1240020001 : Record 14002360;
+      EDIDocument@1240020002 : Record 14002353;
+      EDISalesOrderSend@1240030003 : Codeunit 14002359;
+      EDIManagement@1240020003 : Codeunit 14002379;
+      EDISend@1240030004 : Codeunit 14002356;
+      Text001@1001 : TextConst 'ENU=Create EDI Whse. Sales Advice';
+      Text002@1002 : TextConst 'ENU=Send EDI Whse. Sales Advice';
+      DeleteLog@1240020004 : Boolean;
+      LogEntryNo@1240020005 : Integer;
+      ErrorText@1240020006 : Text[250];
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

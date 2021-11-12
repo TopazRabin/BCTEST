@@ -1,0 +1,147 @@
+OBJECT Report 14050306 Send Whse. Purch. Adv. Job
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/25/19;
+    Time=12:00:00 PM;
+    Version List=SE0.61;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Send Purchase Order Job;
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  CompanyInformation.GET;
+                  EDISetup.GET;
+                END;
+
+    UseRequestPage=No;
+  }
+  DATASET
+  {
+    { 4458;    ;DataItem;                    ;
+               DataItemTable=Table38;
+               DataItemTableView=SORTING(Document Type,Buy-from Vendor No.,No.)
+                                 ORDER(Ascending)
+                                 WHERE(Document Type=CONST(Order),
+                                       EDI Order=CONST(Yes),
+                                       EDI Released=CONST(Yes),
+                                       EDI Ship Adv. Gen.=CONST(No));
+               OnAfterGetRecord=BEGIN
+                                  TradePtnrFound := FALSE;
+
+                                  IF Location.GET("Purchase Header"."Location Code") THEN
+                                    IF EDITradePartner.GET(Location."EDI Trading Partner ID") THEN
+                                      TradePtnrFound := TRUE
+                                    ELSE
+                                      TradePtnrFound := FALSE;
+                                  IF TradePtnrFound = FALSE THEN
+                                    CurrReport.SKIP;
+
+                                  NavisionDocument := '';
+                                  EDIDocument.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+                                  EDIDocument.SETFILTER(
+                                    Status,'%1|%2',EDIDocument.Status::Test,EDIDocument.Status::Production);
+                                  EDIDocument.SETRANGE("Navision Document",'E_PURWSA');
+                                  EDIDocument.SETRANGE(Type,EDIDocument.Type::Export);
+                                  IF EDIDocument.FIND('-') THEN
+                                    NavisionDocument := EDIDocument."Navision Document"
+                                  ELSE BEGIN
+                                    EDIDocument.INIT;
+                                    NavisionDocument := 'E_PURWSA';
+                                  END;
+
+                                  EDIManagement.CreateOutboundLogEntry(
+                                    Text001,LogEntryNo,'PURCHASE ORDER',"Purchase Header"."No.",EDITradePartner."No.",
+                                    NavisionDocument,EDIDocument."EDI Document No.");
+                                  COMMIT;
+
+                                  CLEARLASTERROR;
+                                  CLEAR(EDIPurchOrderSend);
+                                  EDIPurchOrderSend.SetProcessID(2);
+                                  IF EDIPurchOrderSend.RUN("Purchase Header") THEN
+                                    DeleteLog := TRUE
+                                  ELSE
+                                    DeleteLog := FALSE;
+                                  COMMIT;
+
+                                  IF DeleteLog THEN
+                                    EDIManagement.DeleteOutboundLogEntry(LogEntryNo)
+                                  ELSE BEGIN
+                                    ErrorText := '';
+                                    ErrorText := COPYSTR(GETLASTERRORTEXT,1,250);
+                                    EDIManagement.CloseOutboundLogEntry(LogEntryNo,ErrorText);
+                                  END;
+                                  COMMIT;
+
+                                  EDISetup.GET;
+                                  IF EDISetup."Auto Export Send Doc." THEN BEGIN
+                                    EDIDocument.RESET;
+                                    EDIDocument.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+                                    EDIDocument.SETRANGE("Navision Document",'E_PURWSA');
+                                    IF EDIDocument.FIND('-') THEN BEGIN
+                                      EDIManagement.CreateOutboundLogEntry(Text002,LogEntryNo,'SEND DOCUMENT','',EDITradePartner."No.",
+                                      EDIDocument."Navision Document",EDIDocument."EDI Document No.");
+                                      COMMIT;
+
+                                      CLEARLASTERROR;
+                                      IF EDISend.RUN(EDIDocument) THEN
+                                        DeleteLog := TRUE
+                                      ELSE
+                                        DeleteLog := FALSE;
+                                      COMMIT;
+
+                                      IF DeleteLog THEN
+                                        EDIManagement.DeleteOutboundLogEntry(LogEntryNo)
+                                      ELSE BEGIN
+                                        ErrorText := '';
+                                        ErrorText := COPYSTR(GETLASTERRORTEXT,1,250);
+                                        EDIManagement.CloseOutboundLogEntry(LogEntryNo,ErrorText);
+                                      END;
+                                      COMMIT;
+                                    END;
+                                  END;
+                                END;
+
+               ReqFilterFields=Buy-from Vendor No.,No. }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      CompanyInformation@1240030000 : Record 79;
+      EDISetup@1240030004 : Record 14002367;
+      EDIDocument@1240030006 : Record 14002353;
+      EDITradePartner@1240030005 : Record 14002360;
+      Location@1240020005 : Record 14;
+      EDIManagement@1240020003 : Codeunit 14002379;
+      EDIPurchOrderSend@1240030001 : Codeunit 14002357;
+      EDISend@1240030007 : Codeunit 14002356;
+      Text001@1001 : TextConst 'ENU=Create Warehouse Purchase Advice';
+      Text002@1002 : TextConst 'ENU=Send Warehouse Purchase Advice';
+      TradePtnrFound@1240020000 : Boolean;
+      DeleteLog@1240020001 : Boolean;
+      ErrorText@1240020002 : Text[250];
+      LogEntryNo@1240020004 : Integer;
+      NavisionDocument@1240020006 : Code[10];
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

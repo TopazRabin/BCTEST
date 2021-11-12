@@ -1,0 +1,218 @@
+OBJECT Table 11123317 SC - Product Info.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=SCW19.2.0;
+  }
+  PROPERTIES
+  {
+    OnDelete=VAR
+               VariantInfo@11123302 : Record 11123318;
+             BEGIN
+               VariantInfo.SETRANGE("Item No.","Item No.");
+               IF NOT VariantInfo.ISEMPTY THEN
+                 VariantInfo.DELETEALL(TRUE);
+             END;
+
+    CaptionML=ENU=Product Info.;
+  }
+  FIELDS
+  {
+    { 2   ;   ;Item No.            ;Code20        ;CaptionML=ENU=Item No. }
+    { 3   ;   ;Description         ;Text50        ;CaptionML=ENU=Description }
+    { 18  ;   ;Unit Price          ;Decimal       ;CaptionML=ENU=Unit Price;
+                                                   DecimalPlaces=2:2;
+                                                   MinValue=0 }
+    { 38  ;   ;Unit List Price     ;Decimal       ;CaptionML=ENU=Unit List Price;
+                                                   DecimalPlaces=2:2;
+                                                   MinValue=0 }
+    { 68  ;   ;Stock               ;Decimal       ;CaptionML=ENU=Stock;
+                                                   DecimalPlaces=0:5 }
+    { 11123302;;Visible in Webshop ;Boolean       ;CaptionML=ENU=Visible in Webshop }
+    { 11123304;;Last Date/Time Modified;DateTime  ;CaptionML=ENU=Last Date/Time Modified }
+    { 11123352;;Orderable          ;Boolean       ;CaptionML=ENU=Orderable }
+    { 11123353;;Non Orderable Reason;Text250      ;CaptionML=ENU=Non Orderable Reason }
+    { 11123354;;Variants Exist     ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("Item Variant" WHERE (Item No.=FIELD(Item No.)));
+                                                   CaptionML=ENU=Variants Exist;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Item No.                                ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      Text11123303@11123304 : TextConst 'ENU=Sana Commerce - Updating products information...\\';
+      Text11123304@11123303 : TextConst 'ENU=Processing items        #2####################\';
+      Text11123305@11123302 : TextConst 'ENU=Progress                @3@@@@@@@@@@@@@@@@@@@@\';
+      Context@11123305 : Codeunit 11123305;
+
+    PROCEDURE GetCalculatedValues@11123305(VAR Params@11123302 : Record 11123310);
+    VAR
+      Item@11123306 : Record 27;
+      DummyTempVariant@11123305 : TEMPORARY Record 5401;
+      CatalogHelper@11123304 : Codeunit 11123318;
+      RecMgt@11123303 : Codeunit 11123326;
+      Dispatcher@11123307 : Codeunit 11123306;
+    BEGIN
+      Params.CalcOrderable := TRUE;
+      Params.CalcErrorText := '';
+      Params.ProductId := "Item No.";
+      Params.UnitOfMeasureId := '';
+      Params.BaseCurrencyId := Params.CurrentCurrencyId;
+
+      IF RecMgt.GetItem("Item No.",Item,FALSE) THEN BEGIN
+        "Unit Price" := CatalogHelper.GetSalesPrice(Item,DummyTempVariant,Params);
+        IF Orderable THEN BEGIN
+          Orderable := Params.CalcOrderable;
+          "Non Orderable Reason" := Params.CalcErrorText;
+        END;
+        Dispatcher.DispatchInternal('GetAvailableStockForItem',Params);
+        Stock := Params.Inventory;
+      END;
+    END;
+
+    PROCEDURE RefreshAllProductsInfo@11123303(VAR Params@11123308 : Record 11123310);
+    VAR
+      Item@11123302 : Record 27;
+      CatalogHelper@11123303 : Codeunit 11123318;
+      Window@11123304 : Dialog;
+      TotalRecNo@11123305 : Integer;
+      RecNo@11123306 : Integer;
+      CurItemNo@11123307 : Code[20];
+    BEGIN
+      CurItemNo := "Item No.";
+
+      RESET;
+      DELETEALL(TRUE);
+
+      Item.RESET;
+      TotalRecNo := Item.COUNT;
+
+      Window.OPEN(Text11123303 + Text11123304 + Text11123305);
+
+      IF Item.FINDSET THEN BEGIN
+        REPEAT
+          RecNo := RecNo + 1;
+          Window.UPDATE(2,Item."No.");
+          Window.UPDATE(3,ROUND(RecNo / TotalRecNo * 10000,1));
+          CatalogHelper.RefreshProductInfo(Item,0,TRUE,Params);
+        UNTIL Item.NEXT = 0;
+
+        IF CurItemNo <> '' THEN
+          GET(CurItemNo)
+        ELSE
+          FINDFIRST;
+      END;
+      Window.CLOSE;
+    END;
+
+    PROCEDURE RefreshProductInfo@11123309(VAR Params@11123302 : Record 11123310);
+    VAR
+      Item@11123304 : Record 27;
+      RecAction@11123303 : Record 11123327;
+      CatalogHelper@11123305 : Codeunit 11123318;
+    BEGIN
+      RecAction.RESET;
+      RecAction.SETCURRENTKEY("Item No.","Date/Time");
+      RecAction.SETRANGE("Item No.","Item No.");
+      IF RecAction.FINDLAST THEN BEGIN
+        IF Item.GET(RecAction."Item No.") THEN;
+        CatalogHelper.RefreshProductInfo(Item,RecAction.Action,TRUE,Params);
+      END;
+    END;
+
+    PROCEDURE RefreshProductVariantsInfo@11123308(VAR Params@11123303 : Record 11123310);
+    VAR
+      ItemVariant@11123302 : Record 5401;
+      CatalogHelper@11123304 : Codeunit 11123318;
+    BEGIN
+      Params.CalculateSKUPrices := TRUE;
+      Params.CalculateSKUInventory := TRUE;
+
+      ItemVariant.SETRANGE("Item No.","Item No.");
+      IF ItemVariant.FINDSET THEN
+        REPEAT
+          CatalogHelper.RefreshVariantInfo(ItemVariant,0,TRUE,Params);
+        UNTIL ItemVariant.NEXT = 0;
+    END;
+
+    PROCEDURE ShowVariantsInfo@11123302(VAR Params@11123302 : Record 11123310);
+    VAR
+      VariantInfo@11123303 : Record 11123318;
+      VarianstInfoForm@11123304 : Page 11123317;
+    BEGIN
+      RefreshProductVariantsInfo(Params);
+
+      Context.SetParams(Params);
+      VariantInfo.FILTERGROUP(2);
+      VariantInfo.SETRANGE("Item No.","Item No.");
+      VariantInfo.FILTERGROUP(0);
+      IF VariantInfo.FINDFIRST THEN;
+      VarianstInfoForm.SETTABLEVIEW(VariantInfo);
+      VarianstInfoForm.RUNMODAL;
+    END;
+
+    PROCEDURE SetParamsByWebshop@11123304(Webshop@11123302 : Record 11123313;VAR Customer@11123304 : Record 18;VAR Params@11123303 : Record 11123310);
+    VAR
+      RecMgt@11123305 : Codeunit 11123326;
+    BEGIN
+      Params.WebsiteId := Webshop.ID;
+
+      Webshop.TESTFIELD(Webshop."Template Customer No.");
+      IF RecMgt.GetCustomer(Webshop."Template Customer No.",Customer,FALSE) THEN
+        SetParamsByCustomer(Customer,Params);
+    END;
+
+    PROCEDURE SetParamsByAccount@11123306(AccountType@11123302 : 'Customer,Contact,Salesperson';AccountCode@11123307 : Code[20];VAR Customer@11123304 : Record 18;VAR Params@11123303 : Record 11123310);
+    VAR
+      RecMgt@11123305 : Codeunit 11123326;
+      CustomerFunc@11123306 : Codeunit 11123313;
+    BEGIN
+      CASE AccountType OF
+        AccountType::Customer :
+          IF RecMgt.GetCustomer(AccountCode,Customer,FALSE) THEN
+            SetParamsByCustomer(Customer,Params);
+        AccountType::Contact :
+          IF CustomerFunc.GetRelatedCustByContNo(AccountCode,Customer) THEN
+            SetParamsByCustomer(Customer,Params);
+        AccountType::Salesperson :
+          BEGIN
+            CLEAR(Customer);
+            Params.AccountId := '0';
+            Params.AccountType := '0';
+            Params.CurrentCurrencyId := '';
+          END;
+      END;
+    END;
+
+    PROCEDURE SetParamsByCustomer@11123307(VAR Customer@11123302 : Record 18;VAR Params@11123303 : Record 11123310);
+    VAR
+      GLSetup@11123305 : Record 98;
+      RecMgt@11123306 : Codeunit 11123326;
+      CustomerFunc@11123304 : Codeunit 11123313;
+    BEGIN
+      Params.CurrentCurrencyId := CustomerFunc.GetCustomerCurrency(Customer);
+      Params.PricesIncludingVAT := CustomerFunc.GetPricesIncludingVAT(Customer);
+      IF Params.CurrentCurrencyId = '' THEN BEGIN
+        RecMgt.GetGLSetup(GLSetup,TRUE);
+        GLSetup.TESTFIELD("LCY Code");
+        Params.CurrentCurrencyId := GLSetup."LCY Code";
+      END;
+      Params.AccountType := 'Customer';
+      Params.AccountId := Customer."No.";
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

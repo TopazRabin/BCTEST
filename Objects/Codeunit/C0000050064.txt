@@ -1,0 +1,340 @@
+OBJECT Codeunit 50064 Table38EventSubscribers
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=TPZ000.00.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    [EventSubscriber(Codeunit,50065,Tb38_OnInitRecord)]
+    LOCAL PROCEDURE Tb38_InitRecord@1000000008(VAR Sender@1000000000 : Codeunit 50065;Rec@1000000001 : Record 38);
+    BEGIN
+      WITH Rec DO BEGIN
+        // <TPZ1057>
+        IF "Document Type" IN ["Document Type"::Quote,
+                               "Document Type"::Order,
+                               "Document Type"::Invoice,
+                               "Document Type"::"Return Order"]
+        THEN
+          "Order Date" := WORKDATE;
+        // </TPZ1057>
+      END;
+    END;
+
+    [EventSubscriber(Table,38,OnBeforeInsertEvent)]
+    LOCAL PROCEDURE Tb38_OnInsert@1000000000(VAR Rec@1000000000 : Record 38;RunTrigger@1000000001 : Boolean);
+    BEGIN
+      IF NOT(RunTrigger) THEN
+        EXIT;
+      WITH Rec DO BEGIN
+        // <TPZ834>
+        "Assigned User ID" := USERID;
+        // </TPZ834>
+      END;
+    END;
+
+    [EventSubscriber(Table,38,OnAfterValidateEvent,"Buy-from Vendor No.")]
+    LOCAL PROCEDURE Tb38_BuyFromVendorNo_OnValidate@1000000003(VAR Rec@1000000000 : Record 38;VAR xRec@1000000001 : Record 38;CurrFieldNo@1000000002 : Integer);
+    VAR
+      CalendarMgmt@1000000004 : Codeunit 7600;
+      CalChange@1000000003 : Record 7602;
+      Vend@1000000005 : Record 23;
+      Table38EventPublishers@1000000006 : Codeunit 50065;
+      HideValidation@1000000007 : Boolean;
+    BEGIN
+      //PSHUKLA
+      WITH Rec DO BEGIN
+        IF "Document Type" IN ["Document Type"::Order, "Document Type"::Quote] THEN BEGIN
+          "Requested Receipt Date" := CalendarMgmt.CalcDateBOC(AdjustDateFormula("Lead Time Calculation"), "Order Date",
+                                                  CalChange."Source Type"::Vendor,"Buy-from Vendor No.",'',
+                                                  CalChange."Source Type"::Vendor,"Buy-from Vendor No.",'',FALSE);
+          "Expected Receipt Date" := "Requested Receipt Date";
+        END;
+        IF "Buy-from Vendor No." <> xRec."Buy-from Vendor No." THEN
+          Table38EventPublishers.Tb38_OnCopyVendorComment(Rec,xRec,HideValidation);
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50065,Tb38_OnCopyVendorComment)]
+    LOCAL PROCEDURE Tb38_CopyVendorComment@1000000004(VAR Sender@1000000000 : Codeunit 50065;VAR Rec@1000000001 : Record 38;VAR xRec@1000000006 : Record 38;VAR SetHideValidation@1000000005 : Boolean);
+    VAR
+      CommentLine@1000000004 : Record 97;
+      PurchCommentLine@1000000003 : Record 43;
+      NewLineNo@1000000002 : Integer;
+    BEGIN
+      //<TPZ2705>
+      IF SetHideValidation THEN
+        EXIT;
+      //</TPZ2705>
+
+      WITH Rec DO BEGIN
+        //<TPZ1514>
+        IF "Document Type" <> "Document Type"::Order THEN
+          EXIT;
+
+        CommentLine.SETRANGE("Table Name", CommentLine."Table Name"::Vendor);
+        CommentLine.SETRANGE("No.", "Buy-from Vendor No.");
+        CommentLine.SETRANGE("Print on Order Confirmation", TRUE);
+        IF CommentLine.FINDSET THEN BEGIN
+          NewLineNo := 10000;
+          PurchCommentLine.SETRANGE("Document Type", "Document Type");
+          PurchCommentLine.SETRANGE("No.", "No.");
+          PurchCommentLine.SETRANGE("Document Line No.", 0);
+          IF PurchCommentLine.FIND('+') THEN
+            NewLineNo := PurchCommentLine."Line No." + 100;
+          PurchCommentLine.RESET;
+          REPEAT
+            PurchCommentLine.INIT;
+            PurchCommentLine."Document Type" := "Document Type";
+            PurchCommentLine."No." := "No.";
+            PurchCommentLine."Document Line No." := 0;
+            PurchCommentLine."Line No." := NewLineNo;
+
+            NewLineNo += 100;
+            PurchCommentLine.Comment := CommentLine.Comment;
+            PurchCommentLine."Print On Order" := CommentLine."Print on Order Confirmation";
+            PurchCommentLine.Date := WORKDATE;
+            PurchCommentLine.INSERT;
+          UNTIL CommentLine.NEXT = 0;
+        END;
+        //</TPZ1514>
+      END;
+    END;
+
+    [EventSubscriber(Table,38,OnAfterValidateEvent,"Ship-to Code")]
+    LOCAL PROCEDURE Tb38_ShipToCode_OnValidate@1000000005(VAR Rec@1000000000 : Record 38;VAR xRec@1000000001 : Record 38;CurrFieldNo@1000000002 : Integer);
+    VAR
+      ShipToAddr@1000000003 : Record 222;
+      Cust@1000000004 : Record 18;
+    BEGIN
+      WITH Rec DO BEGIN
+        IF "Ship-to Code" <> '' THEN BEGIN
+          ShipToAddr.GET("Sell-to Customer No.","Ship-to Code");
+          // <TPZ60>
+          "Ship-to Phone No." := ShipToAddr."Phone No.";
+          // </TPZ60>
+        END ELSE BEGIN
+          TESTFIELD("Sell-to Customer No.");
+          Cust.GET("Sell-to Customer No.");
+          // <TPZ60>
+          "Ship-to Phone No." := Cust."Phone No.";
+          // </TPZ60>
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,38,OnAfterValidateEvent,"Order Address Code")]
+    LOCAL PROCEDURE Tb38_OrderAddressCode_OnValidate@1000000007(VAR Rec@1000000000 : Record 38;VAR xRec@1000000001 : Record 38;CurrFieldNo@1000000002 : Integer);
+    VAR
+      OrderAddr@1000000003 : Record 224;
+      PurchSetup@1000000004 : Record 312;
+      ShippingAccount@1000000005 : Record 14000714;
+      Vend@1000000006 : Record 23;
+    BEGIN
+      WITH Rec DO BEGIN
+        IF "Order Address Code" <> '' THEN BEGIN
+          OrderAddr.GET("Buy-from Vendor No.","Order Address Code");
+          IF IsCreditDocType THEN BEGIN
+            // <TPZ60>
+            "Ship-to Phone No." := OrderAddr."Phone No.";
+            // </TPZ60>
+          END;
+        END ELSE BEGIN
+          Vend.GET("Buy-from Vendor No.");
+          IF IsCreditDocType THEN BEGIN
+            // <TPZ60>
+            "Ship-to Phone No." := Vend."Phone No.";
+            // </TPZ60>
+          END;
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50065,Tb38_OnUpdatePurchLines1)]
+    LOCAL PROCEDURE Tb38_UpdatePurchLines1@1000000014(VAR Sender@1000000000 : Codeunit 50065;VAR UpdateConfirmed@1000000002 : Boolean);
+    BEGIN
+      UpdateConfirmed := TRUE;
+    END;
+
+    [EventSubscriber(Codeunit,50065,Tb38_OnUpdatePurchLines2)]
+    LOCAL PROCEDURE Tb38_UpdatePurchLines2@1000000015(VAR Sender@1000000000 : Codeunit 50065;UpdateConfirmed@1000000001 : Boolean;Rec@1000000002 : Record 38;VAR PurchLine@1000000003 : Record 39);
+    BEGIN
+      WITH Rec DO BEGIN
+        IF UpdateConfirmed AND (PurchLine."No." <> '') THEN
+          PurchLine.VALIDATE("Package Tracking No.","Package Tracking No.");
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50065,Tb38_OnUpdatePurchLines3)]
+    LOCAL PROCEDURE Tb38_UpdatePurchLines3@1000000016(VAR Sender@1000000000 : Codeunit 50065;UpdateConfirmed@1000000001 : Boolean;Rec@1000000002 : Record 38;VAR PurchLine@1000000003 : Record 39);
+    BEGIN
+      WITH Rec DO BEGIN
+        IF UpdateConfirmed AND (PurchLine."No." <> '') THEN
+          PurchLine.VALIDATE("Inbound Container Number","Inbound Container Number");
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50065,Tb38_OnUpdateShiptoAddress)]
+    LOCAL PROCEDURE Tb38_UpdateShiptoAddress@1000000010(VAR Sender@1000000000 : Codeunit 50065;VAR Rec@1000000001 : Record 38;Location@1000000002 : Record 14);
+    BEGIN
+      WITH Rec DO BEGIN
+        // <TPZ60>
+        "Ship-to Phone No." := Location."Phone No.";
+        // </TPZ60>
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50065,Tb38_OnUpdateShiptoAddress1)]
+    LOCAL PROCEDURE Tb38_UpdateShiptoAddress1@1000000011(VAR Sender@1000000000 : Codeunit 50065;VAR Rec@1000000001 : Record 38;CompanyInfo@1000000002 : Record 79);
+    BEGIN
+      WITH Rec DO BEGIN
+        // <TPZ60>
+        "Ship-to Phone No." := CompanyInfo."Ship-to Phone No.";
+       // </TPZ60>
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50065,Tb38_OnSetShipToForSpecOrder)]
+    LOCAL PROCEDURE Tb38_SetShipToForSpecOrder@1000000012(VAR Sender@1000000000 : Codeunit 50065;VAR Rec@1000000001 : Record 38;Location@1000000002 : Record 14);
+    BEGIN
+      WITH Rec DO BEGIN
+        // <TPZ60>
+        "Ship-to Phone No." := Location."Phone No.";
+        // </TPZ60>
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50065,Tb38_OnSetShipToForSpecOrder1)]
+    LOCAL PROCEDURE Tb38_SetShipToForSpecOrder1@1000000013(VAR Sender@1000000000 : Codeunit 50065;VAR Rec@1000000001 : Record 38;CompanyInfo@1000000002 : Record 79);
+    BEGIN
+      WITH Rec DO BEGIN
+        // <TPZ60>
+        "Ship-to Phone No." := CompanyInfo."Ship-to Phone No.";
+       // </TPZ60>
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50065,Tb38_OnCreatePickMovement)]
+    LOCAL PROCEDURE Tb38_CreatePickMovement@1000000001(VAR Sender@1000000000 : Codeunit 50065;VAR Rec@1000000001 : Record 38);
+    VAR
+      RFSetup@1000000012 : Record 14002801;
+      Location@1000000011 : Record 14;
+      WarehouseRequest@1000000010 : Record 5765;
+      MovementHeader@1000000009 : Record 14099001;
+      MovementLine@1000000008 : Record 14099002;
+      BinContent@1000000007 : Record 7302;
+      PurchaseLine@1000000006 : Record 39;
+      ACEOneMgt@1000000005 : Codeunit 14099001;
+      OutstQty@1000000004 : Decimal;
+      PicksCreated@1000000003 : Integer;
+      MovementLineCreated@1000000002 : Boolean;
+      PurchLine@1000000013 : Record 39;
+    BEGIN
+      WITH Rec DO BEGIN
+        PurchaseLine.SETRANGE("Document Type",WarehouseRequest."Source Subtype");
+        PurchaseLine.SETRANGE("Document No.",WarehouseRequest."Source No.");
+        PurchaseLine.SETRANGE(Type,PurchaseLine.Type::Item);
+
+        IF PurchaseLine.FINDFIRST AND
+           (PurchaseLine."Outstanding Quantity" * PurchaseLine."Qty. per Unit of Measure" >
+           ACEOneMgt.ProcessedPickQty(DATABASE::"Purchase Line",PurchaseLine."Document Type",
+             PurchaseLine."Document No.",PurchaseLine."Line No.") +
+           ACEOneMgt.PickQuantity(DATABASE::"Purchase Line",PurchaseLine."Document Type",
+             PurchaseLine."Document No.",PurchaseLine."Line No."))
+        THEN BEGIN
+          TESTFIELD("Location Code");
+          Location.GET("Location Code");
+          Location.TESTFIELD("Ship Bin (ACE One WMS)");
+
+          ACEOneMgt.CreateMovementHeader(WarehouseRequest."Location Code",PurchaseLine."Order Date",
+            PurchaseLine."Document Type",PurchaseLine."Document No.",'',
+            '',MovementHeader);
+
+          BinContent.RESET;
+          BinContent.SETCURRENTKEY("Location Code","Item No.","Variant Code",
+            "Unit of Measure Code","Bin Ranking");
+            BinContent.ASCENDING(FALSE);
+          REPEAT
+            OutstQty :=
+              PurchaseLine."Outstanding Quantity" * PurchaseLine."Qty. per Unit of Measure" -
+              ACEOneMgt.ProcessedPickQty(DATABASE::"Purchase Line",PurchaseLine."Document Type",
+                PurchaseLine."Document No.",PurchaseLine."Line No.") -
+              ACEOneMgt.PickQuantity(DATABASE::"Purchase Line",PurchaseLine."Document Type",
+                PurchaseLine."Document No.",PurchaseLine."Line No.");
+            BinContent.SETRANGE("Location Code","Location Code");
+            BinContent.SETRANGE("Item No.",PurchaseLine."No.");
+            BinContent.SETRANGE("Variant Code",PurchaseLine."Variant Code");
+            BinContent.SETFILTER(
+              "Bin Code",'<>%1',Location."Ship Bin (ACE One WMS)");
+            IF BinContent.FINDFIRST THEN BEGIN
+              REPEAT
+                IF (Location."Use Bin Types (ACE One WMS)" AND
+                   ACEOneMgt.IsALBinTypePick(
+                     BinContent."Location Code",BinContent."Bin Code")) OR
+                   NOT Location."Use Bin Types (ACE One WMS)"
+                THEN BEGIN
+                  IF ACEOneMgt.CreateMovementLine(BinContent,OutstQty,MovementHeader."No.",
+                     PurchLine."Expected Receipt Date",MovementLine,PurchaseLine."Unit of Measure Code")
+                  THEN BEGIN
+                    MovementLine."Source Type" := DATABASE::"Purchase Line";
+                    MovementLine."Source Subtype" := PurchaseLine."Document Type";
+                    MovementLine."Source ID" := PurchaseLine."Document No.";
+                    MovementLine."Source Reference No." := PurchaseLine."Line No.";
+                    MovementLine.MODIFY;
+                    MovementLineCreated := TRUE;
+                  END;
+                END;
+              UNTIL (BinContent.NEXT = 0) OR (OutstQty <= 0);
+
+              IF MovementLineCreated THEN BEGIN
+                ACEOneMgt.CreatePickMovePlaceLine(MovementLine);
+                WarehouseRequest."Pick Movement" := MovementHeader."No.";
+                WarehouseRequest.MODIFY;
+                PicksCreated := PicksCreated + 1;
+                PurchaseLine."Bin Code" := Location."Ship Bin (ACE One WMS)";
+                PurchaseLine."Return Qty. to Ship" :=
+                  PurchaseLine."Outstanding Quantity" - OutstQty;
+                PurchaseLine."Outstanding Qty. (Base)" :=
+                  PurchaseLine."Outstanding Quantity" *
+                    PurchaseLine."Qty. per Unit of Measure";
+                PurchaseLine.MODIFY;
+              END;
+            END;
+          UNTIL PurchaseLine.NEXT = 0;
+
+          IF MovementLineCreated THEN BEGIN
+            ACEOneMgt.SortingSequence(MovementHeader);
+          END ELSE BEGIN
+            RFSetup.LOCKTABLE(TRUE);
+            IF INCSTR(MovementHeader."No.") = RFSetup."Next Reg. Movem. No." THEN BEGIN
+              RFSetup."Next Movement No." := MovementHeader."No.";
+              RFSetup.MODIFY;
+            END;
+            MovementHeader.DELETE;
+          END;
+          MovementLineCreated := FALSE;
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+
+      12-20-2019 UCHOUHAN TPZ2705
+        Added code to skip comment in suggested order.
+      20200228  PSHUKLA Added new function Tb38_BuyFromVendorNo_OnValidate
+    }
+    END.
+  }
+}
+

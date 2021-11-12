@@ -1,0 +1,1921 @@
+OBJECT Codeunit 14002407 Forecast and Release
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12/28/17;
+    Time=12:00:00 PM;
+    Version List=SE0.60.18;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EDIAlert@1240020007 : Record 14000380;
+      EDIDocument@1240020008 : Record 14002353;
+      CurrQuoteHeader@1240020012 : Record 36;
+      TmpOrderHeader@1240020014 : TEMPORARY Record 36;
+      EDIRecordAssocDoc@1240030000 : Codeunit 14002380;
+      CreateEDIAlert@1240020001 : Codeunit 14000375;
+      ReplaceCodeFound@1240020000 : Boolean;
+      ForecastIsRelease@1240020002 : Boolean;
+      CancelReleasedOrderUpdate@1240020003 : Boolean;
+      CloseBlanketLine@1240020004 : Boolean;
+      ReleasedOrderBypassed@1240020005 : Boolean;
+      NewItem@1240020006 : Boolean;
+      Done@1240020009 : Boolean;
+      AlertNo@1240020010 : Integer;
+      CloseOrderOverrideCode@1240020011 : Boolean;
+      SingleDocument@1240020013 : Boolean;
+
+    PROCEDURE ProcessSingleDocument@1240020006(QuoteHeader@1240020004 : Record 36);
+    VAR
+      EDIRecDocHdr@1240020002 : Record 14002358;
+      EDIDocument@1240020003 : Record 14002353;
+      QuoteLine@1240020000 : Record 37;
+      Text001@1240020001 : TextConst 'ENU=Quote %1 was previously processed.\';
+      Text002@1240020005 : TextConst 'ENU=Do you want to process again?';
+      Text003@1240020006 : TextConst 'ENU=Process cancelled.';
+    BEGIN
+      SingleDocument := TRUE;
+      CurrQuoteHeader.COPY(QuoteHeader);
+
+      QuoteLine.RESET;
+      QuoteLine.SETRANGE("Document Type",CurrQuoteHeader."Document Type");
+      QuoteLine.SETRANGE("Document No.",CurrQuoteHeader."No.");
+      QuoteLine.SETFILTER("EDI Line Status",'<>%1',QuoteLine."EDI Line Status"::" ");
+      IF QuoteLine.FIND('-') THEN
+        IF NOT CONFIRM(
+          STRSUBSTNO(Text001,CurrQuoteHeader."No.") +
+          Text002)
+        THEN
+          ERROR(Text003);
+
+      EDIRecDocHdr.GET(CurrQuoteHeader."EDI Internal Doc. No.");
+      CASE EDIRecDocHdr."EDI Document No." OF
+        '830','DELFOR':
+          UpdateForecast(EDIRecDocHdr);
+        '862','DELJIT':
+          BEGIN
+            EvaluateQuotes(EDIRecDocHdr);
+            IF EDIRecDocHdr."Evaluate EDI Time" THEN
+              EvaluateEDITime(EDIRecDocHdr,EDIDocument);
+          END;
+      END;
+    END;
+
+    PROCEDURE EvaluateQuotes@1240030000(VAR CurrEDIRecDocHeader@1240030000 : Record 14002358) : Boolean;
+    VAR
+      Text001@1240030007 : TextConst 'ENU=Evaluating Forecast and Release....';
+      Text002@1240030006 : TextConst 'ENU=EDI Receive Document';
+      Text003@1240030005 : TextConst 'ENU=Sell-To Customer';
+      Text004@1240030004 : TextConst 'ENU=Quote';
+      Text005@1240030003 : TextConst 'ENU=Blanket Order';
+      Text006@1240030002 : TextConst 'ENU=Sales Order';
+      Text007@1240030001 : TextConst 'ENU=Item';
+      EDIChangedDocument@1240030023 : Record 14002373;
+      EDIRecDocHeader@1240030010 : Record 14002358;
+      EDITemplate@1240030024 : Record 14002350;
+      NoSeriesLine@1240030019 : Record 309;
+      BegCumulativeTotal@1240030032 : Record 14002405;
+      BlanketHeader@1240030025 : Record 36;
+      BlanketLine@1240030026 : Record 37;
+      OrderHeader@1240030015 : Record 36;
+      OrderLine@1240030014 : Record 37;
+      PrevQuoteLine@1240030035 : Record 37;
+      QuoteHeader@1240030011 : Record 36;
+      QuoteLine@1240030012 : Record 37;
+      SalesHeader@1240030017 : Record 36;
+      SalesLine@1240030018 : Record 37;
+      SalesLine2@1240030031 : Record 37;
+      SalesLine3@1240020008 : Record 37;
+      ShipmentHdr@1240020005 : Record 110;
+      ShipmentLine@1240030013 : Record 111;
+      ShipmentLine2@1240030030 : Record 111;
+      TmpQuoteLine@1240030016 : TEMPORARY Record 37;
+      TmpReleaseDate@1240030021 : TEMPORARY Record 14002404;
+      EDIRecDocLineInfo@1240030039 : Record 14002372;
+      EDIRecDocHdrInfo@1240030038 : Record 14002371;
+      EDIRecDocHdrInfo2@1240030037 : Record 14002371;
+      ReleaseSalesDocument@1240030020 : Codeunit 414;
+      DispWindow@1240030008 : Dialog;
+      CurrReleaseDate@1240030022 : Date;
+      CurrEDICode@1240030029 : Code[20];
+      TotalShipQty@1240030033 : Decimal;
+      TotalOrderQty@1240030034 : Decimal;
+      PrevQty@1240030036 : Decimal;
+      EntryNo@1240030040 : Integer;
+      OrderFound@1240030041 : Boolean;
+      OrderWasReleased@1240030042 : Boolean;
+      MatchReleaseItem@1240020000 : Boolean;
+      ReleaseItemFound@1240020002 : Boolean;
+      UseOrderLineOutstandingQty@1240020003 : Boolean;
+      ShipmentFound@1240020006 : Boolean;
+      OrderLineOutstandingQty@1240020004 : Decimal;
+      Text008@1240030027 : TextConst 'ENU=Blanket Order Line not found on Blanket Order %1 for Quote %2 Item %3 Release Date %4.';
+      Text009@1240030028 : TextConst 'ENU=Blanket Order not found for Quote %1.';
+      Text010@1240020001 : TextConst 'ENU=Blanket Order with Blanket Order Line for Quote %1 Item %2 with release date of %3 was not found.';
+      FindBlanketLine@1240020007 : Boolean;
+      CurrEDITime@1240020011 : Time;
+      DailyReleaseSchedule@1240020010 : Boolean;
+      ShipmentLineFound@1240020009 : Boolean;
+    BEGIN
+      IF GUIALLOWED THEN
+        DispWindow.OPEN(
+          Text001 + '\' +
+          PADSTR(Text002,25,' ') + '#1###########################\' +
+          PADSTR(Text003,25,' ') + '#2###########################\' +
+          PADSTR(Text004,25,' ') + '#3###########################\' +
+          PADSTR(Text005,25,' ') + '#4###########################\' +
+          PADSTR(Text006,25,' ') + '#5###########################\' +
+          PADSTR(Text007,25,' ') + '#6###########################');
+
+      EDIRecDocHeader.GET(CurrEDIRecDocHeader."Internal Doc. No.");
+      EDIRecDocHeader."Data Error" := TRUE;
+      EDIRecDocHeader."Forecast Release Error" := TRUE;
+      EDIRecDocHeader."Document Processed" := FALSE;
+      EDIRecDocHeader.MODIFY;
+      COMMIT;
+
+      IF GUIALLOWED THEN BEGIN
+        DispWindow.UPDATE(1,CurrEDIRecDocHeader."Internal Doc. No.");
+        DispWindow.UPDATE(2,CurrEDIRecDocHeader."Customer No.");
+      END;
+
+      IF NOT ForecastIsRelease THEN BEGIN
+        EDIAlert.RESET;
+        EDIAlert.SETCURRENTKEY("Internal Doc. No.");
+        EDIAlert.SETRANGE("Internal Doc. No.",CurrEDIRecDocHeader."Internal Doc. No.");
+        EDIAlert.DELETEALL;
+      END;
+
+      EDIDocument.RESET;
+      EDIDocument.SETRANGE("Trade Partner No.",CurrEDIRecDocHeader."Trade Partner No.");
+      EDIDocument.SETRANGE("Navision Document",CurrEDIRecDocHeader."Navision Document");
+      EDIDocument.SETRANGE("EDI Document No.",CurrEDIRecDocHeader."EDI Document No.");
+      EDIDocument.SETRANGE(Version,CurrEDIRecDocHeader."EDI Version");
+      EDIDocument.SETRANGE(Type,EDIDocument.Type::Import);
+      EDIDocument.SETFILTER(Status,'<>%1',EDIDocument.Status::Inactive);
+      EDIDocument.FIND('-');
+
+      EDITemplate.GET(EDIDocument."EDI Template Code");
+
+      TmpOrderHeader.RESET;
+      TmpOrderHeader.DELETEALL;
+
+      // Update Quantities based on Received Cumulative Quantity
+      IF ((EDIDocument."EDI Document No." = '862') OR
+          (EDIDocument."EDI Document No." = 'DELJIT')) AND
+        EDIDocument."Release Qty. Cumulative" THEN BEGIN
+         QuoteHeader.RESET;
+         QuoteHeader.SETRANGE("Document Type",QuoteHeader."Document Type"::Quote);
+         IF SingleDocument THEN
+           QuoteHeader.SETRANGE("No.",CurrQuoteHeader."No.")
+          ELSE BEGIN
+            QuoteHeader.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+            QuoteHeader.SETRANGE("EDI Order",TRUE);
+            QuoteHeader.SETRANGE("EDI Internal Doc. No.",CurrEDIRecDocHeader."Internal Doc. No.");
+          END;
+          IF QuoteHeader.FIND('-') THEN
+            REPEAT
+              IF GUIALLOWED THEN
+                DispWindow.UPDATE(3,QuoteHeader."No.");
+              QuoteLine.RESET;
+              QuoteLine.SETRANGE("Document Type",QuoteHeader."Document Type");
+              QuoteLine.SETRANGE("Document No.",QuoteHeader."No.");
+              QuoteLine.SETFILTER("No.",'<>%1','');
+              IF QuoteLine.FIND('-') THEN
+                REPEAT
+                  TotalShipQty := 0;
+                  TotalOrderQty := 0;
+                  BlanketHeader.RESET;
+                  BlanketHeader.SETCURRENTKEY("Document Type","Sell-to Customer No.","No.");
+                  BlanketHeader.SETRANGE("Document Type",BlanketHeader."Document Type"::"Blanket Order");
+                  IF EDIDocument."Match Release Sell-to Code" THEN
+                    BlanketHeader.SETRANGE("Sell-to Customer No.",QuoteHeader."Sell-to Customer No.");
+                  IF EDIDocument."Match Release Ship-to Code" THEN
+                    BlanketHeader.SETRANGE("Ship-to Code",QuoteHeader."Ship-to Code");
+                  IF EDIDocument."Match Release Trade Partner" THEN
+                    BlanketHeader.SETRANGE("EDI Trade Partner",QuoteHeader."EDI Trade Partner");
+                  IF EDIDocument."Match Release P.O. No." THEN
+                    BlanketHeader.SETRANGE("External Document No.",QuoteLine."EDI Code");
+                  IF BlanketHeader.FIND('-') THEN BEGIN
+                    BlanketLine.RESET;
+                    BlanketLine.SETCURRENTKEY(
+                      "Document Type",Type,"No.","Variant Code");
+                    BlanketLine.SETRANGE("Document Type",BlanketHeader."Document Type");
+                    BlanketLine.SETRANGE("Document No.",BlanketHeader."No.");
+                    BlanketLine.SETRANGE(Type,BlanketLine.Type::Item);
+                    BlanketLine.SETRANGE("No.",QuoteLine."No.");
+                    BlanketLine.SETRANGE("Variant Code",QuoteLine."Variant Code");
+                    IF EDIDocument."Release No. Char. to Match" <> 0 THEN
+                      BlanketLine.SETFILTER(
+                        "EDI Release No.",'%1..',
+                          COPYSTR(QuoteLine."EDI Release No.",1,EDIDocument."Release No. Char. to Match"));
+                    IF BlanketLine.FIND('-') THEN
+                      REPEAT
+                        // Find Total Sales Shipment Lines
+                        ShipmentLine2.RESET;
+                        ShipmentLine2.SETCURRENTKEY("Blanket Order No.","Blanket Order Line No.");
+                        ShipmentLine2.SETRANGE("Blanket Order No.",BlanketHeader."No.");
+                        ShipmentLine2.SETRANGE("Blanket Order Line No.",BlanketLine."Line No.");
+                        ShipmentLine2.CALCSUMS(ShipmentLine2.Quantity);
+                        TotalShipQty := TotalShipQty + ShipmentLine2.Quantity;
+                        // Find Total Sales Lines
+                        SalesLine2.SETCURRENTKEY(
+                          "Document Type","Blanket Order No.","Blanket Order Line No.");
+                        SalesLine2.SETRANGE("Document Type",SalesLine2."Document Type"::Order);
+                        SalesLine2.SETRANGE("Blanket Order No.",BlanketHeader."No.");
+                        SalesLine2.SETRANGE("Blanket Order Line No.",BlanketLine."Line No.");
+                        IF SalesLine2.FIND('-') THEN
+                          REPEAT
+                            IF EDIDocument."Enable Cumulative Rel. Process" THEN BEGIN
+                              OrderHeader.GET(SalesLine2."Document Type",SalesLine2."Document No.");
+                              IF OrderHeader.Status = OrderHeader.Status::Open THEN
+                                OrderHeader.DELETE(TRUE);
+                              IF OrderHeader.Status = OrderHeader.Status::Released THEN
+                                TotalOrderQty := TotalOrderQty + SalesLine2."Outstanding Quantity";
+                             END ELSE
+                               TotalOrderQty := TotalOrderQty + SalesLine2."Outstanding Quantity";
+                          UNTIL SalesLine2.NEXT = 0;
+                      UNTIL BlanketLine.NEXT = 0;
+                    BegCumulativeTotal.RESET;
+                    BegCumulativeTotal.SETRANGE("Trade Partner Code",BlanketHeader."EDI Trade Partner");
+                    BegCumulativeTotal.SETRANGE("Blanket Order No.",BlanketHeader."No.");
+                    BegCumulativeTotal.SETRANGE("Item No.",QuoteLine."No.");
+                    BegCumulativeTotal.SETRANGE(Variant,QuoteLine."Variant Code");
+                    IF NOT BegCumulativeTotal.FIND('-') THEN
+                      BegCumulativeTotal.INIT;
+                    IF (EDIDocument."Include Rel. ASN Cumulative") AND (NOT Done) THEN BEGIN
+                      IF (PrevQuoteLine."No." <> QuoteLine."No.") OR
+                         (PrevQuoteLine."Variant Code" <> QuoteLine."Variant Code")
+                      THEN
+                        NewItem := TRUE
+                      ELSE
+                        NewItem := FALSE;
+                      GetASNCumulative(EDIRecDocHeader,QuoteLine,NewItem);
+                      IF Done THEN BEGIN
+                        QuoteLine.VALIDATE(
+                          Quantity,QuoteLine."EDI Cumulative Quantity" -
+                            (TotalShipQty + TotalOrderQty + BegCumulativeTotal.Quantity));
+                        IF (PrevQuoteLine."No." <> QuoteLine."No.") OR
+                          (PrevQuoteLine."Variant Code" <> QuoteLine."Variant Code") THEN
+                            PrevQty := 0
+                        ELSE
+                          QuoteLine.VALIDATE(
+                            Quantity,QuoteLine."EDI Cumulative Quantity" -
+                              (TotalShipQty + TotalOrderQty + BegCumulativeTotal.Quantity + PrevQty));
+                      END;
+                    END ELSE BEGIN
+                      QuoteLine.VALIDATE(
+                        Quantity,QuoteLine."EDI Cumulative Quantity" -
+                          (TotalShipQty + TotalOrderQty + BegCumulativeTotal.Quantity));
+                      IF (PrevQuoteLine."No." <> QuoteLine."No.") OR
+                         (PrevQuoteLine."Variant Code" <> QuoteLine."Variant Code") THEN
+                        PrevQty := 0
+                      ELSE
+                        QuoteLine.VALIDATE(
+                          Quantity,QuoteLine."EDI Cumulative Quantity" -
+                            (TotalShipQty + TotalOrderQty + BegCumulativeTotal.Quantity + PrevQty));
+                    END;
+                    QuoteLine.MODIFY;
+                    PrevQuoteLine.TRANSFERFIELDS(QuoteLine);
+                    PrevQty := PrevQty + QuoteLine.Quantity;
+                  END;
+                UNTIL QuoteLine.NEXT = 0;
+            UNTIL QuoteHeader.NEXT = 0;
+      END;
+      // End Quantity Update
+
+      IF STRPOS(
+        EDIDocument."Close Order Override Code",CurrEDIRecDocHeader."PO Change Purpose Code") <> 0
+      THEN
+        CloseOrderOverrideCode := TRUE
+      ELSE
+        CloseOrderOverrideCode := FALSE;
+      IF (EDIDocument."Close Open Sales Order") AND
+         ((CurrEDIRecDocHeader."PO Change Purpose Code" = '05') OR
+          (CurrEDIRecDocHeader."PO Change Purpose Code" = '5') OR
+          (CloseOrderOverrideCode)) AND
+         ((EDIDocument."Create Release from Forecast" = FALSE) AND
+          (EDIDocument."Release Qty. Cumulative" = FALSE))
+      THEN
+        CloseReleaseOpenOrder(
+          CurrEDIRecDocHeader."Internal Doc. No.",EDIDocument."Close Open Order Action");
+
+      CancelReleasedOrderUpdate := EDIDocument."Do Not Update Released Order";
+      IF (ForecastIsRelease) AND
+         (EDIDocument."Replace Forecast") AND
+         (EDIDocument."Reopen Released Sales Order" = FALSE)
+      THEN
+        CancelReleasedOrderUpdate := TRUE;
+      DailyReleaseSchedule := EDIDocument."Daily Release Schedule";
+
+      QuoteHeader.RESET;
+      QuoteHeader.SETRANGE("Document Type",QuoteHeader."Document Type"::Quote);
+      IF SingleDocument THEN
+        QuoteHeader.SETRANGE("No.",CurrQuoteHeader."No.")
+      ELSE BEGIN
+        QuoteHeader.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+        QuoteHeader.SETRANGE("EDI Order",TRUE);
+        QuoteHeader.SETRANGE("EDI Internal Doc. No.",CurrEDIRecDocHeader."Internal Doc. No.");
+      END;
+      IF QuoteHeader.FIND('-') THEN
+        REPEAT
+          TmpReleaseDate.RESET;
+          TmpReleaseDate.DELETEALL;
+          IF GUIALLOWED THEN
+            DispWindow.UPDATE(3,QuoteHeader."No.");
+          QuoteLine.RESET;
+          QuoteLine.SETRANGE("Document Type",QuoteHeader."Document Type");
+          QuoteLine.SETRANGE("Document No.",QuoteHeader."No.");
+          QuoteLine.SETFILTER("No.",'<>%1','');
+          QuoteLine.SETFILTER(Quantity,'>=%1',0);
+          QuoteLine.SETFILTER("EDI Line Status",'<>%1',QuoteLine."EDI Line Status"::Closed);
+          IF ForecastIsRelease THEN
+            QuoteLine.SETFILTER("EDI Ship Req. Date",'<>%1',0D);
+          IF QuoteLine.FIND('-') THEN
+            REPEAT
+              IF GUIALLOWED THEN
+                DispWindow.UPDATE(6,QuoteLine."No.");
+              CASE QuoteLine."EDI Line Type" OF
+                QuoteLine."EDI Line Type"::Release,QuoteLine."EDI Line Type"::"Forecast & Release":
+                  BEGIN
+                    // Check for Order Line
+                    ReleasedOrderBypassed := FALSE;
+                    OrderHeader.RESET;
+                    OrderHeader.SETCURRENTKEY(
+                      "Document Type","EDI Trade Partner","External Document No.","Sell-to Customer No.");
+                    OrderHeader.SETRANGE("Document Type",OrderHeader."Document Type"::Order);
+                    OrderHeader.SETRANGE("EDI Trade Partner",QuoteHeader."EDI Trade Partner");
+                    IF QuoteLine."EDI Code" = '' THEN
+                      OrderHeader.SETRANGE("External Document No.",QuoteHeader."External Document No.")
+                    ELSE
+                      OrderHeader.SETRANGE("External Document No.",QuoteLine."EDI Code");
+                    OrderHeader.SETRANGE("Sell-to Customer No.",QuoteHeader."Sell-to Customer No.");
+                    OrderHeader.SETRANGE("Ship-to Code",QuoteHeader."Ship-to Code");
+                    IF OrderHeader.FIND('-') THEN BEGIN
+                      REPEAT
+                        OrderFound := TRUE;
+                        IF (OrderHeader.Status = OrderHeader.Status::Released) AND
+                           (CancelReleasedOrderUpdate = FALSE)
+                        THEN BEGIN
+                          ReleaseSalesDocument.Reopen(OrderHeader);
+                          OrderWasReleased := TRUE;
+                        END ELSE BEGIN
+                          OrderWasReleased := FALSE;
+                          IF CancelReleasedOrderUpdate THEN
+                            ReleasedOrderBypassed := TRUE;
+                        END;
+                        OrderLine.RESET;
+                        OrderLine.SETRANGE("Document Type",OrderHeader."Document Type");
+                        OrderLine.SETRANGE("Document No.",OrderHeader."No.");
+                        OrderLine.SETRANGE(Type,QuoteLine.Type);
+                        OrderLine.SETRANGE("No.",QuoteLine."No.");
+                        IF EDIDocument."Release No. Char. to Match" <> 0 THEN
+                          OrderLine.SETFILTER(
+                            "EDI Release No.",'%1..',
+                              COPYSTR(QuoteLine."EDI Release No.",1,EDIDocument."Release No. Char. to Match"));
+                        IF ((OrderLine."EDI Forecast Begin Date" <> 0D) AND
+                            (OrderLine."EDI Forecast End Date" <> 0D) AND
+                            (ForecastIsRelease)) OR
+                           ((OrderLine."EDI Forecast Begin Date" <> 0D) AND
+                            (OrderLine."EDI Forecast End Date" <> 0D) AND
+                            (DailyReleaseSchedule = FALSE) AND
+                            (OrderLine."EDI Line Type" = OrderLine."EDI Line Type"::Release))
+                        THEN BEGIN
+                          OrderLine.SETFILTER(
+                            "EDI Forecast Begin Date",'<=%1',QuoteLine."EDI Ship Req. Date");
+                          OrderLine.SETFILTER(
+                            "EDI Forecast End Date",'>=%1',QuoteLine."EDI Ship Req. Date");
+                        END ELSE
+                          OrderLine.SETRANGE("EDI Ship Req. Date",QuoteLine."EDI Ship Req. Date");
+                        OrderLine.SETRANGE("EDI Kanban No.",QuoteLine."EDI Kanban No.");
+                        OrderLine.SETRANGE("EDI Time",QuoteLine."EDI Time");
+                        IF OrderLine.FIND('-') THEN BEGIN
+                          IF EDIDocument."Archive Sales Order" THEN
+                            ArchiveDocument(OrderHeader);
+                          EDIRecordAssocDoc.RecordAssocDoc(CurrEDIRecDocHeader,OrderHeader,FALSE);
+                          QuoteLine."EDI Line Status" := QuoteLine."EDI Line Status"::"Order Exists";
+                          IF ((CurrEDIRecDocHeader."PO Change Purpose Code" = '05') OR
+                              (CurrEDIRecDocHeader."PO Change Purpose Code" = '04') OR
+                              (CurrEDIRecDocHeader."PO Change Purpose Code" = '4') OR
+                              (CurrEDIRecDocHeader."PO Change Purpose Code" = '5')) AND
+                              (ReleasedOrderBypassed = FALSE)
+                          THEN
+                             QuoteLine."EDI Line Status" := QuoteLine."EDI Line Status"::"Change Made";
+                           IF NOT ReleasedOrderBypassed THEN BEGIN
+                             OrderLine."EDI Ship Req. Date" := QuoteLine."EDI Ship Req. Date";
+                             OrderLine."EDI Release No." := QuoteLine."EDI Release No.";
+                           END;
+                        END ELSE BEGIN
+                          OrderFound := FALSE;
+                          IF OrderWasReleased THEN BEGIN
+                            SalesLine3.RESET;
+                            SalesLine3.SETRANGE("Document Type",OrderHeader."Document Type");
+                            SalesLine3.SETRANGE("Document No.",OrderHeader."No.");
+                            SalesLine3.SETFILTER(Type,'>0');
+                            SalesLine3.SETFILTER(Quantity,'<>0');
+                            IF SalesLine3.FIND('-') THEN
+                              ReleaseSalesDocument.RUN(OrderHeader);
+                          END;
+                        END;
+                      UNTIL (QuoteLine."EDI Line Status" = QuoteLine."EDI Line Status"::"Order Exists") OR
+                            (QuoteLine."EDI Line Status" = QuoteLine."EDI Line Status"::"Change Made") OR
+                            (OrderHeader.NEXT = 0);
+                    END ELSE
+                      OrderFound := FALSE;
+                    // Check for Shipment Line
+                    ShipmentLineFound := FALSE;
+                    IF (QuoteLine."EDI Line Status" <> QuoteLine."EDI Line Status"::"Order Exists") AND
+                       (QuoteLine."EDI Line Status" <> QuoteLine."EDI Line Status"::"Change Made")
+                    THEN BEGIN
+                      ShipmentFound := FALSE;
+                      ShipmentLine.RESET;
+                      ShipmentLine.SETCURRENTKEY(
+                        "Sell-to Customer No.","No.","EDI Release No.","EDI Ship Req. Date");
+                      ShipmentLine.SETRANGE("Sell-to Customer No.",QuoteLine."Sell-to Customer No.");
+                      ShipmentLine.SETRANGE("No.",QuoteLine."No.");
+                      IF EDIDocument."Release No. Char. to Match" <> 0 THEN
+                        ShipmentLine.SETFILTER(
+                          "EDI Release No.",'%1..',
+                            COPYSTR(QuoteLine."EDI Release No.",1,EDIDocument."Release No. Char. to Match"));
+                      IF ((ShipmentLine."EDI Forecast Begin Date" <> 0D) AND
+                          (ShipmentLine."EDI Forecast End Date" <> 0D) AND
+                          (ForecastIsRelease)) OR
+                         ((ShipmentLine."EDI Forecast Begin Date" <> 0D) AND
+                          (ShipmentLine."EDI Forecast End Date" <> 0D) AND
+                          (DailyReleaseSchedule = FALSE))
+                      THEN BEGIN
+                        ShipmentLine.SETFILTER(
+                          "EDI Forecast Begin Date",'<=%1',QuoteLine."EDI Ship Req. Date");
+                        ShipmentLine.SETFILTER(
+                          "EDI Forecast End Date",'>=%1',QuoteLine."EDI Ship Req. Date");
+                      END ELSE
+                        ShipmentLine.SETRANGE("EDI Ship Req. Date",QuoteLine."EDI Ship Req. Date");
+                      ShipmentLine.SETRANGE("EDI Kanban No.",QuoteLine."EDI Kanban No.");
+                      ShipmentLine.SETRANGE("EDI Time",QuoteLine."EDI Time");
+                      IF ShipmentLine.FIND('-') THEN
+                        ShipmentLineFound := TRUE
+                      ELSE BEGIN
+                        ShipmentLine.SETRANGE("EDI Time");
+                        IF ShipmentLine.FIND('-') THEN
+                          ShipmentLineFound := TRUE;
+                      END;
+                      IF ShipmentLineFound THEN BEGIN
+                        REPEAT
+                          ShipmentHdr.RESET;
+                          IF ShipmentHdr.GET(ShipmentLine."Document No.") THEN BEGIN
+                            IF (ShipmentHdr."Ship-to Code" = QuoteHeader."Ship-to Code") AND
+                               (ShipmentHdr."EDI Trade Partner" = QuoteHeader."EDI Trade Partner")
+                              THEN BEGIN
+                                IF QuoteLine."EDI Code" = '' THEN BEGIN
+                                  IF ShipmentHdr."External Document No." =
+                                    QuoteHeader."External Document No."
+                                 THEN
+                                   ShipmentFound := TRUE;
+                              END ELSE BEGIN
+                                IF ShipmentHdr."External Document No." = QuoteLine."EDI Code" THEN
+                                  ShipmentFound := TRUE;
+                              END;
+                            END;
+                          END;
+                        UNTIL (ShipmentLine.NEXT = 0) OR (ShipmentFound = TRUE);
+                        IF ShipmentFound THEN
+                          IF ShipmentLine.Quantity <> 0 THEN
+                            QuoteLine."EDI Line Status" :=
+                              QuoteLine."EDI Line Status"::"Shipment Exists";
+                      END;
+                    END;
+                    IF QuoteLine.Quantity = 0 THEN BEGIN
+                      IF (QuoteLine."EDI Line Status" <> QuoteLine."EDI Line Status"::"Order Exists") AND
+                         (QuoteLine."EDI Line Status" <> QuoteLine."EDI Line Status"::"Change Made") AND
+                         (QuoteLine."EDI Line Status" <> QuoteLine."EDI Line Status"::"Shipment Exists")
+                      THEN
+                        QuoteLine."EDI Line Status" := QuoteLine."EDI Line Status"::New;
+                    END;
+                  END;
+              END;
+              QuoteLine.MODIFY;
+              IF (QuoteLine."EDI Line Status" = QuoteLine."EDI Line Status"::"Change Made") THEN BEGIN
+                OrderHeader.GET(OrderLine."Document Type",OrderLine."Document No.");
+                ReleaseSalesDocument.Reopen(OrderHeader);
+                OrderLine.GET(OrderLine."Document Type",OrderLine."Document No.",OrderLine."Line No.");
+                IF (QuoteLine.Quantity >= OrderLine."Quantity Shipped") AND
+                   (QuoteLine."Quantity (Base)" >= OrderLine."Qty. Shipped (Base)")
+                THEN
+                  OrderLine.VALIDATE(Quantity,QuoteLine.Quantity)
+                ELSE
+                  IF EDIDocument."Outstanding Quantity Received" THEN
+                    CASE TRUE OF
+                      OrderLine."Outstanding Quantity" >= QuoteLine.Quantity:
+                        BEGIN
+                          OrderLine.VALIDATE(Quantity,OrderLine."Quantity Shipped");
+                          OrderLine.VALIDATE("EDI Line Status",OrderLine."EDI Line Status"::Closed);
+
+                          TmpQuoteLine.COPY(QuoteLine);
+                          TmpQuoteLine.INSERT;
+                          TmpReleaseDate."Shipment Req. Date" := QuoteLine."EDI Ship Req. Date";
+                          TmpReleaseDate."EDI Code" := QuoteLine."EDI Code";
+                          TmpReleaseDate."Line No." := QuoteLine."Line No.";
+                          TmpReleaseDate."Document Type" := QuoteLine."Document Type";
+                          TmpReleaseDate."Document No." := QuoteLine."Document No.";
+                          TmpReleaseDate."EDI Time" := QuoteLine."EDI Time";
+                          TmpReleaseDate.INSERT;
+                        END;
+                      OrderLine."Outstanding Quantity" < QuoteLine.Quantity:
+                        BEGIN
+                          CASE EDIDocument."Rel. Qty More Than Outstanding" OF
+                            EDIDocument."Rel. Qty More Than Outstanding"::"Alert Only":
+                              BEGIN
+                                AlertNo := 2;
+                                CreateAlertEntry(
+                                  EDIRecDocHeader."Internal Doc. No.",OrderLine,QuoteLine,AlertNo,1);
+                                QuoteLine."EDI Line Type" := QuoteLine."EDI Line Status"::Cancellation;
+                                QuoteLine.MODIFY;
+                             END;
+                            EDIDocument."Rel. Qty More Than Outstanding"::"Allow Update (Release Qty.)":
+                              BEGIN
+                                AlertNo := 5;
+                                CreateAlertEntry(
+                                  EDIRecDocHeader."Internal Doc. No.",OrderLine,QuoteLine,AlertNo,2);
+                                QuoteLine."EDI Line Type" :=
+                                  QuoteLine."EDI Line Status"::"Release Created";
+                                QuoteLine.MODIFY;
+
+                                OrderLine.VALIDATE(Quantity,OrderLine."Quantity Shipped");
+                                TmpQuoteLine.COPY(QuoteLine);
+                                TmpQuoteLine.INSERT;
+                                TmpReleaseDate."Shipment Req. Date" := QuoteLine."EDI Ship Req. Date";
+                                TmpReleaseDate."EDI Code" := QuoteLine."EDI Code";
+                                TmpReleaseDate."Line No." := QuoteLine."Line No.";
+                                TmpReleaseDate."Document Type" := QuoteLine."Document Type";
+                                TmpReleaseDate."Document No." := QuoteLine."Document No.";
+                                TmpReleaseDate."EDI Time" := QuoteLine."EDI Time";
+                                TmpReleaseDate.INSERT;
+                             END;
+                            EDIDocument."Rel. Qty More Than Outstanding"::"Allow Update (Outstanding Qty.)":
+                              BEGIN
+                                UseOrderLineOutstandingQty := TRUE;
+                                OrderLineOutstandingQty := OrderLine."Outstanding Quantity";
+                                AlertNo := 6;
+                                CreateAlertEntry(
+                                  EDIRecDocHeader."Internal Doc. No.",OrderLine,QuoteLine,AlertNo,2);
+                                QuoteLine."EDI Line Type" :=
+                                  QuoteLine."EDI Line Status"::"Release Created";
+                                QuoteLine.MODIFY;
+
+                                OrderLine.VALIDATE(Quantity,OrderLine."Quantity Shipped");
+                                TmpQuoteLine.COPY(QuoteLine);
+                                TmpQuoteLine.INSERT;
+                                TmpReleaseDate."Shipment Req. Date" := QuoteLine."EDI Ship Req. Date";
+                                TmpReleaseDate."EDI Code" := QuoteLine."EDI Code";
+                                TmpReleaseDate."Line No." := QuoteLine."Line No.";
+                                TmpReleaseDate."Document Type" := QuoteLine."Document Type";
+                                TmpReleaseDate."Document No." := QuoteLine."Document No.";
+                                TmpReleaseDate."EDI Time" := QuoteLine."EDI Time";
+                                TmpReleaseDate.INSERT;
+                             END;
+                           END;
+                        END
+                      ELSE BEGIN
+                        IF EDIDocument."Release Qty. Update Cancelled" THEN BEGIN
+                          AlertNo := 1;
+                          CreateAlertEntry(
+                            EDIRecDocHeader."Internal Doc. No.",OrderLine,QuoteLine,AlertNo,1);
+                        END;
+                        QuoteLine."EDI Line Type" := QuoteLine."EDI Line Status"::Cancellation;
+                        QuoteLine.MODIFY;
+                     END;
+                    END
+                  ELSE BEGIN
+                    IF EDIDocument."Release Qty. Update Cancelled" THEN BEGIN
+                      AlertNo := 1;
+                      CreateAlertEntry(
+                        EDIRecDocHeader."Internal Doc. No.",OrderLine,QuoteLine,AlertNo,1);
+                    END;
+                    QuoteLine."EDI Line Type" := QuoteLine."EDI Line Status"::Cancellation;
+                    QuoteLine.MODIFY;
+                  END;
+                OrderLine."EDI Ship Req. Date" := QuoteLine."EDI Ship Req. Date";
+                OrderLine."Requested Delivery Date" := QuoteLine."Requested Delivery Date";
+                //
+                // Add additional fields that can be changed.
+                //
+                OrderLine.MODIFY(TRUE);
+                EDIChangedDocument.RESET;
+                EDIChangedDocument.SETRANGE("Internal Doc. No.",CurrEDIRecDocHeader."Internal Doc. No.");
+                IF NOT EDIChangedDocument.FIND('+') THEN BEGIN
+                  EDIChangedDocument."Internal Doc. No." := CurrEDIRecDocHeader."Internal Doc. No.";
+                  EDIChangedDocument."Entry No." := 1;
+                  EDIChangedDocument."Document Type" := OrderHeader."Document Type";
+                  EDIChangedDocument."Document No." := OrderHeader."No.";
+                  EDIChangedDocument."Assoc. Internal Doc. No." := OrderHeader."EDI Internal Doc. No.";
+                  EDIChangedDocument.INSERT;
+                END;
+              END;
+              IF OrderFound THEN BEGIN
+                OrderHeader.GET(OrderLine."Document Type",OrderLine."Document No.");
+                IF ReleasedOrderBypassed = FALSE THEN
+                  OrderHeader.VALIDATE("Shipment Date",QuoteLine."Shipment Date");
+                IF OrderWasReleased THEN BEGIN
+                  SalesLine3.RESET;
+                  SalesLine3.SETRANGE("Document Type",OrderHeader."Document Type");
+                  SalesLine3.SETRANGE("Document No.",OrderHeader."No.");
+                  SalesLine3.SETFILTER(Type,'>0');
+                  SalesLine3.SETFILTER(Quantity,'<>0');
+                  IF SalesLine3.FIND('-') THEN
+                    ReleaseSalesDocument.RUN(OrderHeader);
+                END;
+              END;
+              IF (QuoteLine."EDI Line Status" <> QuoteLine."EDI Line Status"::"Order Exists") AND
+                 (QuoteLine."EDI Line Status" <> QuoteLine."EDI Line Status"::"Shipment Exists") AND
+                 (QuoteLine."EDI Line Status" <> QuoteLine."EDI Line Status"::"Change Made") AND
+                 (QuoteLine."EDI Line Status" <> QuoteLine."EDI Line Status"::New)
+               THEN BEGIN
+                 TmpQuoteLine.COPY(QuoteLine);
+                 TmpQuoteLine.INSERT;
+                 TmpReleaseDate."Shipment Req. Date" := QuoteLine."EDI Ship Req. Date";
+                 TmpReleaseDate."EDI Code" := QuoteLine."EDI Code";
+                 TmpReleaseDate."Line No." := QuoteLine."Line No.";
+                 TmpReleaseDate."Document Type" := QuoteLine."Document Type";
+                 TmpReleaseDate."Document No." := QuoteLine."Document No.";
+                 TmpReleaseDate."EDI Time" := QuoteLine."EDI Time";
+                 TmpReleaseDate.INSERT;
+               END;
+            UNTIL QuoteLine.NEXT = 0;
+          TmpReleaseDate.RESET;
+          IF TmpReleaseDate.FIND('-') THEN BEGIN
+            NoSeriesLine.LOCKTABLE;
+            SalesLine.LOCKTABLE;
+            SalesHeader.LOCKTABLE;
+            CLEAR(CurrReleaseDate);
+            CurrEDICode := '';
+            REPEAT
+              IF (CurrReleaseDate <> TmpReleaseDate."Shipment Req. Date") OR
+                 (CurrEDICode <> TmpReleaseDate."EDI Code") OR
+                 (CurrEDICode  = '') AND (CurrEDITime <> 0T) AND
+                 (CurrEDITime <> TmpReleaseDate."EDI Time")
+              THEN BEGIN
+                IF CurrReleaseDate <> 0D THEN
+                  IF EDITemplate."Auto. Release Sales Order" THEN
+                    ReleaseSalesDocument.RUN(SalesHeader);
+                CurrReleaseDate := TmpReleaseDate."Shipment Req. Date";
+                CurrEDICode := TmpReleaseDate."EDI Code";
+                CurrEDITime := TmpReleaseDate."EDI Time";
+                SalesHeader.RESET;
+                SalesHeader.INIT;
+                CLEAR(SalesHeader);
+                SalesHeader.SetRunFromEDI(TRUE);
+                SalesHeader."Document Type" := SalesHeader."Document Type"::Order;
+                SalesHeader.INSERT(TRUE);
+                SalesHeader.VALIDATE("Sell-to Customer No.",QuoteHeader."Sell-to Customer No.");
+                SalesHeader.VALIDATE("Ship-to Code",QuoteHeader."Ship-to Code");
+                SalesHeader.TRANSFERFIELDS(QuoteHeader,FALSE);
+                SalesHeader."Posting Date" := WORKDATE;
+                SalesHeader."External Document No." := CurrEDICode;
+                SalesHeader.Status := SalesHeader.Status::Open;
+                SalesHeader.VALIDATE("Shipment Date",TmpReleaseDate."Shipment Req. Date");
+                SalesLine."EDI Time" := TmpQuoteLine."EDI Time";
+                SalesHeader.MODIFY(TRUE);
+                SalesHeader.SetRunFromEDI(FALSE);
+                IF GUIALLOWED THEN
+                  DispWindow.UPDATE(5,SalesHeader."No.");
+
+                // Create EDI Receive Doc. Hdr. Info. record for sales order
+                EDIRecDocHdrInfo.RESET;
+                EDIRecDocHdrInfo.SETRANGE("Internal Doc. No.",QuoteHeader."EDI Internal Doc. No.");
+                EDIRecDocHdrInfo.SETRANGE("Document No.",QuoteHeader."No.");
+                IF EDIRecDocHdrInfo.FIND('-') THEN BEGIN
+                  EDIRecDocHdrInfo."Document No." := SalesHeader."No.";
+                  EDIRecDocHdrInfo.MODIFY;
+                END ELSE BEGIN
+                  EntryNo := 0;
+                  EDIRecDocHdrInfo.RESET;
+                  EDIRecDocHdrInfo.SETRANGE("Internal Doc. No.",QuoteHeader."EDI Internal Doc. No.");
+                  IF EDIRecDocHdrInfo.FIND('+') THEN BEGIN
+                    EntryNo := EDIRecDocHdrInfo."Entry No." + 1;
+                    EDIRecDocHdrInfo2.INIT;
+                    EDIRecDocHdrInfo2.TRANSFERFIELDS(EDIRecDocHdrInfo);
+                    EDIRecDocHdrInfo2."Document No." := SalesHeader."No.";
+                    EDIRecDocHdrInfo2."Entry No." := EntryNo;
+                    EDIRecDocHdrInfo2.INSERT;
+                  END ELSE
+                    EDIRecDocHdrInfo2.INIT;
+                END;
+              END;
+              IF GUIALLOWED THEN
+                DispWindow.UPDATE(6,TmpQuoteLine."No.");
+              SalesLine.INIT;
+              TmpQuoteLine.GET(TmpReleaseDate."Document Type",TmpReleaseDate."Document No.",TmpReleaseDate."Line No.");
+              SalesLine.SetRunFromEDI(TRUE);
+              SalesLine."Document Type" := SalesHeader."Document Type";
+              SalesLine."Document No." := SalesHeader."No.";
+              SalesLine."Line No." := TmpQuoteLine."Line No.";
+              SalesLine."Sell-to Customer No." := TmpQuoteLine."Sell-to Customer No.";
+              SalesLine.VALIDATE(Type,TmpQuoteLine.Type);
+              SalesLine.VALIDATE("No.",TmpQuoteLine."No.");
+              SalesLine.VALIDATE("Location Code",TmpQuoteLine."Location Code");
+              SalesLine.VALIDATE(Quantity,TmpQuoteLine.Quantity);
+              SalesLine.TRANSFERFIELDS(TmpQuoteLine);
+              SalesLine."Document Type" := SalesHeader."Document Type";
+              SalesLine."Document No." := SalesHeader."No.";
+              SalesLine."Document No." := SalesHeader."No.";
+              SalesLine."Line No." := TmpQuoteLine."Line No.";
+              SalesHeader.SetRunFromEDI(TRUE);
+              SalesHeader.VALIDATE("Shipment Date",SalesLine."Shipment Date");
+              SalesHeader.MODIFY(TRUE);
+              SalesHeader.SetRunFromEDI(FALSE);
+
+              // Create EDI Receive Doc. Line Info. record for sales order
+              EDIRecDocLineInfo.RESET;
+              EDIRecDocLineInfo.SETRANGE("Internal Doc. No.",QuoteHeader."EDI Internal Doc. No.");
+              EDIRecDocLineInfo.SETRANGE("Document No.",TmpQuoteLine."Document No.");
+              EDIRecDocLineInfo.SETRANGE("Line No.",TmpQuoteLine."Line No.");
+              IF EDIRecDocLineInfo.FIND('-') THEN BEGIN
+                EDIRecDocLineInfo."Document No." := SalesLine."Document No.";
+                EDIRecDocLineInfo.MODIFY;
+              END;
+
+              // Assign to Blanket Order
+              IF EDIDocument."Tie Release to Forecast" THEN
+                AssignBlanketOrder(
+                  TmpQuoteLine,QuoteLine,SalesLine,QuoteHeader,CurrEDIRecDocHeader);
+
+              SalesLine.INSERT(TRUE);
+              SalesLine.SetRunFromEDI(FALSE);
+              QuoteLine.GET(
+                TmpQuoteLine."Document Type",TmpQuoteLine."Document No.",TmpQuoteLine."Line No.");
+              QuoteLine."EDI Line Status" := OrderLine."EDI Line Status"::"Release Created";
+              QuoteLine.MODIFY(TRUE);
+            UNTIL TmpReleaseDate.NEXT = 0;
+            IF EDITemplate."Auto. Release Sales Order" THEN
+              ReleaseSalesDocument.RUN(SalesHeader);
+          END;
+        UNTIL QuoteHeader.NEXT = 0;
+
+      IF EDIDocument."Delete Quote After Rel. Create" THEN BEGIN
+        QuoteHeader.RESET;
+        QuoteHeader.SETRANGE("Document Type",QuoteHeader."Document Type"::Quote);
+        IF SingleDocument THEN
+          QuoteHeader.SETRANGE("No.",CurrQuoteHeader."No.")
+        ELSE BEGIN
+          QuoteHeader.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+          QuoteHeader.SETRANGE("EDI Order",TRUE);
+          QuoteHeader.SETRANGE("EDI Internal Doc. No.",CurrEDIRecDocHeader."Internal Doc. No.");
+        END;
+        IF QuoteHeader.FIND('-') THEN
+          QuoteHeader.DELETEALL(TRUE);
+      END;
+
+      EDIRecDocHeader."Release Created" := TRUE;
+      EDIRecDocHeader."Forecast Release Created Date" := TODAY;
+      EDIRecDocHeader."Forecast Release Created Time" := TIME;
+      EDIRecDocHeader."Forecast Release Error" := FALSE;
+      EDIRecDocHeader."Data Error" := FALSE;
+      EDIRecDocHeader."Document Processed" := TRUE;
+      EDIRecDocHeader.MODIFY;
+      COMMIT;
+
+      IF GUIALLOWED THEN
+        DispWindow.CLOSE;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE UpdateForecast@1240030001(CurrEDIRecDocHeader@1240030000 : Record 14002358) Resp : Boolean;
+    VAR
+      BlanketHeader@1240030003 : Record 36;
+      BlanketLine@1240030004 : Record 37;
+      QuoteHeader@1240030001 : Record 36;
+      QuoteLine@1240030002 : Record 37;
+      EDIRecDocHeader@1240030005 : Record 14002358;
+      LineNo@1240030006 : Integer;
+      PrevLineQty@1000000001 : Decimal;
+      PrevItem@1000000002 : Code[20];
+      PrevVariant@1000000003 : Code[10];
+      QtyShipped@1240030007 : Decimal;
+      QtyInvoiced@1240030008 : Decimal;
+      PrevForecastQty@1240020004 : Decimal;
+      ForecastBeginDate@1240020001 : Date;
+      ForecastEndDate@1240020000 : Date;
+      PlanningForecast@1240020003 : Boolean;
+      CreateAlert@1240020005 : Boolean;
+      QtyToShip@1240020002 : Decimal;
+      Quantity@1240020006 : Decimal;
+    BEGIN
+      EDIRecDocHeader.GET(CurrEDIRecDocHeader."Internal Doc. No.");
+      EDIRecDocHeader."Data Error" := TRUE;
+      EDIRecDocHeader."Forecast Release Error" := TRUE;
+      EDIRecDocHeader."Document Processed" := FALSE;
+      EDIRecDocHeader.MODIFY;
+      COMMIT;
+
+      EDIAlert.RESET;
+      EDIAlert.SETCURRENTKEY("Internal Doc. No.");
+      EDIAlert.SETRANGE("Internal Doc. No.",CurrEDIRecDocHeader."Internal Doc. No.");
+      EDIAlert.DELETEALL;
+
+      EDIDocument.RESET;
+      EDIDocument.SETRANGE("Trade Partner No.",CurrEDIRecDocHeader."Trade Partner No.");
+      EDIDocument.SETRANGE("Navision Document",CurrEDIRecDocHeader."Navision Document");
+      EDIDocument.SETRANGE("EDI Document No.",CurrEDIRecDocHeader."EDI Document No.");
+      EDIDocument.SETRANGE(Version,CurrEDIRecDocHeader."EDI Version");
+      EDIDocument.SETRANGE(Type,EDIDocument.Type::Import);
+      EDIDocument.SETFILTER(Status,'<>%1',EDIDocument.Status::Inactive);
+      EDIDocument.FIND('-');
+
+      ReplaceCodeFound :=
+        (EDIRecDocHeader."PO Change Purpose Code" = '05') OR
+        (EDIRecDocHeader."PO Change Purpose Code" = '5');
+
+      CreateAlert := FALSE;
+
+      TmpOrderHeader.RESET;
+      TmpOrderHeader.DELETEALL;
+
+      // Update Quantities based on Received Cumulative Quantity
+      IF ((EDIDocument."EDI Document No." = '830') OR
+          (EDIDocument."EDI Document No." = 'DELFOR')) AND
+        EDIDocument."Forecast Qty. Cumulative" THEN BEGIN
+          QuoteHeader.RESET;
+          QuoteHeader.SETRANGE("Document Type",QuoteHeader."Document Type"::Quote);
+          IF SingleDocument THEN
+            QuoteHeader.SETRANGE("No.",CurrQuoteHeader."No.")
+          ELSE BEGIN
+            QuoteHeader.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+            QuoteHeader.SETRANGE("EDI Order",TRUE);
+            QuoteHeader.SETRANGE("EDI Internal Doc. No.",CurrEDIRecDocHeader."Internal Doc. No.");
+          END;
+          IF QuoteHeader.FIND('-') THEN
+            REPEAT
+              QuoteLine.RESET;
+              QuoteLine.SETRANGE("Document Type",QuoteHeader."Document Type");
+              QuoteLine.SETRANGE("Document No.",QuoteHeader."No.");
+              QuoteLine.SETFILTER("No.",'<>%1','');
+              PrevLineQty := 0;
+              PrevItem := '';
+              PrevVariant := '';
+              IF QuoteLine.FIND('-') THEN BEGIN
+                REPEAT
+                  IF (QuoteLine."No." <> PrevItem) OR
+                     (QuoteLine."Variant Code" <> PrevVariant) THEN
+                    PrevLineQty := 0;
+                  QuoteLine.VALIDATE(
+                    Quantity,(QuoteLine."EDI Cumulative Quantity" - PrevLineQty));
+                  IF QuoteLine.Quantity <> 0 THEN
+                    QuoteLine.MODIFY;
+                  PrevLineQty := QuoteLine."EDI Cumulative Quantity";
+                  PrevItem := QuoteLine."No.";
+                  PrevVariant := QuoteLine."Variant Code";
+                UNTIL QuoteLine.NEXT = 0;
+              END;
+            UNTIL QuoteHeader.NEXT = 0;
+      END;
+      // End Update
+
+      ForecastIsRelease := EDIDocument."Create Release from Forecast";
+      CloseBlanketLine := EDIDocument."Close Shipped Blanket Line";
+
+      IF (EDIDocument."Replace Forecast") OR
+         ((EDIDocument."Replace Forecast") AND
+          (EDIDocument."Close Open Sales Order") AND
+          (ForecastIsRelease)) OR
+         (CloseBlanketLine)
+      THEN BEGIN
+        CreateAlert := EDIDocument."Close Order Request Cancelled";
+        ReplaceForecast(
+          QuoteHeader,CurrEDIRecDocHeader."Internal Doc. No.",
+          CloseBlanketLine,EDIDocument."Close Open Sales Order",
+          EDIDocument."Reopen Released Sales Order",EDIDocument."Close Open Order Action",
+          EDIDocument."Replace Forecast",CreateAlert);
+      END;
+
+      QuoteHeader.RESET;
+      QuoteHeader.SETRANGE("Document Type",QuoteHeader."Document Type"::Quote);
+      IF SingleDocument THEN
+        QuoteHeader.SETRANGE("No.",CurrQuoteHeader."No.")
+      ELSE BEGIN
+        QuoteHeader.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+        QuoteHeader.SETRANGE("EDI Order",TRUE);
+        QuoteHeader.SETRANGE("EDI Internal Doc. No.",CurrEDIRecDocHeader."Internal Doc. No.");
+      END;
+      IF QuoteHeader.FIND('-') THEN BEGIN
+        REPEAT
+          QuoteLine.RESET;
+          QuoteLine.SETRANGE("Document Type",QuoteHeader."Document Type");
+          QuoteLine.SETRANGE("Document No.",QuoteHeader."No.");
+          IF EDIDocument."Bypass Zero Quantity Forecast" THEN
+            QuoteLine.SETFILTER(Quantity,'<>0');
+          IF QuoteLine.FIND('-') THEN
+            REPEAT
+              BlanketHeader.RESET;
+              BlanketHeader.SETRANGE("Document Type",BlanketHeader."Document Type"::"Blanket Order");
+              BlanketHeader.SETRANGE("Sell-to Customer No.",QuoteHeader."Sell-to Customer No.");
+              BlanketHeader.SETRANGE("Ship-to Code",QuoteHeader."Ship-to Code");
+              BlanketHeader.SETRANGE("EDI Trade Partner",QuoteHeader."EDI Trade Partner");
+              BlanketHeader.SETRANGE("External Document No.",QuoteLine."EDI Code");
+              IF BlanketHeader.FIND('-') THEN BEGIN
+                IF EDIDocument."Archive Sales Order" THEN
+                  ArchiveDocument(BlanketHeader);
+                IF BlanketHeader."EDI Internal Doc. No." = '' THEN BEGIN
+                  BlanketHeader."EDI Internal Doc. No." := QuoteHeader."EDI Internal Doc. No.";
+                  BlanketHeader.MODIFY;
+                END;
+                ForecastBeginDate := 0D;
+                ForecastEndDate := 0D;
+                BlanketLine.RESET;
+                BlanketLine.SETRANGE("Document Type",BlanketHeader."Document Type");
+                BlanketLine.SETRANGE("Document No.",BlanketHeader."No.");
+                BlanketLine.SETRANGE(Type,QuoteLine.Type);
+                BlanketLine.SETRANGE("No.",QuoteLine."No.");
+                BlanketLine.SETRANGE("Variant Code",QuoteLine."Variant Code");
+                IF QuoteLine."EDI Ship Req. Date" = 0D THEN BEGIN
+                  PlanningForecast := TRUE;
+                  BlanketLine.SETRANGE("EDI Forecast Begin Date",QuoteLine."EDI Forecast Begin Date");
+                  BlanketLine.SETRANGE("EDI Forecast End Date",QuoteLine."EDI Forecast End Date");
+                END ELSE BEGIN
+                  PlanningForecast := FALSE;
+                  BlanketLine.SETFILTER("EDI Forecast Begin Date",'<=%1',QuoteLine."EDI Ship Req. Date");
+                  BlanketLine.SETFILTER("EDI Forecast End Date",'>=%1',QuoteLine."EDI Ship Req. Date");
+                END;
+                BlanketLine.SETRANGE("EDI Code",QuoteLine."EDI Code");
+                IF EDIDocument."Match Forecast Release No." THEN
+                  BlanketLine.SETRANGE("EDI Release No.",QuoteLine."EDI Release No.");
+                IF BlanketLine.FIND('-') THEN BEGIN
+                  EDIRecordAssocDoc.RecordAssocDoc(CurrEDIRecDocHeader,BlanketHeader,FALSE);
+                  // Change Blanket Line
+                  IF ((CloseBlanketLine = TRUE) AND
+                      (BlanketLine."EDI Line Status" <> BlanketLine."EDI Line Status"::Closed)) OR
+                     (CloseBlanketLine = FALSE)
+                  THEN BEGIN
+                    IF (QuoteLine.Quantity >= BlanketLine."Quantity Shipped") AND
+                       (QuoteLine."Quantity (Base)" >= BlanketLine."Qty. Shipped (Base)")
+                    THEN BEGIN
+                      QtyShipped := 0;
+                      QtyInvoiced := 0;
+                      QtyToShip := 0;
+                      Quantity := 0;
+                      PrevForecastQty := 0;
+                      LineNo := BlanketLine."Line No.";
+                      QtyShipped := BlanketLine."Quantity Shipped";
+                      QtyInvoiced := BlanketLine."Quantity Invoiced";
+                      QtyToShip := BlanketLine."Qty. to Ship";
+                      Quantity := BlanketLine.Quantity;
+                      PrevForecastQty := BlanketLine.Quantity;
+                      ForecastBeginDate := BlanketLine."EDI Forecast Begin Date";
+                      ForecastEndDate := BlanketLine."EDI Forecast End Date";
+                      BlanketLine.SetRunFromEDI(TRUE);
+                      BlanketLine.DELETE;
+                      BlanketLine."Sell-to Customer No." := BlanketHeader."Sell-to Customer No.";
+                      BlanketLine."Document Type" := BlanketHeader."Document Type";
+                      BlanketLine."Document No." := BlanketHeader."No.";
+                      BlanketLine."Line No." := LineNo;
+                      BlanketLine.TRANSFERFIELDS(QuoteLine,FALSE);
+                      BlanketLine."Quantity Shipped" := QtyShipped;
+                      BlanketLine."Quantity Invoiced" := QtyInvoiced;
+                      BlanketLine."Qty. to Ship" := QtyToShip;
+                      BlanketLine.Quantity := Quantity;
+                      BlanketLine.VALIDATE(Quantity,QuoteLine.Quantity);
+                      IF PlanningForecast THEN BEGIN
+                        BlanketLine."EDI Forecast Begin Date" := ForecastBeginDate;
+                        BlanketLine."EDI Forecast End Date" := ForecastEndDate;
+                      END;
+                      IF QuoteLine."Shipment Date" = 0D THEN
+                        BlanketLine.VALIDATE("Shipment Date",0D);
+                      BlanketLine.INSERT(TRUE);
+                      BlanketLine.SetRunFromEDI(FALSE);
+                    END;
+                  END;
+                END ELSE BEGIN
+                  // Create Blanket Line
+                  BlanketLine.RESET;
+                  BlanketLine.SETRANGE("Document Type",BlanketHeader."Document Type");
+                  BlanketLine.SETRANGE("Document No.",BlanketHeader."No.");
+                  IF BlanketLine.FIND('+') THEN
+                    LineNo := BlanketLine."Line No."
+                  ELSE
+                    LineNo := 0;
+                  BlanketLine.INIT;
+                  BlanketLine.SetRunFromEDI(TRUE);
+                  BlanketLine."Sell-to Customer No." := BlanketHeader."Sell-to Customer No.";
+                  BlanketLine."Document Type" := BlanketHeader."Document Type";
+                  BlanketLine."Document No." := BlanketHeader."No.";
+                  BlanketLine."Document Type" := BlanketHeader."Document Type";
+                  BlanketLine."Document No." := BlanketHeader."No.";
+                  BlanketLine."Line No." := LineNo + 10000;
+                  BlanketLine.VALIDATE(Type,QuoteLine.Type);
+                  BlanketLine.VALIDATE("No.",QuoteLine."No.");
+                  BlanketLine.VALIDATE("Location Code",QuoteLine."Location Code");
+                  BlanketLine.VALIDATE(Quantity,QuoteLine.Quantity);
+                  BlanketLine.TRANSFERFIELDS(QuoteLine,FALSE);
+                  IF QuoteLine."Shipment Date" = 0D THEN
+                    BlanketLine.VALIDATE("Shipment Date",0D);
+                  BlanketLine.INSERT(TRUE);
+                  BlanketLine.SetRunFromEDI(FALSE);
+                  EDIRecordAssocDoc.RecordAssocDoc(CurrEDIRecDocHeader,BlanketHeader,FALSE);
+                END;
+              END ELSE BEGIN
+                // Create Blanket Order
+                BlanketHeader.SetRunFromEDI(TRUE);
+                BlanketHeader."Document Type" := BlanketHeader."Document Type"::"Blanket Order";
+                BlanketHeader."No." := '';
+                BlanketHeader.INSERT(TRUE);
+                BlanketHeader.TRANSFERFIELDS(QuoteHeader,FALSE);
+                BlanketHeader."External Document No." := QuoteLine."EDI Code";
+                BlanketHeader.MODIFY(TRUE);
+                BlanketHeader.SetRunFromEDI(FALSE);
+                EDIRecordAssocDoc.RecordAssocDoc(CurrEDIRecDocHeader,BlanketHeader,FALSE);
+                // Create Blanket Line
+                BlanketLine.SetRunFromEDI(TRUE);
+                BlanketLine."Sell-to Customer No." := BlanketHeader."Sell-to Customer No.";
+                BlanketLine."Document Type" := BlanketHeader."Document Type";
+                BlanketLine."Document No." := BlanketHeader."No.";
+                BlanketLine."Line No." := 10000;
+                BlanketLine.VALIDATE(Type,QuoteLine.Type);
+                BlanketLine.VALIDATE("No.",QuoteLine."No.");
+                BlanketLine.VALIDATE("Location Code",QuoteLine."Location Code");
+                BlanketLine.VALIDATE(Quantity,QuoteLine.Quantity);
+                BlanketLine.TRANSFERFIELDS(QuoteLine,FALSE);
+                IF QuoteLine."Shipment Date" = 0D THEN
+                  BlanketLine.VALIDATE("Shipment Date",0D);
+                BlanketLine.INSERT(TRUE);
+                BlanketLine.SetRunFromEDI(FALSE);
+              END;
+            UNTIL QuoteLine.NEXT = 0;
+        UNTIL QuoteHeader.NEXT = 0;
+        IF NOT ForecastIsRelease THEN
+          COMMIT;
+        EDIRecDocHeader.GET(CurrEDIRecDocHeader."Internal Doc. No.");
+        EDIRecDocHeader."Data Error" := FALSE;
+        EDIRecDocHeader."Forecast Release Error" := FALSE;
+        EDIRecDocHeader."Document Processed" := TRUE;
+        EDIRecDocHeader."Forecast Created" := TRUE;
+        EDIRecDocHeader.MODIFY;
+      END;
+
+      IF NOT EDIDocument."Create Release from Forecast" AND
+        EDIDocument."Delete Forecast Quote" THEN
+          QuoteHeader.DELETEALL(TRUE);
+
+      IF ForecastIsRelease THEN
+        EvaluateQuotes(EDIRecDocHeader);
+    END;
+
+    PROCEDURE ReplaceForecast@1240020000(QuoteHeader@1240020024 : Record 36;InternalDocNo@1240020004 : Code[10];CloseShippedLine@1240020003 : Boolean;CloseOpenOrder@1240020002 : Boolean;ReopenOrder@1240020001 : Boolean;CloseOrderAction@1240020000 : 'Zero Quantity,Delete Order';ReplaceForecast@1240020013 : Boolean;CreateAlert@1240020028 : Boolean);
+    VAR
+      CurrBlanketLine@1240020012 : Record 37;
+      EDIRecDocHeader@1240020011 : Record 14002358;
+      OrderLine@1240020010 : Record 37;
+      OrderLine2@1240020021 : Record 37;
+      OrderHeader@1240020009 : Record 36;
+      SalesHdrTmp@1240020015 : TEMPORARY Record 36;
+      QuoteLine@1240020005 : Record 37;
+      BlanketHdrTmp@1240020025 : TEMPORARY Record 36;
+      BlanketHeader@1240020006 : Record 36;
+      Package@1240020027 : Record 14000701;
+      ReleaseSalesDocument@1240020008 : Codeunit 414;
+      CloseOrder@1240020007 : Boolean;
+      OrderReleased@1240020018 : Boolean;
+      BypassInsert@1240020019 : Boolean;
+      OrderLineFound@1240020023 : Boolean;
+      BypassBlanketLine@1240020026 : Boolean;
+      PackageFound@1240020020 : Boolean;
+      i@1240020014 : Integer;
+      OrderLineQty@1240020016 : Decimal;
+      ShippedNotInvoiced@1240020017 : Decimal;
+      BlanketLineShippedNotInvoiced@1240020022 : Decimal;
+    BEGIN
+      i := 0;
+
+      BlanketHdrTmp.RESET;
+      BlanketHdrTmp.DELETEALL;
+      SalesHdrTmp.RESET;
+      SalesHdrTmp.DELETEALL;
+
+      QuoteHeader.RESET;
+      QuoteHeader.SETRANGE("Document Type",QuoteHeader."Document Type"::Quote);
+      IF SingleDocument THEN
+        QuoteHeader.SETRANGE("No.",CurrQuoteHeader."No.")
+      ELSE BEGIN
+        QuoteHeader.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+        QuoteHeader.SETRANGE("EDI Order",TRUE);
+        QuoteHeader.SETRANGE("EDI Internal Doc. No.",InternalDocNo);
+      END;
+      IF QuoteHeader.FIND('-') THEN BEGIN
+        REPEAT
+          QuoteLine.RESET;
+          QuoteLine.SETRANGE("Document Type",QuoteHeader."Document Type");
+          QuoteLine.SETRANGE("Document No.",QuoteHeader."No.");
+          IF QuoteLine.FIND('-') THEN
+            REPEAT
+              BlanketHeader.RESET;
+              BlanketHeader.SETCURRENTKEY(
+                "Document Type","EDI Trade Partner","External Document No.",
+                "Sell-to Customer No.","Ship-to Code");
+              BlanketHeader.SETRANGE("Document Type",BlanketHeader."Document Type"::"Blanket Order");
+              BlanketHeader.SETRANGE("EDI Trade Partner",QuoteHeader."EDI Trade Partner");
+              BlanketHeader.SETRANGE("External Document No.",QuoteLine."EDI Code");
+              BlanketHeader.SETRANGE("Sell-to Customer No.",QuoteHeader."Sell-to Customer No.");
+              BlanketHeader.SETRANGE("Ship-to Code",QuoteHeader."Ship-to Code");
+              IF BlanketHeader.FIND('-') THEN BEGIN
+                REPEAT
+                  IF EDIDocument."Archive Sales Order" THEN
+                    ArchiveDocument(BlanketHeader);
+                  BlanketHdrTmp.RESET;
+                  BlanketHdrTmp.SETRANGE("Document Type",BlanketHdrTmp."Document Type"::"Blanket Order");
+                  BlanketHdrTmp.SETRANGE("No.",BlanketHeader."No.");
+                  IF NOT BlanketHdrTmp.FIND('-') THEN BEGIN
+                    BlanketHdrTmp."Document Type" := BlanketHdrTmp."Document Type"::"Blanket Order";
+                    BlanketHdrTmp."No." := BlanketHeader."No.";
+                    BlanketHdrTmp.INSERT;
+                    IF ForecastIsRelease AND ReplaceCodeFound THEN BEGIN
+                      CurrBlanketLine.RESET;
+                      CurrBlanketLine.SETCURRENTKEY("Document Type","Document No.",Type,"EDI Code");
+                      CurrBlanketLine.SETRANGE("Document Type",BlanketHeader."Document Type");
+                      CurrBlanketLine.SETRANGE("Document No.",BlanketHeader."No.");
+                      CurrBlanketLine.SETRANGE(Type,QuoteLine.Type);
+                      CurrBlanketLine.SETRANGE("EDI Code",QuoteLine."EDI Code");
+                      IF CurrBlanketLine.FIND('-') THEN
+                        REPEAT
+                          BlanketLineShippedNotInvoiced := 0;
+                          BypassBlanketLine := FALSE;
+                          OrderLineFound := FALSE;
+                          IF CurrBlanketLine."Quantity Shipped" <> 0 THEN BEGIN
+                            IF CloseShippedLine THEN BEGIN
+                              CurrBlanketLine.VALIDATE(Quantity,CurrBlanketLine."Quantity Shipped");
+                              CurrBlanketLine."EDI Line Status" :=
+                              CurrBlanketLine."EDI Line Status"::Closed;
+                              CurrBlanketLine.MODIFY;
+                              IF QuoteLine."EDI Ship Req. Date" <> 0D THEN BEGIN
+                                IF (CurrBlanketLine."EDI Forecast Begin Date" <= QuoteLine."EDI Ship Req. Date") AND
+                                   (CurrBlanketLine."EDI Forecast End Date" >= QuoteLine."EDI Ship Req. Date")
+                                THEN BEGIN
+                                  QuoteLine."EDI Line Status" := QuoteLine."EDI Line Status"::Closed;
+                                  QuoteLine.MODIFY;
+                                END;
+                              END;
+                            END;
+                          END ELSE BEGIN
+                            OrderLine.RESET;
+                            OrderLine.SETCURRENTKEY(
+                              "Document Type","Blanket Order No.","Blanket Order Line No.");
+                            OrderLine.SETRANGE("Blanket Order No.",CurrBlanketLine."Document No.");
+                            OrderLine.SETRANGE("Blanket Order Line No.",CurrBlanketLine."Line No.");
+                            IF NOT OrderLine.FIND('-') THEN
+                              CurrBlanketLine.DELETE(TRUE)
+                          END;
+                          IF CloseOpenOrder THEN BEGIN
+                            OrderLine.RESET;
+                            OrderLine.SETCURRENTKEY(
+                              "Document Type","Blanket Order No.","Blanket Order Line No.");
+                            OrderLine.SETRANGE("Document Type",OrderLine."Document Type"::Order);
+                            OrderLine.SETRANGE("Blanket Order No.",CurrBlanketLine."Document No.");
+                            OrderLine.SETRANGE("Blanket Order Line No.",CurrBlanketLine."Line No.");
+                            OrderLine.SETRANGE("No.",CurrBlanketLine."No.");
+                            IF OrderLine.FIND('-') THEN
+                              REPEAT
+                                IF OrderHeader.GET(
+                                  OrderLine."Document Type"::Order,OrderLine."Document No.")
+                                THEN BEGIN
+                                  IF i = 0 THEN BEGIN
+                                    SalesHdrTmp.RESET;
+                                    SalesHdrTmp."Document Type" := OrderHeader."Document Type";
+                                    SalesHdrTmp."No." := OrderHeader."No.";
+                                    SalesHdrTmp.INSERT;
+                                    i := i + 1;
+                                  END ELSE BEGIN
+                                    SalesHdrTmp.RESET;
+                                    IF SalesHdrTmp.FIND('-') THEN
+                                      REPEAT
+                                        IF OrderHeader."No." = SalesHdrTmp."No." THEN
+                                          BypassInsert := TRUE;
+                                      UNTIL (SalesHdrTmp.NEXT = 0) OR (BypassInsert = TRUE);
+                                    IF NOT BypassInsert THEN BEGIN
+                                      SalesHdrTmp.RESET;
+                                      SalesHdrTmp."Document Type" := OrderHeader."Document Type";
+                                      SalesHdrTmp."No." := OrderHeader."No.";
+                                      SalesHdrTmp.INSERT;
+                                      i := i + 1;
+                                    END;
+                                  END;
+                                END;
+                              UNTIL OrderLine.NEXT = 0;
+                          END;
+                        UNTIL CurrBlanketLine.NEXT = 0;
+                    END;
+                  END;
+                UNTIL BlanketHeader.NEXT = 0;
+              END;
+            UNTIL QuoteLine.NEXT = 0;
+        UNTIL QuoteHeader.NEXT = 0;
+      END;
+
+      i := 0;
+
+      BlanketHdrTmp.RESET;
+      IF BlanketHdrTmp.FIND('-') THEN
+        REPEAT
+          IF BlanketHeader.GET(BlanketHdrTmp."Document Type",BlanketHdrTmp."No.") THEN BEGIN
+            CurrBlanketLine.RESET;
+            CurrBlanketLine.SETCURRENTKEY("Document Type","Document No.",Type,"EDI Code");
+            CurrBlanketLine.SETRANGE("Document Type",BlanketHeader."Document Type");
+            CurrBlanketLine.SETRANGE("Document No.",BlanketHeader."No.");
+            CurrBlanketLine.SETRANGE(Type,CurrBlanketLine.Type);
+            CurrBlanketLine.SETRANGE("EDI Code",BlanketHeader."External Document No.");
+            IF CurrBlanketLine.FIND('-') THEN
+              REPEAT
+                OrderLine.RESET;
+                OrderLine.SETCURRENTKEY(
+                  "Document Type","Blanket Order No.","Blanket Order Line No.");
+                OrderLine.SETRANGE("Document Type",OrderLine."Document Type"::Order);
+                OrderLine.SETRANGE("Blanket Order No.",CurrBlanketLine."Document No.");
+                OrderLine.SETRANGE("Blanket Order Line No.",CurrBlanketLine."Line No.");
+                OrderLine.SETRANGE("No.",CurrBlanketLine."No.");
+                IF OrderLine.FIND('-') THEN
+                  IF CloseOpenOrder THEN BEGIN
+                    REPEAT
+                      IF OrderHeader.GET(
+                        OrderLine."Document Type"::Order,OrderLine."Document No.")
+                      THEN BEGIN
+                        IF EDIDocument."Archive Sales Order" THEN
+                          ArchiveDocument(OrderHeader);
+                        CloseOrder := TRUE;
+                        OrderReleased := FALSE;
+                        IF OrderHeader.Status = OrderHeader.Status::Released THEN BEGIN
+                          IF ReopenOrder = FALSE THEN BEGIN
+                            CloseOrder := FALSE;
+                            BypassBlanketLine := TRUE;
+                            IF CreateAlert THEN BEGIN
+                              SalesHdrTmp.RESET;
+                              SalesHdrTmp.SETRANGE(
+                                "Document Type",OrderHeader."Document Type");
+                              SalesHdrTmp.SETRANGE("No.",OrderHeader."No.");
+                              IF SalesHdrTmp.FIND('-') THEN BEGIN
+                                SalesHdrTmp.DELETE;
+                                AlertNo := 7;
+                                CreateAlertEntry(InternalDocNo,OrderLine,QuoteLine,AlertNo,1);
+                              END;
+                            END;
+                          END ELSE BEGIN
+                            OrderReleased := TRUE;
+                            ReleaseSalesDocument.Reopen(OrderHeader);
+                          END;
+                        END;
+                        IF (CloseOrder) AND (NOT BypassBlanketLine) THEN BEGIN
+                          IF CloseOrderAction = CloseOrderAction::"Zero Quantity" THEN BEGIN
+                            EDIRecDocHeader.GET(InternalDocNo);
+                            EDIRecordAssocDoc.RecordAssocDoc(EDIRecDocHeader,OrderHeader,FALSE);
+                            OrderLineQty := 0;
+                            OrderLine2.RESET;
+                            OrderLine2.SETRANGE("Document Type",OrderHeader."Document Type");
+                            OrderLine2.SETRANGE("Document No.",OrderHeader."No.");
+                            OrderLine2.SETRANGE(Type,OrderLine.Type);
+                            IF OrderLine2.FIND('-') THEN
+                              REPEAT
+                                IF OrderLine2."Quantity Shipped" = 0 THEN BEGIN
+                                  OrderLine2.VALIDATE(Quantity,0);
+                                  OrderLine2.MODIFY(TRUE);
+                                END ELSE BEGIN
+                                  OrderLineQty := OrderLineQty + OrderLine2.Quantity;
+                                  IF CreateAlert THEN BEGIN
+                                    SalesHdrTmp.RESET;
+                                    SalesHdrTmp.SETRANGE(
+                                      "Document Type",OrderHeader."Document Type");
+                                    SalesHdrTmp.SETRANGE("No.",OrderHeader."No.");
+                                    IF SalesHdrTmp.FIND('-') THEN BEGIN
+                                      SalesHdrTmp.DELETE;
+                                      AlertNo := 3;
+                                      CreateAlertEntry(
+                                        InternalDocNo,OrderLine2,QuoteLine,AlertNo,1);
+                                    END;
+                                  END;
+                                END;
+                              UNTIL OrderLine2.NEXT = 0;
+                            IF (OrderReleased) AND (OrderLineQty <> 0) THEN
+                              ReleaseSalesDocument.RUN(OrderHeader);
+                          END ELSE BEGIN
+                            ShippedNotInvoiced := 0;
+                            OrderLineFound := TRUE;
+                            OrderLine2.RESET;
+                            OrderLine2.SETRANGE("Document Type",OrderHeader."Document Type");
+                            OrderLine2.SETRANGE("Document No.",OrderHeader."No.");
+                            OrderLine2.SETRANGE(Type,OrderLine.Type);
+                            IF OrderLine2.FIND('-') THEN BEGIN
+                              REPEAT
+                                BlanketLineShippedNotInvoiced :=
+                                BlanketLineShippedNotInvoiced + OrderLine2."Qty. Shipped Not Invoiced";
+                                ShippedNotInvoiced :=
+                                  ShippedNotInvoiced + OrderLine2."Qty. Shipped Not Invoiced";
+                              UNTIL OrderLine2.NEXT = 0;
+                              Package.RESET;
+                              Package.SETCURRENTKEY(
+                                "Source Type","Source Subtype","Source ID","Location Code");
+                              Package.SETRANGE("Source Type",36);
+                              Package.SETRANGE("Source Subtype",1);
+                              Package.SETRANGE("Source ID",OrderHeader."No.");
+                              IF NOT Package.FIND('-') THEN BEGIN
+                                PackageFound := FALSE;
+                                IF ShippedNotInvoiced = 0 THEN BEGIN
+                                  SalesHdrTmp.RESET;
+                                  SalesHdrTmp.SETRANGE(
+                                    "Document Type",OrderHeader."Document Type");
+                                  SalesHdrTmp.SETRANGE("No.",OrderHeader."No.");
+                                  IF SalesHdrTmp.FIND('-') THEN BEGIN
+                                    SalesHdrTmp.DELETE;
+                                    OrderHeader.SetRunFromEDI(TRUE);
+                                    IF NOT OrderHeader.DELETE(TRUE) THEN
+                                      IF OrderReleased THEN
+                                        ReleaseSalesDocument.RUN(OrderHeader);
+                                    OrderHeader.SetRunFromEDI(FALSE);
+                                  END;
+                                END;
+                              END ELSE BEGIN
+                                PackageFound := TRUE;
+                                IF CreateAlert THEN BEGIN
+                                  SalesHdrTmp.RESET;
+                                  SalesHdrTmp.SETRANGE(
+                                    "Document Type",OrderHeader."Document Type"::Order);
+                                  SalesHdrTmp.SETRANGE("No.",OrderHeader."No.");
+                                  IF SalesHdrTmp.FIND('-') THEN BEGIN
+                                    SalesHdrTmp.DELETE;
+                                    CASE TRUE OF
+                                      PackageFound:
+                                        BEGIN
+                                          AlertNo := 8;
+                                          CreateAlertEntry(
+                                            InternalDocNo,OrderLine2,QuoteLine,AlertNo,1);
+                                        END;
+                                      ShippedNotInvoiced <> 0:
+                                        BEGIN
+                                          AlertNo := 4;
+                                          CreateAlertEntry(
+                                            InternalDocNo,OrderLine2,QuoteLine,AlertNo,1);
+                                         END;
+                                    END;
+                                  END;
+                                END;
+                                IF OrderReleased THEN
+                                  ReleaseSalesDocument.RUN(OrderHeader);
+                              END;
+                            END;
+                          END;
+                        END;
+                      END;
+                    UNTIL OrderLine.NEXT = 0;
+                  END;
+              UNTIL CurrBlanketLine.NEXT = 0;
+          END;
+        UNTIL BlanketHdrTmp.NEXT = 0;
+
+      IF ReplaceForecast AND ReplaceCodeFound THEN BEGIN
+        BlanketHdrTmp.RESET;
+        IF BlanketHdrTmp.FIND('-') THEN
+          REPEAT
+            IF BlanketHeader.GET(BlanketHdrTmp."Document Type",BlanketHdrTmp."No.") THEN BEGIN
+              CurrBlanketLine.RESET;
+              CurrBlanketLine.SETRANGE("Document Type",BlanketHeader."Document Type");
+              CurrBlanketLine.SETRANGE("Document No.",BlanketHeader."No.");
+              CurrBlanketLine.SETRANGE(Type,CurrBlanketLine.Type::Item);
+              CurrBlanketLine.SETRANGE("EDI Code",BlanketHeader."External Document No.");
+              CurrBlanketLine.SETRANGE("Quantity Shipped",0);
+              IF CurrBlanketLine.FIND('-') THEN
+                REPEAT
+                  OrderLine.RESET;
+                  OrderLine.SETCURRENTKEY(
+                    "Document Type","Blanket Order No.","Blanket Order Line No.");
+                  OrderLine.SETRANGE("Blanket Order No.",CurrBlanketLine."Document No.");
+                  OrderLine.SETRANGE("Blanket Order Line No.",CurrBlanketLine."Line No.");
+                  IF NOT OrderLine.FIND('-') THEN
+                    CurrBlanketLine.DELETE(TRUE);
+                UNTIL CurrBlanketLine.NEXT = 0;
+            END;
+          UNTIL BlanketHdrTmp.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE GetASNCumulative@1240020003(EDIRecDocHdr@1240020000 : Record 14002358;VAR CurrQuoteLine@1240020001 : Record 37;NewItem@1240020002 : Boolean);
+    VAR
+      EDIRecDocField@1240020003 : Record 14002359;
+      ASNCumulative@1240020004 : Decimal;
+      CurrDecimalString@1240020005 : Text[30];
+      Found@1240020006 : Boolean;
+      Overship@1240020007 : Boolean;
+    BEGIN
+      ASNCumulative := 0;
+      Overship := TRUE;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+      EDIRecDocField.SETRANGE("Segment Group",CurrQuoteLine."EDI Segment Group");
+      EDIRecDocField.SETRANGE(Segment,'SHP');
+      IF EDIRecDocField. FIND('-') THEN
+        REPEAT
+          IF (EDIRecDocField.Element = '01') AND (EDIRecDocField."Field Text Value" = '02') THEN BEGIN
+            EDIRecDocField.NEXT;
+            Found := TRUE;
+            IF EDIRecDocField."Field Dec. Value" = 0 THEN BEGIN
+              IF EDIRecDocField."Field Text Value" = '' THEN
+                CurrDecimalString := '0'
+              ELSE
+                IF COPYSTR(EDIRecDocField."Field Text Value",1,1) = '+' THEN
+                  CurrDecimalString := COPYSTR(EDIRecDocField."Field Text Value",2)
+                ELSE
+                  CurrDecimalString := EDIRecDocField."Field Text Value";
+              EVALUATE(ASNCumulative,CurrDecimalString);
+            END ELSE
+              ASNCumulative := EDIRecDocField."Field Dec. Value";
+          END;
+        UNTIL (EDIRecDocField.NEXT = 0) OR (Found = TRUE);
+        IF (NewItem) OR ((NewItem = FALSE) AND (Done = FALSE)) THEN BEGIN
+          IF (ASNCumulative > CurrQuoteLine."EDI Cumulative Quantity") THEN
+            Done := FALSE
+          ELSE
+            Done := TRUE;
+        END;
+        IF NOT Done THEN BEGIN
+          CurrQuoteLine.VALIDATE("EDI Cumulative Quantity",ASNCumulative);
+          CurrQuoteLine.MODIFY;
+        END;
+    END;
+
+    PROCEDURE CreateAlertEntry@1240020001(InternalDocNo@1240020000 : Code[10];CurrOrderLine@1240020001 : Record 37;CurrQuoteLine@1240020002 : Record 37;AlertNo@1240020003 : Integer;ProcessAction@1240020004 : ' ,Request Cancelled,Order Created') : Boolean;
+    BEGIN
+      CLEAR(CreateEDIAlert);
+      CreateEDIAlert.CreateAlertForecastRelease(
+      InternalDocNo,CurrOrderLine,CurrQuoteLine,AlertNo,ProcessAction);
+    END;
+
+    PROCEDURE AssignBlanketOrder@1240020004(TmpQuoteLine@1240020006 : Record 37;QuoteLine@1240020012 : Record 37;VAR SalesLine@1240020004 : Record 37;QuoteHeader@1240020011 : Record 36;EDIRecDocHeader@1240020013 : Record 14002358);
+    VAR
+      BlanketHeader@1240020003 : Record 36;
+      BlanketLine@1240020002 : Record 37;
+      CurrEDICode@1240020007 : Code[20];
+      ReleaseItemFound@1240020000 : Boolean;
+      MatchReleaseItem@1240020001 : Boolean;
+      Text008@1240020009 : TextConst 'ENU=Blanket Order Line not found on Blanket Order %1 for Quote %2 Item %3 Release Date %4.';
+      Text009@1240020008 : TextConst 'ENU=Blanket Order not found for Quote %1.';
+      Text010@1240020010 : TextConst 'ENU=Blanket Order with Blanket Order Line for Quote %1 Item %2 Release Date %3 was not found.';
+      FindBlanketLine@1240020005 : Boolean;
+    BEGIN
+      ReleaseItemFound := FALSE;
+      MatchReleaseItem := EDIDocument."Match Release Item No.";
+      BlanketHeader.RESET;
+      BlanketHeader.SETCURRENTKEY("Document Type","Sell-to Customer No.","No.");
+      BlanketHeader.SETRANGE("Document Type",BlanketHeader."Document Type"::"Blanket Order");
+      IF EDIDocument."Match Release Sell-to Code" THEN
+        BlanketHeader.SETRANGE("Sell-to Customer No.",QuoteHeader."Sell-to Customer No.");
+      IF EDIDocument."Match Release Ship-to Code" THEN
+        BlanketHeader.SETRANGE("Ship-to Code",QuoteHeader."Ship-to Code");
+      IF EDIDocument."Match Release Trade Partner" THEN
+        BlanketHeader.SETRANGE("EDI Trade Partner",QuoteHeader."EDI Trade Partner");
+      IF EDIDocument."Match Release P.O. No." THEN
+        BlanketHeader.SETRANGE("External Document No.",TmpQuoteLine."EDI Code");
+      IF BlanketHeader.FIND('+') THEN BEGIN
+        FindBlanketLine := FALSE;
+        REPEAT
+          IF EDIDocument."Exclude Blanket P.O. Number" <> '' THEN BEGIN
+            IF STRPOS(
+               BlanketHeader."External Document No.",EDIDocument."Exclude Blanket P.O. Number") = 0 THEN
+              FindBlanketLine := TRUE;
+          END ELSE
+            FindBlanketLine := TRUE;
+          IF FindBlanketLine THEN BEGIN
+            BlanketLine.RESET;
+            BlanketLine.SETRANGE("Document Type",BlanketHeader."Document Type");
+            BlanketLine.SETRANGE("Document No.",BlanketHeader."No.");
+            BlanketLine.SETRANGE(Type,TmpQuoteLine.Type);
+            BlanketLine.SETRANGE("No.",TmpQuoteLine."No.");
+            IF EDIDocument."Release No. Char. to Match" <> 0 THEN
+              BlanketLine.SETFILTER(
+                "EDI Release No.",'%1..',
+                  COPYSTR(TmpQuoteLine."EDI Release No.",1,
+                  EDIDocument."Release No. Char. to Match"));
+            IF ForecastIsRelease THEN
+              BlanketLine.SETFILTER("EDI Ship Req. Date",'<>%1',0D);
+             BlanketLine.SETFILTER(
+              "EDI Forecast Begin Date",'<=%1',TmpQuoteLine."EDI Ship Req. Date");
+            BlanketLine.SETFILTER(
+              "EDI Forecast End Date",'>=%1',TmpQuoteLine."EDI Ship Req. Date");
+            IF BlanketLine.FIND('-') THEN BEGIN
+              ReleaseItemFound := TRUE;
+              SalesLine."EDI Forecast Begin Date" := BlanketLine."EDI Forecast Begin Date";
+              SalesLine."EDI Forecast End Date" := BlanketLine."EDI Forecast End Date";
+              SalesLine."Blanket Order No." := BlanketLine."Document No.";
+              SalesLine."Blanket Order Line No." := BlanketLine."Line No.";
+              IF CurrEDICode = '' THEN
+                SalesLine."EDI Code" := BlanketLine."EDI Code";
+            END;
+          END;
+        UNTIL (MatchReleaseItem = FALSE) OR
+              (ReleaseItemFound = TRUE) OR
+              (BlanketHeader.NEXT(-1) = 0);
+        IF NOT ReleaseItemFound THEN BEGIN
+          IF EDIDocument."Standalone Releases Received" THEN BEGIN
+            CreateBlanketEntry(
+              SalesLine,QuoteHeader,QuoteLine,TmpQuoteLine,EDIRecDocHeader,CurrEDICode);
+          END ELSE BEGIN
+            IF NOT MatchReleaseItem THEN
+              ERROR(
+                Text008,BlanketHeader."No.",TmpQuoteLine."Document No.",
+                TmpQuoteLine."No.",TmpQuoteLine."EDI Ship Req. Date")
+            ELSE
+              ERROR(
+                Text010,TmpQuoteLine."Document No.",TmpQuoteLine."No.",
+                TmpQuoteLine."EDI Ship Req. Date");
+          END;
+        END;
+      END ELSE BEGIN
+        IF EDIDocument."Standalone Releases Received" THEN BEGIN
+          CreateBlanketEntry(
+            SalesLine,QuoteHeader,QuoteLine,TmpQuoteLine,EDIRecDocHeader,CurrEDICode);
+        END ELSE
+          ERROR(Text009,TmpQuoteLine."Document No.");
+      END;
+    END;
+
+    PROCEDURE CreateBlanketEntry@1240020005(VAR SalesLine@1240020000 : Record 37;QuoteHeader@1240020001 : Record 36;QuoteLine@1240020006 : Record 37;TmpQuoteLine@1240020002 : Record 37;CurrEDIRecDocHeader@1240020007 : Record 14002358;CurrEDICode@1240020008 : Code[20]);
+    VAR
+      BlanketHeader@1240020003 : Record 36;
+      BlanketLine@1240020004 : Record 37;
+      BlanketOrderNo@1240020010 : Code[20];
+      LineNo@1240020005 : Integer;
+      BlanketFound@1240020009 : Boolean;
+    BEGIN
+      BlanketFound := FALSE;
+      BlanketOrderNo := '';
+
+      BlanketHeader.RESET;
+      BlanketHeader.SETCURRENTKEY("Document Type","Sell-to Customer No.","No.");
+      BlanketHeader.SETRANGE("Document Type",BlanketHeader."Document Type"::"Blanket Order");
+      IF EDIDocument."Match Release Sell-to Code" THEN
+        BlanketHeader.SETRANGE("Sell-to Customer No.",QuoteHeader."Sell-to Customer No.");
+      IF EDIDocument."Match Release Ship-to Code" THEN
+        BlanketHeader.SETRANGE("Ship-to Code",QuoteHeader."Ship-to Code");
+      IF EDIDocument."Match Release Trade Partner" THEN
+        BlanketHeader.SETRANGE("EDI Trade Partner",QuoteHeader."EDI Trade Partner");
+      IF EDIDocument."Match Release P.O. No." THEN
+        BlanketHeader.SETRANGE("External Document No.",TmpQuoteLine."EDI Code");
+      IF BlanketHeader.FIND('+') THEN BEGIN
+        IF EDIDocument."Exclude Blanket P.O. Number" <> '' THEN BEGIN
+          IF STRPOS(BlanketHeader."External Document No.",EDIDocument."Exclude Blanket P.O. Number") = 0 THEN BEGIN
+            BlanketFound := TRUE;
+            BlanketOrderNo := BlanketHeader."No.";
+          END;
+        END ELSE BEGIN
+          BlanketFound := TRUE;
+          BlanketOrderNo := BlanketHeader."No.";
+        END;
+        IF BlanketFound THEN
+          IF EDIDocument."Match Release Item No." THEN BEGIN
+            BlanketFound := FALSE;
+            REPEAT
+              BlanketLine.RESET;
+              BlanketLine.SETRANGE("Document Type",BlanketHeader."Document Type");
+              BlanketLine.SETRANGE("Document No.",BlanketHeader."No.");
+              BlanketLine.SETRANGE(Type,TmpQuoteLine.Type);
+              BlanketLine.SETRANGE("No.",TmpQuoteLine."No.");
+              IF EDIDocument."Release No. Char. to Match" <> 0 THEN
+                BlanketLine.SETFILTER(
+                  "EDI Release No.",'%1..',
+                    COPYSTR(TmpQuoteLine."EDI Release No.",1,
+                      EDIDocument."Release No. Char. to Match"));
+              IF BlanketLine.FIND('-') THEN BEGIN
+                BlanketFound := TRUE;
+                BlanketOrderNo := BlanketHeader."No.";
+              END;
+            UNTIL (BlanketHeader.NEXT(-1) = 0) OR (BlanketFound = TRUE);
+          END;
+        END;
+
+      IF BlanketFound THEN BEGIN
+        BlanketLine.RESET;
+        BlanketLine.SETRANGE("Document Type",BlanketHeader."Document Type");
+        BlanketLine.SETRANGE("Document No.",BlanketOrderNo);
+        IF BlanketLine.FIND('+') THEN
+          LineNo := BlanketLine."Line No."
+        ELSE
+          LineNo := 0;
+        BlanketLine.INIT;
+        BlanketLine."Sell-to Customer No." := BlanketHeader."Sell-to Customer No.";
+        BlanketLine."Document Type" := BlanketHeader."Document Type";
+        BlanketLine."Document No." := BlanketOrderNo;
+        BlanketLine."Line No." := LineNo + 10000;
+        BlanketLine.VALIDATE(Type,QuoteLine.Type);
+        BlanketLine.VALIDATE("No.",QuoteLine."No.");
+        BlanketLine.VALIDATE("Location Code",QuoteLine."Location Code");
+        BlanketLine.VALIDATE(Quantity,QuoteLine.Quantity);
+        BlanketLine.TRANSFERFIELDS(QuoteLine,FALSE);
+        BlanketLine."EDI Forecast Begin Date" := TmpQuoteLine."EDI Ship Req. Date";
+        CASE EDIDocument."Release Forecast Period" OF
+          EDIDocument."Release Forecast Period"::Daily:
+            BlanketLine."EDI Forecast End Date" := TmpQuoteLine."EDI Ship Req. Date";
+          EDIDocument."Forecast Period"::Weekly:
+            BlanketLine."EDI Forecast End Date" :=
+              CALCDATE('<+6D>',TmpQuoteLine."EDI Ship Req. Date");
+        END;
+        BlanketLine.INSERT(TRUE);
+        EDIRecordAssocDoc.RecordAssocDoc(CurrEDIRecDocHeader,BlanketHeader,FALSE);
+        SalesLine."EDI Forecast Begin Date" := BlanketLine."EDI Forecast Begin Date";
+        SalesLine."EDI Forecast End Date" := BlanketLine."EDI Forecast End Date";
+        SalesLine."Blanket Order No." := BlanketLine."Document No.";
+        SalesLine."Blanket Order Line No." := BlanketLine."Line No.";
+        IF CurrEDICode = '' THEN
+          SalesLine."EDI Code" := BlanketLine."EDI Code";
+      END ELSE BEGIN
+        BlanketHeader."Document Type" := BlanketHeader."Document Type"::"Blanket Order";
+        BlanketHeader."No." := '';
+        BlanketHeader.INSERT(TRUE);
+        BlanketHeader.TRANSFERFIELDS(QuoteHeader,FALSE);
+        BlanketHeader."External Document No." := QuoteLine."EDI Code";
+        BlanketHeader.MODIFY(TRUE);
+        EDIRecordAssocDoc.RecordAssocDoc(CurrEDIRecDocHeader,BlanketHeader,FALSE);
+        // Create Blanket Line
+        BlanketLine."Sell-to Customer No." := BlanketHeader."Sell-to Customer No.";
+        BlanketLine."Document Type" := BlanketHeader."Document Type";
+        BlanketLine."Document No." := BlanketHeader."No.";
+        BlanketLine."Line No." := 10000;
+        BlanketLine.VALIDATE(Type,QuoteLine.Type);
+        BlanketLine.VALIDATE("No.",QuoteLine."No.");
+        BlanketLine.VALIDATE("Location Code",QuoteLine."Location Code");
+        BlanketLine.VALIDATE(Quantity,QuoteLine.Quantity);
+        BlanketLine.TRANSFERFIELDS(QuoteLine,FALSE);
+        BlanketLine."EDI Forecast Begin Date" := TmpQuoteLine."EDI Ship Req. Date";
+        CASE EDIDocument."Release Forecast Period" OF
+          EDIDocument."Release Forecast Period"::Daily:
+            BlanketLine."EDI Forecast End Date" := TmpQuoteLine."EDI Ship Req. Date";
+          EDIDocument."Forecast Period"::Weekly:
+            BlanketLine."EDI Forecast End Date" :=
+              CALCDATE('<+6D>',TmpQuoteLine."EDI Ship Req. Date");
+        END;
+        BlanketLine.INSERT(TRUE);
+      END;
+
+      BlanketOrderNo := '';
+      BlanketFound := FALSE;
+    END;
+
+    PROCEDURE EvaluateEDITime@1240020018(CurrEDIRecDochdr@1240020000 : Record 14002358;CurrEDIDocument@1240020001 : Record 14002353) : Boolean;
+    VAR
+      Text001@1240020003 : TextConst 'ENU=Evaluate Release Requested Time';
+      Text002@1240020004 : TextConst 'ENU=EDI Receive Document';
+      Text003@1240020005 : TextConst 'ENU=Sell-to Customer';
+      Text004@1240020006 : TextConst 'ENU=Quote';
+      Text005@1240020007 : TextConst 'ENU=Sales Order';
+      Text006@1240020008 : TextConst 'ENU=Item';
+      Text007@1240020009 : TextConst 'ENU=Cancelled Ship Time';
+      CurrQuoteHdr@1240020002 : Record 36;
+      CurrQuoteLine@1240020010 : Record 37;
+      CurrQuoteLine2@1240020011 : Record 37;
+      SalesHdr@1240020012 : Record 36;
+      SalesLine@1240020013 : Record 37;
+      SalesLine2@1240020014 : Record 37;
+      OrderReleased@1240020015 : Boolean;
+      DropDemand@1240020016 : Boolean;
+      MultiLine@1240020017 : Boolean;
+      InternalDocNo@1240020018 : Code[20];
+      HorizonBegDate@1240020019 : Date;
+      TimeArray@1240020020 : ARRAY [30] OF Time;
+      i@1240020021 : Integer;
+      OrderCount@1240020022 : Integer;
+      DispWindow@1240020023 : Dialog;
+      ReleaseSalesDocument@1240020024 : Codeunit 414;
+    BEGIN
+      IF GUIALLOWED THEN BEGIN
+        DispWindow.OPEN(
+          Text001 + '\' +
+          PADSTR(Text002,25,' ') + '#1###########################\' +
+          PADSTR(Text003,25,' ') + '#2###########################\' +
+          PADSTR(Text004,25,' ') + '#3###########################\' +
+          PADSTR(Text005,25,' ') + '#4###########################\' +
+          PADSTR(Text006,25,' ') + '#5###########################\' +
+          PADSTR(Text007,25,' ') + '#6###########################');
+      END;
+
+      i := 1;
+
+      IF CurrEDIRecDochdr.GET(CurrQuoteHdr."EDI Internal Doc. No.") THEN
+        InternalDocNo := CurrEDIRecDochdr."Internal Doc. No.";
+
+      IF GUIALLOWED THEN BEGIN
+        DispWindow.UPDATE(1,CurrEDIRecDochdr."Internal Doc. No.");
+        DispWindow.UPDATE(2,CurrEDIRecDochdr."Customer No.");
+      END;
+
+      CurrQuoteHdr.RESET;
+      CurrQuoteHdr.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+      CurrQuoteHdr.SETRANGE("EDI Order",TRUE);
+      CurrQuoteHdr.SETRANGE("EDI Internal Doc. No.",CurrEDIRecDochdr."Internal Doc. No.");
+      CurrQuoteHdr.SETRANGE("Document Type",CurrQuoteHdr."Document Type"::Quote);
+      IF CurrQuoteHdr.FIND('-') THEN
+        REPEAT
+          IF GUIALLOWED THEN
+            DispWindow.UPDATE(3,CurrQuoteHdr."No.");
+          CurrQuoteLine.RESET;
+          CurrQuoteLine.SETRANGE("Document Type",CurrQuoteHdr."Document Type");
+          CurrQuoteLine.SETRANGE("Document No.",CurrQuoteHdr."No.");
+          IF CurrQuoteLine.FIND('-') THEN BEGIN
+            REPEAT
+              HorizonBegDate := CurrQuoteLine."EDI Ship Req. Date";
+              SalesHdr.RESET;
+              SalesHdr.SETCURRENTKEY("Document Type","Sell-to Customer No.","No.");
+              SalesHdr.SETRANGE("Document Type",SalesHdr."Document Type"::Order);
+              SalesHdr.SETRANGE("Sell-to Customer No.",CurrQuoteHdr."Sell-to Customer No.");
+              SalesHdr.SETRANGE("Ship-to Code",CurrQuoteHdr."Ship-to Code");
+              SalesHdr.SETRANGE("EDI Trade Partner",CurrQuoteHdr."EDI Trade Partner");
+              IF (CurrEDIDocument."Match Release P.O. No.") AND (CurrQuoteLine."EDI Code" <> '') THEN
+                SalesHdr.SETRANGE("External Document No.",CurrQuoteLine."EDI Code");
+              SalesHdr.SETRANGE("Shipment Date",HorizonBegDate);
+              IF SalesHdr.FIND('-') THEN
+                OrderCount := SalesHdr.COUNT;
+                IF OrderCount > 1 THEN BEGIN
+                  CurrQuoteLine2.COPY(CurrQuoteLine);
+                  REPEAT
+                    CurrQuoteLine2.SETRANGE("No.",CurrQuoteLine."No.");
+                    CurrQuoteLine2.SETRANGE("EDI Ship Req. Date",CurrQuoteLine."EDI Ship Req. Date");
+                    IF CurrQuoteLine2.FIND('-') THEN
+                      REPEAT
+                        TimeArray[i] := CurrQuoteLine2."EDI Time";
+                        i := i + 1;
+                      UNTIL CurrQuoteLine2.NEXT = 0;
+                    SalesLine.RESET;
+                    SalesLine.SETRANGE("Document Type",SalesHdr."Document Type");
+                    SalesLine.SETRANGE("Document No.",SalesHdr."No.");
+                    SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+                    SalesLine.SETRANGE("No.",CurrQuoteLine."No.");
+                    SalesLine.SETRANGE("EDI Ship Req. Date",CurrQuoteLine."EDI Ship Req. Date");
+                    IF SalesLine.FIND('-') THEN BEGIN
+                      i := 1;
+                      WHILE TimeArray[i] <> 0T DO
+                       IF SalesLine."EDI Time" <> TimeArray[i] THEN BEGIN
+                          DropDemand := TRUE;
+                          i := i +1;
+                        END ELSE BEGIN
+                          DropDemand := FALSE;
+                          i := i + 1;
+                        END;
+                      IF DropDemand THEN BEGIN
+                        IF GUIALLOWED THEN BEGIN
+                          DispWindow.UPDATE(4,SalesHdr."No.");
+                          DispWindow.UPDATE(5,SalesLine."No.");
+                          DispWindow.UPDATE(6,TimeArray[i]);
+                        END;
+                        IF EDIDocument."Archive Sales Order" THEN
+                          ArchiveDocument(SalesHdr);
+                        EDIRecordAssocDoc.RecordAssocDoc(CurrEDIRecDochdr,SalesHdr,FALSE);
+                        IF SalesHdr.Status = SalesHdr.Status::Released THEN BEGIN
+                          OrderReleased := TRUE;
+                          ReleaseSalesDocument.Reopen(SalesHdr);
+                        END ELSE
+                          OrderReleased := FALSE;
+                        CASE CurrEDIDocument."Delete Item Action" OF
+                          CurrEDIDocument."Delete Item Action"::"Zero Quantity":
+                            BEGIN
+                              SalesLine.VALIDATE(Quantity,0);
+                              SalesLine.MODIFY;
+                              SalesLine2.RESET;
+                              SalesLine2.SETRANGE("Document Type",SalesHdr."Document Type");
+                              SalesLine2.SETRANGE("Document No.",SalesHdr."No.");
+                              SalesLine2.SETRANGE(Type,SalesLine2.Type::Item);
+                              IF SalesLine2.FIND('-') THEN
+                                IF SalesLine2.NEXT <> 0 THEN
+                                  MultiLine := TRUE
+                                ELSE
+                                  MultiLine := FALSE;
+                              IF (OrderReleased) AND (MultiLine) THEN
+                                ReleaseSalesDocument.RUN(SalesHdr);
+                            END;
+                          CurrEDIDocument."Delete Item Action"::"Delete Item":
+                            BEGIN
+                             SalesLine.DELETE(TRUE);
+                             SalesLine2.RESET;
+                             SalesLine2.SETRANGE("Document Type",SalesHdr."Document Type");
+                             SalesLine2.SETRANGE("Document No.",SalesHdr."No.");
+                             SalesLine2.SETRANGE(Type,SalesLine2.Type::Item);
+                             IF SalesLine2.FIND('-') THEN
+                               IF SalesLine2.NEXT <> 0 THEN
+                                 MultiLine := TRUE
+                               ELSE
+                                 MultiLine := FALSE;
+                             IF (OrderReleased) AND (MultiLine) THEN
+                               ReleaseSalesDocument.RUN(SalesHdr);
+                            END;
+                        END;
+                      END;
+                    END;
+                  UNTIL SalesHdr.NEXT = 0;
+                END;
+            UNTIL CurrQuoteLine.NEXT = 0;
+          END;
+      UNTIL CurrQuoteHdr.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        DispWindow.CLOSE;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE CloseReleaseOpenOrder@1240020002(InternalDocNo@1240020000 : Code[10];CloseOrderAction@1240020001 : 'Zero Quantity,Delete Order');
+    VAR
+      CurrQuoteHdr@1240020002 : Record 36;
+      CurrQuoteLine@1240020003 : Record 37;
+      OrderHdr@1240020004 : Record 36;
+      OrderLine@1240020005 : Record 37;
+      EDIRecDocHeader@1240020006 : Record 14002358;
+      ReleaseSalesDocument@1240020007 : Codeunit 414;
+      CloseOrder@1240020008 : Boolean;
+      OrderWasReleased@1240020009 : Boolean;
+    BEGIN
+      IF SingleDocument THEN
+        EXIT;
+      CurrQuoteHdr.RESET;
+      CurrQuoteHdr.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+      CurrQuoteHdr.SETRANGE("EDI Order",TRUE);
+      CurrQuoteHdr.SETRANGE("EDI Internal Doc. No.",InternalDocNo);
+      CurrQuoteHdr.SETRANGE("Document Type",CurrQuoteHdr."Document Type"::Quote);
+      IF CurrQuoteHdr.FIND('-') THEN
+        REPEAT
+          CurrQuoteLine.RESET;
+          CurrQuoteLine.SETRANGE("Document Type",CurrQuoteHdr."Document Type");
+          CurrQuoteLine.SETRANGE("Document No.",CurrQuoteHdr."No.");
+          CurrQuoteLine.SETFILTER("No.",'<>%1','');
+          CurrQuoteLine.SETFILTER(Quantity,'>=%1',0);
+          IF CurrQuoteLine.FIND('-') THEN
+            REPEAT
+              CASE CurrQuoteLine."EDI Line Type" OF
+                CurrQuoteLine."EDI Line Type"::Release:
+                  BEGIN
+                    OrderHdr.RESET;
+                    OrderHdr.SETCURRENTKEY("Document Type","Sell-to Customer No.","No.");
+                    OrderHdr.SETRANGE("Document Type",OrderHdr."Document Type"::Order);
+                    OrderHdr.SETRANGE("Sell-to Customer No.",CurrQuoteHdr."Sell-to Customer No.");
+                    OrderHdr.SETRANGE("Ship-to Code",CurrQuoteHdr."Ship-to Code");
+                    OrderHdr.SETRANGE("EDI Trade Partner",CurrQuoteHdr."EDI Trade Partner");
+                    IF CurrQuoteLine."EDI Code" = '' THEN
+                      OrderHdr.SETRANGE("External Document No.",CurrQuoteHdr."External Document No.")
+                    ELSE
+                      OrderHdr.SETRANGE("External Document No.",CurrQuoteLine."EDI Code");
+                    IF OrderHdr.FIND('-') THEN
+                      REPEAT
+                        OrderWasReleased := FALSE;
+                        CloseOrder := TRUE;
+                        IF OrderHdr.Status = OrderHdr.Status::Released THEN BEGIN
+                          CloseOrder := FALSE;
+                          OrderWasReleased := TRUE;
+                          IF EDIDocument."Reopen Released Sales Order" THEN
+                            CloseOrder := TRUE;
+                        END;
+                        IF CloseOrder THEN BEGIN
+                          IF EDIDocument."Archive Sales Order" THEN
+                            ArchiveDocument(OrderHdr);
+                          IF CloseOrderAction = CloseOrderAction::"Zero Quantity" THEN BEGIN
+                            ReleaseSalesDocument.Reopen(OrderHdr);
+                            EDIRecDocHeader.GET(InternalDocNo);
+                            EDIRecordAssocDoc.RecordAssocDoc(EDIRecDocHeader,OrderHdr,FALSE);
+                            OrderLine.RESET;
+                            OrderLine.SETRANGE("Document Type",OrderHdr."Document Type");
+                            OrderLine.SETRANGE("Document No.",OrderHdr."No.");
+                            OrderLine.SETRANGE(Type,CurrQuoteLine.Type);
+                            IF OrderLine.FIND('-') THEN
+                              REPEAT
+                                IF OrderLine."Quantity Shipped" = 0 THEN BEGIN
+                                 OrderLine.VALIDATE(Quantity,0);
+                                  OrderLine.MODIFY(TRUE);
+                                END;
+                              UNTIL OrderLine.NEXT = 0;
+                            IF OrderWasReleased THEN
+                              ReleaseSalesDocument.RUN(OrderHdr);
+                          END ELSE
+                            IF NOT OrderHdr.DELETE(TRUE) THEN;
+                        END;
+                        CloseOrder := FALSE;
+                        OrderWasReleased := FALSE;
+                      UNTIL OrderHdr.NEXT = 0;
+                  END;
+              END;
+            UNTIL CurrQuoteLine.NEXT = 0;
+        UNTIL CurrQuoteHdr.NEXT = 0;
+    END;
+
+    PROCEDURE ArchiveDocument@1240020010(CurrSalesHeader@1240020000 : Record 36);
+    VAR
+      ArchiveManagement@1240020001 : Codeunit 5063;
+    BEGIN
+      TmpOrderHeader.RESET;
+      IF NOT TmpOrderHeader.GET(CurrSalesHeader."Document Type",CurrSalesHeader."No.") THEN BEGIN
+        TmpOrderHeader.COPY(CurrSalesHeader);
+        TmpOrderHeader.INSERT;
+        ArchiveManagement.StoreSalesDocument(CurrSalesHeader,FALSE);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

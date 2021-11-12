@@ -1,0 +1,154 @@
+OBJECT Codeunit 10500 IRS 1099 Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/03/20;
+    Time=12:00:00 PM;
+    Version List=NAVNA11.00.00.39505;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BlockIfUpgradeNeededErr@1020000 : TextConst 'ENU=You must update the form boxes in the 1099 Forms-Boxes window before you can run this report.;ESM=Debe actualizar las casillas del formulario en la ventana de Formularios 1099-Casillas antes de poder ejecutar este informe.;FRC=Vous devez mettre … jour les cases du formulaire dans la fenˆtre Formulairesÿ1099 - Cases avant de pouvoir ex‚cuter ce rapport.;ENC=You must update the form boxes in the 1099 Forms-Boxes window before you can run this report.';
+      UpgradeFormBoxesNotificationMsg@1020001 : TextConst 'ENU=The list of 1099 form boxes is not up to date.;ESM=La lista de casillas del formulario 1099 no est  actualizada.;FRC=La liste des cases du formulaireÿ1099 n''est pas … jour.;ENC=The list of 1099 form boxes is not up to date.';
+      UpgradeFormBoxesMsg@1020002 : TextConst 'ENU=Upgrade the form boxes.;ESM=Actualizar las casillas del formulario.;FRC=Mettez … jour les cases du formulaire.;ENC=Upgrade the form boxes.';
+      ScheduleUpgradeFormBoxesMsg@1020004 : TextConst 'ENU=Schedule an update of the form boxes.;ESM=Programar una actualizaci¢n de las casillas del formulario.;FRC=Programmez une mise … jour des cases du formulaire.;ENC=Schedule an update of the form boxes.';
+      UpgradeFormBoxesScheduledMsg@1020005 : TextConst 'ENU=A job queue entry has been created.\\Make sure Earliest Start Date/Time field in the Job Queue Entry Card window is correct, and then choose the Set Status to Ready action to schedule a background job.;ESM=Se ha creado una entrada de cola de trabajos.\\Aseg£rese de que el campo Fecha/Hora de inicio m s temprana en la ventana de la Tarjeta de entrada de cola de trabajos sea correcto y luego elija la acci¢n Establecer estado en listo para programar un trabajo en segundo plano.;FRC=Une ‚criture file d''attente des travaux a ‚t‚ cr‚‚e.\\Assurez-vous que le champ Date/heure d‚but au plus t“t dans la fenˆtre Fiche ‚criture file d''attente des travaux est correct, puis choisissez l''action D‚finir l''‚tat sur Prˆt pour programmer un job d''arriŠre-plan.;ENC=A job queue entry has been created.\\Make sure Earliest Start Date/Time field in the Job Queue Entry Card window is correct, and then choose the Set Status to Ready action to schedule a background job.';
+      ConfirmUpgradeNowQst@1020003 : TextConst 'ENU=The update process can take a while and block other users activities. Do you want to start the update now?;ESM=El proceso de actualizaci¢n puede tomar un tiempo y bloquear las actividades de otros usuarios. ¨Desea iniciar la actualizaci¢n ahora?;FRC=Le processus de mise … jour peut prendre un certain temps et bloquer les activit‚s d''autres utilisateurs. Voulez-vous d‚marrer la mise … jour maintenant?;ENC=The update process can take a while and block other users activities. Do you want to start the update now?';
+      FormBoxesUpgradedMsg@1020006 : TextConst 'ENU=The 1099 form boxes are successfully updated.;ESM=Las casillas del formulario 1099 se actualizaron con ‚xito.;FRC=Les cases du formulaireÿ1099 ont bien ‚t‚ mises … jour.;ENC=The 1099 form boxes are successfully updated.';
+      UnkownCodeErr@1020007 : TextConst '@@@="%1 = document number;%2 = vendor number;%3 = IRS 1099 code.";ENU=Invoice %1 for vendor %2 has unknown 1099 code %3.;ESM=La factura %1 del proveedor %2 tiene un c¢digo 1099 desconocido %3.;FRC=La facture %1 pour le fournisseur %2 possŠde un code 1099 inconnu %3.;ENC=Invoice %1 for vendor %2 has unknown 1099 code %3.';
+
+    [External]
+    PROCEDURE Calculate1099Amount@2(VAR Invoice1099Amount@1020000 : Decimal;VAR Amounts@1020003 : ARRAY [20] OF Decimal;Codes@1020001 : ARRAY [20] OF Code[10];LastLineNo@1020002 : Integer;VendorLedgerEntry@1000 : Record 25;AppliedAmount@1002 : Decimal);
+    BEGIN
+      VendorLedgerEntry.CALCFIELDS(Amount);
+      Invoice1099Amount := -AppliedAmount * VendorLedgerEntry."IRS 1099 Amount" / VendorLedgerEntry.Amount;
+      UpdateLines(
+        Amounts,Codes,LastLineNo,VendorLedgerEntry,VendorLedgerEntry."IRS 1099 Code",Invoice1099Amount);
+    END;
+
+    PROCEDURE ShowUpgradeFormBoxesNotificationIfUpgradeNeeded@1020001();
+    VAR
+      UpgradeFormBoxes@1020000 : Notification;
+    BEGIN
+      IF NOT UpgradeNeeded THEN
+        EXIT;
+
+      UpgradeFormBoxes.ID := GetUpgradeFormBoxesNotificationID;
+      UpgradeFormBoxes.MESSAGE := UpgradeFormBoxesNotificationMsg;
+      UpgradeFormBoxes.SCOPE := NOTIFICATIONSCOPE::LocalScope;
+      UpgradeFormBoxes.ADDACTION(
+        GetUpgradeFormBoxesNotificationMsg,CODEUNIT::"IRS 1099 Management",'UpgradeFormBoxesFromNotification');
+      UpgradeFormBoxes.SEND;
+    END;
+
+    PROCEDURE ThrowErrorfUpgradeNeeded@1020002();
+    BEGIN
+      IF UpgradeNeeded THEN
+        ERROR(BlockIfUpgradeNeededErr);
+    END;
+
+    PROCEDURE UpgradeNeeded@1020000() : Boolean;
+    VAR
+      IRS1099FormBox@1020000 : Record 10010;
+    BEGIN
+      EXIT(NOT IRS1099FormBox.GET('DIV-07'));
+    END;
+
+    LOCAL PROCEDURE GetUpgradeFormBoxesNotificationID@1020003() : Text;
+    BEGIN
+      EXIT('644a30e2-a1f4-45d1-ae23-4eb14071ea8a');
+    END;
+
+    LOCAL PROCEDURE GetUpgradeFormBoxesNotificationMsg@1020008() : Text;
+    BEGIN
+      IF TASKSCHEDULER.CANCREATETASK THEN
+        EXIT(ScheduleUpgradeFormBoxesMsg);
+      EXIT(UpgradeFormBoxesMsg);
+    END;
+
+    PROCEDURE GetAdjustmentAmount@1020010(VendorLedgerEntry@1020000 : Record 25) : Decimal;
+    VAR
+      IRS1099Adjustment@1020002 : Record 10016;
+    BEGIN
+      IF VendorLedgerEntry."IRS 1099 Code" = '' THEN
+        EXIT(0);
+      IF IRS1099Adjustment.GET(
+           VendorLedgerEntry."Vendor No.",VendorLedgerEntry."IRS 1099 Code",DATE2DMY(VendorLedgerEntry."Posting Date",3))
+      THEN
+        EXIT(IRS1099Adjustment.Amount);
+    END;
+
+    PROCEDURE UpgradeFormBoxesFromNotification@1020004(Notification@1020000 : Notification);
+    BEGIN
+      UpgradeFormBoxes;
+    END;
+
+    PROCEDURE UpgradeFormBoxes@1020007();
+    VAR
+      JobQueueEntry@1020001 : Record 472;
+      UpgradeIRS1099FormBoxes@1020000 : Codeunit 10501;
+      JobQueueManagement@1020002 : Codeunit 456;
+      Confirmed@1020004 : Boolean;
+      Handled@1020003 : Boolean;
+      CanCreateTask@1020005 : Boolean;
+    BEGIN
+      IF NOT UpgradeNeeded THEN
+        EXIT;
+
+      OnBeforeUpgradeFormBoxes(Handled,CanCreateTask);
+      IF NOT Handled THEN
+        CanCreateTask := TASKSCHEDULER.CANCREATETASK;
+      IF CanCreateTask THEN BEGIN
+        JobQueueEntry.INIT;
+        JobQueueEntry."Object Type to Run" := JobQueueEntry."Object Type to Run"::Codeunit;
+        JobQueueEntry."Earliest Start Date/Time" := CREATEDATETIME(TODAY,TIME + 60000);
+        JobQueueEntry."Object ID to Run" := CODEUNIT::"Upgrade IRS 1099 Form Boxes";
+        JobQueueManagement.CreateJobQueueEntry(JobQueueEntry);
+        IF GUIALLOWED THEN
+          MESSAGE(UpgradeFormBoxesScheduledMsg);
+        JobQueueEntry.SETRECFILTER;
+        PAGE.RUN(PAGE::"Job Queue Entry Card",JobQueueEntry);
+      END ELSE BEGIN
+        IF GUIALLOWED THEN
+          Confirmed := CONFIRM(ConfirmUpgradeNowQst)
+        ELSE
+          Confirmed := TRUE;
+        IF Confirmed THEN BEGIN
+          UpgradeIRS1099FormBoxes.RUN;
+          MESSAGE(FormBoxesUpgradedMsg);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateLines@1020009(VAR Amounts@1020004 : ARRAY [20] OF Decimal;Codes@1020001 : ARRAY [20] OF Code[10];LastLineNo@1020003 : Integer;ApplVendorLedgerEntry@1020005 : Record 25;Code@1000 : Code[10];Amount@1001 : Decimal) : Integer;
+    VAR
+      i@1020002 : Integer;
+    BEGIN
+      i := 1;
+      WHILE (Codes[i] <> Code) AND (i <= LastLineNo) DO
+        i := i + 1;
+
+      IF (Codes[i] = Code) AND (i <= LastLineNo) THEN
+        Amounts[i] += Amount + GetAdjustmentAmount(ApplVendorLedgerEntry)
+      ELSE
+        ERROR(UnkownCodeErr,ApplVendorLedgerEntry."Entry No.",ApplVendorLedgerEntry."Vendor No.",Code);
+      EXIT(i);
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeUpgradeFormBoxes@1020005(VAR Handled@1020000 : Boolean;VAR CreateTask@1020001 : Boolean);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

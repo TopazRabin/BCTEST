@@ -1,0 +1,298 @@
+OBJECT Codeunit 51989 GG Test
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/28/21;
+    Time=[ 9:40:39 AM];
+    Modified=Yes;
+    Version List=GG;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            PurchaseLine@1000000000 : Record 39;
+            ShippingAccount@1000000001 : Record 14000714;
+            WarehouseShipmentLine@1000000002 : Record 7321;
+            WarehouseActivityHeader@1000000003 : Record 5766;
+            JobQueueEntry@1000000004 : Record 472;
+            InventoryStatusReport@1000000005 : Codeunit 51992;
+          BEGIN
+            ImportExcelFile;
+            MESSAGE('Done');
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      TempExcelBuffer@1000000000 : TEMPORARY Record 370;
+      FileMgt@1000000002 : Codeunit 419;
+      ServerFileName@1000000001 : Text;
+      numvar@1000000003 : Integer;
+      AttrID@1000000004 : Integer;
+
+    LOCAL PROCEDURE ImportExcelFile@1000000004();
+    VAR
+      ExcelBuff@1000000006 : Record 370;
+      Window@1000000005 : Dialog;
+      ServerFileName@1000000004 : Text;
+      SheetName@1000000003 : Text[250];
+      RecNo@1000000002 : Integer;
+      TotalRecNo@1000000001 : Integer;
+      RowNo@1000000000 : Integer;
+      FileMgt@1000000007 : Codeunit 419;
+      Text51000@1000000010 : TextConst 'ENU=Import Excel File;ESM=Importar fich. Excel;FRC=Importer fichier Excel;ENC=Import Excel File';
+      Text51001@1000000009 : TextConst 'ENU=Importing Data...\\;ESM=Analizar Datos...\\;FRC=Analyse des donn‚es...\\;ENC=Analysing Data...\\';
+      ExcelExtensionTok@1000000008 : TextConst '@@@={Locked};ENU=.xlsx;ESM=.xlsx;FRC=.xlsx;ENC=.xlsx';
+      IntegerRec@1000000011 : Record 2000000026;
+      ColText@1000000012 : ARRAY [40] OF Text[250];
+      ItemRec@1000000013 : Record 27;
+      SalesPrice@1000000014 : Record 7002;
+      Itemno@1000000015 : Code[20];
+      CPG@1000000016 : Code[20];
+      CustNo@1000000017 : Code[20];
+      unitprice@1000000018 : Decimal;
+    BEGIN
+      ServerFileName := FileMgt.UploadFile(Text51000,ExcelExtensionTok);
+      IF ServerFileName = '' THEN
+        EXIT;
+
+      SheetName := ExcelBuff.SelectSheetsName(ServerFileName);
+      IF SheetName = '' THEN
+        EXIT;
+      ExcelBuff.LOCKTABLE;
+      ExcelBuff.OpenBook(ServerFileName,SheetName);
+      ExcelBuff.ReadSheet;
+      AttrID := 1000;
+      Window.OPEN(Text51000 + '@1@@@@@@@@@@@@@@@@@@@@@@@@@\');
+      TotalRecNo := ExcelBuff.COUNT;
+      IntegerRec.RESET;
+      IntegerRec.SETRANGE(Number,2,TotalRecNo);
+      REPEAT
+        CLEAR(ColText);
+        ExcelBuff.SETRANGE("Row No.",IntegerRec.Number);
+        IF ExcelBuff.FIND('-') THEN
+          REPEAT
+            ColText[ExcelBuff."Column No."] := ExcelBuff."Cell Value as Text";
+          UNTIL ExcelBuff.NEXT = 0;
+          //UpdateItemCardLabel(ColText);
+          //InsertItemAttributeValue(ColText);
+          //UpdateItemMediumUnitPrice(ColText);
+      UNTIL IntegerRec.NEXT = 0;
+      ExcelBuff.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE UpdateItemCardLabel@1000000006(ColText@1000000000 : ARRAY [40] OF Text[250]);
+    VAR
+      Item@1000000001 : Record 27;
+    BEGIN
+      IF Item.GET(ColText[1]) THEN BEGIN
+        Item.Description := ColText[2];
+        Item."Label Description" := ColText[3];
+        Item."Label Description 2" := ColText[4];
+        Item."Label Description 3" := ColText[5];
+        Item."Label Description 4" := ColText[6];
+        Item.Size := ColText[7];
+        Item.MODIFY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertItemAttributeValue@1000000005(ColText@1000000000 : ARRAY [40] OF Text[250]);
+    VAR
+      ItemAttributeValue@1000000001 : Record 7501;
+    BEGIN
+      //1060
+      ItemAttributeValue.RESET;
+      ItemAttributeValue.SETRANGE(ID,1060);
+      ItemAttributeValue.SETRANGE(Value,ColText[2]);
+      IF ItemAttributeValue.FINDFIRST THEN
+        InsertItemAttrValueMapping(ItemAttributeValue.ID,ColText[1])
+      ELSE BEGIN
+        AttrID += 1;
+        ItemAttributeValue.INIT;
+        ItemAttributeValue."Attribute ID" := 1060;
+        ItemAttributeValue.ID := AttrID;
+        ItemAttributeValue.VALIDATE(Value,ColText[2]);
+        ItemAttributeValue.INSERT;
+        //InsertItemAttrValueMapping(ItemAttributeValue.ID,ColText[1]);
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertItemAttrValueMapping@1000000007(ItemAttributeValueID@1000000001 : Integer;ItemNo@1000000002 : Code[20]);
+    VAR
+      ItemAttrValueMapping@1000000000 : Record 7505;
+    BEGIN
+      ItemAttrValueMapping.INIT;
+      ItemAttrValueMapping."Table ID" := 27;
+      ItemAttrValueMapping."No." := ItemNo;
+      ItemAttrValueMapping."Item Attribute ID" := 1060;
+      ItemAttrValueMapping."Item Attribute Value ID" := ItemAttributeValueID;
+      ItemAttrValueMapping.INSERT;
+    END;
+
+    LOCAL PROCEDURE UpdateSalesPriceCPG@1000000000(ItemNo@1000000000 : Code[20];CustNo@1000000001 : Code[20];CPG@1000000002 : Code[20];UnitPrice@1000000004 : Decimal);
+    VAR
+      SalesPrice@1000000003 : Record 7002;
+      TopazSetup@1000000005 : Record 50056;
+    BEGIN
+      //Update Customer Price Group
+      IF ItemNo = '' THEN EXIT;
+      SalesPrice.RESET;
+      SalesPrice.SETRANGE("Sales Type",SalesPrice."Sales Type"::"Customer Price Group");
+      SalesPrice.SETRANGE("Sales Code",CPG);
+      SalesPrice.SETRANGE("Item No.",ItemNo);
+      IF SalesPrice.FINDFIRST THEN BEGIN
+        SalesPrice."Unit Price" := UnitPrice;
+        SalesPrice."Modified Date" := TODAY;
+        SalesPrice."Modified Time" := TIME;
+        SalesPrice.MODIFY(TRUE);
+      END ELSE BEGIN
+        SalesPrice.INIT;
+        SalesPrice."Sales Type" := SalesPrice."Sales Type"::"Customer Price Group";
+        SalesPrice.VALIDATE("Sales Code",CPG);
+        SalesPrice.VALIDATE("Item No.",ItemNo);
+        SalesPrice."Starting Date" := TODAY;
+        SalesPrice."Unit Price" := UnitPrice;
+        SalesPrice.INSERT(TRUE);
+        //-->test record to identify missing entry
+        TopazSetup.INIT;
+        TopazSetup.Option := CPG;
+        TopazSetup."Option Choice" := FORMAT(numvar);
+        TopazSetup."DefaultCode 20_1" := ItemNo;
+        TopazSetup."DefaultCode 20" := 'SALESPRICG';
+        TopazSetup.INSERT;
+        numvar += 1;
+        //<--
+      END;// ELSE UpdateSalesPriceSpecial(ItemNo,CustNo,CPG,UnitPrice);
+    END;
+
+    LOCAL PROCEDURE UpdateSalesPriceSpecial@1000000002(ItemNo@1000000000 : Code[20];CustNo@1000000001 : Code[20];CPG@1000000002 : Code[20];UnitPrice@1000000004 : Decimal);
+    VAR
+      SalesPrice@1000000003 : Record 7002;
+      TopazSetup@1000000005 : Record 50056;
+    BEGIN
+      //Update specia sales price for customer
+      IF ItemNo = '' THEN EXIT;
+      SalesPrice.RESET;
+      SalesPrice.SETRANGE("Sales Type",SalesPrice."Sales Type"::Customer);
+      SalesPrice.SETRANGE("Sales Code",CustNo);
+      SalesPrice.SETRANGE("Item No.",ItemNo);
+      IF SalesPrice.FINDFIRST THEN BEGIN
+        SalesPrice."Unit Price" := UnitPrice;
+        SalesPrice."Modified Date" := TODAY;
+        SalesPrice."Modified Time" := TIME;
+        SalesPrice.MODIFY(TRUE);
+      END ELSE BEGIN
+        SalesPrice.INIT;
+        SalesPrice."Sales Type" := SalesPrice."Sales Type"::Customer;
+        SalesPrice.VALIDATE("Sales Code",CustNo);
+        SalesPrice.VALIDATE("Item No.",ItemNo);
+        SalesPrice."Starting Date" := TODAY;
+        SalesPrice."Unit Price" := UnitPrice;
+        SalesPrice.INSERT(TRUE);
+        TopazSetup.INIT;
+        TopazSetup.Option := CustNo;
+        TopazSetup."Option Choice" := ItemNo;
+        TopazSetup."DefaultCode 20" := 'SALESPRICE';
+        TopazSetup.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateItemUnitPrice@1000000001(ItemNo@1000000003 : Code[20];UnitPrice@1000000000 : Decimal);
+    VAR
+      ItemRec@1000000001 : Record 27;
+      DateFilterCalc@1000000004 : Codeunit 358;
+      Now@1000000002 : DateTime;
+    BEGIN
+      IF ItemNo = '' THEN EXIT;
+      IF ItemRec.GET(ItemNo) THEN BEGIN
+        ItemRec.VALIDATE("Unit Price" , UnitPrice);
+        Now := DateFilterCalc.ConvertToUtcDateTime(CURRENTDATETIME);
+        ItemRec."Last Date Modified" := DT2DATE(Now);
+        ItemRec."Last Time Modified" := DT2TIME(Now);
+        ItemRec.MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateHotSheetPrice@1000000003(HotSheetCode@1000000001 : Code[20];ItemNo@1000000000 : Code[20];UnitPrice@1000000002 : Decimal;UOMPara@1000000004 : Code[10]);
+    VAR
+      HotSheetPrice@1000000003 : Record 50017;
+    BEGIN
+      IF ItemNo = '' THEN EXIT;
+      HotSheetPrice.RESET;
+      HotSheetPrice.SETRANGE(Code,HotSheetCode);
+      HotSheetPrice.SETRANGE("Item No.",ItemNo);
+      HotSheetPrice.SETRANGE("Unit of Measure Code",UOMPara);
+      IF HotSheetPrice.FINDFIRST THEN BEGIN
+        HotSheetPrice."Unit Price" := UnitPrice;
+        HotSheetPrice.MODIFY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateSoneparDSCustomer@1000000008();
+    VAR
+      EDITradePartner@1000000000 : Record 14002360;
+      Customer@1000000001 : Record 18;
+      ShiptoAddress@1000000002 : Record 222;
+    BEGIN
+      Customer.RESET;
+      Customer.SETFILTER("EDI Trade Partner",'VIKING|SONEPAR2|SONEPAR|QED|ONESOURCE|NORTHCOAST|IRBY|IES|CODALE|BROOKELECTRIC');
+      IF Customer.FINDSET THEN REPEAT
+        IF ShiptoAddress.GET(Customer."No.",'DS') THEN
+          ERROR('customer no. %1',Customer."No.")
+          //ShiptoAddress.DELETE(TRUE);
+      UNTIL Customer.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE UpdateItemMediumUnitPrice@1000000009(ColText@1000000000 : ARRAY [40] OF Text[250]);
+    VAR
+      Item@1000000001 : Record 27;
+    BEGIN
+      IF Item.GET(ColText[1]) THEN BEGIN
+        EVALUATE(Item."Medium Unit Price" , ColText[2]);
+        Item.MODIFY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateEDICustomerCrossRef@1000000011();
+    VAR
+      EDICustCrossReference@1000000000 : Record 14002362;
+      EDICustCrossReference2@1000000002 : Record 14002362;
+      CustomerDivision@1000000001 : Record 50007;
+    BEGIN
+      CustomerDivision.RESET;
+      CustomerDivision.SETRANGE("Mfr. Rep. Code",'KOP');
+      IF CustomerDivision.FINDFIRST THEN REPEAT
+        EDICustCrossReference.RESET;
+        EDICustCrossReference.SETRANGE("Trade Partner No.",'KOPINTIZ');
+        EDICustCrossReference.SETRANGE("Navision Sell To Code",CustomerDivision."Customer No.");
+        IF NOT EDICustCrossReference.FINDFIRST THEN BEGIN
+          EDICustCrossReference.INIT;
+          EDICustCrossReference."Trade Partner No." := 'KOPINTIZ';
+          EDICustCrossReference."EDI Sell To Code" := CustomerDivision."Customer No.";
+          EDICustCrossReference."Navision Sell To Code" := CustomerDivision."Customer No.";
+          EDICustCrossReference.INSERT;
+        END;
+      UNTIL CustomerDivision.NEXT = 0;
+      COMMIT;
+      EDICustCrossReference.RESET;
+      EDICustCrossReference.SETRANGE("Trade Partner No.",'KOPINTIZ');
+      IF EDICustCrossReference.FINDFIRST THEN REPEAT
+        CustomerDivision.RESET;
+        CustomerDivision.SETRANGE("Customer No.",EDICustCrossReference."Navision Sell To Code");
+        CustomerDivision.SETRANGE("Mfr. Rep. Code",'KOP');
+        IF NOT CustomerDivision.FINDFIRST THEN BEGIN
+          EDICustCrossReference2.GET(EDICustCrossReference."Trade Partner No.",EDICustCrossReference."Line No.");
+          EDICustCrossReference2.DELETE(TRUE);
+        END;
+      UNTIL EDICustCrossReference.NEXT = 0;
+    END;
+
+    BEGIN
+    {
+      GGupta Please do not delete/Replace this CU, it is important batch CU
+    }
+    END.
+  }
+}
+

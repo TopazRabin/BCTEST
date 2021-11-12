@@ -1,0 +1,2200 @@
+OBJECT Codeunit 50077 Table37EventSubscribers
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/05/21;
+    Time=[ 7:50:58 AM];
+    Modified=Yes;
+    Version List=TPZ000.00.00,001,TPZ2881,003,004,TPZ2970,2993,008,3125,3247,010;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SalesHeader@1000000000 : Record 36;
+      TPZGenLedgSetup@1000000001 : Record 98;
+      Table36EventSubscribers@1000000002 : Codeunit 50078;
+      SuppressUpdateUnitPrice@1000000003 : Boolean;
+      SuppressCheckItemAvailability@1000000004 : Boolean;
+      TemporarySalesHeaderUsed@1000000005 : Boolean;
+      Text0000@1000000006 : TextConst 'ENU=Sales Quote Line No. %1 must be same as Sales Line No. %2.';
+
+    [EventSubscriber(Table,37,OnBeforeInsertEvent)]
+    LOCAL PROCEDURE Tb37_OnInsert@1000000000(VAR Rec@1000000000 : Record 37;RunTrigger@1000000001 : Boolean);
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+      //<TPZ2779>
+      IF (Rec."Document No." = '') AND (Rec."Document Type"=Rec."Document Type"::"Return Order") THEN
+        ERROR('Blank Document No. Is Not Allowed');
+      //</TPZ2779>
+    END;
+
+    [EventSubscriber(Table,37,OnBeforeModifyEvent)]
+    LOCAL PROCEDURE Tb37_OnModify@1000000001(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;RunTrigger@1000000002 : Boolean);
+    BEGIN
+       IF NOT RunTrigger THEN
+        EXIT;
+        //<TPZ2583>
+        Tb37_CheckPackingStatus(Rec,xRec);
+      //</TPZ2583>
+      //<TPZ2779>
+      IF (Rec."Document No." = '') AND (Rec."Document Type"=Rec."Document Type"::"Return Order") THEN
+        ERROR('Blank Document No. Is Not Allowed');
+      //</TPZ2779>
+    END;
+
+    [EventSubscriber(Table,37,OnBeforeDeleteEvent)]
+    PROCEDURE Tb37_OnDelete@1000000007(VAR Rec@1000000000 : Record 37;RunTrigger@1000000001 : Boolean);
+    VAR
+      recReasonCode@1000000002 : Record 231;
+      SalesCommentLine@1000000003 : Record 44;
+      WarehouseRequest@1000000004 : Record 5765;
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      WITH Rec DO BEGIN
+         TestStatusOpen;
+        //<TPZ2583>
+       // Tb37_CheckPackingStatus(Rec);
+        IF "Document Type" = "Document Type"::Order THEN BEGIN
+          //IF Rec.Quantity < xRec.Quantity THEN BEGIN
+            WarehouseRequest.RESET;
+            WarehouseRequest.SETRANGE("Source Type",37);
+            WarehouseRequest.SETRANGE("Source Document",WarehouseRequest."Source Document"::"Sales Order");
+            WarehouseRequest.SETRANGE("Source No.","Document No.");
+            //WarehouseRequest.SETRANGE("Document Status",WarehouseRequest."Document Status"::Released);
+            WarehouseRequest.SETFILTER("Activity Status",'%1|%2|%3',WarehouseRequest."Activity Status"::"Pick Created",
+              WarehouseRequest."Activity Status"::"Pick Registered",WarehouseRequest."Activity Status"::Packed);
+            //WarehouseRequest.SETRANGE("Location Code","Location Code");
+            IF NOT WarehouseRequest.ISEMPTY THEN
+              ERROR('Pick is Created For Sales Order %1',"Document No.");
+          //END;
+        END;
+        //</TPZ2583>
+        IF (("Document Type" = "Document Type"::Quote) OR ("Document Type" = "Document Type"::Order) ) AND "Lost Opportunity" AND ("Reason Code"='') THEN
+          ERROR('Lost Opprtunity is True Please Fill Reason Code');
+
+        IF recReasonCode.GET("Reason Code") THEN BEGIN
+          IF recReasonCode.Mandatory AND "Lost Opportunity" AND (("Document Type" = "Document Type"::Quote) OR ("Document Type" = "Document Type"::Order) ) THEN BEGIN
+            SalesCommentLine.RESET;
+            SalesCommentLine.SETRANGE("Document Type","Document Type");
+            SalesCommentLine.SETRANGE("No.","Document No.");
+            SalesCommentLine.SETRANGE("Document Line No.","Line No.");
+            IF SalesCommentLine.ISEMPTY THEN
+              ERROR('Please Insert Sales Line Comments for Sales Order %1 Line No. %2',"Document No.","Line No.");
+          END;
+        END;
+        //</TPZ2568>
+        //TOP030B KT ABCSI Lost Opportunities 03092015
+        IF Type = Type::Item THEN
+        Tb37_UpdateLostOpportunity(Rec);
+      //TOP030B KT ABCSI Lost Opportunities 03092015
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterDeleteEvent)]
+    PROCEDURE Tb37_OnDelete_1@1000000014(VAR Rec@1000000000 : Record 37;RunTrigger@1000000001 : Boolean);
+    VAR
+      ChangeMgt@1000000002 : Codeunit 11123324;
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      ChangeMgt.DeleteSalesLineRelatedData(Rec); // SC  <TPZ1925>
+    END;
+
+    [EventSubscriber(Table,37,OnBeforeRenameEvent)]
+    LOCAL PROCEDURE Tb37_OnRename@1000000002(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      IF NOT RunTrigger THEN
+        EXIT;
+
+      IF (Rec."Document No." = '') AND (Rec."Document Type"=Rec."Document Type"::"Return Order") THEN
+        ERROR('Blank Document No. Is Not Allowed');
+    END;
+
+    [EventSubscriber(Codeunit,50087,Table_37_No_Onvalidate)]
+    PROCEDURE Tb37_No_OnValidate@1000100004(VAR Sender@1000000000 : Codeunit 50087;VAR Rec@1000000001 : Record 37;VAR xRec@1000000002 : Record 37;VAR HideValidationDialog@1000000008 : Boolean);
+    VAR
+      ItemRec@1000000005 : Record 27;
+      ItemDivMatrix@1000000004 : Record 50032;
+      UserSetupMgt@1000000003 : Codeunit 5700;
+      Item2@1000000006 : Record 27;
+      Text50000@1000000007 : TextConst 'ENU=You can enter items with Price Book Code %1 only.';
+    BEGIN
+      GetSalesHeader_Event(Rec);
+      WITH Rec DO BEGIN
+        IF (xRec."No." <> "No.") AND (Quantity <> 0) THEN BEGIN
+        TESTFIELD("Qty. to Asm. to Order (Base)",0);
+        CALCFIELDS("Reserved Qty. (Base)");
+        TESTFIELD("Reserved Qty. (Base)",0);
+        IF Type = Type::Item THEN
+          Tb37_CheckQtyRounding(Rec,HideValidationDialog); //TPZ9429
+        END;
+
+
+        //TOP130 KT ABCSI Item List Sort and Filter by Status 04092015 Start
+        IF (xRec."No." <> "No.") AND ("No." <> '') THEN BEGIN
+          IF Type = Type::Item THEN BEGIN
+            ItemRec.RESET;
+            ItemRec.SETRANGE("No.","No.");
+            IF  (NOT SalesHeader."Non Divisional") THEN BEGIN
+              SalesHeader.TESTFIELD("Shortcut Dimension 5 Code");
+              IF ItemDivMatrix.GET(SalesHeader."Shortcut Dimension 5 Code") THEN BEGIN
+                ItemRec.SETFILTER("Shortcut Dimension 5 Code",ItemDivMatrix."Divisional Filter");
+                ItemRec.FINDFIRST;
+              END;
+            END ELSE BEGIN
+              ItemRec.SETRANGE("Shortcut Dimension 5 Code");
+              ItemRec.FINDFIRST;
+            END;
+            // <TOP8714>
+            IF UserSetupMgt.GetPriceBookFilter <> '' THEN BEGIN
+              Item2.RESET;
+              Item2.SETRANGE("No.","No.");
+              Item2.SETFILTER("Price Book Code",UserSetupMgt.GetPriceBookFilter);
+              IF NOT Item2.FINDFIRST THEN
+                ERROR(Text50000,UserSetupMgt.GetPriceBookFilter);
+            END;
+            // </TOP8714>
+          END;
+        END;
+        //TOP130 KT ABCSI Item List Sort and Filter by Status 04092015 Start
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterAssignGLAccountValues)]
+    PROCEDURE Tb37_No_OnValidate_1@1000000030(VAR SalesLine@1000000000 : Record 37;GLAccount@1000000001 : Record 15);
+    BEGIN
+            // <TPZ92>
+            SalesLine."Commission Payable" := GLAccount."Commission Payable";
+            // </TPZ92>
+    END;
+
+    [EventSubscriber(Table,37,OnAfterAssignItemValues)]
+    PROCEDURE Tb37_No_OnValidate_2@1000000031(VAR SalesLine@1000000000 : Record 37;Item@1000000001 : Record 27);
+    VAR
+      SalesSetup@1000000002 : Record 311;
+      CustMfrRepExcp@1000000003 : Record 51047;
+      Text51000@1000000004 : TextConst 'ENU=%1 exists for %2 %3 that doesn''t allow to have different Mfr. Reps. on the same order.';
+      CustDivision@1000000005 : Record 50007;
+      Location@1000000006 : Record 14;
+      LastSalesPrice@1000000008 : Record 50004;
+      StockStatusWkshLine@1000000007 : Record 50000;
+    BEGIN
+      GetSalesHeader_Event(SalesLine);
+      WITH SalesLine DO BEGIN
+        GetSalesSetup;
+            SalesSetup.GET;//Utk
+            IF SalesSetup."Validate Cust. Mfr. Rep. Exc." THEN BEGIN
+              //<TPZ1390>
+              //SalesLineLoc.RESET;
+              //SalesLineLoc.SETRANGE("Document Type",SalesHeader."Document Type");
+              //SalesLineLoc.SETRANGE("Document No.",SalesHeader."No.");
+              //SalesLineLoc.SETFILTER("Line No.",'<>%1',"Line No.");
+              //SalesLineLoc.SETRANGE(Type,Type::Item);
+              //SalesLineLoc.SETFILTER("No.",'<>%1','');
+              //IF SalesLineLoc.FINDSET THEN
+                //REPEAT
+             //</TPZ1390>
+                  CustMfrRepExcp.RESET;
+                  CustMfrRepExcp.SETRANGE("Customer No.","Sell-to Customer No.");
+                  // <TPZ1274>
+                  CustMfrRepExcp.SETFILTER("Mfr. Rep. Code",'<>%1','');
+                  // </TPZ1274>
+                  IF CustMfrRepExcp.FINDSET THEN
+                    REPEAT
+                      IF ((Item."Manufacturer Code" = CustMfrRepExcp."Manufacturer Code") AND
+                          (CustMfrRepExcp."Mfr. Rep. Code" <> SalesHeader."Mfr. Rep. Code")) OR
+                         ((Item."Manufacturer Code" <> CustMfrRepExcp."Manufacturer Code") AND
+                          (CustMfrRepExcp."Mfr. Rep. Code" = SalesHeader."Mfr. Rep. Code"))
+                      THEN
+                        ERROR(
+                          Text51000,
+                          CustMfrRepExcp.TABLECAPTION,
+                          FIELDCAPTION("Sell-to Customer No."),
+                          "Sell-to Customer No.");
+                    UNTIL CustMfrRepExcp.NEXT = 0;
+                //UNTIL SalesLineLoc.NEXT = 0;
+              // <TPZ1274>
+               IF (Item."Manufacturer Code" <> '') AND
+                 CustMfrRepExcp.GET("Sell-to Customer No.",Item."Manufacturer Code")
+              THEN BEGIN
+              // </TPZ1274>
+                IF (SalesHeader."Mfr. Rep. Code" <> CustMfrRepExcp."Mfr. Rep. Code") THEN BEGIN
+                  // <TPZ1278>
+                  //SalesHeader.SetSalesLineException("Document Type","Document No.","Line No.");
+                  SalesHeader.VALIDATE("Mfr. Rep. Code",CustMfrRepExcp."Mfr. Rep. Code");
+                  SalesHeader.MODIFY;
+                 // SalesHeader.SetSalesLineException("Document Type"::Quote,'',0);
+                  // </TPZ1278>
+                END;
+              END ELSE BEGIN
+                IF CustDivision.GET(SalesHeader."Sell-to Customer No.",SalesHeader."Shortcut Dimension 5 Code") THEN BEGIN
+                  // <TPZ1278>
+                  //SalesHeader.SetSalesLineException("Document Type","Document No.","Line No.");
+                 // SalesHeader.SetSalesLineException("Document Type","Document No.","Line No.");
+                  SalesHeader.VALIDATE("Mfr. Rep. Code",CustDivision."Mfr. Rep. Code");
+                  SalesHeader.MODIFY;
+                 // SalesHeader.SetSalesLineException("Document Type"::Quote,'',0);
+                  // </TPZ1278>
+                END;
+              END;
+            END;
+            "Mfr. Rep. Code" := SalesHeader."Mfr. Rep. Code";
+            "ISR Code" := SalesHeader."ISR Code";
+            "CSR Code" := SalesHeader."CSR Code";
+            // </TPZ572>
+            // <TPZ92>
+            "Mfr. Rep. Comm. %" := SalesHeader."Mfr. Rep. Comm. %";
+            // </TPZ92>
+            "Alt. UOM Code" := Item."Alt. Sales Unit of Measure"; //TOP050 KT ABCSI Modification to Item Cards 01202015
+            //<TPZ1047>
+           // GetLocation("Location Code");
+            IF "Location Code" = '' THEN
+             CLEAR(Location)
+            ELSE
+            IF Location.Code <> "Location Code" THEN
+             Location.GET("Location Code");
+
+            IF Location.Code <> '' THEN BEGIN
+              VALIDATE("Purchasing Code", Location."Default Purchasing Code");
+            END;
+           //</TPZ1047>
+            //<TPZ3344>
+           IF (Type = Type :: Item) AND ("No." <> '')  AND ("Shortcut Dimension 5 Code" = 'L') THEN BEGIN
+            LastSalesPrice.RESET;
+            LastSalesPrice.ASCENDING;
+            LastSalesPrice.SETCURRENTKEY("Sell-to Customer No.","Item No.","Document Date");
+            LastSalesPrice.SETRANGE("Document Type",LastSalesPrice."Document Type"::"Stock Status");
+            LastSalesPrice.SETRANGE("Sell-to Customer No.","Sell-to Customer No.");
+            LastSalesPrice.SETRANGE("Item No.","No.");
+            LastSalesPrice.SETRANGE("Special Price",FALSE);
+            IF LastSalesPrice.FINDLAST THEN BEGIN
+              //"Last Unit Price" := LastSalesPrice."Last Unit Price";
+              IF LastSalesPrice."Price Increase" THEN BEGIN
+                "Post Price Inc.":=LastSalesPrice."Last Unit Price";
+                "Pre Price inc.":=LastSalesPrice."Pre Increase Unit Price";
+              END;
+               "Stock Status Unit Price" := LastSalesPrice."Last Unit Price";
+            END;
+
+
+            StockStatusWkshLine.RESET;
+            IF StockStatusWkshLine.GET("No.") THEN BEGIN
+              IF "Pre Price inc." = 0 THEN
+                "Pre Price inc." := StockStatusWkshLine."Pre Increase Unit Price";
+              IF "Post Price Inc." = 0 THEN
+                 "Post Price Inc." := StockStatusWkshLine."Post Increase Unit Price";
+              IF "Stock Status Unit Price" = 0 THEN
+                 "Stock Status Unit Price" := StockStatusWkshLine."Unit Price";
+            END;
+           END;
+           //</TPZ3344>
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterAssignItemChargeValues)]
+    PROCEDURE Tb37_No_OnValidate_3@1000000040(VAR SalesLine@1000000000 : Record 37;ItemCharge@1000000001 : Record 5800);
+    BEGIN
+      WITH SalesLine DO BEGIN
+             // <TPZ1539>
+            "Commission Payable" := ItemCharge."Commission Payable";
+            // </TPZ1539>
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50087,Table_37_No_Onvalidate_1)]
+    PROCEDURE Tb37_No_OnValidate_4@1000000034(VAR Sender@1000000000 : Codeunit 50087;VAR Rec@1000000001 : Record 37);
+    BEGIN
+
+      Rec.VALIDATE("Alt. UOM Code");  //TOP050 KT ABCSI Modification to Item Cards 01202015
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"No.")]
+    PROCEDURE Tb37_No_OnValidate_5@1000000059(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    VAR
+      ItemLedgerEntry@1000000003 : Record 32;
+      TotalCostPerUnit@1000000004 : Decimal;
+      ItemLoc@1000000007 : Record 27;
+      TotalRemainingQty@1000000008 : Decimal;
+      NoOfEntry@1000000005 : Integer;
+    BEGIN
+      AvgCostPerLocation(Rec);
+      GetAvgCostPerUnitPerLoc(Rec); //TPZ2993
+      ReplacementCost(Rec);  //TPZ3125
+      {
+      //PSHUKLA new functionality for Avg Unit cost per location
+      IF (Rec.Type = Rec.Type::Item) THEN BEGIN //AND (Rec."Location Code" <> '') THEN BEGIN
+        TotalCostPerUnit := 0;
+        TotalRemainingQty := 0;
+        NoOfEntry := 0;
+        ItemLoc.GET(Rec."No.");
+        ItemLedgerEntry.RESET;
+        ItemLedgerEntry.SETCURRENTKEY("Item No.",Open,"Variant Code",Positive,"Location Code","Posting Date");
+        ItemLedgerEntry.SETRANGE("Item No.",Rec."No.");
+        ItemLedgerEntry.SETRANGE(Open,TRUE);
+        ItemLedgerEntry.SETFILTER("Location Code",'<>%1&<>%2','ONWATER','OWTRANSIT');
+        IF ItemLedgerEntry.FINDFIRST THEN
+          REPEAT
+            ItemLedgerEntry.CALCFIELDS("Cost per Unit");
+            //TotalCostPerUnit += (ItemLedgerEntry."Cost per Unit" * ItemLedgerEntry."Remaining Quantity");
+            TotalCostPerUnit += ItemLedgerEntry."Cost per Unit"; //Avg of cos per unit
+            TotalRemainingQty += ItemLedgerEntry."Remaining Quantity";
+            NoOfEntry += 1;
+          UNTIL ItemLedgerEntry.NEXT = 0;
+          {
+          IF TotalRemainingQty = 0 THEN
+            TotalRemainingQty := 1;
+           Rec."Average Unit Cost Per Loc" := ROUND(TotalCostPerUnit/TotalRemainingQty,0.0001,'=');
+           }
+          IF NoOfEntry = 0 THEN NoOfEntry := 1;  //Avg of cos per unit
+          Rec."Average Unit Cost Per Loc" := ROUND(TotalCostPerUnit/NoOfEntry,0.0001,'=');//Avg of cos per unit
+          IF Rec."Average Unit Cost Per Loc" = 0 THEN
+            Rec."Average Unit Cost Per Loc" := ROUND(Rec."Unit Cost (LCY)",0.0001,'=');
+      END;
+      }
+    END;
+
+    [EventSubscriber(Codeunit,50087,Table_37_No_OnLookup)]
+    PROCEDURE Tb37_No_OnLookup@1000000038(VAR Rec@1000000000 : Record 37);
+    VAR
+      "***ABCSI Locals***"@1000000008 : Integer;
+      StandardText@1000000007 : Record 7;
+      GLAccount@1000000006 : Record 15;
+      ItemRec@1000000005 : Record 27;
+      ResourceRec@1000000004 : Record 156;
+      FixedAssetRec@1000000003 : Record 5600;
+      ItemChargeRec@1000000002 : Record 5800;
+      ItemDivMatrix@1000000001 : Record 50032;
+    BEGIN
+      GetSalesHeader_Event(Rec);
+      WITH Rec DO BEGIN
+        //TOP130 KT ABCSI Item List Sort and Filter by Status 04092015
+      TestStatusOpen;
+      //GetSalesHeader;
+      CASE Type OF
+        Type::" ":
+          BEGIN
+            IF PAGE.RUNMODAL(8,StandardText) = ACTION::LookupOK THEN
+              VALIDATE("No.",StandardText.Code);
+          END;
+        Type::Item:
+          BEGIN
+            ItemRec.RESET;
+            IF  (NOT SalesHeader."Non Divisional") THEN BEGIN
+              SalesHeader.TESTFIELD("Shortcut Dimension 5 Code");
+              ItemRec.FILTERGROUP(2);
+              IF ItemDivMatrix.GET(SalesHeader."Shortcut Dimension 5 Code") THEN
+                ItemRec.SETFILTER("Shortcut Dimension 5 Code",ItemDivMatrix."Divisional Filter");
+              ItemRec.FILTERGROUP(0);
+            END ELSE
+              ItemRec.SETRANGE("Shortcut Dimension 5 Code");
+            IF ItemRec.GET("No.") THEN BEGIN END;
+            IF PAGE.RUNMODAL(31,ItemRec) = ACTION::LookupOK THEN
+              VALIDATE("No.",ItemRec."No.");
+          END;
+        Type::"Fixed Asset":
+          BEGIN
+            IF PAGE.RUNMODAL(5601,FixedAssetRec) = ACTION::LookupOK THEN
+              VALIDATE("No.",FixedAssetRec."No.");
+          END;
+        Type::"Charge (Item)":
+          BEGIN
+            IF PAGE.RUNMODAL(5800,ItemChargeRec) = ACTION::LookupOK THEN
+              VALIDATE("No.",ItemChargeRec."No.");
+          END;
+        Type::"G/L Account":
+          BEGIN
+            GLAccount.RESET;
+            IF NOT "System-Created Entry" THEN BEGIN
+              GLAccount.FILTERGROUP(2);
+              GLAccount.SETRANGE("Direct Posting",TRUE);
+              GLAccount.SETRANGE("Account Type",GLAccount."Account Type"::Posting);
+              GLAccount.SETRANGE(Blocked,FALSE);
+              GLAccount.FILTERGROUP(2);
+            END;
+            IF PAGE.RUNMODAL(18,GLAccount) = ACTION::LookupOK THEN
+              VALIDATE("No.",GLAccount."No.");
+          END;
+        Type::Resource:
+          BEGIN
+            IF PAGE.RUNMODAL(77,ResourceRec) = ACTION::LookupOK THEN
+              VALIDATE("No.",ResourceRec."No.");
+          END;
+      END;
+      //TOP130 KT ABCSI Item List Sort and Filter by Status 04092015
+
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,Description)]
+    LOCAL PROCEDURE TB37_Description_OnValidate@1000000061(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      {WITH Rec DO BEGIN
+        IF (xRec."No." = '') AND ("No." <>'') THEN
+           VALIDATE("No.",'');
+      END;
+      }
+    END;
+
+    [EventSubscriber(Table,37,OnBeforeValidateEvent,"Location Code")]
+    LOCAL PROCEDURE Tb37_LocationCode_OnValidate@1000000003(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      //<TPZ2757>
+      IF Rec."Document Type" = Rec."Document Type"::"Return Order" THEN
+        Rec.TESTFIELD("Return Reason Code");
+      //</TPZ2757>
+    END;
+
+    [EventSubscriber(Codeunit,50087,Table_37_LocationCode_Onvalidate)]
+    PROCEDURE Tb37_LocationCode_OnValidate_1@1000010005(VAR Sender@1000000000 : Codeunit 50087;VAR Rec@1000000001 : Record 37);
+    VAR
+      Location@1000000003 : Record 14;
+    BEGIN
+      WITH Rec DO BEGIN
+        //<TPZ1047>
+        IF (Type = Type::Item) AND ("No." <> '') THEN BEGIN
+          //GetLocation("Location Code");
+          IF "Location Code" = '' THEN
+             CLEAR(Location)
+          ELSE
+            IF Location.Code <> "Location Code" THEN
+             Location.GET("Location Code");
+
+          IF Location.Code <> '' THEN
+          VALIDATE("Purchasing Code", Location."Default Purchasing Code");
+        END;
+      //</TPZ1047>
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"Location Code")]
+    PROCEDURE Tb37_LocationCode_OnValidate_2@1000000006(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    VAR
+      LocationDivHdlgPct@1000000003 : Record 51712;
+    BEGIN
+      WITH Rec DO BEGIN
+        // <TPZ92>
+        IF "Location Code" <> '' THEN BEGIN
+          IF "Location Code" <> LocationDivHdlgPct."Location Code" THEN
+            IF NOT LocationDivHdlgPct.GET("Location Code","Shortcut Dimension 5 Code") THEN
+              CLEAR(LocationDivHdlgPct);
+        END ELSE
+          CLEAR(LocationDivHdlgPct);
+        // </TPZ92>
+
+      VALIDATE("Location Hdlg. %",LocationDivHdlgPct."Handling %");
+
+
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"Location Code")]
+    PROCEDURE Tb37_LocationCode_OnValidate_3@1000000052(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    VAR
+      ItemLedgerEntry@1000000006 : Record 32;
+      TotalCostPerUnit@1000000005 : Decimal;
+      ItemLoc@1000000004 : Record 27;
+      TotalRemainingQty@1000000003 : Decimal;
+    BEGIN
+      //PSHUKLA new functionality for Avg Unit cost per location
+      AvgCostPerLocation(Rec);
+      GetAvgCostPerUnitPerLoc(Rec); //TPZ2993
+      ReplacementCost(Rec);  //TPZ3125
+      {
+      IF (Rec.Type = Rec.Type::Item) AND (Rec."Location Code" <> '') THEN BEGIN
+        TotalCostPerUnit := 0;
+        TotalRemainingQty := 0;
+
+        ItemLoc.GET(Rec."No.");
+        ItemLedgerEntry.RESET;
+        ItemLedgerEntry.SETCURRENTKEY("Item No.",Open,"Variant Code",Positive,"Location Code","Posting Date");
+        ItemLedgerEntry.SETRANGE("Item No.",Rec."No.");
+        ItemLedgerEntry.SETRANGE(Open,TRUE);
+        ItemLedgerEntry.SETRANGE("Location Code",Rec."Location Code");
+        IF ItemLedgerEntry.FINDFIRST THEN
+          REPEAT
+            ItemLedgerEntry.CALCFIELDS("Cost per Unit");
+            TotalCostPerUnit += (ItemLedgerEntry."Cost per Unit" * ItemLedgerEntry."Remaining Quantity");
+            TotalRemainingQty += ItemLedgerEntry."Remaining Quantity";
+          UNTIL ItemLedgerEntry.NEXT = 0;
+          IF TotalRemainingQty = 0 THEN
+            TotalRemainingQty := 1;
+          Rec."Average Unit Cost Per Loc" := ROUND(TotalCostPerUnit/TotalRemainingQty,0.0001,'=');
+          IF Rec."Average Unit Cost Per Loc" = 0 THEN
+            Rec."Average Unit Cost Per Loc" := ROUND(Rec."Unit Cost (LCY)",0.0001,'=');
+      END;
+      }
+    END;
+
+    [EventSubscriber(Codeunit,50087,Table_37_Quntity_OnValidate)]
+    PROCEDURE Tb37_Quantity_OnValidate@1000000011(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;VAR HideValidationDialog@1000000002 : Boolean;VAR CurrFieldNo@1000000011 : Integer);
+    VAR
+      ItemLedgEntry@1000000005 : Record 32;
+      RoundedUpQty@1000000004 : Decimal;
+      MinQty@1000000003 : Decimal;
+      Item@1000000006 : Record 27;
+      Text51078@1000000009 : TextConst 'ENU=Do you want to round the quantity up to %1 %2?';
+      Text51080@1000000008 : TextConst 'ENU=cannot be more than %1 less %2 and %3';
+      TextRNDERROR@1000000007 : TextConst 'ENU="You Must Round the Qty in order to sell this item %1 "';
+      Text51500@1000000010 : TextConst 'ENU=In Sales Document %1, Line no. %2 you cannot change Quantity to less than %3 because total quantity in ship bin and being picked is %3.';
+    BEGIN
+      WITH Rec DO BEGIN
+        //TestStatusOpen;
+        GetSalesHeader_Event(Rec);
+       { IF NOT "System-Created Entry" THEN
+        IF Type <> Type::" " THEN
+          SalesHeader.TESTFIELD(Status,SalesHeader.Status::Open);
+          }
+          Tb37_CheckQtyRounding(Rec,HideValidationDialog);//TPZ9429
+        // <TPZ69>
+        IF GUIALLOWED AND
+          ("Document Type" IN ["Document Type"::Quote,"Document Type"::Order]) AND
+           (Type = Type::Item) AND
+           (CurrFieldNo = FIELDNO(Quantity)) AND
+           (Quantity <> 0) AND
+           Item.GET("No.") AND
+           (Item."Sales Order Multiple" <> 0)
+           AND (NOT Item."Override Sales Order Multiple")  //TPZ2899
+        THEN
+          IF Quantity MOD Item."Sales Order Multiple" <> 0 THEN BEGIN
+            RoundedUpQty := Item."Sales Order Multiple" * (Quantity DIV Item."Sales Order Multiple" + 1);
+            IF CONFIRM(Text51078,TRUE,RoundedUpQty,"Unit of Measure Code") THEN
+              Quantity := RoundedUpQty
+              //<TPZ9429>
+              ELSE
+               ERROR(TextRNDERROR,Item."No.");  //EB
+             //</TPZ9429>
+          END;
+        // </TPZ69>
+
+        //TM BEG 070215 - Only allow user to change quantity if new quantity is more than total qty. picked + qty. in pick ticket.
+        IF (Quantity <> xRec.Quantity) AND ("Document Type" <> "Document Type"::Quote) THEN BEGIN
+          MinQty := Tb37_CalcWhseMinQtyAllowToChangeTo(Rec);
+          IF Quantity < MinQty THEN
+            ERROR(Text51500, "Document No.", "Line No.", MinQty);
+        END;
+        //TM END 070215
+
+        //TOP030B KT ABCSI Lost Opportunities 03112015
+        IF Quantity <> 0 THEN
+          TESTFIELD("Reason Code",'');
+        //TOP030B KT ABCSI Lost Opportunities 03112015
+
+        //TOP050 KT ABCSI Modification to Item Cards 01212015
+        IF "Alt. UOM Code" <> '' THEN
+          "Alt. UOM Quantity" := Tb37_CalcAltUOMQty(Rec,Quantity);
+        //TOP050 KT ABCSI Modification to Item Cards 01212015
+
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,Quantity)]
+    PROCEDURE Tb37_Quantity_OnValidate_1@1000000012(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      WITH Rec DO BEGIN
+        //TOP180 KT ABCSI Customer Pricing - Hot Sheets 04142015 Start
+        IF "Document Type" <> "Document Type"::Quote THEN BEGIN  //TOP010E KT ABCSI 07282015
+          IF Type = Type::Item THEN BEGIN
+            IF (xRec.Quantity <> Quantity) AND (Quantity <> 0) AND (CurrFieldNo = FIELDNO(Quantity)) THEN
+              BEGIN
+                Tb37_UpdateLastSalesPrice(Rec);
+              END;
+          END;
+        END; //TOP010E KT ABCSI 07282015
+      //TOP180 KT ABCSI Customer Pricing - Hot Sheets 04142015 End
+
+        Tb37_UpdateMarginPercent(Rec); //TOP230 KT ABCSI CRP 2 Fixes 05282015
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,Quantity)]
+    PROCEDURE Tb37_Quantity_OnValidate_2@1000000063(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    VAR
+      ItemLedgerEntry@1000000003 : Record 32;
+      TotalCostPerUnit@1000000004 : Decimal;
+      ItemLoc@1000000007 : Record 27;
+      TotalRemainingQty@1000000008 : Decimal;
+      NoOfEntry@1000000005 : Integer;
+    BEGIN
+      //PSHUKLA new functionality for Avg Unit cost per location
+      AvgCostPerLocation(Rec);
+      GetAvgCostPerUnitPerLoc(Rec); //TPZ2993
+      ReplacementCost(Rec);  //TPZ3125
+      {IF (Rec.Type = Rec.Type::Item) THEN BEGIN //AND (Rec."Location Code" <> '') THEN BEGIN
+        TotalCostPerUnit := 0;
+        TotalRemainingQty := 0;
+        NoOfEntry := 0;
+        ItemLoc.GET(Rec."No.");
+        ItemLedgerEntry.RESET;
+        ItemLedgerEntry.SETCURRENTKEY("Item No.",Open,"Variant Code",Positive,"Location Code","Posting Date");
+        ItemLedgerEntry.SETRANGE("Item No.",Rec."No.");
+        ItemLedgerEntry.SETRANGE(Open,TRUE);
+        ItemLedgerEntry.SETFILTER("Location Code",'<>%1&<>%2','ONWATER','OWTRANSIT');
+        IF ItemLedgerEntry.FINDFIRST THEN
+          REPEAT
+            ItemLedgerEntry.CALCFIELDS("Cost per Unit");
+            //TotalCostPerUnit += (ItemLedgerEntry."Cost per Unit" * ItemLedgerEntry."Remaining Quantity");
+            TotalCostPerUnit += ItemLedgerEntry."Cost per Unit"; //Avg of cos per unit
+            TotalRemainingQty += ItemLedgerEntry."Remaining Quantity";
+            NoOfEntry += 1;
+          UNTIL ItemLedgerEntry.NEXT = 0;
+          {
+          IF TotalRemainingQty = 0 THEN
+            TotalRemainingQty := 1;
+           Rec."Average Unit Cost Per Loc" := ROUND(TotalCostPerUnit/TotalRemainingQty,0.0001,'=');
+           }
+          IF NoOfEntry = 0 THEN NoOfEntry := 1;  //Avg of cos per unit
+          Rec."Average Unit Cost Per Loc" := ROUND(TotalCostPerUnit/NoOfEntry,0.0001,'=');//Avg of cos per unit
+          IF Rec."Average Unit Cost Per Loc" = 0 THEN
+            Rec."Average Unit Cost Per Loc" := ROUND(Rec."Unit Cost (LCY)",0.0001,'=');
+      END;
+      }
+    END;
+
+    [EventSubscriber(Table,37,OnBeforeValidateEvent,"Qty. to Ship")]
+    PROCEDURE Tb37_QuantitytoShip_OnValidate@1000000017(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+
+      Tb37_CheckQtyShipRounding(Rec);//<TPZ2504>
+    END;
+
+    [EventSubscriber(Table,37,OnBeforeValidateEvent,"Unit Price")]
+    PROCEDURE Tb37_UnitPrice_Onvalidate@1000000019(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      WITH Rec DO BEGIN
+        //TOP050 KT ABCSI Modification to Item Cards 01212015
+        IF "Alt. UOM Code" <> '' THEN
+          "Alt. UOM Unit Price" := Tb37_CalcAltUOMUnitPrice(Rec,"Unit Price");
+        //TOP050 KT ABCSI Modification to Item Cards 01212015
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"Unit Price")]
+    PROCEDURE Tb37_UnitPrice_Onvalidate_1@1000000020(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      WITH Rec DO BEGIN
+        //TOP180 KT ABCSI Customer Pricing - Hot Sheets 04142015 Start
+        IF "Document Type" <> "Document Type"::Quote THEN BEGIN  //TOP010E KT ABCSI 07282015
+         IF Type = Type::Item THEN BEGIN
+          IF (xRec."Unit Price" <> "Unit Price") AND ("Unit Price" <> 0) AND (CurrFieldNo = FIELDNO("Unit Price")) THEN
+            BEGIN
+              Tb37_UpdateLastSalesPrice(Rec);
+            END;
+         END;
+        END; //TOP010E KT ABCSI 07282015
+        //TOP180 KT ABCSI Customer Pricing - Hot Sheets 04142015 End
+
+        Tb37_UpdateMarginPercent(Rec); //TOP230 KT ABCSI CRP 2 Fixes 05282015
+
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"Unit Cost (LCY)")]
+    PROCEDURE Tb37_UnitCostLCY_OnValidate@1000000025(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      Tb37_UpdateMarginPercent(Rec); //TOP230 KT ABCSI CRP 2 Fixes 05282015
+    END;
+
+    [EventSubscriber(Codeunit,50087,"Table_37_LineDiscount%_OnValidate")]
+    PROCEDURE "Tb37_LineDiscount%_OnValidate"@1000000008(VAR Sender@1000000000 : Codeunit 50087;VAR Rec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer;VAR Currency@1000000003 : Record 4;VAR CalledFromActualUnitPrice@1000000004 : Boolean);
+    BEGIN
+      WITH Rec DO BEGIN
+        // <TPZ1276>
+        "Line Discount Amount" :=
+          ROUND(
+            Quantity * "Unit Price",
+            Currency."Amount Rounding Precision") -
+          ROUND(
+            Quantity * ROUND("Unit Price" * (100 - "Line Discount %") / 100,Currency."Unit-Amount Rounding Precision"),
+            Currency."Amount Rounding Precision");
+            // </TPZ1276>
+
+          "Inv. Discount Amount" := 0;
+          "Inv. Disc. Amount to Invoice" := 0;
+
+        //TOP100A KT ABCSI Multipliers 02192015
+        IF ((CurrFieldNo <> 0) AND (CurrFieldNo <> FIELDNO("Actual Unit Price"))) OR (CurrFieldNo = 0) THEN BEGIN  //TOP230 KT ABCSI Topaz Fixes 07152015
+          IF "Line Discount %" <> 0 THEN BEGIN
+            // <TPZ1276>
+            Multiplier := ROUND(((100 - "Line Discount %")/100),0.0000001,'=');
+            // </TPZ1276>
+            IF NOT CalledFromActualUnitPrice THEN
+              "Actual Unit Price" := ROUND(Multiplier * "Unit Price",0.0001)  //TOP230 KT ABCSI Go Live Fixes 11092015
+            ELSE
+              CLEAR(CalledFromActualUnitPrice);
+          END ELSE BEGIN
+            Multiplier := 0;
+            "Actual Unit Price" := ROUND("Unit Price",0.0001);
+          END;
+        END;
+          IF "Alt. UOM Code" <> '' THEN
+            "Alt. UOM Actual Unit Price" := Tb37_CalcAltUOMUnitPrice(Rec,"Actual Unit Price");
+        //TOP100A KT ABCSI Multipliers 02192015
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnBeforeValidateEvent,"Gen. Prod. Posting Group")]
+    PROCEDURE Tb37_GenProdPostingGroup_OnValidate@1000100010(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    VAR
+      TPZText001@1000000003 : TextConst 'ENU=You cannot manually change %1: %2, when the %3 is sold as %4.';
+      Item@1000000004 : Record 27;
+    BEGIN
+      WITH Rec DO BEGIN
+        //<TPZ1682
+        IF ((CurrFieldNo = FIELDNO("Gen. Prod. Posting Group")) AND
+           (Type = Type::Item) AND
+           (Sample OR Promo) AND //<TPZ2368>
+           ("Gen. Prod. Posting Group" <> xRec."Gen. Prod. Posting Group")) THEN
+           IF Sample THEN
+             ERROR(TPZText001,FIELDCAPTION("Gen. Prod. Posting Group"), "Gen. Prod. Posting Group",Item.TABLECAPTION, FIELDCAPTION(Sample))
+           ELSE
+             ERROR(TPZText001,FIELDCAPTION("Gen. Prod. Posting Group"), "Gen. Prod. Posting Group", Item.TABLECAPTION, FIELDCAPTION(Promo));//<TPZ2368>
+        //</TPZ1682>
+
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50087,Table_37_UnitOfMeasureCode_OnValidate)]
+    PROCEDURE Tb37_UnitOfMeasureCode_OnValidate@1000000009(VAR Sender@1000000000 : Codeunit 50087;VAR Rec@1000000001 : Record 37;VAR xRec@1000000002 : Record 37;CurrFieldNo@1000000003 : Integer);
+    BEGIN
+      WITH Rec DO BEGIN
+        //TOP180 KT ABCSI Customer Pricing - Hot Sheets 04142015 Start
+        IF "Document Type" <> "Document Type"::Quote THEN BEGIN  //TOP010E KT ABCSI 07282015
+        IF (xRec."Unit of Measure Code" <> "Unit of Measure Code") AND ("Unit of Measure Code" <> '') AND (CurrFieldNo = FIELDNO("Unit of Measure Code")) THEN
+          BEGIN
+            Tb37_UpdateLastSalesPrice(Rec);
+          END;
+        END; //TOP010E KT ABCSI 07282015
+        //TOP180 KT ABCSI Customer Pricing - Hot Sheets 04142015 End
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"Unit of Measure")]
+    PROCEDURE Tb37_UnitOfMeasureCode_OnValidate_1@1000000064(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    VAR
+      ItemLedgerEntry@1000000003 : Record 32;
+      TotalCostPerUnit@1000000004 : Decimal;
+      ItemLoc@1000000007 : Record 27;
+      TotalRemainingQty@1000000008 : Decimal;
+      NoOfEntry@1000000005 : Integer;
+    BEGIN
+      //PSHUKLA new functionality for Avg Unit cost per location
+      AvgCostPerLocation(Rec);
+      GetAvgCostPerUnitPerLoc(Rec); //TPZ2993
+      ReplacementCost(Rec);  //TPZ3125
+      {IF (Rec.Type = Rec.Type::Item) THEN BEGIN //AND (Rec."Location Code" <> '') THEN BEGIN
+        TotalCostPerUnit := 0;
+        TotalRemainingQty := 0;
+        NoOfEntry := 0;
+        ItemLoc.GET(Rec."No.");
+        ItemLedgerEntry.RESET;
+        ItemLedgerEntry.SETCURRENTKEY("Item No.",Open,"Variant Code",Positive,"Location Code","Posting Date");
+        ItemLedgerEntry.SETRANGE("Item No.",Rec."No.");
+        ItemLedgerEntry.SETRANGE(Open,TRUE);
+        ItemLedgerEntry.SETFILTER("Location Code",'<>%1&<>%2','ONWATER','OWTRANSIT');
+        IF ItemLedgerEntry.FINDFIRST THEN
+          REPEAT
+            ItemLedgerEntry.CALCFIELDS("Cost per Unit");
+            //TotalCostPerUnit += (ItemLedgerEntry."Cost per Unit" * ItemLedgerEntry."Remaining Quantity");
+            TotalCostPerUnit += ItemLedgerEntry."Cost per Unit"; //Avg of cos per unit
+            TotalRemainingQty += ItemLedgerEntry."Remaining Quantity";
+            NoOfEntry += 1;
+          UNTIL ItemLedgerEntry.NEXT = 0;
+          {
+          IF TotalRemainingQty = 0 THEN
+            TotalRemainingQty := 1;
+           Rec."Average Unit Cost Per Loc" := ROUND(TotalCostPerUnit/TotalRemainingQty,0.0001,'=');
+           }
+          IF NoOfEntry = 0 THEN NoOfEntry := 1;  //Avg of cos per unit
+          Rec."Average Unit Cost Per Loc" := ROUND(TotalCostPerUnit/NoOfEntry,0.0001,'=');//Avg of cos per unit
+          IF Rec."Average Unit Cost Per Loc" = 0 THEN
+            Rec."Average Unit Cost Per Loc" := ROUND(Rec."Unit Cost (LCY)",0.0001,'=');
+      END;
+      }
+    END;
+
+    [EventSubscriber(Table,37,OnBeforeValidateEvent,"Return Reason Code")]
+    LOCAL PROCEDURE Tb_37_ReturnReasonCode_OnValidate@1000000005(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    VAR
+      Text0001@1000000003 : TextConst 'ENU=This is ''Sample'' Return line, Please check the Prices after entering Return Reason Code.';
+    BEGIN
+      //<TPZ2850>
+      WITH Rec DO BEGIN
+        IF Sample THEN
+          MESSAGE(Text0001);
+      END;
+      //</TPZ2850>
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"Return Reason Code")]
+    PROCEDURE Tb37_ReturnReasonCode_OnValidate_1@1000000018(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    VAR
+      ReturnReason@1000000004 : Record 6635;
+      SalesCommentLine@1000000003 : Record 44;
+    BEGIN
+      WITH Rec DO BEGIN
+        //<TPZ2568>
+        IF "Return Reason Code" <> xRec."Return Reason Code" THEN
+          IF ReturnReason.GET("Return Reason Code") THEN
+            IF ReturnReason.Mandatory THEN BEGIN
+              //<TPZ3112>
+              IF ("Document Type" = "Document Type" :: "Return Order") AND (ReturnReason.Type = ReturnReason.Type :: Quality) THEN
+                MESSAGE ('Please Put QA Help Desk Ticket Number in Line Comment');
+              //</TPZ3112>
+              COMMIT;
+              SalesCommentLine.RESET;
+              SalesCommentLine.SETRANGE("Document Type","Document Type");
+              SalesCommentLine.SETRANGE("No.","Document No.");
+              SalesCommentLine.SETRANGE("Document Line No.","Line No.");
+              IF SalesCommentLine.ISEMPTY THEN
+                ShowLineComments;
+          END;
+      //</TPZ2568>
+            END;
+    END;
+
+    [EventSubscriber(Codeunit,50087,Table_37_GetSalesHeader_Function)]
+    PROCEDURE Tb37_GetSalesHeader@1000000057(VAR Rec@1000000000 : Record 37);
+    VAR
+      Currency@1000000001 : Record 4;
+    BEGIN
+      WITH Rec DO BEGIN
+         IF ("Document Type" <> SalesHeader."Document Type") OR ("Temp Sales Order No." <> SalesHeader."No.") THEN BEGIN
+            SalesHeader.GET("Document Type","Temp Sales Order No.");
+            IF SalesHeader."Currency Code" = '' THEN
+              Currency.InitRoundingPrecision
+                      ELSE BEGIN
+              SalesHeader.TESTFIELD("Currency Factor");
+              Currency.GET(SalesHeader."Currency Code");
+              Currency.TESTFIELD("Amount Rounding Precision");
+                      END;
+                    END;
+              END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterUpdateUnitPrice)]
+    PROCEDURE Tb37_UpdateUnitPrice@1000000050(VAR SalesLine@1000000000 : Record 37;xSalesLine@1000000001 : Record 37;CalledByFieldNo@1000000002 : Integer;CurrFieldNo@1000000003 : Integer);
+    VAR
+      GotSalesPrice@1000000004 : Boolean;
+      GotHotSheetPrice@1000000005 : Boolean;
+      PriceCalcMgt@1000000006 : Codeunit 7000;
+      CustDivision@1000000007 : Record 50007;
+      Division@1000000008 : Record 51001;
+    BEGIN
+      {PSHUKLA CODECOVERAGEINCLUDE commented
+      GetSalesHeader_Event(SalesLine);//Utkarsh
+      WITH SalesLine DO BEGIN
+          CASE Type OF
+
+          //TOP180 KT ABCSI Customer Pricing - Hot Sheets 04132015 Comment Start
+          {
+          Type::Item,Type::Resource:
+      BEGIN
+              PriceCalcMgt.FindSalesLineLineDisc(SalesHeader,Rec);
+              PriceCalcMgt.FindSalesLinePrice(SalesHeader,Rec,CalledByFieldNo);
+      END;
+          }
+          //TOP180 KT ABCSI Customer Pricing - Hot Sheets 04132015 Comment End
+          //TOP180 KT ABCSI Customer Pricing - Hot Sheets 04132015 Start
+          Type::Item:
+      BEGIN
+              CLEAR(GotSalesPrice);
+              CLEAR(GotHotSheetPrice);
+              //"Pricing Logic" := "Pricing Logic"::" "; //TOP230 KT ABCSI CRP 2 Fixes 06042015
+              PriceCalcMgt.FindSalesLineSalesPrice(SalesHeader,SalesLine,CalledByFieldNo);
+
+              IF "Pricing Logic" = "Pricing Logic"::"Sales Price" THEN GotSalesPrice := TRUE;
+
+
+              IF ("Pricing Logic" <> "Pricing Logic"::"Sales Price") THEN BEGIN
+                PriceCalcMgt.FindSalesLineLineDisc(SalesHeader,SalesLine);
+                IF "Pricing Logic" = "Pricing Logic"::"Hot Sheet" THEN GotHotSheetPrice := TRUE;
+      END;
+
+              IF (NOT GotSalesPrice) AND (NOT GotHotSheetPrice) THEN BEGIN
+                PriceCalcMgt.FindSalesLinePrice(SalesHeader,SalesLine,CalledByFieldNo);
+                //if "Unit price" <> 0 then "Pricing Logic" := "Pricing Logic"::"Item Unit Price";
+              END;
+
+
+              //TOP230 KT ABCSI CRP 2 Fixes 05282015
+              IF (NOT GotSalesPrice) AND (NOT GotHotSheetPrice) THEN
+                IF "Recomm. Multiplier" = 0 THEN BEGIN
+                  IF CustDivision.GET(SalesHeader."Sell-to Customer No.",SalesHeader."Shortcut Dimension 5 Code") THEN BEGIN
+                    IF CustDivision.Multiplier <> 0 THEN BEGIN
+                      "Line Discount %" := ROUND((1 - CustDivision.Multiplier) * 100,0.00001); //TOP230 KT ABCSI Go Live Fixes 11092015
+                      "Recomm. Multiplier" := CustDivision.Multiplier;
+                      Multiplier := CustDivision.Multiplier;
+                      "Pricing Logic" := "Pricing Logic"::"Customer Base Multiplier"; //TOP230 KT ABCSI CRP 2 Fixes 06022015
+                    END;
+                  END;
+                END;
+               //TOP230 KT ABCSI CRP 2 Fixes 05282015
+
+            END;
+
+          Type::Resource:
+      BEGIN
+              PriceCalcMgt.FindSalesLineLineDisc(SalesHeader,SalesLine);
+              PriceCalcMgt.FindSalesLinePrice(SalesHeader,SalesLine,CalledByFieldNo);
+            END;
+          //TOP180 KT ABCSI Customer Pricing - Hot Sheets 04132015 Start
+        END;
+        //TOP100A KT ABCSI Multipliers 02192015
+        CASE Type OF
+          Type::Item:
+          BEGIN
+              IF "Recomm. Multiplier" <> 0 THEN
+                "Recomm. Unit Price" := ROUND("Unit Price" * "Recomm. Multiplier",0.0001) //TOP230 KT ABCSI Go Live Fixes 11092015
+              ELSE
+                "Recomm. Unit Price" := "Unit Price";
+
+              IF Multiplier <> 0 THEN
+                "Actual Unit Price" := ROUND("Unit Price" * Multiplier,0.0001)  //TOP230 KT ABCSI Go Live Fixes 11092015
+              ELSE
+                "Actual Unit Price" := "Unit Price";
+
+              IF "Alt. UOM Code" <> '' THEN BEGIN
+                "Alt. UOM Actual Unit Price" := Tb37_CalcAltUOMUnitPrice(SalesLine,"Actual Unit Price");
+                "Alt. UOM Recomm. Unit Price" := Tb37_CalcAltUOMUnitPrice(SalesLine,"Recomm. Unit Price");
+          END;
+        END;
+        END;
+        //TOP100A KT ABCSI Multipliers 02192015
+
+        // <TPZ875>
+        IF ("Document Type" IN ["Document Type"::Quote,"Document Type"::Order,"Document Type"::Invoice]) AND
+           (Type = Type::Item) AND
+           Division.GET(SalesHeader."Shortcut Dimension 5 Code") AND
+           Division."Use Last Price as Recomm Price"
+        THEN BEGIN
+          Tb37_GetLastSalesPrice(SalesLine);
+          "Line Discount %" := 0;
+          "Recomm. Multiplier" := 0;
+          Multiplier := 0;
+          "Unit Price" := "Last Unit Price";
+          "Recomm. Unit Price" := "Last Unit Price";
+          "Actual Unit Price" := "Last Unit Price";
+        END;
+        // </TPZ875>
+
+        VALIDATE("Unit Price");
+
+      END;
+      }
+    END;
+
+    [EventSubscriber(Codeunit,50087,Table_37_UpdateAmount_Function)]
+    PROCEDURE Tb37_UpdateAmount@1000000013(VAR Rec@1000000000 : Record 37);
+    BEGIN
+      WITH Rec DO BEGIN
+          //<TPZ1375>
+
+       Tb37_UpdateMarginPercent(Rec);
+        //</TPZ1375>
+
+        // <TPZ92>
+        VALIDATE("Mfr. Rep. Comm. %");
+        VALIDATE("Location Hdlg. %");;
+        // </TPZ92>
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50087,Table_37_ShowDimensions_Function)]
+    PROCEDURE Tb37_ShowDimensions@1000000015(VAR Rec@1000000000 : Record 37);
+    VAR
+      DimMgt@1000000001 : Codeunit 408;
+      Codeunit408EventSubscriber@1000000002 : Codeunit 51908;
+      OldDimSetID@1000000003 : Integer;
+      ATOLink@1000000004 : Record 904;
+    BEGIN
+      WITH Rec DO BEGIN
+        OldDimSetID := "Dimension Set ID";
+        "Dimension Set ID" :=
+        DimMgt.EditDimensionSet("Dimension Set ID",STRSUBSTNO('%1 %2 %3',"Document Type","Document No.","Line No."));
+        //VerifyItemLineDim;
+        IF IsShippedReceivedItemDimChanged THEN
+        ConfirmShippedReceivedItemDimChange;
+        //TOP020 KT ABCSI Sales Orders by Division Code 01272015
+        //DimMgt.UpdateGlobalDimFromDimSetID("Dimension Set ID","Shortcut Dimension 1 Code","Shortcut Dimension 2 Code");  Commented Out for TOP020
+         Codeunit408EventSubscriber.Cu408_UpdateGlobalDimFromDimSetIDCustom("Dimension Set ID","Shortcut Dimension 1 Code","Shortcut Dimension 2 Code","Shortcut Dimension 5 Code");
+        //TOP020 KT ABCSI Sales Orders by Division Code 01272015
+        ATOLink.UpdateAsmDimFromSalesLine(Rec);
+
+        IF OldDimSetID <> "Dimension Set ID" THEN
+          MODIFY;
+      END;
+
+      COMMIT;
+      ERROR('');
+    END;
+
+    [EventSubscriber(Codeunit,50087,Table_37_CreateDim_Function)]
+    PROCEDURE Tb37_CreateDim@1000000016(VAR Rec@1000000000 : Record 37);
+    VAR
+      DimMgt@1000000001 : Codeunit 408;
+      Codeunit408EventSubscriber@1000000002 : Codeunit 51908;
+    BEGIN
+      WITH Rec DO BEGIN
+        //TOP020 KT ABCSI Sales Orders by Division Code 01272015
+        //DimMgt.UpdateGlobalDimFromDimSetID("Dimension Set ID","Shortcut Dimension 1 Code","Shortcut Dimension 2 Code");  Commented Out for TOP020
+        Codeunit408EventSubscriber.Cu408_UpdateGlobalDimFromDimSetIDCustom("Dimension Set ID","Shortcut Dimension 1 Code","Shortcut Dimension 2 Code","Shortcut Dimension 5 Code");
+        //TOP020 KT ABCSI Sales Orders by Division Code 01272015
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50087,Table_37_GetUnitCost_Function)]
+    PROCEDURE Tb37_GetUnitCost@1000000021(VAR Rec@1000000000 : Record 37;VAR Item@1000000002 : Record 27);
+    VAR
+      UOMMgt@1000000001 : Codeunit 5402;
+    BEGIN
+
+      Rec."Qty. per Alt. UOM" := UOMMgt.GetQtyPerUnitOfMeasure(Item,Rec."Alt. UOM Code");  //TOP050 KT ABCSI Modification to Item Cards 01202015
+    END;
+
+    [EventSubscriber(Codeunit,50087,Table_37_InitType_Function)]
+    PROCEDURE Tb37_InitType@1000000022(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37);
+    BEGIN
+      WITH Rec DO BEGIN
+        GetSalesHeader_Event(Rec);
+        // <TPZ145>
+          IF SalesHeader."Document Type" IN [
+                                             SalesHeader."Document Type"::Quote,
+                                             SalesHeader."Document Type"::Order,
+                                             SalesHeader."Document Type"::"Return Order"]
+          THEN
+            Type := Type::Item
+          ELSE
+          Type := xRec.Type;
+          // </TPZ145>
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,50087,Table_37_InitHeaderDefault_Function)]
+    PROCEDURE Tb37_InitHeaderDefault@1000000023(VAR Rec@1000000000 : Record 37;VAR SalesHeader1@1000000001 : Record 36);
+    BEGIN
+      WITH Rec DO BEGIN
+          // <TPZ92>
+        "Mfr. Rep. Code" := SalesHeader1."Mfr. Rep. Code";
+        "Mfr. Rep. Comm. %" := SalesHeader1."Mfr. Rep. Comm. %";
+        "Location Hdlg. %" := SalesHeader1."Location Hdlg. %";
+        //TOP110 KT ABCSI Salesperson 04022015
+        VALIDATE("E-Ship Agent Code",SalesHeader1."Shipping Agent Code");
+        "E-Ship Agent Service" := SalesHeader1."E-Ship Agent Service";
+        //TOP110 KT ABCSI Salesperson 04022015
+      END;
+    END;
+
+    PROCEDURE Tb37_UpdateLostOpportunity@1000000027(VAR Rec@1000000001 : Record 37);
+    VAR
+      LostOpporunity@1000000000 : Record 50002;
+    BEGIN
+      GetSalesHeader_Event(Rec);
+      WITH Rec DO BEGIN
+        //TOP030B KT ABCSI Lost Opportunities 03092015
+        IF ("Document Type" = "Document Type"::Order) OR ("Document Type" = "Document Type"::Quote) THEN BEGIN
+          IF ("Lost Opportunity") THEN BEGIN
+            IF NOT LostOpporunity.GET("Document Type","Document No.","Line No.") THEN BEGIN
+              LostOpporunity.INIT;
+              LostOpporunity."Document Type" := "Document Type";
+              LostOpporunity."Document No." := "Document No.";
+              LostOpporunity."Line No." := "Line No.";
+              LostOpporunity.INSERT;
+            END;
+            LostOpporunity."Sell-to Customer No." := "Sell-to Customer No.";
+            LostOpporunity.Type := LostOpporunity.Type::Item;
+            LostOpporunity."No." := "No.";
+            LostOpporunity."Location Code" := "Location Code";
+            LostOpporunity."Shipment Date" := "Shipment Date";
+            LostOpporunity."Unit of Measure Code" := "Unit of Measure Code";
+            IF (LostOpporunity.Quantity = 0) AND ("Outstanding Quantity" <> 0) THEN
+              LostOpporunity.Quantity := "Outstanding Quantity";
+            LostOpporunity."Quantity(Base)" := "Outstanding Qty. (Base)";
+            LostOpporunity."Unit Cost" := "Unit Cost (LCY)";
+            LostOpporunity."Actual Unit Price" := "Actual Unit Price";
+            LostOpporunity."Reason Code" := "Reason Code";
+            IF "Reason Code Comment" <> '' THEN
+              LostOpporunity."Reason Code Comment" := "Reason Code Comment"
+            ELSE BEGIN
+              IF "Document Type" = "Document Type"::Quote THEN
+                LostOpporunity."Reason Code Comment":= SalesHeader."Your Reference";
+
+            END;
+            LostOpporunity."Lost Date" := TODAY;
+            LostOpporunity."User ID" := USERID;
+            LostOpporunity.MODIFY;
+          END;
+        END;
+        //TOP030B KT ABCSI Lost Opportunities 03092015
+      END;
+    END;
+
+    PROCEDURE Tb37_CalcAltUOMQty@1000000029(VAR rec@1000000000 : Record 37;Qty@14000700 : Decimal) : Decimal;
+    BEGIN
+      WITH rec DO BEGIN
+        //TOP050 KT ABCSI Modification to Item Cards 01212015
+        IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+          IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+            IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+              EXIT(ROUND(Qty / "Qty. per Alt. UOM",0.00001))
+            ELSE
+              EXIT(ROUND(Qty * "Qty. per Unit of Measure",0.00001));
+          END ELSE
+            EXIT(Qty);
+        END ELSE
+          EXIT(0);
+        //TOP050 KT ABCSI Modification to Item Cards 01212015
+      END;
+    END;
+
+    PROCEDURE Tb37_CalcQtyFromAltUOMQty@1000000028(VAR rec@1000000000 : Record 37;Qty@1000000001 : Decimal) : Decimal;
+    BEGIN
+      WITH rec DO BEGIN
+        //TOP050 KT ABCSI Modification to Item Cards 01212015
+        IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+          IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+            IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+              EXIT(ROUND(Qty * "Qty. per Alt. UOM",0.00001))
+            ELSE
+              EXIT(ROUND(Qty / "Qty. per Unit of Measure",0.00001));
+          END ELSE
+            EXIT(Qty);
+        END ELSE
+          EXIT(0);
+        //TOP050 KT ABCSI Modification to Item Cards 01212015
+      END;
+    END;
+
+    PROCEDURE Tb37_CalcAltUOMUnitPrice@1000000026(VAR rec@1000000000 : Record 37;UnitPrice@1000000001 : Decimal) : Decimal;
+    BEGIN
+      WITH rec DO BEGIN
+        //TOP050 KT ABCSI Modification to Item Cards 01212015
+        IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+          IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+            IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+              EXIT(ROUND(UnitPrice * "Qty. per Alt. UOM",0.0001)) //TOP230 KT ABCSI Go Live Fixes 11092015
+            ELSE
+              EXIT(ROUND(UnitPrice / "Qty. per Unit of Measure",0.0001)) //TOP230 KT ABCSI Go Live Fixes 11092015
+          END ELSE
+            EXIT(UnitPrice);
+        END ELSE
+          EXIT(0);
+        //TOP050 KT ABCSI Modification to Item Cards 01212015
+      END;
+    END;
+
+    PROCEDURE Tb37_CalcUnitPriceFromAltUOMUnitPrice@1000000024(VAR rec@1000000000 : Record 37;UnitPrice@1000000001 : Decimal) : Decimal;
+    BEGIN
+      WITH rec DO BEGIN
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+      IF "Qty. per Alt. UOM" <> 0 THEN BEGIN
+        IF "Qty. per Alt. UOM" <> "Qty. per Unit of Measure" THEN BEGIN
+          IF "Qty. per Alt. UOM" > "Qty. per Unit of Measure" THEN
+            EXIT(ROUND(UnitPrice / "Qty. per Alt. UOM",0.0001)) //TOP230 KT ABCSI Go Live Fixes 11092015
+          ELSE
+            EXIT(ROUND(UnitPrice * "Qty. per Unit of Measure",0.0001)); //TOP230 KT ABCSI Go Live Fixes 11092015
+        END ELSE
+          EXIT(UnitPrice);
+      END ELSE
+        EXIT(0);
+      //TOP050 KT ABCSI Modification to Item Cards 01212015
+      END;
+    END;
+
+    PROCEDURE Tb37_AutoFillQtyToOrder@1000000033(VAR rec@1000000001 : Record 37;VAR LocalSalesLine@1000000000 : Record 37);
+    BEGIN
+      WITH  rec DO BEGIN
+      //TOP030A KT ABCSI Sales Quotes 02132015
+      IF "Document Type" = "Document Type"::Quote THEN BEGIN
+        SETRANGE("Document Type",LocalSalesLine."Document Type");
+        SETRANGE("Document No.",LocalSalesLine."Document No.");
+        SETFILTER(Type,'<>%1',LocalSalesLine.Type::" ");
+        // <TPZ1067>
+        IF FIND('-') THEN REPEAT
+          CALCFIELDS("Qty. Ordered","Qte. Qty. Invoiced");
+          "Qty. to Order" := Quantity - "Qty. Ordered" - "Qte. Qty. Invoiced";
+          MODIFY;
+        UNTIL NEXT = 0;
+        // </TPZ1067>
+      END;
+      //TOP030A KT ABCSI Sales Quotes 02132015
+      END;
+    END;
+
+    PROCEDURE Tb37_DeleteQtyToOrder@1000000032(VAR Rec@1000000001 : Record 37;VAR LocalSalesLine@1000000000 : Record 37);
+    BEGIN
+      WITH Rec DO BEGIN
+      //TOP030A KT ABCSI Sales Quotes 02132015
+      IF "Document Type" = "Document Type"::Quote THEN BEGIN
+        SETRANGE("Document Type",LocalSalesLine."Document Type");
+        SETRANGE("Document No.",LocalSalesLine."Document No.");
+        SETFILTER(Type,'<>%1',LocalSalesLine.Type::" ");
+        IF FINDFIRST THEN REPEAT
+          "Qty. to Order" := 0;
+          MODIFY;
+        UNTIL NEXT = 0;
+      END;
+      //TOP030A KT ABCSI Sales Quotes 02132015
+      END;
+    END;
+
+    PROCEDURE Tb37_SetStyle@1000000037(VAR rec@1000000000 : Record 37) : Text;
+    VAR
+      Item@1000000001 : Record 27;
+    BEGIN
+      //-->TPZ3247
+      WITH  rec DO BEGIN
+        IF (Type = Type::Item) AND ("No." <> '')  AND (NOT Sample) THEN BEGIN //EBAGIM Took of qty TPZ1125
+          Item.GET("No.");
+          IF Item."Replacement Cost" = 0 THEN  //TPZ3247
+            EXIT('StrongAccent') //'Ambiguous' Subordinate //TPZ3247
+          ELSE IF ("Actual Unit Price" <> "Recomm. Unit Price") AND ("Actual Unit Price"> "Replacement Cost") THEN  //TOP230 KT ABCSI CRP 2 Fixes 05012015
+            EXIT('Favorable')
+          ELSE IF ("Actual Unit Price" < "Replacement Cost") THEN
+            EXIT('unFavorable')
+          ELSE EXIT('');
+        END ELSE
+          EXIT('');
+      END;
+      {
+      //-->TPZ3125 Code commented and written new code to check color from Replacement Cost
+      WITH  rec DO BEGIN
+        IF (Type = Type::Item) AND ("No." <> '')  AND (NOT Sample) THEN BEGIN //EBAGIM Took of qty TPZ1125
+         Item.GET("No.");
+          IF ("Actual Unit Price" <> "Recomm. Unit Price") AND ("Actual Unit Price"> "Replacement Cost") THEN  //TOP230 KT ABCSI CRP 2 Fixes 05012015
+            EXIT('Favorable')
+          ELSE IF ("Actual Unit Price" < "Replacement Cost") THEN
+            EXIT('unFavorable')
+          ELSE EXIT('');
+        END ELSE
+          EXIT('');
+      END;
+      }
+      //<--TPZ3247
+      //-->TPZ3085 Code commented and written new code to check color from Replacement Cost and average unit cost
+      {WITH  rec DO BEGIN
+        IF (Type = Type::Item) AND ("No." <> '')  AND (NOT Sample) THEN BEGIN //EBAGIM Took of qty TPZ1125
+         Item.GET("No.");
+          IF ("Actual Unit Price" <> "Recomm. Unit Price") AND ("Actual Unit Price"> Item."Average Unit Cost") THEN  //TOP230 KT ABCSI CRP 2 Fixes 05012015
+            EXIT('Favorable')
+          ELSE IF ("Actual Unit Price" < Item."Average Unit Cost") THEN
+            EXIT('unFavorable')
+          ELSE EXIT('');
+        END ELSE
+          EXIT('');
+      END;
+
+
+      WITH  rec DO BEGIN
+        IF (Type = Type::Item) AND ("No." <> '')  AND (NOT Sample) THEN BEGIN //EBAGIM Took of qty TPZ1125
+         Item.GET("No.");
+          IF ("Actual Unit Price" <> "Recomm. Unit Price") AND ("Actual Unit Price"> Item."Unit Cost") THEN  //TOP230 KT ABCSI CRP 2 Fixes 05012015
+            EXIT('Favorable')
+          ELSE IF ("Actual Unit Price" < Item."Unit Cost") THEN
+            EXIT('unFavorable')
+          ELSE EXIT('');
+        END ELSE
+          EXIT('');
+      END;
+
+      //<--TPZ3085
+      SalesSetup.GET;// EBAGIM COMMENT OUT TPZ1125
+      IF (SalesSetup."Sales Line Max. Margin %" <> 0) AND (SalesSetup."Sales Line Min. Margin %" <> 0) THEN BEGIN //TOP230 KT ABCSI CRP 2 Fixes 05012015
+        IF (Type = Type::Item) AND ("No." <> '')  AND (NOT Sample) THEN BEGIN //EB Tool of qty
+          Item.GET("No.");
+          IF ("Actual Unit Price" < (Item."Unit Cost" + ((Item."Unit Cost" * SalesSetup."Sales Line Min. Margin %")/100))) THEN  //TOP230 KT ABCSI CRP 2 Fixes 05012015
+            EXIT('Unfavorable')
+          ELSE IF ("Actual Unit Price" > (Item."Unit Cost" + ((Item."Unit Cost" * SalesSetup."Sales Line Max. Margin %")/100))) THEN
+            EXIT('Favorable')
+          ELSE EXIT('');
+        END ELSE
+          EXIT('');
+      END ELSE
+        EXIT('');
+       }
+    END;
+
+    PROCEDURE Tb37_UpdateLastSalesPrice@1000000036(VAR InRec@1000000000 : Record 37);
+    VAR
+      NewLastSalesPrice@1000000001 : Record 50004;
+      SalesHeaderLoc@1000000002 : Record 36;
+    BEGIN
+        IF InRec.Type <> InRec.Type::Item THEN
+          EXIT;
+        //GetSalesHeader
+        GetSalesHeader_Event(InRec);
+        IF InRec."Unit Price" = 0 THEN
+          EXIT;
+        NewLastSalesPrice.RESET;
+        NewLastSalesPrice.SETRANGE("Document Type",InRec."Document Type");
+        NewLastSalesPrice.SETRANGE("Document No.",InRec."Document No.");
+        NewLastSalesPrice.SETRANGE("Sell-to Customer No.",InRec."Sell-to Customer No.");
+        NewLastSalesPrice.SETRANGE("Item No.",InRec."No.");
+        NewLastSalesPrice.SETRANGE("Unit of Measure Code",InRec."Unit of Measure Code");
+        IF NewLastSalesPrice.FINDFIRST THEN BEGIN
+          NewLastSalesPrice."Document Date" := SalesHeader."Document Date";
+          NewLastSalesPrice."Last Unit Price" := InRec."Actual Unit Price";
+          NewLastSalesPrice."Last Price UOM" := InRec."Unit of Measure Code";
+          NewLastSalesPrice."Last Price Qty." := InRec.Quantity;
+          NewLastSalesPrice."Last Price Date" :=TODAY;
+          NewLastSalesPrice."Last Price User ID" := USERID;
+          NewLastSalesPrice."Special Price" := InRec."Special Price"; //TPZ2970
+          NewLastSalesPrice.MODIFY;
+        END ELSE BEGIN
+          NewLastSalesPrice.INIT;
+          NewLastSalesPrice."Document Type" := InRec."Document Type";
+          NewLastSalesPrice."Document No." := InRec."Document No.";
+          // <TPZ1014>
+          NewLastSalesPrice.VALIDATE("Sell-to Customer No.",InRec."Sell-to Customer No.");
+          // </TPZ1014>
+          NewLastSalesPrice."Item No." := InRec."No.";
+          NewLastSalesPrice."Unit of Measure Code" := InRec."Unit of Measure Code";
+          NewLastSalesPrice."Document Date" := SalesHeader."Document Date";
+          NewLastSalesPrice."Last Unit Price" := InRec."Actual Unit Price";
+          NewLastSalesPrice."Last Price UOM" := InRec."Unit of Measure Code";
+          NewLastSalesPrice."Last Price Qty." := InRec.Quantity;
+          NewLastSalesPrice."Last Price Date" := TODAY;
+          NewLastSalesPrice."Last Price User ID" := USERID;
+          NewLastSalesPrice."Special Price" := InRec."Special Price"; //TPZ2970
+          // <TPZ449>
+          //IF SalesHeaderLoc.GET(InRec."Document Type",InRec."No.") THEN BEGIN
+          IF SalesHeaderLoc.GET(InRec."Document Type",InRec."Document No.") THEN BEGIN //<TPZ1603
+            NewLastSalesPrice."Shortcut Dimension 5 Code" := SalesHeaderLoc."Shortcut Dimension 5 Code";
+            NewLastSalesPrice."Country/Region Code" := SalesHeaderLoc."Sell-to Country/Region Code";
+          END;
+          // </TPZ449>
+          NewLastSalesPrice.INSERT;
+        END;
+    END;
+
+    PROCEDURE Tb37_GetLastSalesPrice@1000000035(VAR ToSalesLine@1000000000 : Record 37);
+    VAR
+      LastSalesPrice@1000000001 : Record 50004;
+    BEGIN
+       WITH ToSalesLine DO BEGIN
+        IF ToSalesLine.Type <> ToSalesLine.Type::Item THEN
+          EXIT;
+        LastSalesPrice.RESET;
+        LastSalesPrice.ASCENDING;
+        LastSalesPrice.SETCURRENTKEY("Sell-to Customer No.","Item No.","Document Date");
+        LastSalesPrice.SETRANGE("Sell-to Customer No.",ToSalesLine."Sell-to Customer No.");
+        LastSalesPrice.SETRANGE("Item No.",ToSalesLine."No.");
+
+        //<TPZ1081,TPZ8666>
+        //GetSalesHeader;
+        GetSalesHeader_Event(ToSalesLine);
+        IF (SalesHeader."Shortcut Dimension 5 Code" = 'I') OR (SalesHeader."Shortcut Dimension 5 Code" = 'E') OR (SalesHeader."Shortcut Dimension 5 Code" = 'P') THEN //<TPZ2558>
+      LastSalesPrice.SETRANGE("Document Type",LastSalesPrice."Document Type"::"Posted Sales Invoice");
+        //</TPZ1081,TPZ8666>
+        // <TPZ2974>
+        IF SalesHeader."Shortcut Dimension 5 Code" = 'L' THEN
+            LastSalesPrice.SETFILTER("Document Type",'<>%1&<>%2',LastSalesPrice."Document Type"::"Return Order",LastSalesPrice."Document Type"::"Credit Memo");
+        //</TPZ2974>
+        IF LastSalesPrice.FINDLAST THEN BEGIN
+          "Last Unit Price" := LastSalesPrice."Last Unit Price";
+          "Last Price UOM" := LastSalesPrice."Last Price UOM";
+          "Last Price Qty." := LastSalesPrice."Last Price Qty.";
+          "Last Price Date" := LastSalesPrice."Last Price Date";
+        END ELSE BEGIN
+          "Last Unit Price" := 0;
+          "Last Price UOM" := '';
+          "Last Price Qty." := 0;
+          "Last Price Date" := 0D;
+          END;
+      END;
+    END;
+
+    PROCEDURE Tb37_UpdateMarginPercent@1000000039(VAR rec@1000000000 : Record 37);
+    BEGIN
+      WITH rec DO BEGIN
+        //TOP230 KT ABCSI CRP 2 Fixes 05282015
+        IF (Quantity <> 0) AND ("Unit Cost" <> 0) AND ("Actual Unit Price" <> 0) THEN BEGIN
+          "Gross Margin %" := ROUND(((Quantity * "Actual Unit Price") - (Quantity * "Unit Cost")) * 100 / (Quantity * "Actual Unit Price"),0.1);
+        END ELSE
+          "Gross Margin %" := 0;
+
+        //TOP230 KT ABCSI CRP 2 Fixes 05282015
+        //-->TPZ2881
+        IF (Quantity <> 0) AND ("Average Unit Cost" <> 0) AND ("Actual Unit Price" <> 0) THEN BEGIN
+          "Gross Margin % Avg Cost" := ROUND(((Quantity * "Actual Unit Price") - (Quantity * "Average Unit Cost")) * 100 / (Quantity * "Actual Unit Price"),0.1);
+          "Replacement Margin" := "Gross Margin % Avg Cost"; //36155
+        END ELSE
+          "Gross Margin % Avg Cost" := 0;
+        //<--
+        //-->36155
+        IF (Quantity <> 0) AND ("Replacement Cost" <> 0) AND ("Actual Unit Price" <> 0) THEN
+          "Replacement Margin" := ROUND(((Quantity * "Actual Unit Price") - (Quantity * "Replacement Cost")) * 100 / (Quantity * "Actual Unit Price"),0.1);
+        //<--36155
+      END;
+    END;
+
+    PROCEDURE Tb37_CalcWhseMinQtyAllowToChangeTo@1000000047(VAR Rec@1000000005 : Record 37) : Decimal;
+    VAR
+      PickedQty@1000000000 : Decimal;
+      PickQty@1000000001 : Decimal;
+      OutboundReqMgt@1000000002 : Codeunit 14002863;
+      PickedQtyBase@1000000003 : Decimal;
+      PickQtyBase@1000000004 : Decimal;
+    BEGIN
+      WITH Rec DO BEGIN
+        //TM BEG 070215
+        OutboundReqMgt.CaclTotalPickedQty(DATABASE::"Sales Line", "Document Type", "Document No.", "Line No.",
+                                          PickedQty, PickedQtyBase);
+
+        OutboundReqMgt.CaclTotalPickQty(DATABASE::"Sales Line", "Document Type", "Document No.", "Line No.",
+                                        PickQty, PickQtyBase, FALSE);
+
+        //MESSAGE('%1,%2,%3',PickedQty,PickQty,"Qty. in Cross Dock");
+
+        EXIT(PickedQty + PickQty);
+      END;
+      //TM END 070215
+    END;
+
+    PROCEDURE Tb37_CopyLastUnitPriceToActualUnitPrice@1000000046(VAR SalesLineLoc@1000000000 : Record 37);
+    BEGIN
+      // <TPZ929>
+      SalesLineLoc.RESET;
+      SalesLineLoc.SETRANGE("Document Type",SalesLineLoc."Document Type");
+      SalesLineLoc.SETRANGE("Document No.",SalesLineLoc."Document No.");
+      SalesLineLoc.SETFILTER(Type,'<>%1',SalesLineLoc.Type::" ");
+      IF SalesLineLoc.FIND('-') THEN
+        REPEAT
+          SalesLineLoc.VALIDATE("Actual Unit Price",SalesLineLoc."Last Unit Price");
+          //<TPZ1125>//EBAGIM
+          SalesLineLoc."Unit Price Color":=Tb37_SetStyle(SalesLineLoc);
+          //<TPZ1125>
+          SalesLineLoc.MODIFY;
+        UNTIL SalesLineLoc.NEXT = 0;
+      // </TPZ929>
+    END;
+
+    PROCEDURE Tb37_ClearActualUnitPrice@1000000045(VAR SalesLineLoc@1000000000 : Record 37);
+    BEGIN
+      // <TPZ929>
+      SalesLineLoc.RESET;
+      SalesLineLoc.SETRANGE("Document Type",SalesLineLoc."Document Type");
+      SalesLineLoc.SETRANGE("Document No.",SalesLineLoc."Document No.");
+      SalesLineLoc.SETFILTER(Type,'<>%1',SalesLineLoc.Type::" ");
+      IF SalesLineLoc.FIND('-') THEN
+        REPEAT
+          SalesLineLoc.VALIDATE("Actual Unit Price",0);
+          SalesLineLoc.MODIFY;
+        UNTIL SalesLineLoc.NEXT = 0;
+      // </TPZ929>
+    END;
+
+    PROCEDURE Tb37_CheckQtyRounding@1000000044(VAR SalesLine@1000000001 : Record 37;VAR HideValidationDialog@1000000002 : Boolean);
+    VAR
+      RoundedUpQty@1000000000 : Decimal;
+      Item@1000000003 : Record 27;
+      Text51078@1000000005 : TextConst 'ENU=Do you want to round the quantity up to %1 %2?';
+      TextRNDERROR@1000000006 : TextConst 'ENU="You Must Round the Qty in order to sell this item %1 "';
+    BEGIN
+      // <TPZ69>
+
+      IF GUIALLOWED THEN
+       WITH SalesLine DO BEGIN
+        //IF ("Document Type" IN ["Document Type"::Quote,"Document Type"::Order]) AND  //<TPZ2521>
+        IF ("Document Type" IN ["Document Type"::Quote,"Document Type"::Order,"Document Type"::"Return Order"]) AND  //</TPZ2521>
+         (Type = Type::Item) AND
+        // (CurrFieldNo = FIELDNO(Quantity)) AND
+         (Quantity <> 0) AND
+         Item.GET("No.") AND
+         (Item."Sales Order Multiple" <> 0)
+         AND (NOT Item."Override Sales Order Multiple")  //TPZ2899
+      THEN
+        IF Quantity MOD Item."Sales Order Multiple" <> 0 THEN BEGIN
+          RoundedUpQty := Item."Sales Order Multiple" * (Quantity DIV Item."Sales Order Multiple" + 1);
+         IF NOT HideValidationDialog THEN BEGIN //<TPZ2682>
+          IF CONFIRM(Text51078,TRUE,RoundedUpQty,"Unit of Measure Code") THEN
+            Quantity := RoundedUpQty
+            //<TPZ9429>
+            ELSE
+             ERROR(TextRNDERROR,Item."No.");  //EB
+           //</TPZ9429>
+          END ELSE//<TPZ2682>
+             Quantity := RoundedUpQty;//<TPZ2682>
+        END;
+       END;
+      // </TPZ69>
+    END;
+
+    PROCEDURE Tb37_GetGLSetup@1000000041();
+    BEGIN
+      //<TPZ1682>
+      TPZGenLedgSetup.GET;
+      //</TPZ1682>
+    END;
+
+    PROCEDURE Tb37_SetGPPG_DIMForSampleLines@1000000054(VAR pSampleSalesLine@1000000000 : Record 37);
+    VAR
+      TPZGenLedgSetup@1000000001 : Record 98;
+      Item@1000000002 : Record 27;
+    BEGIN
+      //<TPZ1682>
+      IF pSampleSalesLine.Type <> pSampleSalesLine.Type::Item THEN
+        EXIT;
+      GetSalesHeader_Event(pSampleSalesLine); // UTkarsh
+      IF pSampleSalesLine.Sample THEN BEGIN
+        TPZGenLedgSetup.GET;
+        TPZGenLedgSetup.TESTFIELD("Sample Items GPPG Code");
+        TPZGenLedgSetup.TESTFIELD("Sample Items Expense G/L Acct.");
+        TPZGenLedgSetup.TESTFIELD("Sample Items GPPG Code");
+        TPZGenLedgSetup.TESTFIELD("Sample Department Code");
+        TPZGenLedgSetup.TESTFIELD("Sample Site Code");
+        pSampleSalesLine.VALIDATE("Gen. Prod. Posting Group",TPZGenLedgSetup."Sample Items GPPG Code");
+        pSampleSalesLine.VALIDATE("Shortcut Dimension 1 Code",TPZGenLedgSetup."Sample Department Code");
+        pSampleSalesLine.VALIDATE("Shortcut Dimension 2 Code",TPZGenLedgSetup."Sample Site Code");
+      END ELSE BEGIN
+        //GetItem;
+        pSampleSalesLine.TESTFIELD("No.");
+        IF pSampleSalesLine."No." <> Item."No." THEN
+        Item.GET(pSampleSalesLine."No.");
+
+        Item.TESTFIELD("Gen. Prod. Posting Group");
+        pSampleSalesLine.VALIDATE("Gen. Prod. Posting Group",Item."Gen. Prod. Posting Group");
+        pSampleSalesLine.VALIDATE("Shortcut Dimension 1 Code",SalesHeader."Shortcut Dimension 1 Code");
+        pSampleSalesLine.VALIDATE("Shortcut Dimension 2 Code",SalesHeader."Shortcut Dimension 2 Code");
+      END;
+      //</TPZ1682>
+    END;
+
+    PROCEDURE Tb37_SetGPPG_DIMForPromoLines@1000000049(VAR pPromoSalesLine@1000000000 : Record 37);
+    VAR
+      TPZGenLedgSetup@1000000002 : Record 98;
+      Item@1000000001 : Record 27;
+    BEGIN
+      //<TPZ2368>
+      IF pPromoSalesLine.Type <> pPromoSalesLine.Type::Item THEN
+        EXIT;
+      GetSalesHeader_Event(pPromoSalesLine); // UTkarsh
+      IF pPromoSalesLine.Promo THEN BEGIN
+        TPZGenLedgSetup.GET;
+        TPZGenLedgSetup.TESTFIELD("Promo Items GPPG Code");
+        TPZGenLedgSetup.TESTFIELD("Promo Items Expense G/L Acct.");
+        TPZGenLedgSetup.TESTFIELD("Promo Items GPPG Code");
+        TPZGenLedgSetup.TESTFIELD("Promo Department Code");
+        TPZGenLedgSetup.TESTFIELD("Promo Site Code");
+        pPromoSalesLine.VALIDATE("Gen. Prod. Posting Group",TPZGenLedgSetup."Promo Items GPPG Code");
+        pPromoSalesLine.VALIDATE("Shortcut Dimension 1 Code",TPZGenLedgSetup."Promo Department Code");
+        pPromoSalesLine.VALIDATE("Shortcut Dimension 2 Code",TPZGenLedgSetup."Promo Site Code");
+      END ELSE BEGIN
+        //GetItem;
+        pPromoSalesLine.TESTFIELD("No.");
+        IF pPromoSalesLine."No." <> Item."No." THEN
+        Item.GET(pPromoSalesLine."No.");
+        Item.TESTFIELD("Gen. Prod. Posting Group");
+        pPromoSalesLine.VALIDATE("Gen. Prod. Posting Group",Item."Gen. Prod. Posting Group");
+        pPromoSalesLine.VALIDATE("Shortcut Dimension 1 Code",SalesHeader."Shortcut Dimension 1 Code");
+        pPromoSalesLine.VALIDATE("Shortcut Dimension 2 Code",SalesHeader."Shortcut Dimension 2 Code");
+      END;
+      //</TPZ2368>
+    END;
+
+    PROCEDURE Tb37_CheckQtyShipRounding@1000000048(VAR SalesLine@1000000001 : Record 37);
+    VAR
+      RoundedUpQtyShip@1000000000 : Decimal;
+      Item@1000000002 : Record 27;
+      Text51078@1000000004 : TextConst 'ENU=Do you want to round the quantity up to %1 %2?';
+      TextRNDERROR@1000000003 : TextConst 'ENU="You Must Round the Qty in order to sell this item %1 "';
+    BEGIN
+      // <TPZ2504>
+
+      IF GUIALLOWED THEN
+       WITH SalesLine DO BEGIN
+        IF ("Document Type" IN ["Document Type"::Quote,"Document Type"::Order]) AND
+         (Type = Type::Item) AND
+        // (CurrFieldNo = FIELDNO(Quantity)) AND
+         (Quantity <> 0) AND
+         Item.GET("No.") AND
+         (Item."Sales Order Multiple" <> 0)
+           AND (NOT Item."Override Sales Order Multiple")  //TPZ2899
+      THEN
+        IF "Qty. to Ship" MOD Item."Sales Order Multiple" <> 0 THEN BEGIN
+          RoundedUpQtyShip := Item."Sales Order Multiple" * ("Qty. to Ship" DIV Item."Sales Order Multiple" + 1);
+          IF CONFIRM(Text51078,TRUE,RoundedUpQtyShip,"Unit of Measure Code") THEN
+            "Qty. to Ship" := RoundedUpQtyShip
+            //<TPZ9429>
+            ELSE
+             ERROR(TextRNDERROR,Item."No.");  //EB
+           //</TPZ9429>
+        END;
+       END;
+      // </TPZ2504>
+    END;
+
+    PROCEDURE Tb37_CheckPackingStatus@1000000042(VAR Rec@1000000001 : Record 37;VAR xRec@1000000002 : Record 37);
+    VAR
+      WarehouseRequest@1000000000 : Record 5765;
+    BEGIN
+      WITH Rec DO BEGIN
+        //<TPZ2583>
+        IF "Document Type" = "Document Type"::Order THEN BEGIN
+          IF Rec.Quantity < xRec.Quantity THEN BEGIN
+            WarehouseRequest.RESET;
+            WarehouseRequest.SETRANGE("Source Type",37);
+            WarehouseRequest.SETRANGE("Source Document",WarehouseRequest."Source Document"::"Sales Order");
+            WarehouseRequest.SETRANGE("Source No.","Document No.");
+            //WarehouseRequest.SETRANGE("Document Status",WarehouseRequest."Document Status"::Released);
+            WarehouseRequest.SETFILTER("Activity Status",'%1|%2|%3',WarehouseRequest."Activity Status"::"Pick Created",
+              WarehouseRequest."Activity Status"::"Pick Registered",WarehouseRequest."Activity Status"::Packed);
+            //WarehouseRequest.SETRANGE("Location Code","Location Code");
+            IF NOT WarehouseRequest.ISEMPTY THEN
+              ERROR('Pick is Created For Sales Order %1',"Document No.");
+          END;
+      END;
+      //</TPZ2583>
+      END;
+    END;
+
+    PROCEDURE Tb37_SetSuppressUpdateUnitPrice@1000000058(UpdateUnitPrice@1000000000 : Boolean);
+    BEGIN
+       // START,SC  <TPZ1925>
+            SuppressUpdateUnitPrice := UpdateUnitPrice;
+       // END,SC    </TPZ1925>
+    END;
+
+    PROCEDURE Tb37_SetSuppressCheckItmeAvail@1000000056(CheckItemAvailability@1000000000 : Boolean);
+    BEGIN
+      // START,SC   <TPZ1925>
+            SuppressCheckItemAvailability := CheckItemAvailability;
+      // END,SC     </TPZ1925>
+    END;
+
+    PROCEDURE Tb37_SetTemporarySalesHeader@1000000055(useTemporarySalesHeader@1000000000 : Boolean);
+    BEGIN
+      // START,SC    <TPZ1925>
+            TemporarySalesHeaderUsed := useTemporarySalesHeader;
+      // END,SC      </TPZ1925>
+    END;
+
+    PROCEDURE Tb37_IsTemporarySalesHeader@1000000053() TemporarySalesHeaderUsed : Boolean;
+    BEGIN
+       // START,SC   <TPZ1925>
+            EXIT(TemporarySalesHeaderUsed);
+       // END,SC     </TPZ1925>
+    END;
+
+    LOCAL PROCEDURE GetSalesHeader_Event@1000000043(VAR rec@1000000000 : Record 37);
+    VAR
+      Currency@1000000001 : Record 4;
+    BEGIN
+      WITH rec DO BEGIN
+        //TOP210 DM 04/11/15 start
+        IF "Temp Sales Order No." <> '' THEN BEGIN
+          IF ("Document Type" <> SalesHeader."Document Type") OR ("Temp Sales Order No." <> SalesHeader."No.") THEN BEGIN
+            SalesHeader.GET("Document Type","Temp Sales Order No.");
+            IF SalesHeader."Currency Code" = '' THEN
+              Currency.InitRoundingPrecision
+            ELSE BEGIN
+              SalesHeader.TESTFIELD("Currency Factor");
+              Currency.GET(SalesHeader."Currency Code");
+              Currency.TESTFIELD("Amount Rounding Precision");
+            END;
+          END;
+
+        END ELSE BEGIN
+        //TOP210 DM 04/11/15 end
+        IF ("Document Type" <> SalesHeader."Document Type") OR ("Document No." <> SalesHeader."No.") THEN BEGIN
+           SalesHeader.GET("Document Type","Document No.") ;
+          IF SalesHeader."Currency Code" = '' THEN
+            Currency.InitRoundingPrecision
+          ELSE BEGIN
+            SalesHeader.TESTFIELD("Currency Factor");
+            Currency.GET(SalesHeader."Currency Code");
+            Currency.TESTFIELD("Amount Rounding Precision");
+          END;
+        END;
+
+        END; //TOP210 DM 04/11/15
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnBeforeUpdateUnitPrice)]
+    PROCEDURE Tb37_UpdateUnitPrice_PS@1000000062(VAR SalesLine@1000000000 : Record 37;xSalesLine@1000000001 : Record 37;CalledByFieldNo@1000000002 : Integer;CurrFieldNo@1000000003 : Integer;VAR Handled@1000000010 : Boolean);
+    VAR
+      GotSalesPrice@1000000004 : Boolean;
+      GotHotSheetPrice@1000000005 : Boolean;
+      PriceCalcMgt@1000000006 : Codeunit 7000;
+      CustDivision@1000000007 : Record 50007;
+      Division@1000000008 : Record 51001;
+      UnitPricexRecValue@1000000009 : Decimal;
+    BEGIN
+      //PSHUKLA
+      IF (CalledByFieldNo <> CurrFieldNo) AND (CurrFieldNo <> 0) THEN BEGIN
+        Handled := TRUE;
+        EXIT;
+      END;
+      IF CalledByFieldNo = SalesLine.FIELDNO(Quantity) THEN BEGIN
+        Handled := TRUE;
+        SalesLine.VALIDATE("Unit Price");
+        EXIT;
+      END;
+
+      GetSalesHeader_Event(SalesLine);
+      SalesLine.TESTFIELD("Qty. per Unit of Measure");
+       {//-->Std code open
+       IF CalledByFieldNo = SalesLine.FIELDNO(Quantity) THEN BEGIN
+        IF (SalesLine."Shortcut Dimension 5 Code" <> 'E') AND (SalesLine."Shortcut Dimension 5 Code" <> 'P') THEN BEGIN //<TPZ2558> //<TPZ2641>
+        END ELSE BEGIN
+          EXIT;
+        END;
+       END;
+       //<--
+       }
+      WITH SalesLine DO BEGIN
+
+          CASE Type OF
+            Type::Item:
+              BEGIN
+                "Pricing Logic" := "Pricing Logic"::"Sales Price";
+                UnitPricexRecValue := SalesLine."Unit Price";
+                SalesLine."Unit Price" := 0;
+                PriceCalcMgt.FindSalesLinePrice(SalesHeader,SalesLine,CalledByFieldNo);
+                IF SalesLine."Unit Price" = 0 THEN BEGIN
+                  SalesLine."Pricing Logic" := SalesLine."Pricing Logic"::" ";
+                  SalesLine."Unit Price" := UnitPricexRecValue;
+                END;
+              END;
+          END;
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterUpdateUnitPrice)]
+    PROCEDURE Tb37_UpdateUnitPrice_PS_1@1000000060(VAR SalesLine@1000000000 : Record 37;xSalesLine@1000000001 : Record 37;CalledByFieldNo@1000000002 : Integer;CurrFieldNo@1000000003 : Integer);
+    VAR
+      GotSalesPrice@1000000004 : Boolean;
+      GotHotSheetPrice@1000000005 : Boolean;
+      PriceCalcMgt@1000000006 : Codeunit 7000;
+      CustDivision@1000000007 : Record 50007;
+      Division@1000000008 : Record 51001;
+    BEGIN
+      //PSHUKLA
+      WITH SalesLine DO BEGIN
+        SalesHeader.GET(SalesLine."Document Type",SalesLine."Document No.");
+       {//-->Std code open
+       IF CalledByFieldNo = SalesLine.FIELDNO(Quantity) THEN BEGIN
+        IF (SalesLine."Shortcut Dimension 5 Code" <> 'E') AND (SalesLine."Shortcut Dimension 5 Code" <> 'P') THEN BEGIN //<TPZ2558> //<TPZ2641>
+        END ELSE BEGIN
+          EXIT;
+        END;
+       END;
+       //<--
+       }
+          CASE Type OF
+          Type::Item:
+            BEGIN
+              IF "Pricing Logic" = "Pricing Logic"::"Sales Price" THEN GotSalesPrice := TRUE;
+              IF "Pricing Logic" = "Pricing Logic"::"Hot Sheet" THEN GotHotSheetPrice := TRUE;
+              //TOP230 KT ABCSI CRP 2 Fixes 05282015
+              IF (NOT GotSalesPrice) AND (NOT GotHotSheetPrice) THEN
+                IF "Recomm. Multiplier" = 0 THEN BEGIN
+                  IF CustDivision.GET(SalesHeader."Sell-to Customer No.",SalesHeader."Shortcut Dimension 5 Code") THEN BEGIN
+                    IF CustDivision.Multiplier <> 0 THEN BEGIN
+                      "Line Discount %" := ROUND((1 - CustDivision.Multiplier) * 100,0.00001); //TOP230 KT ABCSI Go Live Fixes 11092015
+                      "Recomm. Multiplier" := CustDivision.Multiplier;
+                      Multiplier := CustDivision.Multiplier;
+                      "Pricing Logic" := "Pricing Logic"::"Customer Base Multiplier"; //TOP230 KT ABCSI CRP 2 Fixes 06022015
+                    END;
+                  END;
+                END;
+               //TOP230 KT ABCSI CRP 2 Fixes 05282015
+              IF "Recomm. Multiplier" <> 0 THEN
+                "Recomm. Unit Price" := ROUND("Unit Price" * "Recomm. Multiplier",0.0001) //TOP230 KT ABCSI Go Live Fixes 11092015
+              ELSE
+                "Recomm. Unit Price" := "Unit Price";
+
+              IF Multiplier <> 0 THEN
+                "Actual Unit Price" := ROUND("Unit Price" * Multiplier,0.0001)  //TOP230 KT ABCSI Go Live Fixes 11092015
+              ELSE
+                "Actual Unit Price" := ROUND("Unit Price",0.0001);
+
+              IF "Alt. UOM Code" <> '' THEN BEGIN
+                "Alt. UOM Actual Unit Price" := Tb37_CalcAltUOMUnitPrice(SalesLine,"Actual Unit Price");
+                "Alt. UOM Recomm. Unit Price" := Tb37_CalcAltUOMUnitPrice(SalesLine,"Recomm. Unit Price");
+              END;
+          END;
+        END;
+        //TOP100A KT ABCSI Multipliers 02192015
+
+        // <TPZ875>
+        IF ("Document Type" IN ["Document Type"::Quote,"Document Type"::Order,"Document Type"::Invoice]) AND
+           (Type = Type::Item) AND
+           Division.GET(SalesHeader."Shortcut Dimension 5 Code") AND
+           Division."Use Last Price as Recomm Price"
+        THEN BEGIN
+          Tb37_GetLastSalesPrice(SalesLine);
+          "Line Discount %" := 0;
+          "Recomm. Multiplier" := 0;
+          Multiplier := 0;
+          "Unit Price" := "Last Unit Price";
+          "Recomm. Unit Price" := "Last Unit Price";
+          "Actual Unit Price" := "Last Unit Price";
+        END;
+        // </TPZ875>
+        VALIDATE("Unit Price"); //new
+      END;
+    END;
+
+    PROCEDURE Tb37_SetStyleLastPriceDate@1000000010(VAR Rec@1000000010 : Record 37;VAR StyleTxtLastPriceDate@1000000011 : Text;CurrField@1000000013 : Integer);
+    VAR
+      LastYearDate@1000000000 : Date;
+      ModifyDate@1000000001 : Date;
+      SalesPrice@1000000002 : Record 7002;
+      SalesLineMultiplier@1000000003 : Record 7004;
+      ItemMultiplier@1000000005 : Record 27;
+      SalesPriceFound@1000000004 : Boolean;
+      HotSheetPriceFound@1000000006 : Boolean;
+      SalesLineMultiplierFound@1000000007 : Boolean;
+      HotSheetPrice@1000000008 : Record 50017;
+      LastYearDateFound@1000000009 : Boolean;
+      TextCH@1000000012 : TextConst 'ENU=There is no history for Item %1 , Customer %2 , the recommended price is outdated.';
+    BEGIN
+      WITH Rec DO BEGIN
+        StyleTxtLastPriceDate := 'Standard';
+
+        LastYearDate := 0D;
+        LastYearDateFound := FALSE;
+
+        ModifyDate := 0D;
+        SalesPriceFound := FALSE;
+        HotSheetPriceFound := FALSE;
+        SalesLineMultiplierFound := FALSE;
+
+        IF (Type=Type::Item) THEN BEGIN
+
+          LastYearDate := CALCDATE('-1Y',WORKDATE);
+         IF "Last Price Date" <> 0D THEN //BEGIN
+          IF ("Last Price Date" < LastYearDate) THEN
+            LastYearDateFound := TRUE
+          ELSE
+            LastYearDateFound := FALSE;
+        { END ELSE
+          IF CurrField <> 0 THEN
+            MESSAGE(TextCH,"No.","Sell-to Customer No.");}
+
+          IF LastYearDateFound THEN BEGIN
+            ModifyDate := CALCDATE('-6M',WORKDATE);
+          IF "Pricing Logic" = "Pricing Logic" :: "Sales Price" THEN BEGIN
+            SalesPrice.RESET;
+            SalesPrice.SETCURRENTKEY("Modified Date");
+            SalesPrice.SETASCENDING("Modified Date",FALSE);
+            SalesPrice.SETRANGE("Sales Type",SalesPrice."Sales Type" :: Customer);
+            SalesPrice.SETRANGE("Sales Code","Sell-to Customer No.");
+            SalesPrice.SETRANGE("Item No.","No.");
+            //SalesPrice.SETFILTER("Modified Date",'<%2',ModifyDate);
+            IF SalesPrice.FINDFIRST THEN
+             IF SalesPrice."Modified Date" <> 0D THEN
+               IF SalesPrice."Modified Date" >= ModifyDate THEN
+                SalesPriceFound := TRUE;
+          END;
+          IF ("Pricing Logic" = "Pricing Logic" :: "Sales Line Multiplier(Cust.)") OR ("Pricing Logic" = "Pricing Logic" :: "Sales Line Multiplier(Cust. Mult. Grp.)") THEN BEGIN
+            IF SalesPriceFound = FALSE THEN BEGIN
+              SalesLineMultiplier.RESET;
+              SalesLineMultiplier.SETCURRENTKEY("Last Modified Date");
+              SalesLineMultiplier.SETASCENDING("Last Modified Date",FALSE);
+              SalesLineMultiplier.SETRANGE("Sales Type",SalesLineMultiplier."Sales Type" :: Customer);
+              SalesLineMultiplier.SETRANGE("Sales Code","Sell-to Customer No.");
+              IF ItemMultiplier.GET("No.") THEN
+                SalesLineMultiplier.SETRANGE(Code,ItemMultiplier."Item Disc. Group");
+              //SalesLineMultiplier.SETFILTER("Last Modified Date",'<%2',ModifyDate);
+              IF SalesLineMultiplier.FINDFIRST THEN
+               IF SalesLineMultiplier."Last Modified Date" <> 0D THEN
+                 IF SalesLineMultiplier."Last Modified Date" >= ModifyDate THEN
+                  SalesLineMultiplierFound := TRUE;
+            END;
+          END;
+          IF ("Pricing Logic" = "Pricing Logic" :: "Hot Sheet") THEN BEGIN
+            IF (SalesPriceFound = FALSE) AND (SalesLineMultiplierFound = FALSE) THEN BEGIN
+              SalesLineMultiplier.RESET;
+              SalesLineMultiplier.SETRANGE("Sales Type",SalesLineMultiplier."Sales Type" :: Customer);
+              SalesLineMultiplier.SETRANGE("Sales Code","Sell-to Customer No.");
+              IF ItemMultiplier.GET("No.") THEN
+                SalesLineMultiplier.SETRANGE(Code,ItemMultiplier."Item Disc. Group");
+              SalesLineMultiplier.SETFILTER("Hot Sheet Code",'<>%1','');
+              IF (SalesLineMultiplier.FINDFIRST) AND (HotSheetPriceFound = FALSE) THEN BEGIN
+                REPEAT
+                    HotSheetPrice.RESET;
+                    HotSheetPrice.SETRANGE(Code,SalesLineMultiplier."Hot Sheet Code");
+                    HotSheetPrice.SETRANGE("Item Disc. Group",SalesLineMultiplier.Code);
+                    HotSheetPrice.SETRANGE("Item No.","No.");
+                    IF HotSheetPrice.FINDFIRST THEN BEGIN
+                      IF HotSheetPrice."Last Modified Date" = 0D THEN
+                        HotSheetPriceFound := FALSE
+                      ELSE BEGIN
+                        IF HotSheetPrice."Last Modified Date" >= ModifyDate THEN
+                          HotSheetPriceFound := TRUE
+                      END;
+                    END;
+                UNTIL SalesLineMultiplier.NEXT = 0;
+              END;
+            END;
+          END;
+        END;
+          IF (LastYearDateFound) AND ((SalesPriceFound = FALSE) AND (SalesLineMultiplierFound = FALSE) AND (HotSheetPriceFound = FALSE)) THEN
+            StyleTxtLastPriceDate := 'Ambiguous';
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnBeforeValidateEvent,"No.")]
+    PROCEDURE Tb37_ItemNo_OnValidate@1000000051(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    VAR
+      Item@1000000003 : Record 27;
+      ItemAttributeValueMapping@1000000004 : Record 7505;
+      BlockedItemAttributeValue@1000000008 : TextConst 'ENU=Item Attribute Value "%1", associated with item"%2" is blocked. \This Item is blocked from being sold in %1 location';
+      SalesHeader@1000000009 : Record 36;
+    BEGIN
+      //>>TPZ2837
+      IF Rec.Type <> Rec.Type::Item THEN
+        EXIT;
+      IF Item.GET(Rec."No.") THEN BEGIN
+        ItemAttributeValueMapping.RESET;
+        ItemAttributeValueMapping.SETFILTER("Table ID",'27');
+        ItemAttributeValueMapping.SETRANGE("No.",Rec."No.");
+        ItemAttributeValueMapping.SETFILTER("Item Attribute ID",'1');
+        ItemAttributeValueMapping.SETFILTER("Item Attribute Value ID",'817'); //CA
+        IF ItemAttributeValueMapping.FINDFIRST THEN
+            IF SalesHeader.GET(SalesHeader."Document Type"::Order,Rec."Document No.") THEN
+              //IF (SalesHeader."Bill-to County" = 'CA' ) OR (SalesHeader."Sell-to County" = 'CA') THEN
+              IF (SalesHeader."Ship-to County" = 'CA' ) THEN
+                //>>TPZ2891
+                //ERROR(BlockedItemAttributeValue,'CA',Item."No.");
+                MESSAGE(BlockedItemAttributeValue,'CA',Item."No.");
+                //<<TPZ2891
+      END;
+      //<<TPZ2837
+    END;
+
+    LOCAL PROCEDURE AvgCostPerLocation@1000000065(VAR SalesLinePara@1000000000 : Record 37);
+    VAR
+      ItemLedgerEntry@1000000005 : Record 32;
+      TotalCostPerUnit@1000000004 : Decimal;
+      ItemLoc@1000000003 : Record 27;
+      TotalRemainingQty@1000000002 : Decimal;
+      NoOfEntry@1000000001 : Integer;
+    BEGIN
+      IF (SalesLinePara.Type = SalesLinePara.Type::Item) THEN BEGIN //AND (Rec."Location Code" <> '') THEN BEGIN
+        TotalCostPerUnit := 0;
+        TotalRemainingQty := 0;
+        NoOfEntry := 0;
+        ItemLoc.GET(SalesLinePara."No.");
+        ItemLedgerEntry.RESET;
+        ItemLedgerEntry.SETCURRENTKEY("Item No.",Open,"Variant Code",Positive,"Location Code","Posting Date");
+        ItemLedgerEntry.SETRANGE("Item No.",SalesLinePara."No.");
+        ItemLedgerEntry.SETRANGE(Open,TRUE);
+        ItemLedgerEntry.SETFILTER("Location Code",'<>%1&<>%2','ONWATER','OWTRANSIT');
+        IF ItemLedgerEntry.FINDFIRST THEN
+          REPEAT
+            ItemLedgerEntry.CALCFIELDS("Cost per Unit","Cost Amount (Actual)","Cost Amount (Expected)");
+            IF ItemLedgerEntry.Quantity > 0 THEN
+              TotalCostPerUnit += (((ItemLedgerEntry."Cost Amount (Actual)" + ItemLedgerEntry."Cost Amount (Expected)")
+                                  /ItemLedgerEntry.Quantity) * ItemLedgerEntry."Remaining Quantity")
+            ELSE
+              TotalCostPerUnit += ((ItemLedgerEntry."Cost Amount (Actual)" + ItemLedgerEntry."Cost Amount (Expected)")
+                                   * ItemLedgerEntry."Remaining Quantity");
+            TotalRemainingQty += ItemLedgerEntry."Remaining Quantity";
+          UNTIL ItemLedgerEntry.NEXT = 0;
+          IF TotalRemainingQty = 0 THEN
+            TotalRemainingQty := 1;
+          SalesLinePara."Average Unit Cost" := ROUND(TotalCostPerUnit/TotalRemainingQty,0.0001,'=');
+          //IF SalesLinePara."Average Unit Cost" = 0 THEN  //If cost zero then don't need to get from item card
+            //SalesLinePara."Average Unit Cost" := ROUND(SalesLinePara."Unit Cost (LCY)",0.0001,'=');
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"Quote Line No.")]
+    PROCEDURE "UpdateActualPriceFromQuoteLineNo."@1000000004(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    VAR
+      SLLoc@1000000003 : Record 37;
+    BEGIN
+      WITH Rec DO BEGIN
+        IF "Quote Line No." <> 0 THEN
+          TESTFIELD("Quote No.");
+        IF SLLoc.GET(SLLoc."Document Type"::Quote,"Quote No.","Quote Line No.") THEN BEGIN
+          IF "No." <> SLLoc."No." THEN
+            ERROR(Text0000,SLLoc."No.","No.");
+          "Unit Price" := SLLoc."Unit Price";
+          Multiplier :=     SLLoc.Multiplier;
+          "Recomm. Unit Price" :=     SLLoc."Recomm. Unit Price";
+          "Actual Unit Price" :=     SLLoc."Actual Unit Price";
+          "Alt. UOM Recomm. Unit Price" :=     SLLoc."Alt. UOM Recomm. Unit Price";
+          "Alt. UOM Actual Unit Price" :=     SLLoc."Alt. UOM Actual Unit Price";
+          "Recomm. Multiplier" :=     SLLoc."Recomm. Multiplier";
+          "Alt. UOM Unit Price" :=     SLLoc."Alt. UOM Unit Price";
+          "Old Actual Unit Price" :=     SLLoc."Old Actual Unit Price";
+          "New Actual Unit Price" :=     SLLoc."New Actual Unit Price";
+          "Requested Unit Price" :=     SLLoc."Requested Unit Price";
+          "Line Discount %" := SLLoc."Line Discount %";
+          VALIDATE("Unit Price");
+          MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE Pg516_SelltoCustName@1000000066(VAR SelltoCustNo@1000000000 : Code[20]) : Text;
+    VAR
+      Customer_Local@1000000001 : Record 18;
+    BEGIN
+      //001 TPZ2994
+      Customer_Local.RESET;
+      IF Customer_Local.GET(SelltoCustNo) THEN
+        EXIT(Customer_Local.Name);
+
+      EXIT('');
+      //001 TPZ2994
+    END;
+
+    PROCEDURE GetAvgCostPerUnitPerLoc@1000000067(VAR SalesLinePara@1000000006 : Record 37);
+    VAR
+      ItemLedgerEntry@1000000003 : Record 32;
+      TotalCostPerUnit@1000000004 : Decimal;
+      ItemLoc@1000000007 : Record 27;
+      TotalRemainingQty@1000000008 : Decimal;
+      NoOfEntry@1000000005 : Integer;
+      AvgCostPerUnit@1000000001 : Decimal;
+    BEGIN
+      ////TPZ2993 PSHUKLA new functionality for Avg Unit cost per location
+      TotalCostPerUnit := 0;
+      TotalRemainingQty := 0;
+      NoOfEntry := 0;
+      AvgCostPerUnit := 0;
+      IF ItemLoc.GET(SalesLinePara."No.") THEN BEGIN
+        ItemLedgerEntry.RESET;
+        ItemLedgerEntry.SETCURRENTKEY("Item No.",Open,"Variant Code",Positive,"Location Code","Posting Date");
+        ItemLedgerEntry.SETRANGE("Item No.",ItemLoc."No.");
+        ItemLedgerEntry.SETRANGE(Open,TRUE);
+        IF SalesLinePara."Location Code" <> '' THEN
+          ItemLedgerEntry.SETRANGE("Location Code",SalesLinePara."Location Code")
+        ELSE
+          ItemLedgerEntry.SETFILTER("Location Code",'<>%1&<>%2','ONWATER','OWTRANSIT');
+        IF ItemLedgerEntry.FINDFIRST THEN
+          REPEAT
+            ItemLedgerEntry.CALCFIELDS("Cost per Unit","Cost Amount (Actual)","Cost Amount (Expected)");
+            IF ItemLedgerEntry.Quantity > 0 THEN
+              TotalCostPerUnit += (((ItemLedgerEntry."Cost Amount (Actual)" + ItemLedgerEntry."Cost Amount (Expected)")
+                                  /ItemLedgerEntry.Quantity) * ItemLedgerEntry."Remaining Quantity")
+            ELSE
+              TotalCostPerUnit += ((ItemLedgerEntry."Cost Amount (Actual)" + ItemLedgerEntry."Cost Amount (Expected)")
+                                   * ItemLedgerEntry."Remaining Quantity");
+            TotalRemainingQty += ItemLedgerEntry."Remaining Quantity";
+          UNTIL ItemLedgerEntry.NEXT = 0;
+
+        IF TotalRemainingQty = 0 THEN
+            TotalRemainingQty := 1;
+        SalesLinePara."Average Unit Cost Per Loc" := ROUND(TotalCostPerUnit/TotalRemainingQty,0.0001,'=');
+      END;
+    END;
+
+    PROCEDURE Tb37_GetLastSalesPrice_Quote@1000000068(VAR ToSalesLine@1000000000 : Record 37) : Decimal;
+    VAR
+      LastSalesPrice@1000000001 : Record 50004;
+    BEGIN
+      //<TPZ2995>
+      WITH ToSalesLine DO BEGIN
+        IF ToSalesLine.Type <> ToSalesLine.Type::Item THEN
+          EXIT;
+        LastSalesPrice.RESET;
+        LastSalesPrice.ASCENDING;
+        LastSalesPrice.SETCURRENTKEY("Sell-to Customer No.","Item No.","Document Date");
+        LastSalesPrice.SETRANGE("Sell-to Customer No.",ToSalesLine."Sell-to Customer No.");
+        LastSalesPrice.SETRANGE("Item No.",ToSalesLine."No.");
+        LastSalesPrice.SETRANGE("Document Type",LastSalesPrice."Document Type"::Quote);
+        IF LastSalesPrice.FINDLAST THEN
+          EXIT(LastSalesPrice."Last Unit Price");
+
+       EXIT(0);
+      END;
+      //</TPZ2995>
+    END;
+
+    PROCEDURE Tb37_GetLastSalesPriceDate_Quote@1000000069(VAR ToSalesLine@1000000000 : Record 37) : Date;
+    VAR
+      LastSalesPrice@1000000001 : Record 50004;
+    BEGIN
+      //<TPZ2995>
+      WITH ToSalesLine DO BEGIN
+        IF ToSalesLine.Type <> ToSalesLine.Type::Item THEN
+          EXIT;
+        LastSalesPrice.RESET;
+        LastSalesPrice.ASCENDING;
+        LastSalesPrice.SETCURRENTKEY("Sell-to Customer No.","Item No.","Document Date");
+        LastSalesPrice.SETRANGE("Sell-to Customer No.",ToSalesLine."Sell-to Customer No.");
+        LastSalesPrice.SETRANGE("Item No.",ToSalesLine."No.");
+        LastSalesPrice.SETRANGE("Document Type",LastSalesPrice."Document Type"::Quote);
+        IF LastSalesPrice.FINDLAST THEN
+          EXIT(LastSalesPrice."Last Price Date");
+
+       EXIT(0D);
+      END;
+      //</TPZ2995>
+    END;
+
+    PROCEDURE Pg516_SalesHeaderCustPONo@1000000070(VAR SL@1000000002 : Record 37) : Text;
+    VAR
+      SH_Local@1000000001 : Record 36;
+    BEGIN
+      //<TPZ3016>
+      SH_Local.RESET;
+      IF SH_Local.GET(SL."Document Type",SL."Document No.") THEN
+        EXIT(SH_Local."External Document No.");
+
+      EXIT('');
+
+      //</TPZ3016>
+    END;
+
+    PROCEDURE Pg516_SalesHeaderStatus@1000000072(VAR SL@1000000002 : Record 37) : Text;
+    VAR
+      SH_Local@1000000001 : Record 36;
+    BEGIN
+      //<TPZ3016>
+      SH_Local.RESET;
+      IF SH_Local.GET(SL."Document Type",SL."Document No.") THEN
+        EXIT(FORMAT(SH_Local.Status));
+
+      EXIT('');
+    END;
+
+    LOCAL PROCEDURE ReplacementCost@1000000071(VAR SalesLinePara@1000000000 : Record 37);
+    VAR
+      ItemLoc@1000000001 : Record 27;
+    BEGIN
+      //TPZ3125
+      IF (SalesLinePara.Type = SalesLinePara.Type::Item) THEN BEGIN
+        IF ItemLoc.GET(SalesLinePara."No.") AND (ItemLoc."Replacement Cost" <> 0) THEN
+          SalesLinePara."Replacement Cost" := ItemLoc."Replacement Cost"
+        ELSE
+          SalesLinePara."Replacement Cost" := SalesLinePara."Average Unit Cost";
+      END;
+    END;
+
+    BEGIN
+    {
+      001 TPZ2891 RPS 07092020 - Replace Error on Item No. Validate on SO with Message
+      002 TPZ2881 PKS 07232020  Added cod to calculate Gross Margin % Avg Cost
+      003 TPZ2899 GKG 07272020 - Code added for 'Sales order Multiple'
+      004 TPZ2970 VAH 11252020 - Code added in Function Tb37_UpdateLastSalesPrice
+      001 TPZ2994 UTK 12032020 - Added function to get customer name in page 516
+      005 TPZ2995 UTK 12172020 Added New Functions Tb37_GetLastSalesPrice_Quote and Tb37_GetLastSalesPriceDate_Quote.
+      006 TPZ3016 UTK 02222021 Added new finctions Pg516_SalesHeaderCustPONo and Pg516_SalesHeaderStatus.
+      006 TPZ3085 PKS 02172021  Added new code to show color from average unit cost field
+      007 TPZ3125 PKS 03152021  Added code to flow Replacement Cost, Replacement Margin fields and update color coding
+      008 TPZ3112 UTK 03242021  Added code to pop-up messsage fror Quality Return.
+      009 TPZ3247 PKS 06292021 Added new logic on color coding of replacement cost field to show blue bold if replacement cost is zero on item card
+      010 TPZ3344 UTK 10042021 Added code to update 'Stock Status Unit Price','Pre Inc Price','Post Inc Price' fields.
+    }
+    END.
+  }
+}
+

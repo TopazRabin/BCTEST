@@ -1,0 +1,347 @@
+OBJECT Report 51126 Import IntlSales Quote/Order
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=TPZ000.00.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Import Intl. Sales Quote/Order;
+    ProcessingOnly=Yes;
+  }
+  DATASET
+  {
+    { 1000000000;;DataItem;                  ;
+               DataItemTable=Table50005;
+               DataItemTableView=SORTING(Document Type,No.)
+                                 WHERE(Document Type=FILTER(Quote|Order));
+               ReqFilterHeadingML=ENU=Sales Quote/Order;
+               OnPreDataItem=BEGIN
+                               //<TPZ1089> 102615
+                               NotFoundRow := 0;
+                               //</TPZ1089> 102615
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  TESTFIELD("No.");
+                                  TESTFIELD("Sell-to Customer No.");
+
+                                  ExcelBuff.LOCKTABLE;
+                                  ExcelBuff.OpenBook(ServerFileName,SheetName);
+                                  ExcelBuff.ReadSheet;
+
+                                  AnalyzeData;
+
+                                  ExcelBuff.DELETEALL;
+                                END;
+
+               OnPostDataItem=BEGIN
+                                //<TPZ1089>  102615
+                                CreateNotFoundExcel;
+                                //</TPZ1089> 102615
+                              END;
+
+               ReqFilterFields=Document Type,No. }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      OnQueryClosePage=VAR
+                         FileMgt@1000000000 : Codeunit 419;
+                       BEGIN
+                         IF CloseAction = ACTION::OK THEN BEGIN
+                           ServerFileName := FileMgt.UploadFile(Text51006,ExcelExtensionTok);
+                           IF ServerFileName = '' THEN
+                             EXIT(FALSE);
+
+                           SheetName := ExcelBuff.SelectSheetsName(ServerFileName);
+                           IF SheetName = '' THEN
+                             EXIT(FALSE);
+                         END;
+                       END;
+
+    }
+    CONTROLS
+    {
+      { 1000000000;;Container;
+                  ContainerType=ContentArea }
+
+      { 1000000001;1;Group  ;
+                  CaptionML=ENU=Options;
+                  GroupType=Group }
+
+      { 1000000002;2;Field  ;
+                  CaptionML=ENU=Create Missing Cross References;
+                  SourceExpr=CreateMissingCrossRef }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      Item@1000000008 : Record 27;
+      ItemCrossReference@1000000013 : Record 5717;
+      SalesLine@1000000009 : Record 50006;
+      ExcelBuff@1000000000 : TEMPORARY Record 370;
+      Window@1000000006 : Dialog;
+      ServerFileName@1000000002 : Text;
+      SheetName@1000000001 : Text[250];
+      Text51006@1000000004 : TextConst 'ENU=Import Excel File;ESM=Importar fich. Excel;FRC=Importer fichier Excel;ENC=Import Excel File';
+      Text51016@1000000005 : TextConst 'ENU=Importing Data...\\;ESM=Analizar Datos...\\;FRC=Analyse des donn‚es...\\;ENC=Analysing Data...\\';
+      ExcelExtensionTok@1000000003 : TextConst '@@@={Locked};ENU=.xlsx;ESM=.xlsx;FRC=.xlsx;ENC=.xlsx';
+      RecNo@1000000007 : Integer;
+      TotalRecNo@1000000010 : Integer;
+      RowNo@1000000011 : Integer;
+      CreateMissingCrossRef@1000000012 : Boolean;
+      NotFoundTempExcelBuffer@1000000014 : TEMPORARY Record 370;
+      NotFoundRow@1000000015 : Integer;
+      NotFoundItemNo@1000000016 : Text[100];
+
+    LOCAL PROCEDURE AnalyzeData@2();
+    VAR
+      ItemFound@1000000005 : Boolean;
+      CrossRefFound@1000000008 : Boolean;
+      LineNo@1000000001 : Integer;
+      ItemNo@1000000000 : Code[20];
+      CrossReferenceNo@1000000006 : Code[20];
+      Description@1000000007 : Text[50];
+      Quantity@1000000002 : Decimal;
+      UOMCode@1000000003 : Code[10];
+      ActualUnitPrice@1000000004 : Decimal;
+    BEGIN
+      Window.OPEN(Text51016 + '@1@@@@@@@@@@@@@@@@@@@@@@@@@\');
+      TotalRecNo := ExcelBuff.COUNT;
+
+      IF ExcelBuff.FIND('-') THEN
+        REPEAT
+          RecNo := RecNo + 1;
+          Window.UPDATE(1,ROUND(RecNo / TotalRecNo * 10000,1));
+
+          IF ExcelBuff."Row No." <> RowNo THEN BEGIN
+            RowNo := ExcelBuff."Row No.";
+            ItemFound := FALSE;
+            CrossRefFound := FALSE;
+            //<TPZ1089
+            NotFoundItemNo := '';
+            //</TPZ1089>
+          END;
+
+          IF ExcelBuff."Row No." <> 1 THEN
+          CASE ExcelBuff."Column No." OF
+            1:
+              BEGIN
+                ItemNo := DELCHR(ExcelBuff."Cell Value as Text",'=',',');
+                ItemFound := Item.GET(ItemNo);
+                IF ItemFound THEN BEGIN
+                  SalesLine.RESET;
+                  SalesLine.SETRANGE("Document Type","Sales Header Buffer"."Document Type");
+                  SalesLine.SETRANGE("Document No.","Sales Header Buffer"."No.");
+                  SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+                  SalesLine.SETRANGE("No.",ItemNo);
+                  IF SalesLine.FINDLAST THEN
+                    LineNo := SalesLine."Line No."
+                  ELSE BEGIN
+                    SalesLine.RESET;
+                    SalesLine.SETRANGE("Document Type","Sales Header Buffer"."Document Type");
+                    SalesLine.SETRANGE("Document No.","Sales Header Buffer"."No.");
+                    IF SalesLine.FINDLAST THEN
+                      LineNo := SalesLine."Line No." + 10000
+                    ELSE
+                      LineNo := LineNo + 10000;
+
+                    SalesLine.INIT;
+                    SalesLine."Document Type" := "Sales Header Buffer"."Document Type";
+                    SalesLine."Document No." := "Sales Header Buffer"."No.";
+                    SalesLine."Line No." := LineNo;
+                    SalesLine.VALIDATE("Sell-to Customer No.","Sales Header Buffer"."Sell-to Customer No.");
+                    SalesLine.Type := SalesLine.Type::Item;
+                    SalesLine.VALIDATE("No.",Item."No.");
+                    SalesLine.INSERT;
+                  END;
+                END;
+                //<TPZ1089
+                NotFoundItemNo := ItemNo;
+                //</TPZ1089>
+              END;
+            2:
+              BEGIN
+                CrossReferenceNo := DELCHR(ExcelBuff."Cell Value as Text",'=',',');
+                IF ItemFound AND
+                   CreateMissingCrossRef AND
+                   (ExcelBuff."Row No." = RowNo) AND
+                   (CrossReferenceNo <> '')
+                THEN BEGIN
+                  ItemCrossReference.RESET;
+                  ItemCrossReference.SETRANGE("Item No.",Item."No.");
+                  ItemCrossReference.SETRANGE("Cross-Reference Type",ItemCrossReference."Cross-Reference Type"::Customer);
+                  ItemCrossReference.SETRANGE("Cross-Reference Type No.","Sales Header Buffer"."Sell-to Customer No.");
+                  ItemCrossReference.SETRANGE("Cross-Reference No.",CrossReferenceNo);
+                  IF NOT ItemCrossReference.FINDFIRST THEN BEGIN
+                    ItemCrossReference.INIT;
+                    ItemCrossReference."Item No." := Item."No.";
+                    ItemCrossReference."Variant Code" := '';
+                    ItemCrossReference."Cross-Reference Type" := ItemCrossReference."Cross-Reference Type"::Customer;
+                    ItemCrossReference.VALIDATE("Cross-Reference Type No.","Sales Header Buffer"."Sell-to Customer No.");
+                    ItemCrossReference.VALIDATE("Unit of Measure",'PCS');
+                    ItemCrossReference."Cross-Reference No." := CrossReferenceNo;
+                    ItemCrossReference.INSERT;
+                    CrossRefFound := FALSE;
+                  END ELSE
+                    CrossRefFound := TRUE;
+                END;
+
+                IF (NOT ItemFound) AND
+                   (ExcelBuff."Row No." = RowNo) AND
+                   (CrossReferenceNo <> '')
+                THEN BEGIN
+                    ItemCrossReference.RESET;
+                  ItemCrossReference.SETRANGE("Cross-Reference Type",ItemCrossReference."Cross-Reference Type"::Customer);
+                  ItemCrossReference.SETRANGE("Cross-Reference Type No.","Sales Header Buffer"."Sell-to Customer No.");
+                  ItemCrossReference.SETRANGE("Cross-Reference No.",CrossReferenceNo);
+                  IF ItemCrossReference.FINDFIRST AND
+                     Item.GET(ItemCrossReference."Item No.")
+                  THEN BEGIN
+
+                    CrossRefFound := TRUE;
+                    SalesLine.RESET;
+                    SalesLine.SETRANGE("Document Type","Sales Header Buffer"."Document Type");
+                    SalesLine.SETRANGE("Document No.","Sales Header Buffer"."No.");
+                    SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+                    SalesLine.SETRANGE("No.",Item."No.");
+                    IF SalesLine.FINDLAST THEN BEGIN
+                      LineNo := SalesLine."Line No.";
+                    END ELSE BEGIN
+                      SalesLine.RESET;
+                      SalesLine.SETRANGE("Document Type","Sales Header Buffer"."Document Type");
+                      SalesLine.SETRANGE("Document No.","Sales Header Buffer"."No.");
+                      IF SalesLine.FINDLAST THEN
+                        LineNo := SalesLine."Line No." + 10000
+                      ELSE
+                        LineNo := 10000;
+                    END;
+
+                    SalesLine.INIT;
+                    SalesLine."Document Type" := "Sales Header Buffer"."Document Type";
+                    SalesLine."Document No." := "Sales Header Buffer"."No.";
+                    SalesLine."Line No." := LineNo;
+                    SalesLine.VALIDATE("Sell-to Customer No.","Sales Header Buffer"."Sell-to Customer No.");
+                    SalesLine.Type := SalesLine.Type::Item;
+                    SalesLine.SetHideValidationDialog(TRUE);
+                    SalesLine.VALIDATE("Cross-Reference No.",ItemCrossReference."Cross-Reference No.");
+                    SalesLine.INSERT;
+                    ItemFound := TRUE;
+                  END ELSE
+                    CrossRefFound := FALSE;
+                END;
+
+                //<TPZ1089>102615
+                IF (ItemFound = FALSE) AND (ExcelBuff."Row No." = RowNo) THEN BEGIN
+                  NotFoundRow += 1;
+                  EnterNotFoundCell(NotFoundRow,1,FORMAT(RowNo),FALSE,FALSE,FALSE);
+                  EnterNotFoundCell(NotFoundRow,2, NotFoundItemNo,FALSE,FALSE,FALSE);
+                  EnterNotFoundCell(NotFoundRow,3,CrossReferenceNo,FALSE,FALSE,FALSE);
+                END;
+                //</TPZ1089>
+
+              END;
+            3:
+              BEGIN
+                EVALUATE(Description,COPYSTR(ExcelBuff."Cell Value as Text",1,MAXSTRLEN(Description)));
+                IF (ExcelBuff."Row No." = RowNo) AND
+                   (Description <> '') AND ItemFound
+                THEN BEGIN
+                  SalesLine.Description := Description;
+                  SalesLine.MODIFY;
+                END;
+                //<TPZ1089>102615
+                IF (ItemFound = FALSE) AND (ExcelBuff."Row No." = RowNo) THEN BEGIN
+                  EnterNotFoundCell(NotFoundRow,4,Description,FALSE,FALSE,FALSE);
+                END;
+                //</TPZ1089>
+
+              END;
+            4:
+              BEGIN
+                EVALUATE(Quantity,DELCHR(ExcelBuff."Cell Value as Text",'=',','));
+                IF ItemFound AND
+                   (ExcelBuff."Row No." = RowNo) AND
+                   (Quantity <> 0)
+                THEN BEGIN
+                  SalesLine.VALIDATE(Quantity,Quantity);
+                  SalesLine.MODIFY;
+                END;
+
+                //<TPZ1089>102615
+                IF (ItemFound = FALSE) AND (ExcelBuff."Row No." = RowNo) THEN BEGIN
+                  EnterNotFoundCell(NotFoundRow,5,FORMAT(Quantity),FALSE,FALSE,FALSE);
+                END;
+                //</TPZ1089>
+
+              END;
+            6:
+              BEGIN
+                EVALUATE(ActualUnitPrice,ExcelBuff."Cell Value as Text");
+                IF ItemFound AND
+                   (ExcelBuff."Row No." = RowNo) AND
+                   (ActualUnitPrice <> 0)
+                THEN BEGIN
+                  SalesLine.VALIDATE("Actual Unit Price",ActualUnitPrice);
+                  SalesLine.MODIFY;
+                END;
+
+                //<TPZ1089>102615
+                IF (ItemFound = FALSE) AND (ExcelBuff."Row No." = RowNo) THEN BEGIN
+                  EnterNotFoundCell(NotFoundRow,6,FORMAT(ActualUnitPrice),FALSE,FALSE,FALSE);
+                END;
+                //</TPZ1089>
+
+              END;
+          END;
+        UNTIL ExcelBuff.NEXT = 0;
+      Window.CLOSE;
+    END;
+
+    PROCEDURE EnterNotFoundCell@1000000000(RowNoLocal@1000000005 : Integer;ColumnNoLocal@1000000004 : Integer;CellValue@1000000003 : Text[250];Bold@1000000002 : Boolean;Italic@1000000001 : Boolean;UnderLine@1000000000 : Boolean);
+    BEGIN
+      NotFoundTempExcelBuffer.INIT;
+      NotFoundTempExcelBuffer.VALIDATE("Row No.",RowNoLocal);
+      NotFoundTempExcelBuffer.VALIDATE("Column No.",ColumnNoLocal);
+      NotFoundTempExcelBuffer."Cell Value as Text" := CellValue;
+      NotFoundTempExcelBuffer.Formula := '';
+      NotFoundTempExcelBuffer.Bold := Bold;
+      NotFoundTempExcelBuffer.Italic := Italic;
+      NotFoundTempExcelBuffer.Underline := UnderLine;
+      NotFoundTempExcelBuffer.INSERT;
+    END;
+
+    PROCEDURE CreateNotFoundExcel@1000000002();
+    BEGIN
+      NotFoundTempExcelBuffer.SetFriendlyFilename(STRSUBSTNO('%1 %2',"Sales Header Buffer"."No.","Sales Header Buffer"."Sell-to Customer Name"));
+      NotFoundTempExcelBuffer.CreateBook('', STRSUBSTNO('%1 %2',"Sales Header Buffer"."No.","Sales Header Buffer"."Sell-to Customer Name"));
+      NotFoundTempExcelBuffer.WriteSheet('',COMPANYNAME,USERID);
+      NotFoundTempExcelBuffer.CloseBook;
+      NotFoundTempExcelBuffer.OpenExcel;
+
+      NotFoundTempExcelBuffer.GiveUserControl;
+    END;
+
+    BEGIN
+    {
+      2019-01-17 TPZ2417 AKUMAR
+      Created new object.
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

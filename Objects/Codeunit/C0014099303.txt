@@ -1,0 +1,823 @@
+OBJECT Codeunit 14099303 E.D.I. Get XML Structure
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/23/17;
+    Time=12:00:00 PM;
+    Version List=SE0.60.16;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EDIDocument@1240020000 : Record 14002353;
+      EDISegment@1240020006 : Record 14002354;
+      XmlReader@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlReader";
+      XmlReaderSettings@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlReaderSettings";
+      XmlUrlResolver@1003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlUrlResolver";
+      XmlDtdProcessing@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.DtdProcessing";
+      XmlNodeType@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeType";
+      NetCredentialCache@1006 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.CredentialCache";
+      EntryNo@1005 : Integer;
+      CreateLineBegin@1240020001 : Boolean;
+      LineBeginCreated@1240020002 : Boolean;
+      Text001@1240020009 : TextConst 'ENU=Processing...\@1@@@@@@@@@@@@@@@';
+      Text006@1240020003 : TextConst 'ENU=%1 command is not expected to be the first segment.';
+      CreateLineEnd@1240020004 : Boolean;
+      LineEndCreated@1240020005 : Boolean;
+      CheckForDetailSegments@1240020007 : Boolean;
+      LineSegmentArray@1240020008 : ARRAY [300] OF Text[250];
+      Window@1240020010 : Dialog;
+      TotalNumberOfRecs@1240020012 : Integer;
+      NumberOfCurrRec@1240020011 : Integer;
+      Text007@1240020013 : TextConst 'ENU=Node list not found for %1.';
+      DetailBeginElement@1240020015 : Text[250];
+      BegDetailNode@1240020014 : Text[250];
+      EndDetailNode@1240020016 : Text[250];
+      LineBeginCommand@1240020017 : Boolean;
+      OutboundDoc@1240020018 : Boolean;
+      FirstSummaryNode@1240020019 : Text[250];
+      DetailNode@1240020020 : Boolean;
+      NodeValueLength@1240020021 : Integer;
+      cXMLDoc@1240020022 : Boolean;
+      FoundEmptyElement@1240020023 : Boolean;
+
+    PROCEDURE GenerateStructureFromPath@1(Path@1000 : Text;CurrentEDIDocument@1240020000 : Record 14002353;InsertLineBegin@1240020001 : Boolean;BeginElement@1240020002 : Text[250];SummaryNode@1240020005 : Text[250];Length@1240020003 : Integer);
+    BEGIN
+      EDIDocument := CurrentEDIDocument;
+      OutboundDoc := EDIDocument.Type = EDIDocument.Type::Export;
+      LineBeginCommand := InsertLineBegin;
+      DetailBeginElement := BeginElement;
+      FirstSummaryNode :=  SummaryNode;
+      NodeValueLength := Length;
+      cXMLDoc := FALSE;
+      InitializeXMLReaderSettings;
+      CreateXMLReaderFromPath(Path);
+      ParseXML(EDIDocument);
+      XmlReader.Close;
+      Window.CLOSE;
+    END;
+
+    LOCAL PROCEDURE CreateXMLReaderFromPath@4(Path@1000 : Text);
+    BEGIN
+      XmlReader := XmlReader.Create(Path,XmlReaderSettings);
+      TotalRecords(Path);
+      Window.OPEN(Text001);
+    END;
+
+    LOCAL PROCEDURE InitializeXMLReaderSettings@5();
+    BEGIN
+      XmlUrlResolver := XmlUrlResolver.XmlUrlResolver;
+      XmlUrlResolver.Credentials := NetCredentialCache.DefaultNetworkCredentials;
+
+      XmlReaderSettings := XmlReaderSettings.XmlReaderSettings;
+      XmlReaderSettings.DtdProcessing := XmlDtdProcessing.Ignore;
+      XmlReaderSettings.XmlResolver := XmlUrlResolver;
+    END;
+
+    LOCAL PROCEDURE ParseXML@14(VAR EDIDocument@1001 : Record 14002353);
+    VAR
+      EDIXMLStructure@1240020000 : Record 14099300;
+      EDIParentXMLStructure@1000 : Record 14099300;
+    BEGIN
+      WITH EDIDocument DO BEGIN
+        EDIXMLStructure.RESET;
+        EDIXMLStructure.SETRANGE("Trade Partner","Trade Partner No.");
+        EDIXMLStructure.SETRANGE("Navision Document","Navision Document");
+        EDIXMLStructure.SETRANGE("EDI Document No.","EDI Document No.");
+        EDIXMLStructure.SETRANGE(Version,Version);
+        EDIXMLStructure.SETRANGE("Document Type",Type);
+        EDIXMLStructure.DELETEALL;
+      END;
+      EntryNo := 0;
+      DetailNode := FALSE;
+
+      // Parse the file and display each of the nodes.
+      WHILE XmlReader.Read DO BEGIN
+        XmlNodeType := XmlReader.NodeType;
+        IF XmlNodeType.Equals(XmlNodeType.Element) THEN BEGIN
+          ProcessXmlNodeElement(EDIParentXMLStructure,EDIXMLStructure);
+        END ELSE
+          IF XmlNodeType.Equals(XmlNodeType.EndElement) THEN BEGIN
+            WITH EDIParentXMLStructure DO BEGIN
+              IF Depth <> 0 THEN BEGIN
+                EDIXMLStructure.GET(
+                  "Trade Partner","Navision Document","EDI Document No.",Version,"Document Type",
+                  "Parent Entry No.");
+                EDIParentXMLStructure := EDIXMLStructure;
+              END;
+            END;
+            IF LineBeginCreated THEN
+              IF (XmlNodeType.Equals(XmlNodeType.EndElement)) AND
+                 (XmlReader.Name = DetailBeginElement) AND
+                 (LineEndCreated = FALSE)
+              THEN BEGIN
+                 CreateLineEnd := TRUE;
+                WriteCommandSegment(CreateLineEnd);
+              END;
+          END ELSE
+            IF XmlNodeType.Equals(XmlNodeType.Text) THEN BEGIN
+              IF EDIXMLStructure.Value = '' THEN BEGIN
+                EDIXMLStructure.VALIDATE(Value,
+                  COPYSTR(XmlReader.Value,1,MAXSTRLEN(EDIXMLStructure.Value)));
+                EDIXMLStructure.VALIDATE("Data Type",GetType(EDIXMLStructure.Value));
+                EDIXMLStructure.MODIFY;
+              END;
+              IF OutboundDoc THEN BEGIN
+                IF DetailNode = FALSE THEN
+                  WriteEDIElement(EDISegment,EDIXMLStructure,FALSE,TRUE);
+              END ELSE
+                IF DetailNode = FALSE THEN
+                WriteEDIElement(EDISegment,EDIXMLStructure,FALSE,TRUE);
+            END ELSE
+              IF XmlNodeType.Equals(XmlNodeType.Text) OR
+                 XmlNodeType.Equals(XmlNodeType.XmlDeclaration) OR
+                 XmlNodeType.Equals(XmlNodeType.ProcessingInstruction) OR
+                 XmlNodeType.Equals(XmlNodeType.Comment) THEN;
+      END;
+      SetIsParent;
+      SetNamespace;
+      FindEmptyElement;
+    END;
+
+    LOCAL PROCEDURE ProcessXmlNodeElement@8(VAR EDIParentXMLStructure@1000 : Record 14099300;VAR EDIXMLStructure@1003 : Record 14099300);
+    VAR
+      IsEmptyElement@1240020000 : Boolean;
+    BEGIN
+      Window.UPDATE(1,ROUND((NumberOfCurrRec / TotalNumberOfRecs) * 10000,1));
+      EDIXMLStructure := EDIParentXMLStructure;
+      EDIXMLStructure."Is Parent" := TRUE;
+      IF EDIXMLStructure.MODIFY THEN;
+      InsertElement(EDIParentXMLStructure,EDIXMLStructure);
+      EDIParentXMLStructure := EDIXMLStructure;
+
+      IsEmptyElement := XmlReader.IsEmptyElement;
+
+      IF XmlReader.HasAttributes THEN BEGIN
+        EDIXMLStructure."Has Attributes" := TRUE;
+        EDIXMLStructure.MODIFY;
+        IF XmlReader.MoveToFirstAttribute THEN
+          REPEAT
+            InsertAttribute(EDIParentXMLStructure,EDIXMLStructure);
+          UNTIL NOT XmlReader.MoveToNextAttribute;
+      END;
+      IF IsEmptyElement THEN BEGIN
+        WITH EDIParentXMLStructure DO
+          EDIXMLStructure.GET(
+            "Trade Partner","Navision Document","EDI Document No.",Version,"Document Type",
+            "Parent Entry No.");
+        EDIParentXMLStructure := EDIXMLStructure;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertElement@17(EDIParentXMLStructure@1001 : Record 14099300;VAR EDIXMLStructure@1002 : Record 14099300) : Boolean;
+    VAR
+      i@1240020000 : Integer;
+      NodeName@1240020002 : Text[250];
+    BEGIN
+      NumberOfCurrRec := NumberOfCurrRec + 1;
+      NodeName := COPYSTR(XmlReader.Name,1,MAXSTRLEN(NodeName));
+      WITH EDIXMLStructure DO BEGIN
+        RESET;
+        SETRANGE("Parent Entry No.",EDIParentXMLStructure."Entry No.");
+        SETRANGE("Trade Partner",EDIParentXMLStructure."Trade Partner");
+        SETRANGE("Navision Document",EDIParentXMLStructure."Navision Document");
+        SETRANGE("EDI Document No.",EDIParentXMLStructure."EDI Document No.");
+        SETRANGE(Version,EDIParentXMLStructure.Version);
+        SETRANGE("Document Type",EDIParentXMLStructure."Document Type");
+        SETRANGE(Type,Type::Element);
+        SETRANGE(Name,XmlReader.Name);
+        IF NOT FINDFIRST THEN BEGIN
+          INIT;
+          EntryNo += 1;
+          "Entry No." := EntryNo;
+          Type := Type::Element;
+          Name := XmlReader.Name;
+          "Trade Partner" := EDIDocument."Trade Partner No.";
+          "Navision Document" := EDIDocument."Navision Document";
+          "EDI Document No." := EDIDocument."EDI Document No.";
+          Version:= EDIDocument.Version;
+          "Document Type" := EDIDocument.Type;
+
+          Path := STRSUBSTNO('%1/%2',EDIParentXMLStructure.Path,XmlReader.Name);
+          "Node Name" := XmlReader.Name;
+          Depth := XmlReader.Depth;
+          "Parent Entry No." := EDIParentXMLStructure."Entry No.";
+          INSERT(TRUE);
+          IF (LineBeginCommand) THEN BEGIN
+            IF ("Node Name" = DetailBeginElement) THEN BEGIN
+              CreateLineBegin := TRUE;
+              EndDetailNode := DetailBeginElement;
+            END;
+            IF ("Node Name" = BegDetailNode) THEN BEGIN
+              CreateLineBegin := TRUE;
+              IF BegDetailNode = EndDetailNode THEN
+                CreateLineEnd := TRUE;
+            END;
+          END;
+          WriteEDISegment(EDIXMLStructure);
+          EXIT(TRUE);
+        END ELSE BEGIN
+          IF CheckForDetailSegments THEN BEGIN
+            IF FirstSummaryNode = NodeName THEN BEGIN
+              DetailNode := FALSE;
+              CheckForDetailSegments := FALSE;
+            END ELSE BEGIN
+              i := 1;
+              IF LineSegmentArray[i] = NodeName THEN
+                DetailNode := TRUE;
+            END;
+            IF DetailNode = FALSE THEN
+              WriteEDISegment(EDIXMLStructure);
+          END ELSE BEGIN
+            IF OutboundDoc THEN
+            WriteEDISegment(EDIXMLStructure);
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertAttribute@18(EDIParentXMLStructure@1000 : Record 14099300;VAR EDIXMLStructure@1001 : Record 14099300) : Boolean;
+    BEGIN
+      NumberOfCurrRec := NumberOfCurrRec + 1;
+      WITH EDIXMLStructure DO BEGIN
+        RESET;
+        SETRANGE("Parent Entry No.",EDIParentXMLStructure."Entry No.");
+        SETRANGE("Trade Partner",EDIParentXMLStructure."Trade Partner");
+        SETRANGE("Navision Document",EDIParentXMLStructure."Navision Document");
+        SETRANGE("EDI Document No.",EDIParentXMLStructure."EDI Document No.");
+        SETRANGE(Version,EDIParentXMLStructure.Version);
+        SETRANGE("Document Type",EDIParentXMLStructure."Document Type");
+        SETRANGE(Type,Type::Attribute);
+        SETRANGE(Name,XmlReader.Name);
+        IF NOT FINDFIRST THEN BEGIN
+          INIT;
+          EntryNo += 1;
+          "Entry No." := EntryNo;
+          Type := Type::Attribute;
+          Name := XmlReader.Name;
+          VALIDATE(Value,COPYSTR(XmlReader.Value,1,MAXSTRLEN(Value)));
+          "Data Type" := GetType(Value);
+          "Trade Partner" := EDIDocument."Trade Partner No.";
+          "Navision Document" := EDIDocument."Navision Document";
+          "EDI Document No." := EDIDocument."EDI Document No.";
+          Version:= EDIDocument.Version;
+          "Document Type" := EDIDocument.Type;
+
+          Path := STRSUBSTNO('%1/@%2',EDIParentXMLStructure.Path,XmlReader.Name);
+          "Node Name" := XmlReader.Name;
+          Depth := XmlReader.Depth;
+          "Parent Entry No." := EDIParentXMLStructure."Entry No.";
+          INSERT(TRUE);
+          WriteEDIElement(EDISegment,EDIXMLStructure,TRUE,FALSE);
+          EXIT(TRUE);
+        END ELSE BEGIN
+          IF OutboundDoc THEN BEGIN
+                IF DetailNode = FALSE THEN
+                  WriteEDIElement(EDISegment,EDIXMLStructure,TRUE,FALSE);
+              END ELSE
+                IF DetailNode = FALSE THEN
+                WriteEDIElement(EDISegment,EDIXMLStructure,TRUE,FALSE);
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetType@2(Value@1000 : Text) : Integer;
+    VAR
+      DummyXMLStructure@1001 : Record 14099300;
+      Decimal@1003 : Decimal;
+    BEGIN
+      IF Value = '' THEN
+        EXIT(DummyXMLStructure."Data Type"::Text);
+
+      IF EVALUATE(Decimal,Value) THEN
+        EXIT(DummyXMLStructure."Data Type"::Decimal);
+
+      EXIT(DummyXMLStructure."Data Type"::Text)
+    END;
+
+    PROCEDURE WriteEDISegment@1240020000(EDIXMLStructure@1240020002 : Record 14099300);
+    VAR
+      EDISegment2@1240020004 : Record 14002354;
+      ProcessingSequence@1240020003 : Integer;
+      LineNo@1240020001 : Integer;
+    BEGIN
+      LineNo := 0;
+      ProcessingSequence := 0;
+
+      IF CreateLineBegin THEN BEGIN
+        EDISegment2.RESET;
+        EDISegment2.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+        EDISegment2.SETRANGE("Navision Document",EDIDocument."Navision Document");
+        EDISegment2.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+        EDISegment2.SETRANGE(Version,EDIDocument.Version);
+        EDISegment2.SETRANGE(Type,EDIDocument.Type);
+        IF EDISegment2.FIND('+') THEN
+          ProcessingSequence := EDISegment2."Processing Sequence" + 10
+        ELSE
+          ProcessingSequence := 1000;
+
+        EDISegment2.RESET;
+        EDISegment2.VALIDATE("Trade Partner No.",EDIDocument."Trade Partner No.");
+        EDISegment2."Navision Document" := EDIDocument."Navision Document";
+        EDISegment2."EDI Document No." := EDIDocument."EDI Document No.";
+        EDISegment2.Version := EDIDocument.Version;
+        EDISegment2.Type := EDIDocument.Type;
+        EDISegment2.Segment := '';
+        EDISegment2.VALIDATE("Segment Type",EDISegment2."Segment Type"::Command);
+        EDISegment2."Node Name" := 'LINE BEGIN';
+        EDISegment2."Segment Name" := '';
+        EDISegment2."Processing Sequence" := ProcessingSequence;
+        EDISegment2."Node List Path" := '';
+        EDISegment2.Depth := 0;
+        EDISegment2."Parent Entry No." := 0;
+        EDISegment2."Entry No." := 0;
+        EDISegment2.INSERT(TRUE);
+        CreateLineBegin := FALSE;
+        LineBeginCreated := TRUE;
+      END;
+
+      EDISegment.RESET;
+      EDISegment.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+      EDISegment.SETRANGE("Navision Document",EDIDocument."Navision Document");
+      EDISegment.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+      EDISegment.SETRANGE(Version,EDIDocument.Version);
+      EDISegment.SETRANGE(Type,EDIDocument.Type);
+      IF EDISegment.FIND('+') THEN
+        ProcessingSequence := EDISegment."Processing Sequence" + 10
+      ELSE
+        ProcessingSequence := 1000;
+
+      EDISegment.RESET;
+      EDISegment.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+      EDISegment.SETRANGE("Navision Document",EDIDocument."Navision Document");
+      EDISegment.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+      EDISegment.SETRANGE(Version,EDIDocument.Version);
+      EDISegment.SETRANGE(Type,EDIDocument.Type);
+      EDISegment.SETRANGE("Segment Type",EDISegment."Segment Type"::Segment);
+      IF EDISegment.FIND('+') THEN BEGIN
+        LineNo := EDISegment."Entry No." + 10
+      END ELSE
+        LineNo := 10;
+
+      EDISegment.RESET;
+      EDISegment.VALIDATE("Trade Partner No.",EDIDocument."Trade Partner No.");
+      EDISegment."Navision Document" := EDIDocument."Navision Document";
+      EDISegment."EDI Document No." := EDIDocument."EDI Document No.";
+      EDISegment.Version := EDIDocument.Version;
+      EDISegment.Type := EDIDocument.Type;
+      EDISegment.VALIDATE("Segment Type",EDISegment."Segment Type"::Segment);
+      EDISegment."Node Name" := EDIXMLStructure."Node Name";
+      EDISegment."Segment Name" := EDIXMLStructure."Node Name";
+      EDISegment."Processing Sequence" := ProcessingSequence;
+      EDISegment."Entry No." := EDIXMLStructure."Entry No.";
+      EDISegment.Depth := EDIXMLStructure.Depth;
+      EDISegment."Parent Entry No." := EDIXMLStructure."Parent Entry No.";
+      EDISegment."Node List Path" := EDIXMLStructure.Path;
+      EDISegment.InsertedByPage(TRUE);
+      EDISegment.INSERT(TRUE);
+      IF EDISegment."Node List Path" = '/cXML' THEN
+        cXMLDoc := TRUE;
+    END;
+
+    PROCEDURE WriteEDIElement@1240020002(EDISegment@1240020006 : Record 14002354;EDIXMLStructure@1240020003 : Record 14099300;XMLAttribute@1240020001 : Boolean;NodeText@1240020007 : Boolean);
+    VAR
+      EDIElement@1240020005 : Record 14002355;
+      ProcessingSequence@1240020004 : Integer;
+      AttributeName@1240020002 : Text[40];
+      ElementID@1240020000 : Code[5];
+    BEGIN
+      IF XMLAttribute THEN BEGIN
+        AttributeName := EDIXMLStructure."Node Name";
+      END ELSE
+        AttributeName := '';
+      ElementID := '';
+
+      WITH EDISegment DO BEGIN
+        EDIElement.RESET;
+        EDIElement.SETRANGE("Trade Partner No.","Trade Partner No.");
+        EDIElement.SETRANGE("Navision Document","Navision Document");
+        EDIElement.SETRANGE("EDI Document No.","EDI Document No.");
+        EDIElement.SETRANGE(Version,Version);
+        EDIElement.SETRANGE(Type,Type);
+        EDIElement.SETRANGE(Segment,Segment);
+        IF EDIElement.FIND('+') THEN BEGIN
+          IF OutboundDoc AND NodeText THEN BEGIN
+            ElementID := '00';
+            ProcessingSequence := 5000;
+          END ELSE BEGIN
+            ProcessingSequence := EDIElement."Processing Sequence" + 10000;
+            IF EDIElement.Element = '' THEN
+              ElementID := '01'
+            ELSE
+              ElementID := INCSTR(EDIElement.Element);
+          END;
+        END ELSE BEGIN
+          ProcessingSequence := 10000;
+          ElementID := '01';
+        END;
+        EDIElement.RESET;
+        EDIElement.INIT;
+        EDIElement.VALIDATE("Trade Partner No.","Trade Partner No.");
+        EDIElement.VALIDATE("Navision Document","Navision Document");
+        EDIElement."EDI Document No." := "EDI Document No.";
+        EDIElement.Version := Version;
+        IF FoundEmptyElement THEN
+          EDIElement.Element := ''
+        ELSE
+          EDIElement.Element := ElementID;
+        EDIElement.VALIDATE(Type,Type);
+        EDIElement.Segment := Segment;
+        EDIElement."Node Name" := "Node Name";
+        EDIElement."Processing Sequence" := ProcessingSequence;
+        IF XMLAttribute THEN BEGIN
+          EDIElement."Field Name" := AttributeName;
+          EDIElement.VALIDATE("Attribute Name",AttributeName);
+        END ELSE
+          EDIElement."Field Name" := EDISegment."Node Name";
+        IF STRPOS(AttributeName,'xmlns') <> 0 THEN BEGIN
+          EDIElement."XML Fixed Value" := EDIXMLStructure.Value;
+          IF (STRPOS(AttributeName,'xsi') = 0) AND (STRPOS(AttributeName,'xsd') = 0) THEN
+            EDIElement."Document Namespace" := TRUE;
+        END;
+        EDIElement.Length := NodeValueLength;
+        IF EDIElement."Document Namespace" = FALSE THEN
+          EDIElement."Element Mapping Error" := TRUE;
+        IF FoundEmptyElement THEN
+          EDIElement."Element Mapping Error" := FALSE;
+        IF cXMLDoc THEN
+          CASE TRUE OF
+            OutboundDoc:
+              CASE EDISegment."Node List Path" OF
+                '/cXML':
+                  BEGIN
+                    CASE EDIElement."Attribute Name" OF
+                      'version':
+                        BEGIN
+                          EDIElement.VALIDATE(Origin,EDIElement.Origin::Navision);
+                          EDIElement.VALIDATE("NAV Table Name",'E.D.I. Document');
+                          EDIElement.VALIDATE("Field Name",'Version');
+                          EDIElement.VALIDATE(Length,12);
+                          EDIElement.VALIDATE("Minimum Length",1);
+                          EDIElement."Element Mapping Error" := FALSE;
+                        END;
+                      'payloadID':
+                        BEGIN
+                          EDIElement.VALIDATE(Origin,EDIElement.Origin::Navision);
+                          IF EDIElement."Navision Document" = 'E_FUNCTACK' THEN
+                            EDIElement.VALIDATE("NAV Table Name",'E.D.I. Receive Document Hdr.')
+                          ELSE
+                            EDIElement.VALIDATE("NAV Table Name",'E.D.I. Document');
+                          EDIElement.VALIDATE("Field Name",'cXML_Payload_ID');
+                          EDIElement.VALIDATE(Length,100);
+                          EDIElement.VALIDATE("Minimum Length",1);
+                          EDIElement."Element Mapping Error" := FALSE;
+                        END;
+                      'timestamp':
+                        BEGIN
+                          EDIElement.VALIDATE(Origin,EDIElement.Origin::"EDI Out");
+                          EDIElement.VALIDATE("Field Name",'Today');
+                          EDIElement.VALIDATE("Data Type",EDIElement."Data Type"::"Date XML DateTime");
+                          EDIElement.VALIDATE("Time Zone",EDIElement."Time Zone"::Offset);
+                          EDIElement.VALIDATE(Length,25);
+                          EDIElement.VALIDATE("Minimum Length",24);
+                          EDIElement."Element Mapping Error" := FALSE;
+                        END;
+                    END;
+                  END;
+                '/cXML/Header/From/Credential':
+                  BEGIN
+                    EDIElement.VALIDATE(Origin,EDIElement.Origin::Navision);
+                    EDIElement.VALIDATE("NAV Table Name",'E.D.I. Template');
+                    EDIElement.VALIDATE("Field Name",'cXML_From_Domain');
+                    EDIElement.VALIDATE(Length,50);
+                    EDIElement."Element Mapping Error" := FALSE;
+                  END;
+                '/cXML/Header/From/Credential/Identity':
+                  BEGIN
+                    EDIElement.VALIDATE(Origin,EDIElement.Origin::Navision);
+                    EDIElement.VALIDATE("NAV Table Name",'E.D.I. Template');
+                    EDIElement.VALIDATE("Field Name",'My_Trading_Partner_No.');
+                    EDIElement.VALIDATE(Length,20);
+                    EDIElement."Element Mapping Error" := FALSE;
+                  END;
+                '/cXML/Header/To/Credential':
+                  BEGIN
+                    EDIElement.VALIDATE(Origin,EDIElement.Origin::Navision);
+                    EDIElement.VALIDATE("NAV Table Name",'E.D.I. Template');
+                    EDIElement.VALIDATE("Field Name",'cXML_To_Domain');
+                    EDIElement.VALIDATE(Length,50);
+                    EDIElement."Element Mapping Error" := FALSE;
+                  END;
+                '/cXML/Header/To/Credential/Identity':
+                  BEGIN
+                    EDIElement.VALIDATE(Origin,EDIElement.Origin::Navision);
+                    EDIElement.VALIDATE("NAV Table Name",'E.D.I. Trade Partner');
+                    EDIElement.VALIDATE("Field Name",'From_Identifier');
+                    EDIElement.VALIDATE(Length,20);
+                    EDIElement."Element Mapping Error" := FALSE;
+                  END;
+                '/cXML/Header/Sender/Credential':
+                  BEGIN
+                    EDIElement.VALIDATE(Origin,EDIElement.Origin::Navision);
+                    EDIElement.VALIDATE("NAV Table Name",'E.D.I. Template');
+                    EDIElement.VALIDATE("Field Name",'cXML_Sender_Domain');
+                    EDIElement.VALIDATE(Length,50);
+                    EDIElement."Element Mapping Error" := FALSE;
+                  END;
+                '/cXML/Header/Sender/Credential/Identity':
+                  BEGIN
+                    EDIElement.VALIDATE(Origin,EDIElement.Origin::Navision);
+                    EDIElement.VALIDATE("NAV Table Name",'E.D.I. Template');
+                    EDIElement.VALIDATE("Field Name",'cXML_Sender_ID');
+                    EDIElement.VALIDATE(Length,20);
+                    EDIElement."Element Mapping Error" := FALSE;
+                  END;
+                '/cXML/Header/Sender/UserAgent':
+                  BEGIN
+                    EDIElement.VALIDATE(Origin,EDIElement.Origin::Navision);
+                    EDIElement.VALIDATE("NAV Table Name",'E.D.I. Template');
+                    EDIElement.VALIDATE("Field Name",'cXML_Sender_Agent');
+                    EDIElement.VALIDATE(Length,30);
+                    EDIElement."Element Mapping Error" := FALSE;
+                  END;
+              END;
+            ELSE BEGIN
+              IF EDIElement."Navision Document" = 'I_FUNCTACK'THEN
+                CASE EDISegment."Node List Path" OF
+                  '/cXML':
+                  BEGIN
+                    CASE EDIElement."Attribute Name" OF
+                      'payloadID':
+                        BEGIN
+                          EDIElement.VALIDATE(Origin,EDIElement.Origin::Navision);
+                          EDIElement.VALIDATE("NAV Table Name",'E.D.I. Send Document Hdr.');
+                          EDIElement.VALIDATE("Field Name",'cXML_Payload_ID');
+                          EDIElement.VALIDATE(Length,100);
+                          EDIElement."Element Mapping Error" := FALSE;
+                        END;
+                    END;
+                  END;
+                END;
+            END;
+          END;
+        IF XMLAttribute THEN
+          EDIElement.VALIDATE("Attribute Name",AttributeName)
+        ELSE
+          EDIElement."Field Name" := EDISegment."Node Name";
+        EDIElement.InsertedByPage(TRUE);
+        EDIElement.INSERT(TRUE);
+      END;
+    END;
+
+    PROCEDURE WriteCommandSegment@1240020003(CreateLineEnd@1240020002 : Boolean);
+    VAR
+      EDISegment2@1240020004 : Record 14002354;
+      ProcessingSequence@1240020003 : Integer;
+      LineNo@1240020001 : Integer;
+    BEGIN
+      LineNo := 0;
+      ProcessingSequence := 0;
+
+      IF CreateLineBegin THEN BEGIN
+        EDISegment2.RESET;
+        EDISegment2.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+        EDISegment2.SETRANGE("Navision Document",EDIDocument."Navision Document");
+        EDISegment2.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+        EDISegment2.SETRANGE(Version,EDIDocument.Version);
+        EDISegment2.SETRANGE(Type,EDIDocument.Type);
+        IF EDISegment2.FIND('+') THEN
+          ProcessingSequence := EDISegment2."Processing Sequence" + 10
+        ELSE
+          ProcessingSequence := 1000;
+
+        EDISegment2.RESET;
+        EDISegment2.VALIDATE("Trade Partner No.",EDIDocument."Trade Partner No.");
+        EDISegment2."Navision Document" := EDIDocument."Navision Document";
+        EDISegment2."EDI Document No." := EDIDocument."EDI Document No.";
+        EDISegment2.Version := EDIDocument.Version;
+        EDISegment2.Type := EDIDocument.Type;
+        EDISegment2.Segment := '';
+        EDISegment2.VALIDATE("Segment Type",EDISegment2."Segment Type"::Command);
+        EDISegment2."Node Name" := 'LINE BEGIN';
+        EDISegment2."Segment Name" := '';
+        EDISegment2."Processing Sequence" := ProcessingSequence;
+        EDISegment2.Depth := 0;
+        EDISegment2."Parent Entry No." := 0;
+        EDISegment2."Entry No." := 0;
+        EDISegment2.INSERT(TRUE);
+        CreateLineBegin := FALSE;
+        LineBeginCreated := TRUE;
+      END;
+
+      IF CreateLineEnd THEN BEGIN
+        EDISegment2.RESET;
+        EDISegment2.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+        EDISegment2.SETRANGE("Navision Document",EDIDocument."Navision Document");
+        EDISegment2.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+        EDISegment2.SETRANGE(Version,EDIDocument.Version);
+        EDISegment2.SETRANGE(Type,EDIDocument.Type);
+        IF EDISegment2.FIND('+') THEN
+          ProcessingSequence := EDISegment2."Processing Sequence" + 10
+        ELSE
+          ERROR(Text006,'LINE END');
+
+        EDISegment2.RESET;
+        EDISegment2.VALIDATE("Trade Partner No.",EDIDocument."Trade Partner No.");
+        EDISegment2."Navision Document" := EDIDocument."Navision Document";
+        EDISegment2."EDI Document No." := EDIDocument."EDI Document No.";
+        EDISegment2.Version := EDIDocument.Version;
+        EDISegment2.Type := EDIDocument.Type;
+        EDISegment2.Segment := '';
+        EDISegment2.VALIDATE("Segment Type",EDISegment2."Segment Type"::Command);
+        EDISegment2."Node Name" := 'LINE END';
+        EDISegment2."Segment Name" := '';
+        EDISegment2."Processing Sequence" := ProcessingSequence;
+        EDISegment2."Node List Path" := '';
+        EDISegment2.Depth := 0;
+        EDISegment2."Parent Entry No." := 0;
+        EDISegment2."Entry No." := 0;
+        EDISegment2.INSERT(TRUE);
+        CreateLineEnd := FALSE;
+        LineEndCreated := TRUE;
+        StoreDetailSegments;
+      END;
+    END;
+
+    PROCEDURE StoreDetailSegments@1240020004();
+    VAR
+      EDISegment@1240020000 : Record 14002354;
+      StoreSegID@1240020003 : Boolean;
+      StoreSegComplete@1240020002 : Boolean;
+      i@1240020001 : Integer;
+    BEGIN
+      CheckForDetailSegments := FALSE;
+      EDISegment.RESET;
+      EDISegment.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+      EDISegment.SETRANGE("Navision Document",EDIDocument."Navision Document");
+      EDISegment.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+      EDISegment.SETRANGE(Version,EDIDocument.Version);
+      EDISegment.FIND('-');
+      EDISegment.TESTFIELD(Segment);
+
+      i := 0;
+      REPEAT
+        IF EDISegment."Segment Type" = EDISegment."Segment Type"::Command THEN
+          CASE EDISegment."Node Name" OF
+            'LINE BEGIN':
+              BEGIN
+                StoreSegID := TRUE;
+                CLEAR(LineSegmentArray);
+                EDISegment.NEXT;
+              END;
+            'LINE END':
+              BEGIN
+                StoreSegID := FALSE;
+                StoreSegComplete := TRUE;
+              END;
+          END;
+        IF StoreSegID THEN BEGIN
+          i := i + 1;
+          LineSegmentArray[i] := EDISegment."Node Name";
+        END;
+      UNTIL (EDISegment.NEXT = 0) OR (StoreSegComplete);
+      CheckForDetailSegments := TRUE;
+    END;
+
+    LOCAL PROCEDURE TotalRecords@1240020001(FileName@1240020003 : Text[250]);
+    VAR
+      XMLDocIn@1240020002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLNode@1240020001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLNodeList@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      i@1240020004 : Integer;
+    BEGIN
+      IF ISNULL(XMLDocIn) THEN
+        XMLDocIn := XMLDocIn.XmlDocument;
+      XMLDocIn.Load(FileName);
+      XMLNodeList := XMLDocIn.ChildNodes;
+      IF XMLNodeList.Count  > 0 THEN BEGIN
+        CreateLineBegin := FALSE;
+        CreateLineEnd := FALSE;
+        LineEndCreated := FALSE;
+        LineBeginCreated := FALSE;
+        CheckForDetailSegments := FALSE;
+
+        IF DetailBeginElement <> '' THEN BEGIN
+          BegDetailNode := '';
+          EndDetailNode := ''
+        END;
+
+        FOR i := 0 TO XMLNodeList.Count - 1 DO BEGIN
+          XMLNode := XMLNodeList.Item(i);
+          TotalNumberOfRecs := XMLNodeList.Count;
+        END;
+      END ELSE
+        ERROR(Text007,FileName);
+    END;
+
+    LOCAL PROCEDURE SetIsParent@1240020006();
+    VAR
+      EDIXMLStructure@1240020000 : Record 14099300;
+      EDISegment@1240020001 : Record 14002354;
+    BEGIN
+      EDIXMLStructure.RESET;
+      EDIXMLStructure.SETRANGE("Trade Partner",EDIDocument."Trade Partner No.");
+      EDIXMLStructure.SETRANGE("Navision Document",EDIDocument."Navision Document");
+      EDIXMLStructure.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+      EDIXMLStructure.SETRANGE(Version,EDIDocument.Version);
+      EDIXMLStructure.SETRANGE("Document Type",EDIDocument.Type);
+      EDIXMLStructure.SETRANGE("Is Parent",TRUE);
+      IF EDIXMLStructure.FIND('-') THEN
+        REPEAT
+          EDISegment.RESET;
+          EDISegment.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+          EDISegment.SETRANGE("Navision Document",EDIDocument."Navision Document");
+          EDISegment.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+          EDISegment.SETRANGE(Version,EDIDocument.Version);
+          EDISegment.SETRANGE(Type,EDIDocument.Type);
+          EDISegment.SETRANGE("Segment Type",EDISegment."Segment Type"::Segment);
+          EDISegment.SETRANGE("Node List Path",EDIXMLStructure.Path);
+          IF EDISegment.FIND('-') THEN
+            REPEAT
+              EDISegment."Is Parent" := TRUE;
+              EDISegment.MODIFY;
+            UNTIL EDISegment.NEXT = 0;
+        UNTIL EDIXMLStructure.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE SetNamespace@1240020005();
+    VAR
+      EDIElement@1240020000 : Record 14002355;
+      EDISegment@1240020001 : Record 14002354;
+    BEGIN
+      EDIElement.RESET;
+      EDIElement.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+      EDIElement.SETRANGE("Navision Document",EDIDocument."Navision Document");
+      EDIElement.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+      EDIElement.SETRANGE(Version,EDIDocument.Version);
+      EDIElement.SETRANGE(Type,EDIDocument.Type);
+      EDIElement.SETRANGE("Document Namespace",TRUE);
+      IF EDIElement.FIND('-') THEN
+        REPEAT
+          EDISegment.RESET;
+          EDISegment.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+          EDISegment.SETRANGE("Navision Document",EDIDocument."Navision Document");
+          EDISegment.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+          EDISegment.SETRANGE(Version,EDIDocument.Version);
+          EDISegment.SETRANGE(Type,EDIDocument.Type);
+          EDISegment.SETRANGE("Segment Type",EDISegment."Segment Type"::Segment);
+          EDISegment.SETRANGE(Segment,EDIElement.Segment);
+           IF EDISegment.FIND('-') THEN
+            REPEAT
+              EDISegment.Namespace := EDIElement."XML Fixed Value";
+              EDISegment.MODIFY;
+            UNTIL EDISegment.NEXT = 0;
+        UNTIL EDIElement.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE FindEmptyElement@1240020007();
+    VAR
+      EDIXMLStructure@1240020001 : Record 14099300;
+      EDISegment@1240020000 : Record 14002354;
+      EDIElement@1240020002 : Record 14002355;
+    BEGIN
+      EDISegment.RESET;
+      EDISegment.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+      EDISegment.SETRANGE("Navision Document",EDIDocument."Navision Document");
+      EDISegment.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+      EDISegment.SETRANGE(Version,EDIDocument.Version);
+      EDISegment.SETRANGE(Type,EDIDocument.Type);
+      EDISegment.SETRANGE("Segment Type",EDISegment."Segment Type"::Segment);
+      EDISegment.SETRANGE("Is Parent",FALSE);
+      IF EDISegment.FIND('-') THEN
+        REPEAT
+          EDISegment.CALCFIELDS("Has Attributes","Node Text");
+          IF (EDISegment."Has Attributes" = FALSE) AND
+             (EDISegment."Node Text" = FALSE)
+          THEN BEGIN
+            EDIXMLStructure.RESET;
+            EDIXMLStructure.SETRANGE("Trade Partner",EDIDocument."Trade Partner No.");
+            EDIXMLStructure.SETRANGE("Navision Document",EDIDocument."Navision Document");
+            EDIXMLStructure.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+            EDIXMLStructure.SETRANGE(Version,EDIDocument.Version);
+            EDIXMLStructure.SETRANGE("Document Type",EDIDocument.Type);
+            EDIXMLStructure.SETRANGE(Path,EDISegment."Node List Path");
+            IF EDIXMLStructure.FIND('-') THEN BEGIN
+              FoundEmptyElement := TRUE;
+              WriteEDIElement(EDISegment,EDIXMLStructure,FALSE,TRUE);
+              FoundEmptyElement := FALSE;
+            END;
+          END;
+        UNTIL EDISegment.NEXT = 0;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,1335 @@
+OBJECT Codeunit 14000372 E.D.I. Send Shipment Advice
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/13/20;
+    Time=12:00:00 PM;
+    Version List=SE0.62;
+  }
+  PROPERTIES
+  {
+    TableNo=110;
+    Permissions=TableData 110=rimd;
+    OnRun=BEGIN
+            IF NOT ExportShipmentAdvice(Rec) THEN
+              ERROR(Text001,"No.");
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BillOfLading@1240030064 : Record 14000822;
+      CompanyInformation@1240030001 : Record 79;
+      EDISetup@1240030002 : Record 14002367;
+      EDITemplate@1240030003 : Record 14002350;
+      EDITradePartner@1240030004 : Record 14002360;
+      EDIDocument@1240030005 : Record 14002353;
+      EDISegment@1240030006 : Record 14002354;
+      EDISegment2@1240030007 : Record 14002354;
+      EDIElement@1240030008 : Record 14002355;
+      EDISendDocHdr@1240030009 : Record 14002369;
+      EDITotalFields@1240030010 : Record 14002361;
+      EDICustCrossRef@1240030011 : Record 14002362;
+      Item@1240030012 : Record 27;
+      ItemUnitOfMeasure@1240030013 : Record 5404;
+      SellToCustomer@1240020020 : Record 18;
+      ShiptoAddress@1240030016 : Record 222;
+      SalesShipmentHdr@1240020004 : Record 110;
+      SalesShipmentLine@1240020002 : TEMPORARY Record 111;
+      SalesHeader@1240030021 : Record 36;
+      SalesLine@1240030022 : Record 37;
+      SalesInvoiceHdr@1240020033 : Record 112;
+      SalesInvoiceLine@1240020049 : Record 113;
+      ShipmentMethod@1240030024 : Record 10;
+      ShippingAgent@1240030025 : Record 291;
+      EShipAgentService@1240020026 : Record 14000708;
+      OrigSalesShipmentLine@1240030069 : Record 111;
+      EDIElementArray@1240030026 : ARRAY [100] OF Record 14002355;
+      PostedPackage@1240030066 : Record 14000704;
+      PostedPackageLine@1240020024 : Record 14000705;
+      SalesCommentLine@1240020000 : Record 44;
+      ItemCrossReference@1240020001 : Record 5717;
+      EDITradePtnrItem@1240020011 : Record 14002364;
+      ReservationEntry@1240020019 : Record 337;
+      Location@1240020023 : Record 14;
+      ShippingSetup@1240020025 : Record 14000707;
+      PaymentTerms@1240020048 : Record 3;
+      ShippingAgentServices@1240020030 : Record 5790;
+      EDIReceiveDocHdrInfo@1240020053 : Record 14002371;
+      EDIReceiveDocLineInfo@1240020054 : Record 14002372;
+      ShiptoCountry@1240020047 : Record 9;
+      BilltoCountry@1240020046 : Record 9;
+      SelltoCountry@1240020039 : Record 9;
+      ShipfromCountry@1240020027 : Record 9;
+      EDISend@1240030027 : Codeunit 14002356;
+      EDIFormat@1240030029 : Codeunit 14002351;
+      EDIGetReverseCrossRef@1240020017 : Codeunit 14000373;
+      CreateEDIAlert@1240020018 : Codeunit 14000375;
+      EDILoadDBFields@1240020028 : Codeunit 14002392;
+      EDILoadEDIOutFields@1240020051 : Codeunit 14000381;
+      RecRef@1240020052 : RecordRef;
+      BooleanVariable@1240030030 : Boolean;
+      BypassSegment@1240030031 : Boolean;
+      DateVariable@1240030032 : Date;
+      DecimalVariable@1240030033 : Decimal;
+      DocumentNo@1240030034 : Code[10];
+      i@1240030035 : Integer;
+      ILidx@1240030036 : Integer;
+      ShipmentLineNoArray@1240030037 : ARRAY [500] OF Integer;
+      IntegerVariable@1240030038 : Integer;
+      ShipmentFreightAmt@1240030041 : Decimal;
+      ShipmentNetShipWeight@1240030042 : Decimal;
+      ShipmentGrossShipWeight@1240030043 : Decimal;
+      ShipmentVolume@1240020032 : Decimal;
+      ShipmentPalletWeight@1240030044 : Decimal;
+      ShipmentTotalUnits@1240030045 : Decimal;
+      ShipmentTotalBaseUnits@1240030046 : Decimal;
+      InvFreightAmt@1240020044 : Decimal;
+      InvGrossAmt@1240020043 : Decimal;
+      TotalInvDiscount@1240020042 : Decimal;
+      InvoiceTaxPercent@1240020041 : Decimal;
+      InvoiceTax@1240020040 : Decimal;
+      PmtDiscAmt@1240020036 : Decimal;
+      PmtDiscountedAmt@1240020035 : Decimal;
+      PmtDiscPercent@1240020034 : Decimal;
+      LineNumber@1240030047 : Integer;
+      NewSegment@1240030048 : Boolean;
+      Ok@1240030049 : Boolean;
+      OutFldArray@1240030051 : ARRAY [100] OF Text[250];
+      OutLenArray@1240030052 : ARRAY [100] OF Integer;
+      OutErrorArray@1240030053 : ARRAY [100] OF Boolean;
+      OutputOff@1240030054 : Boolean;
+      ProcessingLines@1240030055 : Boolean;
+      TradePtnrFound@1240030062 : Boolean;
+      TotalSegments@1240030063 : Integer;
+      Text001@1240020022 : TextConst 'ENU=Sales Shipment %1 not exported.';
+      Text002@1240020021 : TextConst 'ENU=Trading partner %1 could not be found for customer %2.';
+      Text003@1003 : TextConst 'ENU=Customer %1 is not set up with an Active EDI transaction %2.';
+      Text004@1004 : TextConst 'ENU=EDI Document %1 for Trading Partner %2 has a mapping error.';
+      Text005@1005 : TextConst 'ENU=Shipment line not found for Shipment # %1.';
+      Text006@1006 : TextConst 'ENU=Unable to find EDI segment definition for Trading Partner %1.';
+      Text007@1007 : TextConst 'ENU=LINE END Command found before LINE BEGIN.  Check Segment Definition.';
+      Text008@1008 : TextConst 'ENU=Unable to find EDI Segment Elements for the following: %1 - %2 - %3 -%4';
+      InternalDocNo@1240030071 : Code[10];
+      LoopFinished@1240030073 : Boolean;
+      RepeatCount@1240030077 : Integer;
+      LoopCnt@1240020003 : Integer;
+      NoOfAttempts@1240020005 : Integer;
+      ShipmentLinesPosted@1240020006 : Boolean;
+      Finished@1240020008 : Boolean;
+      EndOfSalesLines@1240020007 : Boolean;
+      EndOfSalesShipmentLines@1240020010 : Boolean;
+      ReverseCrossReference@1240020016 : Boolean;
+      ReverseCrossRefArray@1240020015 : ARRAY [100] OF Text[40];
+      ReverseCrossRefValue@1240020014 : Text[40];
+      BypassSegment2@1240020013 : Boolean;
+      OutError2@1240020012 : Boolean;
+      InvoiceFound@1240020045 : Boolean;
+      PmtNetDays@1240020038 : Integer;
+      PmtDiscDays@1240020037 : Integer;
+      RecordNo@1240020050 : Integer;
+      TimeVariable@1240020029 : Time;
+      DateTimeVariable@1240020031 : DateTime;
+      XMLDoc@1240020009 : Boolean;
+
+    PROCEDURE ExportShipmentAdvice@18(VAR CurrentSalesShipmentHdr@1240030001 : Record 110) ErrorCode@1240030000 : Boolean;
+    VAR
+      EDIXMLManagement@1240020002 : Codeunit 14099302;
+      NodeOnly@1240020000 : Boolean;
+      CreateNode@1240020001 : Boolean;
+    BEGIN
+      CLEAR(EDILoadEDIOutFields);
+      SalesShipmentHdr.COPY(CurrentSalesShipmentHdr);
+
+      EDISetup.LOCKTABLE;
+      EDISetup.GET;
+      IF SalesShipmentHdr."EDI Internal Doc. No." = '' THEN BEGIN
+        EDISetup."Last Internal Doc. No." := INCSTR(EDISetup."Last Internal Doc. No.");
+        SalesShipmentHdr."EDI Internal Doc. No." := EDISetup."Last Internal Doc. No.";
+        EDISetup.MODIFY;
+      END;
+
+      TradePtnrFound := FALSE;
+
+      EDITradePartner.SETCURRENTKEY("Customer No.");
+      EDITradePartner.SETRANGE("Customer No.",SalesShipmentHdr."Bill-to Customer No.");
+      IF EDITradePartner.FIND('-') THEN BEGIN
+        TradePtnrFound := TRUE;
+        EDICustCrossRef.INIT;
+        EDICustCrossRef.RESET;
+        EDICustCrossRef.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+        EDICustCrossRef.SETRANGE("Navision Ship To Code",SalesShipmentHdr."Ship-to Code");
+        Ok := EDICustCrossRef.FIND('-');
+      END;
+
+      IF NOT TradePtnrFound THEN BEGIN
+        EDICustCrossRef.INIT;
+        EDICustCrossRef.SETCURRENTKEY("Navision Sell To Code");
+        EDICustCrossRef.SETRANGE(
+          "Navision Sell To Code",SalesShipmentHdr."Sell-to Customer No.");
+        EDICustCrossRef.SETRANGE("Navision Ship To Code",SalesShipmentHdr."Ship-to Code");
+        IF EDICustCrossRef.FIND('-') THEN BEGIN
+          EDITradePartner.GET(EDICustCrossRef."Trade Partner No.");
+          TradePtnrFound := TRUE;
+        END;
+      END;
+      IF NOT TradePtnrFound THEN
+        ERROR(
+          Text002,
+          SalesShipmentHdr."Sell-to Customer No.");
+
+      DocumentNo := 'E_SHPADV';
+
+      EDIDocument.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+      EDIDocument.SETFILTER(
+        Status,'%1|%2',EDIDocument.Status::Test,EDIDocument.Status::Production);
+      EDIDocument.SETRANGE("Navision Document",DocumentNo);
+      EDIDocument.SETRANGE(Type,EDIDocument.Type::Export);
+      IF NOT EDIDocument.FIND('-') THEN
+        ERROR(
+          Text003,
+          SalesShipmentHdr."Bill-to Customer No.",DocumentNo);
+      XMLDoc := EDIDocument."XML Document";
+
+      EDIDocument.CALCFIELDS("Element Mapping Error","Conditional Mapping Error");
+      IF EDIDocument."Element Mapping Error" OR EDIDocument."Conditional Mapping Error" THEN
+        ERROR(
+          Text004,
+          EDIDocument."Navision Document",EDIDocument."Trade Partner No.");
+
+      EDITemplate.GET(EDIDocument."EDI Template Code");
+
+      Finished := FALSE;
+      NoOfAttempts := 0;
+      ShipmentLinesPosted := FALSE;
+
+      SalesHeader.RESET;
+      SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::Order);
+      SalesHeader.SETRANGE("No.",SalesShipmentHdr."Order No.");
+      IF SalesHeader.FIND('-') THEN BEGIN
+        SalesLine.RESET;
+        SalesLine.SETRANGE("Document Type",SalesHeader."Document Type"::Order);
+        SalesLine.SETRANGE("Document No.",SalesShipmentHdr."Order No.");
+        SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+        EndOfSalesLines := SalesLine.FIND('+');
+
+        OrigSalesShipmentLine.RESET;
+        OrigSalesShipmentLine.SETRANGE("Document No.",SalesShipmentHdr."Order No.");
+        OrigSalesShipmentLine.SETRANGE("Document No.",SalesShipmentHdr."No.");
+        OrigSalesShipmentLine.SETRANGE(Type,OrigSalesShipmentLine.Type::Item);
+        EndOfSalesShipmentLines := OrigSalesShipmentLine.FIND('+');
+        IF SalesLine."Line No." <> OrigSalesShipmentLine."Line No." THEN
+          REPEAT
+            SLEEP := 1000;
+            NoOfAttempts := NoOfAttempts + 1;
+            OrigSalesShipmentLine.RESET;
+            OrigSalesShipmentLine.SETRANGE("Document No.",SalesShipmentHdr."Order No.");
+            OrigSalesShipmentLine.SETRANGE(Type,OrigSalesShipmentLine.Type::Item);
+            EndOfSalesShipmentLines := OrigSalesShipmentLine.FIND('+');
+            IF SalesLine."Line No." <> OrigSalesShipmentLine."Line No." THEN BEGIN
+              IF NoOfAttempts > 5 THEN
+                Finished := TRUE
+            END ELSE
+              ShipmentLinesPosted := TRUE;
+          UNTIL ShipmentLinesPosted OR Finished
+        ELSE
+          ShipmentLinesPosted := TRUE;
+      END ELSE
+        ShipmentLinesPosted := TRUE;
+
+      EDISendDocHdr."Internal Doc No." := SalesShipmentHdr."EDI Internal Doc. No.";
+      EDISendDocHdr."Navision Document" := DocumentNo;
+      EDISendDocHdr."Document No." := SalesShipmentHdr."No.";
+      EDISend.CreateSendHdr(EDITradePartner,EDIDocument,EDISendDocHdr);
+
+      InvFreightAmt := 0;
+      InvGrossAmt := 0;
+      TotalInvDiscount := 0;
+      InvoiceTaxPercent := 0;
+
+      ReadHdrAssocTables;
+
+      SalesShipmentLine.RESET;
+      SalesShipmentLine.DELETEALL;
+
+      SalesShipmentLine.RESET;
+      SalesShipmentLine.SETRANGE("Document No.",SalesShipmentHdr."No.");
+
+      IF EDIDocument."Line Data Not Summarized" THEN BEGIN
+        OrigSalesShipmentLine.RESET;
+        OrigSalesShipmentLine.SETRANGE("Document No.",SalesShipmentHdr."No.");
+        OrigSalesShipmentLine.SETFILTER("No.",'<>%1','');
+        IF OrigSalesShipmentLine.FIND('-') THEN
+          REPEAT
+            SalesShipmentLine.COPY(OrigSalesShipmentLine);
+            SalesShipmentLine.INSERT;
+          UNTIL OrigSalesShipmentLine.NEXT = 0;
+      END ELSE BEGIN
+        OrigSalesShipmentLine.RESET;
+        OrigSalesShipmentLine.SETRANGE("Document No.",SalesShipmentHdr."No.");
+        OrigSalesShipmentLine.SETFILTER("No.",'<>%1','');
+        IF OrigSalesShipmentLine.FIND('-') THEN
+          REPEAT
+            SalesShipmentLine.SETRANGE("No.",OrigSalesShipmentLine."No.");
+            SalesShipmentLine.SETRANGE("Variant Code",OrigSalesShipmentLine."Variant Code");
+            IF SalesShipmentLine.FIND('-') THEN BEGIN
+              SalesShipmentLine.Quantity :=
+                SalesShipmentLine.Quantity + OrigSalesShipmentLine.Quantity;
+              SalesShipmentLine."Quantity (Base)" :=
+                SalesShipmentLine."Quantity (Base)" + OrigSalesShipmentLine."Quantity (Base)";
+              SalesShipmentLine."Gross Weight" :=
+                SalesShipmentLine."Gross Weight" + OrigSalesShipmentLine."Gross Weight";
+              SalesShipmentLine."Net Weight" :=
+                SalesShipmentLine."Net Weight" + OrigSalesShipmentLine."Net Weight";
+              SalesShipmentLine.MODIFY;
+            END ELSE BEGIN
+              SalesShipmentLine.COPY(OrigSalesShipmentLine);
+              SalesShipmentLine.INSERT;
+            END;
+          UNTIL OrigSalesShipmentLine.NEXT = 0;
+      END;
+
+      CLEAR(ShipmentLineNoArray);
+      LineNumber := 0;
+      ShipmentFreightAmt := 0;
+      ShipmentNetShipWeight := 0;
+      ShipmentGrossShipWeight := 0;
+      ShipmentVolume := 0;
+      ShipmentPalletWeight := 0;
+      ShipmentTotalUnits := 0;
+      ShipmentTotalBaseUnits := 0;
+      TotalSegments := 0;
+
+      SalesShipmentLine.RESET;
+      SalesShipmentLine.SETRANGE("Document No.",SalesShipmentHdr."No.");
+      SalesShipmentLine.SETFILTER("No.",'<>%1','');
+      IF NOT EDIDocument."Export Zero Qty. Lines" THEN
+        SalesShipmentLine.SETFILTER(Quantity,'>0');
+      ILidx := 0;
+      IF SalesShipmentLine.FIND('-') THEN
+        REPEAT
+          ILidx := ILidx + 1;
+          ShipmentLineNoArray[ILidx] := SalesShipmentLine."Line No.";
+        UNTIL SalesShipmentLine.NEXT = 0;
+      IF NOT SalesShipmentLine.FIND('-') THEN
+        ERROR(Text005,SalesShipmentHdr."No.");
+
+      OutputOff := FALSE;
+      IF NOT EDIDocument."Export G/L Account Lines" AND
+        (SalesShipmentLine.Type = EDITotalFields.Type::"Account (G/L)")
+      THEN
+        OutputOff := TRUE;
+      IF NOT EDIDocument."Export Resource Lines" AND
+        (SalesShipmentLine.Type = EDITotalFields.Type::Resource)
+      THEN
+        OutputOff := TRUE;
+      IF NOT EDIDocument."Export Item Charge Lines" AND
+        (SalesShipmentLine.Type = SalesShipmentLine.Type::"Charge (Item)")
+      THEN
+        OutputOff := TRUE;
+      ReadLineAssocTables;
+
+      // Create Line Segments
+      EDISegment.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+      EDISegment.SETRANGE("Navision Document",EDIDocument."Navision Document");
+      EDISegment.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+      EDISegment.SETRANGE(Version,EDIDocument.Version);
+      EDISegment.SETRANGE(Type,EDIDocument.Type);
+      IF NOT EDISegment.FIND('-') THEN
+        ERROR(
+          Text006,
+          EDIDocument."Trade Partner No.");
+      REPEAT
+        InternalDocNo := SalesShipmentHdr."EDI Internal Doc. No.";
+        IF (SalesShipmentLine."EDI Line Type" = SalesShipmentLine."EDI Line Type"::Change) AND
+           (SalesShipmentLine."EDI Line Status" = SalesShipmentLine."EDI Line Status"::New)
+        THEN
+          GetAssocInternalDocNo(SalesShipmentHdr);
+        CASE EDISegment."Segment Type" OF
+          EDISegment."Segment Type"::Command:
+            BEGIN
+              IF (EDISegment.Segment = 'LINE BEGIN') OR
+                 (EDISegment."Node Name" = 'LINE BEGIN')
+              THEN BEGIN
+                EDISegment2.COPY(EDISegment);
+                ProcessingLines := TRUE;
+              END;
+              IF (EDISegment.Segment = 'LINE END') OR
+                 (EDISegment."Node Name" = 'LINE END')
+              THEN BEGIN
+                OutputOff := FALSE;
+                IF NOT ProcessingLines THEN
+                  ERROR(Text007);
+                  IF SalesShipmentLine.NEXT <> 0 THEN BEGIN
+                    IF NOT EDIDocument."Export G/L Account Lines" AND
+                      (SalesShipmentLine.Type = EDITotalFields.Type::"Account (G/L)") THEN
+                        OutputOff := TRUE;
+                    IF NOT EDIDocument."Export Resource Lines" AND
+                      (SalesShipmentLine.Type = EDITotalFields.Type::Resource) THEN
+                        OutputOff := TRUE;
+                    IF NOT EDIDocument."Export Item Charge Lines" AND
+                      (SalesShipmentLine.Type = SalesShipmentLine.Type::"Charge (Item)") THEN
+                        OutputOff := TRUE;
+                    ReadLineAssocTables;
+                    EDISegment.GET(
+                      EDISegment2."Trade Partner No.",EDISegment2."Navision Document",
+                      EDISegment2."EDI Document No.",EDISegment2.Version,
+                      EDISegment2.Type,EDISegment2."Processing Sequence",EDISegment2.Segment);
+                  END ELSE
+                    ProcessingLines := FALSE;
+              END;
+            END;
+          EDISegment."Segment Type"::Segment:
+            BEGIN
+              LoopFinished := TRUE;
+              BypassSegment := FALSE;
+              NodeOnly := FALSE;
+              CreateNode := TRUE;
+              EDIElement.SETRANGE("Trade Partner No.",EDISegment."Trade Partner No.");
+              EDIElement.SETRANGE("Navision Document",EDISegment."Navision Document");
+              EDIElement.SETRANGE("EDI Document No.",EDISegment."EDI Document No.");
+              EDIElement.SETRANGE(Version,EDISegment.Version);
+              EDIElement.SETRANGE(Type,EDISegment.Type);
+              EDIElement.SETRANGE(Segment,EDISegment.Segment);
+              IF NOT EDIElement.FIND('-') THEN BEGIN
+                IF XMLDoc THEN BEGIN
+                  EDISegment.CALCFIELDS("Has Attributes","Node Text");
+                  IF EDISegment."Node Text" OR EDISegment."Has Attributes" THEN
+                    ERROR(
+                      Text008,
+                        EDISegment."Trade Partner No.",EDISegment."Navision Document",
+                        EDISegment.Version,EDISegment."Node Name")
+                  ELSE
+                    NodeOnly := TRUE;
+                END ELSE
+                  ERROR(
+                    Text008,
+                    EDISegment."Trade Partner No.",EDISegment."Navision Document",
+                    EDISegment.Version);
+              END ELSE
+                IF XMLDoc AND EDIElement."Node Text" THEN
+                  CreateNode := FALSE;
+              IF (XMLDoc = FALSE) OR (XMLDoc AND NodeOnly = FALSE) THEN BEGIN
+                TotalSegments := TotalSegments + 1;
+                CLEAR(OutFldArray);
+                CLEAR(OutLenArray);
+                CLEAR(OutErrorArray);
+                CLEAR(EDIElementArray);
+                i := 1;
+                LoopCnt := 1;
+                REPEAT
+                  ReverseCrossRefArray[i] := '';
+                  ReverseCrossReference := EDIElement."Reverse Cross Reference";
+                  IF ((EDIElement."Fixed Value" <> '') AND (XMLDoc = FALSE)) OR
+                     ((EDIElement."XML Fixed Value" <> '') AND (XMLDoc))
+                  THEN BEGIN
+                    IF XMLDoc THEN
+                      OutFldArray[i] := EDIElement."XML Fixed Value"
+                    ELSE
+                      OutFldArray[i] := EDIElement."Fixed Value";
+                  END ELSE
+                    CASE EDIElement.Origin OF
+                      EDIElement.Origin::Navision:
+                        BEGIN
+                          LoadDBFields;
+                          IF ReverseCrossReference THEN BEGIN
+                            CLEAR(EDIGetReverseCrossRef);
+                            ReverseCrossRefArray[i] :=
+                              EDIGetReverseCrossRef.GetReverseCrossRef(
+                                EDIElement,EDISendDocHdr,OutFldArray[i]);
+                              EDIGetReverseCrossRef.FormatOutput(
+                                EDISendDocHdr,EDIElement,OutError2,ReverseCrossRefArray,BypassSegment2,i);
+                          END;
+                        END;
+                      EDIElement.Origin::"EDI In":
+                        EDIFormat.LoadEDIInFields(
+                          EDIElement,InternalDocNo,SalesShipmentLine."EDI Segment Group",
+                          ProcessingLines,i,OutFldArray,BooleanVariable,DateVariable,DecimalVariable,
+                          IntegerVariable,TimeVariable,DateTimeVariable);
+                      EDIElement.Origin::"EDI Out":
+                        LoadEDIOutFields;
+                    END;
+                  OutLenArray[i] := EDIElement.Length;
+                  EDIFormat.FormatOutput(
+                    EDITemplate,EDIElement,OutFldArray,OutErrorArray,i,BypassSegment,
+                    BooleanVariable,DateVariable,DecimalVariable,IntegerVariable,TimeVariable,
+                    DateTimeVariable);
+                  IF ReverseCrossReference THEN
+                    OutErrorArray[i] := OutError2;
+                  EDIElementArray[i].COPY(EDIElement);
+                  i := i + 1;
+                UNTIL EDIElement.NEXT = 0;
+              END;
+              NewSegment := TRUE;
+              i := 1;
+              IF ReverseCrossReference THEN
+                BypassSegment := BypassSegment2;
+              CASE EDIElement.Origin OF
+                EDIElement.Origin::Navision:
+                  BEGIN
+                    IF (LoopCnt = 1) AND (EDISegment."Repeat Segment") THEN BEGIN
+                      RepeatSegment;
+                      LoopCnt := LoopCnt + 1;
+                    END;
+                  END;
+              END;
+              IF (NOT BypassSegment) AND (NOT OutputOff) THEN BEGIN
+                IF XMLDoc AND CreateNode THEN BEGIN
+                  EDISend.CreateSendLine(
+                    EDISendDocHdr,EDIElementArray[i],OutFldArray[i],OutLenArray[i],OutErrorArray[i],
+                    NewSegment,ReverseCrossRefValue,EDIDocument,TRUE,EDISegment);
+                  NewSegment := FALSE;
+                END;
+                IF (XMLDoc = FALSE) OR (XMLDoc AND NodeOnly = FALSE) THEN
+                  REPEAT
+                    ReverseCrossRefValue := ReverseCrossRefArray[i];
+                    EDISend.CreateSendLine(
+                      EDISendDocHdr,EDIElementArray[i],OutFldArray[i],OutLenArray[i],OutErrorArray[i],
+                      NewSegment,ReverseCrossRefValue,EDIDocument,FALSE,EDISegment);
+                    NewSegment := FALSE;
+                    i := i + 1;
+                  UNTIL OutLenArray[i] = 0
+              END ELSE
+                TotalSegments := TotalSegments - 1;
+            END;
+        END;
+        IF (EDISegment."Repeat Segment") AND (NOT LoopFinished) THEN BEGIN
+          GetNextRecord;
+          EDISegment.NEXT(-1);
+        END;
+      UNTIL EDISegment.NEXT = 0;
+
+      IF EDISetup."Send Document Error" THEN BEGIN
+        EDISendDocHdr.CALCFIELDS("Data Error");
+        IF EDISendDocHdr."Data Error" THEN BEGIN
+          CLEAR(CreateEDIAlert);
+          CreateEDIAlert.CreateAlertSendDocError(EDISendDocHdr."No.",1,FALSE);
+        END;
+      END;
+
+      SalesShipmentHdr."EDI Shipment Advice Generated" := TRUE;
+      SalesShipmentHdr."EDI Shipment Advice Gen. Date" := TODAY;
+      SalesShipmentHdr.MODIFY;
+
+      IF XMLDoc THEN
+        EDIXMLManagement.ResponseIDSubstitution(EDISendDocHdr);
+
+      COMMIT;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE LoadEDIOutFields@16();
+    BEGIN
+      BooleanVariable := FALSE;
+      DateVariable := 0D;
+      IntegerVariable := 0;
+      DecimalVariable := 0;
+      CLEAR(TimeVariable);
+      CLEAR(DateTimeVariable);
+
+      IF EDIElement.Origin = EDIElement.Origin::"EDI Out" THEN BEGIN
+        CASE EDIElement."Field Name" OF
+          ELSE BEGIN
+            IF (OutputOff) AND
+               (EDIElement."Field Name" IN ['HL1 Count','HL2 Count','HL3 Count','HL4 Count','HL5 Count'])
+            THEN
+              EXIT;
+            LoadEDIOutVariable;
+            LoadEDIOutRecordRef;
+            EDILoadEDIOutFields.ShipmentAdviceSendEDIOut(
+              EDIElement,OutFldArray,DecimalVariable,IntegerVariable,DateVariable,
+              BooleanVariable,TimeVariable,DateTimeVariable,i);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE UpdateLineTotals@28();
+    BEGIN
+      IF NOT OutputOff THEN BEGIN
+        LineNumber := LineNumber + 1;
+        ShipmentTotalUnits := ShipmentTotalUnits + SalesShipmentLine.Quantity;
+        ShipmentTotalBaseUnits := ShipmentTotalBaseUnits + SalesShipmentLine."Quantity (Base)";
+      END;
+
+      IF EDITotalFields.GET(
+        'Total Pallet Weight',SalesShipmentLine.Type,SalesShipmentLine."No.")
+      THEN
+        ShipmentPalletWeight :=
+          ShipmentPalletWeight + (SalesShipmentLine."Net Weight" * SalesShipmentLine.Quantity);
+
+      IF EDITotalFields.GET(
+        'Total Freight Amt.',SalesShipmentLine.Type,SalesShipmentLine."No.")
+      THEN
+        ShipmentFreightAmt := ShipmentFreightAmt + SalesShipmentLine."Unit Price";
+
+      ShipmentVolume :=
+        ShipmentVolume + (SalesShipmentLine.Quantity * SalesShipmentLine."Unit Volume");
+      ShipmentNetShipWeight :=
+        ShipmentNetShipWeight + (SalesShipmentLine."Net Weight" * SalesShipmentLine.Quantity);
+      ShipmentGrossShipWeight :=
+        ShipmentGrossShipWeight + (SalesShipmentLine."Gross Weight" * SalesShipmentLine.Quantity);
+    END;
+
+    PROCEDURE LoadDBFields@23();
+    BEGIN
+      CASE EDIElement."NAV Table No." OF
+        10:
+          BEGIN
+            RecRef.OPEN(10);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(ShipmentMethod);
+          END;
+        14:
+          BEGIN
+            RecRef.OPEN(14);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(Location);
+          END;
+        27:
+          BEGIN
+            RecRef.OPEN(27);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(Item);
+          END;
+        36:
+          BEGIN
+            RecRef.OPEN(36);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(SalesHeader);
+          END;
+        37:
+          BEGIN
+            RecRef.OPEN(37);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(SalesLine);
+          END;
+        44:
+          BEGIN
+            RecRef.OPEN(44);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(SalesCommentLine);
+          END;
+        79:
+          BEGIN
+            RecRef.OPEN(79);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(CompanyInformation);
+          END;
+        110:
+          BEGIN
+            RecRef.OPEN(110);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(SalesShipmentHdr);
+          END;
+        111:
+          BEGIN
+            RecRef.OPEN(111);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(SalesShipmentLine);
+          END;
+        222:
+          BEGIN
+            RecRef.OPEN(222);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(ShiptoAddress);
+          END;
+        291:
+          BEGIN
+            RecRef.OPEN(291);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(ShippingAgent);
+          END;
+        337:
+          BEGIN
+            RecRef.OPEN(337);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(ReservationEntry);
+          END;
+        5404:
+          BEGIN
+            RecRef.OPEN(5404);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(ItemUnitOfMeasure);
+          END;
+        5717:
+          BEGIN
+            RecRef.OPEN(5717);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(ItemCrossReference);
+          END;
+        10018:
+          BEGIN
+            RecRef.OPEN(18);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(SellToCustomer);
+          END;
+        19009:
+          BEGIN
+            RecRef.OPEN(9);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(SelltoCountry);
+          END;
+        19010:
+          BEGIN
+            RecRef.OPEN(9);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(BilltoCountry);
+          END;
+        19011:
+          BEGIN
+            RecRef.OPEN(9);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(ShiptoCountry);
+          END;
+        19012:
+          BEGIN
+            RecRef.OPEN(9);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(ShipfromCountry);
+          END;
+        14000704:
+          BEGIN
+            RecRef.OPEN(14000704);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(PostedPackage);
+          END;
+        14000705:
+          BEGIN
+            RecRef.OPEN(14000705);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(PostedPackageLine);
+          END;
+        14000708:
+          BEGIN
+            RecRef.OPEN(14000708);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EShipAgentService);
+          END;
+        14000822:
+          BEGIN
+            RecRef.OPEN(14000822);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(BillOfLading);
+          END;
+        14002350:
+          BEGIN
+            RecRef.OPEN(14002350);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDITemplate);
+          END;
+        14002353:
+          BEGIN
+            RecRef.OPEN(14002353);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDIDocument);
+          END;
+        14002354:
+          BEGIN
+            RecRef.OPEN(14002354);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDISegment);
+          END;
+        14002360:
+          BEGIN
+            RecRef.OPEN(14002360);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDITradePartner);
+          END;
+        14002362:
+          BEGIN
+            RecRef.OPEN(14002362);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDICustCrossRef);
+          END;
+        14002364:
+          BEGIN
+            RecRef.OPEN(14002364);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDITradePtnrItem);
+          END;
+          14002369:
+          BEGIN
+            RecRef.OPEN(14002369);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDISendDocHdr);
+          END;
+         ELSE
+           EXIT;
+      END;
+      EDILoadDBFields.LoadDBFields(
+        EDIElement,OutFldArray,DecimalVariable,IntegerVariable,DateVariable,
+        BooleanVariable,TimeVariable,DateTimeVariable,i,RecRef);
+      RecRef.CLOSE;
+    END;
+
+    PROCEDURE ReadHdrAssocTables@26();
+    BEGIN
+      EDITemplate.GET(EDIDocument."EDI Template Code");
+
+      CompanyInformation.GET;
+
+      ShippingAgent.INIT;
+      IF SalesShipmentHdr."Shipping Agent Code" <> '' THEN BEGIN
+        IF ShippingAgent.GET(SalesShipmentHdr."Shipping Agent Code") THEN BEGIN
+          ShippingAgentServices.RESET;
+          IF NOT ShippingAgentServices.GET(ShippingAgent.Code) THEN
+            ShippingAgentServices.INIT;
+          IF EShipAgentService.READPERMISSION THEN BEGIN
+            IF SalesShipmentHdr."E-Ship Agent Service" <> '' THEN
+              IF NOT EShipAgentService.GET(
+                SalesShipmentHdr."Shipping Agent Code",SalesShipmentHdr."Shipping Agent Service Code",
+                SalesShipmentHdr."World Wide Service")
+              THEN
+                EShipAgentService.INIT;
+          END;
+        END;
+      END;
+
+      IF SalesShipmentHdr."Shipment Invoice No." <> '' THEN
+        IF SalesInvoiceHdr.GET(SalesShipmentHdr."Shipment Invoice No.") THEN BEGIN
+          InvoiceFound := TRUE;
+          SalesInvoiceHdr.CALCFIELDS("Amount Including VAT",Amount);
+          InvoiceTax := SalesInvoiceHdr."Amount Including VAT" - SalesInvoiceHdr.Amount;
+          IF SalesInvoiceHdr.Amount > 0 THEN
+            InvoiceTaxPercent := (InvoiceTax / SalesInvoiceHdr.Amount) * 100;
+          PaymentTerms.INIT;
+          IF SalesInvoiceHdr."Payment Terms Code" <> '' THEN BEGIN
+            PaymentTerms.GET(SalesInvoiceHdr."Payment Terms Code");
+            PmtDiscPercent := PaymentTerms."Discount %";
+            PmtDiscAmt := ROUND(
+              (SalesInvoiceHdr."Amount Including VAT" * PaymentTerms."Discount %") / 100);
+            PmtDiscountedAmt := SalesInvoiceHdr."Amount Including VAT" - PmtDiscAmt;
+            PmtDiscDays := (CALCDATE(PaymentTerms."Discount Date Calculation",TODAY) - TODAY);
+            PmtNetDays := (CALCDATE(PaymentTerms."Due Date Calculation",TODAY) - TODAY);
+          END;
+        END ELSE
+          SalesInvoiceHdr.INIT
+      ELSE
+        SalesInvoiceHdr.INIT;
+
+      ShiptoAddress.INIT;
+      IF SalesShipmentHdr."Ship-to Code" <> '' THEN
+        ShiptoAddress.GET(
+          SalesShipmentHdr."Sell-to Customer No.",SalesShipmentHdr."Ship-to Code");
+
+      ShipmentMethod.INIT;
+      IF SalesShipmentHdr."Shipment Method Code" <> '' THEN
+        ShipmentMethod.GET(SalesShipmentHdr."Shipment Method Code");
+
+      SellToCustomer.GET(SalesShipmentHdr."Sell-to Customer No.");
+
+      IF BillOfLading.READPERMISSION THEN
+        IF SalesShipmentHdr."Bill of Lading No." <> '' THEN BEGIN
+          BillOfLading.RESET;
+          BillOfLading.SETRANGE("No.",SalesShipmentHdr."Bill of Lading No.");
+          IF NOT BillOfLading.FIND('-') THEN
+            BillOfLading.INIT
+          ELSE BEGIN
+            ShippingSetup.GET;
+            IF ShippingSetup."Use Shipping Agent from BOL" THEN BEGIN
+              IF ShippingAgent.GET(BillOfLading."Shipping Agent Code") THEN
+               IF NOT EShipAgentService.GET(
+                 BillOfLading."Shipping Agent Code",BillOfLading."Shipping Agent Service",
+                 BillOfLading."World Wide Service")
+               THEN
+                 EShipAgentService.INIT
+              ELSE
+                ShippingAgent.INIT;
+            END;
+          END;
+        END;
+
+      IF SalesShipmentHdr."Location Code" <> '' THEN
+        Location.GET(SalesShipmentHdr."Location Code");
+
+      IF PostedPackage.READPERMISSION THEN BEGIN
+        PostedPackage.RESET;
+        PostedPackage.SETCURRENTKEY(
+          "Source Type","Source Subtype","Posted Source ID","Bill of Lading No.");
+        PostedPackage.SETRANGE("Source Type",36);
+        PostedPackage.SETRANGE("Source Subtype",1);
+        PostedPackage.SETRANGE("Source ID",SalesShipmentHdr."Order No.");
+        PostedPackage.SETRANGE("Posted Source ID",SalesShipmentHdr."No.");
+        IF NOT PostedPackage.FIND('-') THEN
+          PostedPackage.INIT;
+      END;
+
+      SalesCommentLine.RESET;
+      SalesCommentLine.SETRANGE("Document Type",SalesCommentLine."Document Type"::Shipment);
+      SalesCommentLine.SETRANGE("No.",SalesShipmentHdr."No.");
+      IF NOT SalesCommentLine.FIND('-') THEN
+        SalesCommentLine.INIT;
+
+      EDIReceiveDocHdrInfo.RESET;
+      EDIReceiveDocHdrInfo.SETCURRENTKEY("Document No.");
+      EDIReceiveDocHdrInfo.SETRANGE("Document No.",SalesShipmentHdr."Order No.");
+      EDIReceiveDocHdrInfo.SETRANGE("Internal Doc. No.",SalesShipmentHdr."EDI Internal Doc. No.");
+      IF NOT EDIReceiveDocHdrInfo.FIND('-') THEN
+        CLEAR(EDIReceiveDocHdrInfo);
+
+      IF SalesShipmentHdr."Sell-to Country/Region Code" <> '' THEN
+        IF NOT SelltoCountry.GET(SalesShipmentHdr."Sell-to Country/Region Code") THEN
+          CLEAR(SelltoCountry);
+
+      IF SalesShipmentHdr."Bill-to Country/Region Code" <> '' THEN
+        IF NOT BilltoCountry.GET(SalesShipmentHdr."Bill-to Country/Region Code") THEN
+          CLEAR(BilltoCountry);
+
+      IF SalesShipmentHdr."Ship-to Country/Region Code" <> '' THEN
+        IF NOT ShiptoCountry.GET(SalesShipmentHdr."Ship-to Country/Region Code") THEN
+          CLEAR(ShiptoCountry);
+
+      IF Location."Country/Region Code" <> '' THEN
+        IF NOT ShipfromCountry.GET(Location."Country/Region Code") THEN
+          CLEAR(ShipfromCountry);
+      //
+      // Add any other tables associated with the Sales Shipment Header here.
+      //
+    END;
+
+    PROCEDURE ReadLineAssocTables@27();
+    BEGIN
+      UpdateLineTotals;
+
+      IF InvoiceFound THEN
+        SalesInvoiceLine.GET(SalesInvoiceHdr."No.",SalesShipmentLine."Line No.")
+      ELSE
+        SalesInvoiceLine.INIT;
+
+      IF SalesShipmentLine.Type = SalesShipmentLine.Type::Item THEN BEGIN
+        IF NOT Item.GET(SalesShipmentLine."No.") THEN
+          Item.INIT;
+        IF NOT ItemUnitOfMeasure.GET(
+          SalesShipmentLine."No.",SalesShipmentLine."Unit of Measure Code")
+        THEN
+          ItemUnitOfMeasure.INIT;
+      END;
+
+      EDITradePtnrItem.RESET;
+      EDITradePtnrItem.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+      EDITradePtnrItem.SETRANGE("Navision Item No.",SalesShipmentLine."No.");
+      IF NOT EDITradePtnrItem.FIND('-') THEN
+        EDITradePtnrItem.INIT;
+
+      ItemCrossReference.RESET;
+      ItemCrossReference.SETCURRENTKEY("Cross-Reference Type","Cross-Reference Type No.");
+      ItemCrossReference.SETFILTER(
+        "Cross-Reference Type",'<>%1',ItemCrossReference."Cross-Reference Type"::Vendor);
+      ItemCrossReference.SETRANGE("Cross-Reference Type No.",SalesShipmentHdr."Sell-to Customer No.");
+      ItemCrossReference.SETRANGE("Item No.",SalesShipmentLine."No.");
+      ItemCrossReference.SETRANGE("Variant Code",SalesShipmentLine."Variant Code");
+      IF NOT ItemCrossReference.FIND('-') THEN BEGIN
+        ItemCrossReference.SETRANGE("Cross-Reference Type No.",'');
+        IF NOT ItemCrossReference.FIND('-') THEN
+          ItemCrossReference.INIT;
+      END;
+
+      IF ReservationEntry.READPERMISSION THEN BEGIN
+        ReservationEntry.RESET;
+        ReservationEntry.SETCURRENTKEY(
+          "Source ID","Source Ref. No.","Source Type","Source Subtype");
+        ReservationEntry.SETRANGE("Source ID",SalesShipmentLine."Order No.");
+        ReservationEntry.SETRANGE("Source Type",37);
+        ReservationEntry.SETRANGE("Source Subtype",1);
+        ReservationEntry.SETRANGE("Source Ref. No.",SalesShipmentLine."Line No.");
+        IF NOT ReservationEntry.FIND('-') THEN
+          ReservationEntry.INIT;
+      END;
+
+      EDIReceiveDocLineInfo.RESET;
+      EDIReceiveDocLineInfo.SETCURRENTKEY("Document No.","Line No.");
+      EDIReceiveDocLineInfo.SETRANGE("Document No.",SalesShipmentHdr."Order No.");
+      EDIReceiveDocLineInfo.SETRANGE("Internal Doc. No.",SalesShipmentHdr."EDI Internal Doc. No.");
+      EDIReceiveDocLineInfo.SETRANGE("Line No.",SalesShipmentLine."Line No.");
+      IF NOT EDIReceiveDocLineInfo.FIND('-') THEN
+        CLEAR(EDIReceiveDocLineInfo);
+
+      //
+      // Add any other tables associated with the Sales Shipment Line here.
+      //
+    END;
+
+    PROCEDURE GetAssocInternalDocNo@1240030000(SalesShipHdr@1240030001 : Record 110);
+    VAR
+      EDIChangedDocument@1240030000 : Record 14002373;
+      CurrEDIRecDocField@1240030002 : Record 14002359;
+      Found@1240030003 : Boolean;
+      RecordCount@1240030004 : Integer;
+    BEGIN
+      Found := FALSE;
+
+      EDIChangedDocument.RESET;
+      EDIChangedDocument.SETRANGE("Assoc. Internal Doc. No.",SalesShipHdr."EDI Internal Doc. No.");
+      IF EDIChangedDocument.FIND('-') THEN BEGIN
+        RecordCount := EDIChangedDocument.COUNT;
+        IF RecordCount = 1 THEN
+          InternalDocNo := EDIChangedDocument."Internal Doc. No."
+        ELSE
+          REPEAT
+            CurrEDIRecDocField.RESET;
+            CurrEDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+            CurrEDIRecDocField.SETRANGE("Internal Doc. No.",EDIChangedDocument."Internal Doc. No.");
+            CurrEDIRecDocField.SETRANGE("Segment Group",SalesShipmentLine."EDI Segment Group");
+            CurrEDIRecDocField.SETRANGE("New Item",TRUE);
+            IF CurrEDIRecDocField.FIND('-') THEN
+              CASE CurrEDIRecDocField."Nav Field No." OF
+               SalesShipmentLine.FIELDNO("EDI Item Cross Ref."):
+                  BEGIN
+                    IF SalesShipmentLine."EDI Item Cross Ref." =
+                      CurrEDIRecDocField."Field Text Value" THEN BEGIN
+                        InternalDocNo := CurrEDIRecDocField."Internal Doc. No.";
+                        Found := TRUE;
+                      END;
+                  END;
+                SalesShipmentLine.FIELDNO("Cross-Reference No."):
+                  BEGIN
+                    IF SalesShipmentLine."Cross-Reference No." =
+                      CurrEDIRecDocField."Field Text Value" THEN BEGIN
+                        InternalDocNo := CurrEDIRecDocField."Internal Doc. No.";
+                        Found := TRUE;
+                     END;
+                  END;
+                SalesShipmentLine.FIELDNO("No."):
+                  BEGIN
+                    IF SalesShipmentLine."No." =
+                      CurrEDIRecDocField."Field Text Value" THEN BEGIN
+                        InternalDocNo := CurrEDIRecDocField."Internal Doc. No.";
+                        Found := TRUE;
+                      END;
+                  END;
+              END;
+          UNTIL (EDIChangedDocument.NEXT = 0) OR (Found = TRUE);
+      END;
+    END;
+
+    PROCEDURE RepeatSegment@1240030005() : Boolean;
+    VAR
+      SalesCommentLine2@1240020000 : Record 44;
+      ReservationEntry2@1240020001 : Record 337;
+      PostedPackage2@1240020002 : Record 14000704;
+      LastRecord@1240030002 : Boolean;
+    BEGIN
+      LoopFinished := TRUE;
+      LastRecord := FALSE;
+      RecordNo := 0;
+
+      CASE EDIElement.Origin OF
+        EDIElement.Origin::"EDI Out":
+          BEGIN
+          END;
+        EDIElement.Origin::Navision:
+          CASE EDIElement."NAV Table No." OF
+            DATABASE::"Sales Comment Line":
+              BEGIN
+                RecordNo := 1;
+                SalesCommentLine2.COPY(SalesCommentLine);
+                IF EDISegment.Maximum <> 0 THEN BEGIN
+                  IF NOT BypassSegment THEN
+                    RepeatCount := RepeatCount + 1;
+                  IF (SalesCommentLine2.NEXT = 0) OR (RepeatCount = EDISegment.Maximum) THEN
+                    LastRecord := TRUE
+                  ELSE
+                    LoopFinished := FALSE;
+                END ELSE BEGIN
+                  IF SalesCommentLine2.NEXT = 0 THEN
+                    LastRecord := TRUE
+                  ELSE
+                    LoopFinished := FALSE;
+                END;
+              END;
+            DATABASE::"Posted Package":
+              BEGIN
+                RecordNo := 2;
+                PostedPackage2.COPY(PostedPackage);
+                IF EDISegment.Maximum <> 0 THEN BEGIN
+                  IF NOT BypassSegment THEN
+                    RepeatCount := RepeatCount + 1;
+                  IF (PostedPackage2.NEXT = 0) OR (RepeatCount = EDISegment.Maximum) THEN
+                    LastRecord := TRUE
+                  ELSE
+                    LoopFinished := FALSE;
+                END ELSE BEGIN
+                  IF PostedPackage2.NEXT = 0 THEN
+                    LastRecord := TRUE
+                  ELSE
+                    LoopFinished := FALSE;
+                END;
+              END;
+            DATABASE::"Reservation Entry":
+              BEGIN
+                RecordNo := 3;
+                ReservationEntry2.COPY(ReservationEntry);
+                IF EDISegment.Maximum <> 0 THEN BEGIN
+                  IF NOT BypassSegment THEN
+                    RepeatCount := RepeatCount + 1;
+                  IF (ReservationEntry2.NEXT = 0) OR (RepeatCount = EDISegment.Maximum) THEN
+                    LastRecord := TRUE
+                  ELSE
+                    LoopFinished := FALSE;
+                END ELSE BEGIN
+                  IF ReservationEntry2.NEXT = 0 THEN
+                    LastRecord := TRUE
+                  ELSE
+                    LoopFinished := FALSE;
+                END;
+              END;
+          END;
+      END;
+
+      IF LastRecord THEN BEGIN
+        LoopFinished := TRUE;
+        RecordNo := 0;
+        RepeatCount := 0;
+      END;
+    END;
+
+    PROCEDURE GetNextRecord@1240020002();
+    BEGIN
+      CASE RecordNo OF
+        1:
+          SalesCommentLine.NEXT;
+        2:
+          PostedPackage.NEXT;
+        3:
+          ReservationEntry.NEXT;
+
+        // Add additional tables here
+
+      END;
+    END;
+
+    PROCEDURE LoadEDIOutRecordRef@1240020006();
+    BEGIN
+      RecRef.OPEN(3);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(PaymentTerms);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(10);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(ShipmentMethod);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(Location);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(18);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(SellToCustomer);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'Sell-to Customer');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(27);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(Item);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(36);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(SalesHeader);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(37);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(SalesLine);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(44);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(SalesCommentLine);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(79);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(CompanyInformation);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(110);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(SalesShipmentHdr);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(111);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(SalesShipmentLine);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'SalesShipmentLineTmp');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(112);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(SalesInvoiceHdr);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(113);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(SalesInvoiceLine);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(222);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(ShiptoAddress);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(291);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(ShippingAgent);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(337);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(ReservationEntry);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(5404);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(ItemUnitOfMeasure);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(5717);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(ItemCrossReference);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14000704);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(PostedPackage);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14000705);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(PostedPackageLine);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14000708);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EShipAgentService);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14000822);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(BillOfLading);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002350);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDITemplate);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002353);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDIDocument);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002354);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDISegment);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002359);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDISendDocHdr);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002360);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDITradePartner);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002362);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDICustCrossRef);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002364);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDITradePtnrItem);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002371);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDIReceiveDocHdrInfo);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002372);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDIReceiveDocLineInfo);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+    END;
+
+    PROCEDURE LoadEDIOutVariable@1240020005();
+    BEGIN
+      EDILoadEDIOutFields.SetShipmentAdviceSendVariable(
+        LineNumber,ShipmentNetShipWeight,ShipmentGrossShipWeight,ShipmentVolume,ShipmentPalletWeight,
+        ShipmentFreightAmt,ShipmentTotalUnits,ShipmentTotalBaseUnits,TotalSegments);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

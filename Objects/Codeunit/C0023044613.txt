@@ -1,0 +1,1850 @@
+OBJECT Codeunit 23044613 DSHIP External Rate Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/21/21;
+    Time=10:03:20 AM;
+    Modified=Yes;
+    Version List=DSHIP2.2.3,3187,3299;
+  }
+  PROPERTIES
+  {
+    TableNo=23044623;
+    OnRun=BEGIN
+
+            trecParam := Rec;
+
+            CASE Rec.Action OF
+              Rec.Action::GetRates: handleGetRates;
+              Rec.Action::GetLabels: handleGetLabels;
+              ELSE EXIT;
+            END;
+
+            Rec.COPY(trecParam, TRUE);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      recDShipSetup@1000000004 : Record 23044600;
+      trecParam@1000000000 : TEMPORARY Record 23044623;
+      cuListMgmt@1000000003 : Codeunit 23044600;
+      cuPackMgmt@1000000002 : Codeunit 23044601;
+      cuRateMgmt@1000000001 : Codeunit 23044602;
+      cuRateSingleton@1000000005 : Codeunit 23044608;
+      tcOrderError@1000000006 : TextConst 'ENU=Error generating labels for Order: %1.\%2;ESM=Error al generar etiquetas para Orden: %1.\%2;FRC=Erreur lors de la g‚n‚ration d''‚tiquettes pour l''ordre: %1.\%2;ENC=Error generating labels for Order: %1.\%2';
+      tcLabelError@1000000007 : TextConst 'ENU=Error generating label for Package: %1.\%2;ESM=Error al generar la etiqueta del paquete:%1.\%2;FRC=Erreur g‚n‚rant l''‚tiquette pour Package: %1.\%2;ENC=Error generating label for Package: %1.\%2';
+      tcCommInvEasyPostName@1000000009 : TextConst 'ENU=commercial_invoice';
+      tcCODReturnLabelName@1000000008 : TextConst 'ENU=cod_return_label';
+      DSHIPFreightIntegProvider@1000000069 : Record 23044624;
+      BOLNo@1000000068 : Code[20];
+      IWXLicensePlateHeader@1000000067 : Record 23044505;
+      BOLFileName@1000000066 : Text;
+      SelectedRateTemp@1000000065 : TEMPORARY Record 23044603;
+      UserSetup@1000000064 : Record 91;
+      SCAC@1000000062 : Code[10];
+      originPostalCode@1000000061 : Code[10];
+      destinationPostalCode@1000000060 : Code[10];
+      proNumber@1000000059 : Text;
+      SpecialInstruction@1000000058 : Text[500];
+      IsSalesOrder@1000000057 : Boolean;
+      IsTransferOrder@1000000056 : Boolean;
+      TransferHeader@1000000055 : Record 5740;
+      SalesHeader@1000000054 : Record 36;
+      Division@1000000053 : Record 51001;
+      ItemDescBOL@1000000052 : Text;
+      JSONManagement@1000000051 : Codeunit 5459;
+      JObject@1000000050 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      OriginObject@1000000049 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      DestinationObject@1000000048 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      ItemsArray@1000000047 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JArray";
+      ItemsObject@1000000046 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      HttpWebRequestMgt@1000000045 : Codeunit 1297;
+      AuthString@1000000044 : Text;
+      TypeHelper@1000000043 : Codeunit 10;
+      TempBlob@1000000042 : TEMPORARY Record 99008535;
+      ResponseInStrm@1000000041 : InStream;
+      ResponseText@1000000040 : Text;
+      HttpStatusCode@1000000039 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpStatusCode";
+      ResponseHeaders@1000000038 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NameValueCollection";
+      JResponseObject@1000000037 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      ArrayString@1000000036 : Text;
+      RateResultJArray@1000000035 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JArray";
+      ChargeJObject@1000000034 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      ChargesJArray@1000000033 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JArray";
+      TotalCharge@1000000032 : Decimal;
+      ChargeValue@1000000031 : Decimal;
+      CarrierDetailJObject@1000000030 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JObject";
+      OriginStreet@1000000029 : Text;
+      OriginCity@1000000028 : Text;
+      OriginState@1000000027 : Text;
+      OriginZip@1000000026 : Text;
+      OriginCountry@1000000025 : Text;
+      DestStreet@1000000024 : Text;
+      DestCity@1000000023 : Text;
+      DestState@1000000022 : Text;
+      DestZip@1000000021 : Text;
+      DestCountry@1000000020 : Text;
+      ContactName@1000000019 : Text;
+      QuoteIDGTranz@1000000018 : Text;
+      OriginCompName@1000000017 : Text;
+      DestCompName@1000000016 : Text;
+      OriginPhoneNo@1000000015 : Text;
+      DestPhoneNo@1000000014 : Text;
+      DestContactName@1000000013 : Text;
+      JsonProNo@1000000012 : Text;
+      FreightClass@1000000011 : Text;
+      ProNoJArrayObject@1000000010 : DotNet "'Newtonsoft.Json'.Newtonsoft.Json.Linq.JArray";
+      Text50001@1000000072 : TextConst 'ENU=Processing Quote Request....';
+      Text50002@1000000071 : TextConst 'ENU=Processing BOL Request....';
+      Text50003@1000000070 : TextConst 'ENU=Processing Document Request....';
+      Text50004@1000000063 : TextConst 'ENU=Processing Tracking Request....';
+      gQuoteNo@1000000073 : Code[20];
+      SpInstrText@1000000074 : TextConst 'ENU=" DO NOT DOUBLE STACK. DO NOT DEPALLETIZE. CUSTOMER MUST SIGN FOR CARTOON/PIECE COUNT. FRAGILE TOP LOAD ONLY."';
+      NonTBDorder@1000000075 : Boolean;
+
+    LOCAL PROCEDURE handleGetRates@1000000000();
+    VAR
+      lrecFreightInt@1000000006 : Record 23044624;
+      lrecWhseShipHeader@1000000003 : Record 7320;
+      lrecSalesHeader@1000000002 : Record 36;
+      lrecTransferHeader@1000000001 : Record 5740;
+      lrecMiscShipment@1000000000 : Record 23044621;
+      ltcUnknownDoc@1000000010 : TextConst 'ENU=Unknown source document for packaging.;ESM=Documento de origen desconocido para el embalaje.;FRC=Document source inconnue pour l''emballage.;ENC=Unknown source document for packaging.';
+      lrecCarrierService@1000000009 : Record 23044611;
+      ltrecRateBuffer@1000000005 : TEMPORARY Record 23044603;
+      ltrecShipMessages@1000000004 : TEMPORARY Record 23044604;
+      lcodShipAgent@1000000007 : Code[20];
+      lsExternalAccountID@1000000008 : Text;
+      DSHIPCarrier@1000000011 : Record 23044607;
+      i@1000000012 : Integer;
+      Unishipper@1000000013 : Codeunit 52003;
+      ltrecRateBuffer1@1000000014 : TEMPORARY Record 23044603;
+    BEGIN
+      //<FUNC>
+      //  Description: Handles the get rates call
+      //  Called From: Codeunit DSHIP Pakcage Rate Management (CU23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      cuRateSingleton.getRateBuffer(ltrecRateBuffer);
+      cuRateSingleton.getShipMessages(ltrecShipMessages);
+
+      lrecFreightInt.GET('EXTERNAL');
+      lsExternalAccountID := lrecFreightInt."API Key";
+
+      lcodShipAgent := cuRateMgmt.getShipAgentByCarrierID(lsExternalAccountID, FALSE);
+      lrecCarrierService.SETRANGE("Shipping Agent Code", lcodShipAgent);
+      IF ( lrecCarrierService.FINDFIRST ) THEN ;
+
+      //<TPZ2723>
+      //Dship Code blocked and modified to insert multiple records in Buffer in Case of External Carreir
+      // ltrecRateBuffer.RESET;
+      // CLEAR(ltrecRateBuffer);
+      // ltrecRateBuffer.ID := 'extGeneric';
+      // ltrecRateBuffer."Carrier Name" := lcodShipAgent;
+      // ltrecRateBuffer.Service := lrecCarrierService."Service Name";
+      // ltrecRateBuffer."Carrier Account ID" := lsExternalAccountID;
+      // ltrecRateBuffer.INSERT;
+      //<TPZ2723> DSHip Code blocked
+      //<TPZ2723>
+      // ltrecShipMessages.RESET;
+      // ltrecShipMessages.ID += 1;
+      // ltrecShipMessages.Carrier := lcodShipAgent;
+      // ltrecShipMessages.Message := 'Selecting this rate will open a new page for manual shipping cost entry.';
+      // ltrecShipMessages.Type := 'rate_message';
+      // ltrecShipMessages.INSERT;
+      //</TPZ2723>
+
+      //<TPZ3187>
+      UserSetup.GET(USERID);
+      IsNonTBDOrder;
+      IF NOT NonTBDorder THEN BEGIN
+        IF UserSetup."DSHIP API Integration" THEN BEGIN
+          IF isPalletEntry(trecParam."License Plate No.") THEN BEGIN
+            Unishipper.CreateXMLRequestPallet(trecParam."Document No.",ltrecRateBuffer,trecParam."License Plate No.");
+            //JsonRequest(ltrecRateBuffer);//3311
+          END ELSE BEGIN
+            Unishipper.CreateXMLRequest(trecParam."Document No.",ltrecRateBuffer);
+            //JsonRequest(ltrecRateBuffer); //3311
+          END;
+        END;// ELSE BEGIN
+      END;
+      //</TPZ3187>
+
+      DSHIPCarrier.RESET;
+      DSHIPCarrier.SETRANGE("Freight Integ. Provider Code",'EXTERNAL');
+      IF DSHIPCarrier.FINDSET THEN
+        REPEAT
+          lrecCarrierService.RESET;
+          lrecCarrierService.SETRANGE("Shipping Agent Code", DSHIPCarrier.Code);
+          IF lrecCarrierService.FINDFIRST THEN BEGIN //3187
+
+          ltrecRateBuffer.RESET;
+          CLEAR(ltrecRateBuffer);
+          ltrecRateBuffer.ID := 'extGeneric'+FORMAT(i);
+          //ltrecRateBuffer."Carrier Name" := lcodShipAgent;
+          ltrecRateBuffer."Carrier Name" := lrecCarrierService."Shipping Agent Code";
+          ltrecRateBuffer.Service := lrecCarrierService."Service Name";
+          ltrecRateBuffer."Carrier Account ID" := lsExternalAccountID;
+          ltrecRateBuffer.INSERT;
+          i += 1;
+          ltrecShipMessages.RESET;
+          ltrecShipMessages.ID += 1;
+          ltrecShipMessages.Carrier := lrecCarrierService."Shipping Agent Code";
+          ltrecShipMessages.Message := 'Selecting this rate will open a new page for manual shipping cost entry.';
+          ltrecShipMessages.Type := 'rate_message';
+          ltrecShipMessages.INSERT;
+          END;//3187
+        UNTIL DSHIPCarrier.NEXT=0;
+      //END; //3187
+      //</TPZ2723>
+      cuRateSingleton.setRateBuffer(ltrecRateBuffer);
+      cuRateSingleton.setShipMessages(ltrecShipMessages);
+
+      trecParam."Object ID" := STRSUBSTNO('extGeneric_%1', RANDOM(99999999));
+    END;
+
+    LOCAL PROCEDURE handleGetLabels@1000000001();
+    VAR
+      lrecLPHeader@1000000003 : Record 23044505;
+      ltrecSelectedRate@1000000020 : TEMPORARY Record 23044603;
+      ltrecTempBlob@1000000019 : Record 99008535;
+      pgExternalRateEntry@1000000002 : Page 23044641;
+      acCloseAction@1000000001 : Action;
+    BEGIN
+      //<FUNC>
+      //  Description: Handles the get label call
+      //  Called From: Codeunit DSHIP Pakcage Rate Management (CU23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      cuRateSingleton.getSelectedRate(ltrecSelectedRate);
+
+      COMMIT;
+      ltrecSelectedRate.INSERT;
+      //<TPZ3187>
+      UserSetup.GET(USERID);
+      //pgExternalRateEntry.SetUniShipOrder(UserSetup."DSHIP API Integration"); //>>change
+      IF ltrecSelectedRate."Shipping Agent" <> ltrecSelectedRate."Shipping Agent"::" " THEN
+        pgExternalRateEntry.SetUniShipOrder(TRUE)
+      ELSE pgExternalRateEntry.SetUniShipOrder(FALSE);
+      //<<change
+      //</TPZ3187>
+
+      pgExternalRateEntry.initPage(ltrecSelectedRate);
+      acCloseAction := pgExternalRateEntry.RUNMODAL;
+      pgExternalRateEntry.ReturnSpecialInstructions(SpecialInstruction); //TPZ3187
+      IF ( acCloseAction IN [ACTION::OK, ACTION::LookupOK] ) THEN BEGIN
+        pgExternalRateEntry.GETRECORD(ltrecSelectedRate);
+        cuRateSingleton.setSelectedRate(ltrecSelectedRate);
+
+        //<TPZ3187>
+        UserSetup.GET(USERID);
+        IF UserSetup."DSHIP API Integration" THEN BEGIN
+          SelectedRateTemp := ltrecSelectedRate;
+          IF ltrecSelectedRate."Shipping Agent" = ltrecSelectedRate."Shipping Agent"::Unishipper THEN BEGIN
+            IF isPalletEntry(trecParam."License Plate No.") THEN  //TPZ3299
+              UnishipQuoteRequestPallet(ltrecSelectedRate."Contract ID") //TPZ3299
+            ELSE      //TPZ3299
+              UnishipQuoteRequest(ltrecSelectedRate."Contract ID");
+            UnishipBOLRequest(gQuoteNo,ltrecSelectedRate."Contract ID");
+          END;
+          //ltrecSelectedRate."Order ID" := trecParam."Package Tracking No.";//3187
+          IF ltrecSelectedRate."Shipping Agent" = ltrecSelectedRate."Shipping Agent"::"Global Tranz" THEN;
+            //JsonShipmentRequest(ltrecSelectedRate."Contract ID"); //3311
+        END;
+        //</TPZ3187>
+      END ELSE
+        EXIT;
+
+      lrecLPHeader.SETFILTER("No.", cuPackMgmt.CreateLPNoFilterWithDShipDocType(trecParam."Document Type", trecParam."Document No."));
+      IF ( lrecLPHeader.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          trecParam."License Plate No." := lrecLPHeader."No.";
+          cuRateMgmt.writeTextToBlob(ltrecTempBlob, 'EXTERNALRATE');
+          trecParam."Package Carrier Label PNG" := ltrecTempBlob.Blob;
+          trecParam."Package Tracking No." := COPYSTR(ltrecSelectedRate."Order ID", 1, MAXSTRLEN(trecParam."Package Tracking No."));
+          trecParam.INSERT;
+        UNTIL(lrecLPHeader.NEXT=0);
+      END; // if lreclpheader.findset
+    END;
+
+    LOCAL PROCEDURE UnishipQuoteRequest@1000000103(CarrierID@1000000020 : Code[20]);
+    VAR
+      OutStrm@1000000001 : OutStream;
+      TempBlob@1000000000 : Record 99008535;
+      XMLDocQ@1000000008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLNodeRef@1000000007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLNodeListRef@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      NodeCountRef@1000000005 : Integer;
+      XMLNodeValue@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      QuoteResponseValues@1000000003 : ARRAY [6] OF Text;
+      HttpWebRequestMgtQuote@1000000009 : Codeunit 1297;
+      RequestText@1000000010 : Text;
+      ResponseInStrm@1000000011 : InStream;
+      IWXLicensePlateHeader@1000000012 : Record 23044505;
+      QuoteRequest@1000000013 : XMLport 50088;
+      Instrm@1000000014 : InStream;
+      Streamreader@1000000015 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      HttpStatusCode@1000000017 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpStatusCode";
+      ResponseHeaders@1000000018 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NameValueCollection";
+      XMLDOMManagement@1000000019 : Codeunit 6224;
+      ProgressWindow@1000000021 : Dialog;
+      ReqDoc@1000200012 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+    BEGIN
+      //<TPZ3187>
+      IF NOT IsUnishipperEnable THEN
+        EXIT;
+      IF GUIALLOWED THEN
+        ProgressWindow.OPEN(Text50001);
+      CLEAR(OutStrm);
+      CLEAR(TempBlob);
+      CLEAR(HttpWebRequestMgtQuote);
+      CLEAR(RequestText);
+      CLEAR(ResponseInStrm);
+
+      IWXLicensePlateHeader.CALCFIELDS("Source No.");
+      IWXLicensePlateHeader.SETRANGE("Source No.",trecParam."Document No.");
+      QuoteRequest.GetSourceDocument(trecParam."Document No.",CarrierID); //temp vah
+      QuoteRequest.SetDateTimeValues(SelectedRateTemp."Pickup Earliest Date",SelectedRateTemp."Pickup Earliest Time",SelectedRateTemp."Pickup Latest Date",SelectedRateTemp."Pickup Latest Time",
+        SelectedRateTemp."Drop Earliest Date",SelectedRateTemp."Drop Earliest Time",SelectedRateTemp."Drop Latest Date",SelectedRateTemp."Drop Latest Time");
+      QuoteRequest.SETTABLEVIEW(IWXLicensePlateHeader);
+      TempBlob.INIT;
+      TempBlob.Blob.CREATEOUTSTREAM(OutStrm);
+      QuoteRequest.SETDESTINATION(OutStrm);
+      QuoteRequest.EXPORT;
+      TempBlob.Blob.CREATEINSTREAM(Instrm);
+      Streamreader := Streamreader.StreamReader(Instrm);
+      RequestText := Streamreader.ReadToEnd;
+      RequestText := COPYSTR(RequestText,57,STRLEN(RequestText)-56);
+      IWXLicensePlateHeader.GET(trecParam."License Plate No.");
+      DSHIPFreightIntegProvider.SETRANGE("Location Code",IWXLicensePlateHeader."Location Code");
+      DSHIPFreightIntegProvider.FINDFIRST;
+      HttpWebRequestMgtQuote.Initialize(DSHIPFreightIntegProvider."API URL");
+      HttpWebRequestMgtQuote.DisableUI();
+      HttpWebRequestMgtQuote.SetMethod('POST');
+      ReqDoc := ReqDoc.XmlDocument();
+      ReqDoc.LoadXml(RequestText);
+      //ReqDoc.Save('U:\Lanham\QuoteRequest.xml'); //Save xml
+
+      //MESSAGE('Request\ %1',RequestText); //Quote Request Msg
+      HttpWebRequestMgtQuote.AddBodyAsText(RequestText);
+      TempBlob.INIT;
+      TempBlob.Blob.CREATEINSTREAM(ResponseInStrm);
+      IF HttpWebRequestMgtQuote.GetResponse(ResponseInStrm,HttpStatusCode,ResponseHeaders) THEN BEGIN
+          CLEAR(XMLDocQ);
+          XMLDocQ := XMLDocQ.XmlDocument();
+          XMLDOMManagement.LoadXMLDocumentFromInStream(ResponseInStrm,XMLDocQ);
+          //XMLDocQ.Save('U:\Lanham\QuoteResponse.xml'); //Save xml
+          XMLNodeListRef := XMLDocQ.SelectNodes('//ReferenceNumber');
+          FOREACH XMLNodeValue IN XMLNodeListRef DO BEGIN
+            NodeCountRef += 1;
+            QuoteResponseValues[NodeCountRef] := XMLNodeValue.InnerText;
+            //MESSAGE(XMLNodeValue.InnerText);
+          END;
+          ProgressWindow.CLOSE;
+          gQuoteNo := QuoteResponseValues[1];
+          //UnishipperQuoteResponse.SetValues(QuoteResponseValues[1],QuoteResponseValues[2],QuoteResponseValues[3],QuoteResponseValues[4],QuoteResponseValues[5]);
+          //UnishipperQuoteResponse.RUNMODAL;
+      END;
+      //</TPZ3187>
+    END;
+
+    LOCAL PROCEDURE UnishipBOLRequest@1000000002(QuoteNo@1000000000 : Code[20];ContractID@1000000049 : Code[20]) : Boolean;
+    VAR
+      XMLRequest@1000000060 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLResponse@1000000002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      RootNode@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLDomMgt@1000000003 : Codeunit 6224;
+      BodyNode@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      BOLRequestNode@1000000005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      HeaderNode@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ActionNode@1000000007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      DateNode@1000000008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ShipmentNode@1000000009 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      EnterpriseNode@1000000010 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ReferenceNumbersNode@1000000011 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ChildNode@1000000012 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      CommentsNode@1000000013 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ServiceFlagsNode@1000000014 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      EquipmentListNode@1000000015 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      DatesNode@1000000016 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      PickupNode@1000000017 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      DropNode@1000000018 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ShipperNode@1000000021 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      NameNode@1000000024 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      AddrLine1Node@1000000026 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      AddrLine2Node@1000000032 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      CityNode@1000000025 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      StateProvinceNode@1000000033 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      PostalCodeNode@1000000036 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      CountryCodeNode@1000000042 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ContactsNode@1000000041 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ContactNode@1000000040 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ContactMethodsNode@1000000039 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ConsigneeNode@1000000038 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      HandlingUnitsNode@1000000037 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      HandlingUnitNode@1000000035 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      QuantityNode@1000000034 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      WeightNode@1000000046 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      DimensionsNode@1000000045 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ItemsNode@1000000044 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ItemNode@1000000043 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      DescriptionNode@1000000031 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      FreightClassNode@1000000030 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      NmfcCodeNode@1000000029 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      MinTemperatureNode@1000000028 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      MaxTemperatureNode@1000000027 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      TemperatureUnitsNode@1000000095 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      HazardousMaterialNode@1000000094 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      WeightsNode@1000000093 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      QuantitiesNode@1000000092 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      PriceSheetsNode@1000000091 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      PriceSheetNode@1000000090 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ContractIdNode@1000000089 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      PaymentNode@1000000088 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      MethodNode@1000000087 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      BillToNode@1000000086 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      AddressNode@1000000085 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      AliasNode@1000000084 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      WarehouseShipmentLine@1000000019 : Record 7321;
+      CustName@1000000022 : Text;
+      Cust@1000000023 : Record 18;
+      Location@1000000047 : Record 14;
+      IWXLicensePlateHeader@1000000048 : Record 23044505;
+      NameThirdP@1000000050 : Text;
+      Add1ThirdP@1000000051 : Text;
+      Add2ThirdP@1000000052 : Text;
+      CityThirdP@1000000053 : Text;
+      StateThirdP@1000000054 : Text;
+      PostCodeThirdP@1000000055 : Text;
+      CountryThirdP@1000000056 : Text;
+      ContactThirdP@1000000057 : Text;
+      PhoneThirdP@1000000058 : Text;
+      ThirdParty@1000000059 : Text;
+      HttpWebRequest@1000000062 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      HttpWebResponse@1000000061 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      ContentType@1000000064 : TextConst 'ENU=Content-type';
+      TypeValue@1000000065 : TextConst 'ENU=text/xml';
+      ProgressWindow@1000000066 : Dialog;
+      TempXMLBuffer@1000000063 : Record 1235;
+      ResponseNode@1000000067 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      BOLNode@1000000068 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLNodeListRef@1000000069 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      Ctr@1000000070 : Integer;
+      PalletEntryLoc@1000010048 : Record 50068;
+    BEGIN
+      //<TPZ3187>
+      SpecialInstruction := SpecialInstruction + SpInstrText; //change
+      IF NOT IsUnishipperEnable THEN
+        EXIT;
+
+      IF GUIALLOWED THEN
+        ProgressWindow.OPEN(Text50002);
+
+      XMLRequest := XMLRequest.XmlDocument;
+      XMLResponse := XMLResponse.XmlDocument;
+
+      WarehouseShipmentLine.RESET;
+      WarehouseShipmentLine.SETRANGE("No.",trecParam."Document No.");
+      WarehouseShipmentLine.SETFILTER("Source No.",'<>%1','');
+      IF WarehouseShipmentLine.FINDFIRST THEN BEGIN
+        IF SalesHeader.GET(SalesHeader."Document Type"::Order,WarehouseShipmentLine."Source No.") THEN BEGIN
+          destinationPostalCode := SalesHeader."Ship-to Post Code";
+          Location.GET(SalesHeader."Location Code");
+          Division.GET(SalesHeader."Shortcut Dimension 5 Code");
+          CASE SalesHeader."Shortcut Dimension 5 Code" OF
+            'E' : BEGIN
+              ItemDescBOL := 'Electrical Fittings';// Division.Name + 'Electric Fittings';
+              FreightClass := '50';
+             END;
+            'L' : BEGIN
+              ItemDescBOL :=  'Lamps';
+              FreightClass := '92'
+            END;
+            'P' :BEGIN
+               ItemDescBOL :=  'Piple tubin';
+              FreightClass := '50';
+            END;
+            'C' : BEGIN
+              ItemDescBOL :=  '';
+              FreightClass := '50';
+            END;
+          END;
+
+          IsSalesOrder := TRUE;
+        END;
+        IF TransferHeader.GET(WarehouseShipmentLine."Source No.") THEN BEGIN
+          Location.GET(TransferHeader."Transfer-from Code");
+          IsTransferOrder := TRUE;
+          destinationPostalCode := TransferHeader."Transfer-to Post Code";
+        END;
+        IF Cust.GET(SalesHeader."Sell-to Customer No.") THEN;
+        originPostalCode := Location."Post Code";
+      END ELSE BEGIN
+        IF SalesHeader.GET(SalesHeader."Document Type"::Order,trecParam."Document No.") THEN BEGIN
+          destinationPostalCode := SalesHeader."Ship-to Post Code";
+          Location.GET(SalesHeader."Location Code");
+          Division.GET(SalesHeader."Shortcut Dimension 5 Code");
+          CASE SalesHeader."Shortcut Dimension 5 Code" OF
+            'E' : BEGIN
+              ItemDescBOL := 'Electrical Fittings';// Division.Name + 'Electric Fittings';
+              FreightClass := '50';
+             END;
+            'L' : BEGIN
+              ItemDescBOL :=  'Lamps';
+              FreightClass := '92'
+            END;
+            'P' :BEGIN
+               ItemDescBOL :=  'Piple tubin';
+              FreightClass := '50';
+            END;
+            'C' : BEGIN
+              ItemDescBOL :=  '';
+              FreightClass := '50';
+            END;
+          END;
+          IsSalesOrder := TRUE;
+        END;
+        IF TransferHeader.GET(trecParam."Document No.") THEN  BEGIN
+          Location.GET(TransferHeader."Transfer-from Code");
+          IsTransferOrder := TRUE;
+          destinationPostalCode := TransferHeader."Transfer-to Post Code";
+        END;
+      END;
+      RootNode := XMLRequest.CreateNode('element','requests','');
+        //XMLDomMgt.AddAttribute(RootNode,'username','U19346929517');
+        XMLDomMgt.AddAttribute(RootNode,'username',DSHIPFreightIntegProvider."API Username");
+        XMLDomMgt.AddAttribute(RootNode,'password','');
+        //XMLDomMgt.AddAttribute(RootNode,'id','42');
+        XMLDomMgt.AddAttribute(RootNode,'id',DSHIPFreightIntegProvider."Unishipper ID");
+        //XMLDomMgt.AddAttribute(RootNode,'token','28e8c450-eefc-11e6-a435-0050560903bc');
+        XMLDomMgt.AddAttribute(RootNode,'token',DSHIPFreightIntegProvider."API Key");
+        XMLDomMgt.AddElement(RootNode,'request','','',BodyNode);
+          XMLDomMgt.AddAttribute(BodyNode,'service','BOLRequest');
+          XMLDomMgt.AddElement(BodyNode,'BOLRequest','','',BOLRequestNode);
+            XMLDomMgt.AddElement(BOLRequestNode,'Header','','',HeaderNode);
+              XMLDomMgt.AddElement(HeaderNode,'Action','Add','',ActionNode);
+            XMLDomMgt.AddElement(HeaderNode,'date',FORMAT(FORMAT(CURRENTDATETIME,0,'<Month,2>/<Day,2>/<Year4> <Hours24,2>:<Minutes,2>')),'',DateNode);
+              XMLDomMgt.AddAttribute(DateNode,'type','generation');
+            XMLDomMgt.AddElement(BOLRequestNode,'Shipment','','',ShipmentNode);
+              XMLDomMgt.AddElement(ShipmentNode,'Enterprise','','',EnterpriseNode);
+                XMLDomMgt.AddAttribute(EnterpriseNode,'customerAcctNum','');
+                XMLDomMgt.AddAttribute(EnterpriseNode,'name',SalesHeader."Sell-to Customer Name");
+              XMLDomMgt.AddElement(ShipmentNode,'ReferenceNumbers','','',ReferenceNumbersNode);
+                XMLDomMgt.AddElement(ReferenceNumbersNode,'ReferenceNumber',QuoteNo,'',ChildNode);
+                  XMLDomMgt.AddAttribute(ChildNode,'type','QuoteNumber');
+                  XMLDomMgt.AddAttribute(ChildNode,'isPrimary','true');
+                XMLDomMgt.AddElement(ReferenceNumbersNode,'ReferenceNumber',SalesHeader."No.",'',ChildNode); //SO number added
+                  XMLDomMgt.AddAttribute(ChildNode,'type','Other');
+                  XMLDomMgt.AddAttribute(ChildNode,'isPrimary','false');
+              XMLDomMgt.AddElement(ShipmentNode,'Comments','','',CommentsNode);
+                XMLDomMgt.AddElement(CommentsNode,'Comment',SpecialInstruction,'',ChildNode);
+                  XMLDomMgt.AddAttribute(ChildNode,'type','SpecialInstructions');
+              XMLDomMgt.AddElement(ShipmentNode,'ServiceFlags','','',ServiceFlagsNode);
+                XMLDomMgt.AddElement(ServiceFlagsNode,'ServiceFlag','','',ChildNode);
+                  XMLDomMgt.AddAttribute(ChildNode,'Code','');
+              XMLDomMgt.AddElement(ShipmentNode,'EquipmentList','','',EquipmentListNode);
+                XMLDomMgt.AddElement(EquipmentListNode,'EquipmentCode','','',ChildNode);
+                  XMLDomMgt.AddAttribute(ChildNode,'desc','');
+                  XMLDomMgt.AddAttribute(ChildNode,'qty','');
+              XMLDomMgt.AddElement(ShipmentNode,'Dates','','',DatesNode);
+                XMLDomMgt.AddElement(DatesNode,'Pickup','','',PickupNode);
+                  XMLDomMgt.AddElement(PickupNode,'Date',FORMAT(FORMAT(CREATEDATETIME(SelectedRateTemp."Pickup Earliest Date",SelectedRateTemp."Pickup Earliest Time"),0,'<Month,2>/<Day,2>/<Year4> <Hours24,2>:<Minutes,2>')),'',DateNode);
+                    XMLDomMgt.AddAttribute(DateNode,'type','earliest');
+                  XMLDomMgt.AddElement(PickupNode,'Date',FORMAT(FORMAT(CREATEDATETIME(SelectedRateTemp."Pickup Latest Date",SelectedRateTemp."Pickup Latest Time"),0,'<Month,2>/<Day,2>/<Year4> <Hours24,2>:<Minutes,2>')),'',DateNode);
+                    XMLDomMgt.AddAttribute(DateNode,'type','latest');
+                XMLDomMgt.AddElement(DatesNode,'Drop','','',PickupNode);
+                  XMLDomMgt.AddElement(PickupNode,'Date',FORMAT(FORMAT(CREATEDATETIME(SelectedRateTemp."Drop Earliest Date",SelectedRateTemp."Drop Earliest Time"),0,'<Month,2>/<Day,2>/<Year4> <Hours24,2>:<Minutes,2>')),'',DateNode);
+                    XMLDomMgt.AddAttribute(DateNode,'type','earliest');
+                  XMLDomMgt.AddElement(PickupNode,'Date',FORMAT(FORMAT(CREATEDATETIME(SelectedRateTemp."Drop Latest Date",SelectedRateTemp."Drop Latest Time"),0,'<Month,2>/<Day,2>/<Year4> <Hours24,2>:<Minutes,2>')),'',DateNode);
+                    XMLDomMgt.AddAttribute(DateNode,'type','latest');
+              XMLDomMgt.AddElement(ShipmentNode,'Shipper','','',ShipperNode);
+                XMLDomMgt.AddElement(ShipperNode,'Address','','',AddressNode);
+                  XMLDomMgt.AddAttribute(AddressNode,'isResidential','false');
+                  XMLDomMgt.AddElement(AddressNode,'Alias','','',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'Name',Location.Name,'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'AddrLine1',Location.Address,'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'AddrLine2',Location."Address 2",'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'City',Location.City,'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'StateProvince',Location.County,'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'PostalCode',Location."Post Code",'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'CountryCode',Location."Country/Region Code",'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'Contacts','','',ContactsNode);
+                    XMLDomMgt.AddElement(ContactsNode,'Contact','','',ContactNode);
+                      XMLDomMgt.AddElement(ContactNode,'Name',Location.Contact,'',ChildNode);
+                    XMLDomMgt.AddElement(ContactNode,'ContactMethods','','',ContactMethodsNode);
+                      XMLDomMgt.AddElement(ContactMethodsNode,'ContactMethod',Location."Phone No.",'',ChildNode);
+                        XMLDomMgt.AddAttribute(ChildNode,'type','phone');
+                        XMLDomMgt.AddAttribute(ChildNode,'sequenceNum','1');
+                      XMLDomMgt.AddElement(ContactMethodsNode,'ContactMethod',Location."E-Mail" ,'',ChildNode);
+                        XMLDomMgt.AddAttribute(ChildNode,'type','email');
+                        XMLDomMgt.AddAttribute(ChildNode,'sequenceNum','2');
+                      XMLDomMgt.AddElement(ContactMethodsNode,'ContactMethod',Cust."Sales Fax No.",'',ChildNode);
+                        XMLDomMgt.AddAttribute(ChildNode,'type','fax');
+                        XMLDomMgt.AddAttribute(ChildNode,'sequenceNum','3');
+            XMLDomMgt.AddElement(ShipmentNode,'Consignee','','',ConsigneeNode);
+                XMLDomMgt.AddElement(ConsigneeNode,'Address','','',AddressNode);
+                  XMLDomMgt.AddAttribute(AddressNode,'isResidential','false');
+                  XMLDomMgt.AddElement(AddressNode,'Alias','','',ChildNode);
+                  IF IsSalesOrder THEN BEGIN
+                    XMLDomMgt.AddElement(AddressNode,'Name',SalesHeader."Ship-to Name",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'AddrLine1',SalesHeader."Ship-to Address",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'AddrLine2',SalesHeader."Ship-to Address 2",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'City',SalesHeader."Ship-to City",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'StateProvince',SalesHeader."Ship-to County",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'PostalCode',SalesHeader."Ship-to Post Code",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'CountryCode',SalesHeader."Ship-to Country/Region Code",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'Contacts','','',ContactsNode);
+                      XMLDomMgt.AddElement(ContactsNode,'Contact','','',ContactNode);
+                        XMLDomMgt.AddElement(ContactNode,'Name',SalesHeader."Ship-to Contact",'',ChildNode);
+                      XMLDomMgt.AddElement(ContactNode,'ContactMethods','','',ContactMethodsNode);
+                        XMLDomMgt.AddElement(ContactMethodsNode,'ContactMethod',SalesHeader."Ship-to Phone No.",'',ChildNode);
+                  END;
+                  IF IsTransferOrder THEN BEGIN
+                    XMLDomMgt.AddElement(AddressNode,'Name',TransferHeader."Transfer-to Name",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'AddrLine1',TransferHeader."Transfer-to Address",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'AddrLine2',TransferHeader."Transfer-to Address 2",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'City',TransferHeader."Transfer-to City",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'StateProvince',TransferHeader."Transfer-to County",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'PostalCode',TransferHeader."Transfer-to Post Code",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'CountryCode',TransferHeader."Trsf.-to Country/Region Code",'',ChildNode);
+                    XMLDomMgt.AddElement(AddressNode,'Contacts','','',ContactsNode);
+                      XMLDomMgt.AddElement(ContactsNode,'Contact','','',ContactNode);
+                        XMLDomMgt.AddElement(ContactNode,'Name',TransferHeader."Transfer-to Contact",'',ChildNode);
+                      XMLDomMgt.AddElement(ContactNode,'ContactMethods','','',ContactMethodsNode);
+                        XMLDomMgt.AddElement(ContactMethodsNode,'ContactMethod','','',ChildNode);// VAH temp
+                  END;
+                        XMLDomMgt.AddAttribute(ChildNode,'type','phone');
+                        XMLDomMgt.AddAttribute(ChildNode,'sequenceNum','1');
+                      XMLDomMgt.AddElement(ContactMethodsNode,'ContactMethod',Cust."Sales E-Mail",'',ChildNode);
+                        XMLDomMgt.AddAttribute(ChildNode,'type','email');
+                        XMLDomMgt.AddAttribute(ChildNode,'sequenceNum','2');
+            XMLDomMgt.AddElement(ShipmentNode,'HandlingUnits','','',HandlingUnitsNode);
+            IWXLicensePlateHeader.SETRANGE("Source No.",trecParam."Document No.");
+            IF IWXLicensePlateHeader.FIND('-') THEN
+              REPEAT
+              //-->TPZ3299 Use Pallent Detail if exist
+              PalletEntryLoc.RESET;
+              PalletEntryLoc.SETRANGE("License Plate No.",IWXLicensePlateHeader."No.");
+              PalletEntryLoc.SETRANGE(Status,PalletEntryLoc.Status::Released);
+              IF PalletEntryLoc.FINDFIRST THEN BEGIN
+                REPEAT
+                  XMLDomMgt.AddElement(HandlingUnitsNode,'HandlingUnit','','',HandlingUnitNode);
+                    XMLDomMgt.AddAttribute(HandlingUnitNode,'stackable','false');
+                    XMLDomMgt.AddAttribute(HandlingUnitNode,'sequence','1');
+                  XMLDomMgt.AddElement(HandlingUnitNode,'Quantity',FORMAT(PalletEntryLoc."No of Pallet/Box"),'',ChildNode); //TPZ3299 we can use no. of pallet as quantity
+                    XMLDomMgt.AddAttribute(ChildNode,'units',FORMAT(PalletEntryLoc."Entry Type"));//'Pallet'); //TPZ3299
+                  XMLDomMgt.AddElement(HandlingUnitNode,'Weight',FORMAT(PalletEntryLoc.Weight),'',ChildNode); //TPZ3299
+                    XMLDomMgt.AddAttribute(ChildNode,'units',PalletEntryLoc."Weight Unit of Measure"); //TPZ3299
+                  XMLDomMgt.AddElement(HandlingUnitNode,'Dimensions','','',ChildNode);
+                    XMLDomMgt.AddAttribute(ChildNode,'height','0'); //TPZ3299
+                    XMLDomMgt.AddAttribute(ChildNode,'units',IWXLicensePlateHeader."Dim. Unit of Measure");
+                    XMLDomMgt.AddAttribute(ChildNode,'width','0'); //TPZ3299
+                    XMLDomMgt.AddAttribute(ChildNode,'length','0'); //TPZ3299
+                  XMLDomMgt.AddElement(HandlingUnitNode,'Items','','',ItemsNode);
+                    XMLDomMgt.AddElement(ItemsNode,'Item','','',ItemNode);
+                      XMLDomMgt.AddAttribute(ItemNode,'sequence','1');
+                      XMLDomMgt.AddElement(ItemNode,'Description',ItemDescBOL,'',ChildNode);
+                      XMLDomMgt.AddElement(ItemNode,'FreightClass','50','',ChildNode);
+                      XMLDomMgt.AddElement(ItemNode,'NmfcCode','','',ChildNode);
+                      XMLDomMgt.AddElement(ItemNode,'MinTemperature','','',ChildNode);
+                      XMLDomMgt.AddElement(ItemNode,'MaxTemperature','','',ChildNode);
+                      XMLDomMgt.AddElement(ItemNode,'TemperatureUnits','F','',ChildNode);
+                      XMLDomMgt.AddElement(ItemNode,'HazardousMaterial','false','',ChildNode);
+                      XMLDomMgt.AddElement(ItemNode,'Weights','','',WeightsNode);
+                        XMLDomMgt.AddElement(WeightsNode,'Weight',FORMAT(PalletEntryLoc.Weight),'',ChildNode); //TPZ3299
+                          XMLDomMgt.AddAttribute(ChildNode,'units',PalletEntryLoc."Weight Unit of Measure"); //TPZ3299
+                          XMLDomMgt.AddAttribute(ChildNode,'type','planned');
+                      XMLDomMgt.AddElement(ItemNode,'Quantities','','',QuantitiesNode);
+                        XMLDomMgt.AddElement(QuantitiesNode,'Quantity','','',ChildNode);
+                          XMLDomMgt.AddAttribute(ChildNode,'type','planned');
+                      XMLDomMgt.AddElement(ItemNode,'MonetaryValue','','',ChildNode);
+                        XMLDomMgt.AddAttribute(ChildNode,'units','USD');
+                UNTIL PalletEntryLoc.NEXT = 0;
+              END ELSE BEGIN
+              //<--
+              XMLDomMgt.AddElement(HandlingUnitsNode,'HandlingUnit','','',HandlingUnitNode);
+                XMLDomMgt.AddAttribute(HandlingUnitNode,'stackable','false');
+                XMLDomMgt.AddAttribute(HandlingUnitNode,'sequence','1');
+              XMLDomMgt.AddElement(HandlingUnitNode,'Quantity','1','',ChildNode);
+                XMLDomMgt.AddAttribute(ChildNode,'units','Pallet');
+              XMLDomMgt.AddElement(HandlingUnitNode,'Weight',FORMAT(IWXLicensePlateHeader."Shipment Gross Weight"),'',ChildNode);
+                XMLDomMgt.AddAttribute(ChildNode,'units',IWXLicensePlateHeader."Weight Unit of Measure");
+              XMLDomMgt.AddElement(HandlingUnitNode,'Dimensions','','',ChildNode);
+                XMLDomMgt.AddAttribute(ChildNode,'height',FORMAT(IWXLicensePlateHeader."Shipment Height"));
+                XMLDomMgt.AddAttribute(ChildNode,'units',IWXLicensePlateHeader."Dim. Unit of Measure");
+                XMLDomMgt.AddAttribute(ChildNode,'width',FORMAT(IWXLicensePlateHeader."Shipment Width"));
+                XMLDomMgt.AddAttribute(ChildNode,'length',FORMAT(IWXLicensePlateHeader."Shipment Length"));
+              XMLDomMgt.AddElement(HandlingUnitNode,'Items','','',ItemsNode);
+                XMLDomMgt.AddElement(ItemsNode,'Item','','',ItemNode);
+                  XMLDomMgt.AddAttribute(ItemNode,'sequence','1');
+                  XMLDomMgt.AddElement(ItemNode,'Description',ItemDescBOL,'',ChildNode);
+                  XMLDomMgt.AddElement(ItemNode,'FreightClass',FreightClass,'',ChildNode);
+                  XMLDomMgt.AddElement(ItemNode,'NmfcCode','','',ChildNode);
+                  XMLDomMgt.AddElement(ItemNode,'MinTemperature','','',ChildNode);
+                  XMLDomMgt.AddElement(ItemNode,'MaxTemperature','','',ChildNode);
+                  XMLDomMgt.AddElement(ItemNode,'TemperatureUnits','F','',ChildNode);
+                  XMLDomMgt.AddElement(ItemNode,'HazardousMaterial','false','',ChildNode);
+                  XMLDomMgt.AddElement(ItemNode,'Weights','','',WeightsNode);
+                    XMLDomMgt.AddElement(WeightsNode,'Weight',FORMAT(IWXLicensePlateHeader."Shipment Gross Weight"),'',ChildNode);
+                      XMLDomMgt.AddAttribute(ChildNode,'units',IWXLicensePlateHeader."Weight Unit of Measure");
+                      XMLDomMgt.AddAttribute(ChildNode,'type','planned');
+                  XMLDomMgt.AddElement(ItemNode,'Quantities','','',QuantitiesNode);
+                    XMLDomMgt.AddElement(QuantitiesNode,'Quantity','','',ChildNode);
+                      XMLDomMgt.AddAttribute(ChildNode,'type','planned');
+                  XMLDomMgt.AddElement(ItemNode,'MonetaryValue','','',ChildNode);
+                    XMLDomMgt.AddAttribute(ChildNode,'units','USD');
+                END; //TPZ3299
+              UNTIL IWXLicensePlateHeader.NEXT=0;
+            XMLDomMgt.AddElement(ShipmentNode,'PriceSheets','','',PriceSheetsNode);
+              XMLDomMgt.AddElement(PriceSheetsNode,'PriceSheet','','',PriceSheetNode);
+                XMLDomMgt.AddAttribute(PriceSheetNode,'type','Cost');
+                XMLDomMgt.AddAttribute(PriceSheetNode,'isSelected','true');
+                XMLDomMgt.AddElement(PriceSheetNode,'ContractId',ContractID,'',ChildNode);
+            XMLDomMgt.AddElement(ShipmentNode,'Payment','','',PaymentNode);
+              XMLDomMgt.AddElement(PaymentNode,'Method','Prepaid','',ChildNode);
+              XMLDomMgt.AddElement(PaymentNode,'BillTo','','',BillToNode);
+                XMLDomMgt.AddAttribute(BillToNode,'thirdParty','false');
+                XMLDomMgt.AddElement(BillToNode,'Address','','',AddressNode);
+                  XMLDomMgt.AddAttribute(AddressNode,'isResidential','false');
+                  XMLDomMgt.AddElement(AddressNode,'Alias','','',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'Name',NameThirdP,'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'AddrLine1',Add1ThirdP,'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'AddrLine2',Add2ThirdP,'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'City',CityThirdP,'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'StateProvince',StateThirdP,'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'PostalCode',PostCodeThirdP,'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'CountryCode',CountryThirdP,'',ChildNode);
+                  XMLDomMgt.AddElement(AddressNode,'Contacts','','',ContactsNode);
+                    XMLDomMgt.AddElement(ContactsNode,'Contact','','',ContactNode);
+                      XMLDomMgt.AddElement(ContactNode,'Name',ContactThirdP,'',ChildNode);
+                    XMLDomMgt.AddElement(ContactNode,'ContactMethods','','',ContactMethodsNode);
+                      XMLDomMgt.AddElement(ContactMethodsNode,'ContactMethod',PhoneThirdP,'',ChildNode);
+                        XMLDomMgt.AddAttribute(ChildNode,'type','phone');
+                        XMLDomMgt.AddAttribute(ChildNode,'sequenceNum','1');
+      XMLRequest.AppendChild(RootNode);
+
+      //>> Auth
+      IWXLicensePlateHeader.GET(trecParam."License Plate No.");
+      DSHIPFreightIntegProvider.RESET;
+      //DSHIPFreightIntegProvider.SETRANGE(Code,'UNISHIPPER');
+      DSHIPFreightIntegProvider.SETRANGE("Location Code",IWXLicensePlateHeader."Location Code");
+      DSHIPFreightIntegProvider.FINDFIRST;
+      //<<Auth
+      //DSHIPFreightIntegProvider.GET('EXTERNAL');
+      HttpWebRequest := HttpWebRequest.Create(DSHIPFreightIntegProvider."API URL");
+      HttpWebRequest.UseDefaultCredentials := TRUE;
+      HttpWebRequest.Method := 'POST';
+      HttpWebRequest.ContentType := TypeValue;
+      //XMLRequest.Save('U:\Lanham\BOLRequest.xml'); //Save xml
+
+      XMLRequest.Save(HttpWebRequest.GetRequestStream);
+      //MESSAGE(XMLRequest.InnerXml); //VAH BOL Request Msg
+      HttpWebResponse := HttpWebRequest.GetResponse;
+      ProgressWindow.CLOSE;
+      IF HttpWebResponse.StatusCode = 200 THEN BEGIN
+        XMLResponse.Load(HttpWebResponse.GetResponseStream);
+        //XMLResponse.Save('U:\Lanham\BOLResponse.xml'); //Save xml
+        BOLNode := XMLResponse.DocumentElement.SelectSingleNode('//ReferenceNumbers');
+        XMLNodeListRef := BOLNode.ChildNodes;
+        FOR Ctr := 0 TO (XMLNodeListRef.Count - 1) DO BEGIN
+          IF XMLNodeListRef.ItemOf(Ctr).SelectSingleNode('@type').InnerText = 'BOL' THEN BEGIN
+            BOLNo := XMLNodeListRef.ItemOf(Ctr).FirstChild.InnerText;
+          END;
+          IF XMLNodeListRef.ItemOf(Ctr).SelectSingleNode('@type').InnerText = 'SCAC' THEN
+           SCAC := XMLNodeListRef.ItemOf(Ctr).FirstChild.InnerText;
+        END;
+        IF UnishipTrackingRequest THEN;
+        IF UnishipDocumentRequest THEN;
+
+        EXIT(TRUE);
+      END ELSE
+        XMLResponse.Load(HttpWebResponse.GetResponseStream);
+        EXIT(FALSE);
+      //</TPZ3187>
+    END;
+
+    LOCAL PROCEDURE UnishipDocumentRequest@1000000005() : Boolean;
+    VAR
+      XMLRequest@1000000002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLResponse@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      RootNode@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLDomMgt@1000000003 : Codeunit 6224;
+      BodyNode@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      DocumentsNode@1000000005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      DocumentNode@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ChildNode@1000000007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      HttpWebRequest@1000000010 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      HttpWebResponse@1000000009 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      ProgressWindow@1000000008 : Dialog;
+      ContentType@1000000012 : TextConst 'ENU=Content-type';
+      TypeValue@1000000011 : TextConst 'ENU="text/xml;charset=utf-8"';
+      DocumentRespNode@1000000013 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLNodeListRef@1000000015 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      Ctr@1000000014 : Integer;
+      Base64Node@1000000016 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      TempBlob@1000000017 : TEMPORARY Record 99008535;
+      i@1170000000 : Integer;
+      IStream@1000000018 : InStream;
+      UniBOLFileName@1000000019 : Text;
+      Location@1000000020 : Record 14;
+      LPHeader@1000000021 : Record 23044505;
+    BEGIN
+      //<TPZ3187>
+      IF NOT IsUnishipperEnable THEN
+        EXIT;
+      LPHeader.GET(trecParam."License Plate No.");
+      //>> Auth
+      DSHIPFreightIntegProvider.RESET;
+      //DSHIPFreightIntegProvider.SETRANGE(Code,'UNISHIPPER');
+      DSHIPFreightIntegProvider.SETRANGE("Location Code",LPHeader."Location Code");
+      DSHIPFreightIntegProvider.FINDFIRST;
+      //<<Auth
+      IF GUIALLOWED THEN
+        ProgressWindow.OPEN(Text50003);
+
+      XMLRequest := XMLRequest.XmlDocument;
+      XMLResponse := XMLResponse.XmlDocument;
+
+      RootNode := XMLRequest.CreateNode('element','requests','');
+        //XMLDomMgt.AddAttribute(RootNode,'username','U19346929517');
+        XMLDomMgt.AddAttribute(RootNode,'username',DSHIPFreightIntegProvider."API Username");
+        XMLDomMgt.AddAttribute(RootNode,'password','');
+        //XMLDomMgt.AddAttribute(RootNode,'id','42');
+        XMLDomMgt.AddAttribute(RootNode,'id',DSHIPFreightIntegProvider."Unishipper ID");
+        //XMLDomMgt.AddAttribute(RootNode,'token','28e8c450-eefc-11e6-a435-0050560903bc');
+        XMLDomMgt.AddAttribute(RootNode,'token',DSHIPFreightIntegProvider."API Key");
+        XMLDomMgt.AddElement(RootNode,'request','','',BodyNode);
+          XMLDomMgt.AddAttribute(BodyNode,'service','documentRequest');
+          XMLDomMgt.AddElement(BodyNode,'documents','','',DocumentsNode);
+            XMLDomMgt.AddElement(DocumentsNode,'document','','',DocumentNode);
+              XMLDomMgt.AddElement(DocumentNode,'referenceNumber',BOLNo,'',ChildNode);//VAH Temp BOL
+              XMLDomMgt.AddElement(DocumentNode,'searchModifier','BOL','',ChildNode);
+      XMLRequest.AppendChild(RootNode);
+
+      HttpWebRequest := HttpWebRequest.Create(DSHIPFreightIntegProvider."API URL");
+      HttpWebRequest.UseDefaultCredentials := TRUE;
+
+      HttpWebRequest.Method := 'POST';
+      HttpWebRequest.ContentType := TypeValue;
+      XMLRequest.Save(HttpWebRequest.GetRequestStream);
+      //XMLRequest.Save('U:\Lanham\UnishipDocumentRequest.xml'); //Save xml
+      //MESSAGE(XMLRequest.InnerXml); //VAH Document Request Msg
+      HttpWebResponse := HttpWebRequest.GetResponse;
+      ProgressWindow.CLOSE;
+      IF HttpWebResponse.StatusCode = 200 THEN BEGIN
+        //MESSAGE('BOL Request Completed');
+        XMLResponse.Load(HttpWebResponse.GetResponseStream);
+        //MESSAGE(XMLResponse.InnerXml);
+
+        DocumentRespNode := XMLResponse.DocumentElement.SelectSingleNode('//document');
+        XMLNodeListRef := DocumentRespNode.ChildNodes;
+          FOREACH Base64Node IN XMLNodeListRef DO BEGIN
+            //NodeCountRef += 1;
+            Ctr += 1;
+            IF Base64Node.Name = 'name' THEN
+              UniBOLFileName := Base64Node.InnerText;
+
+            BOLFileName := 'BOL'+FORMAT(Ctr)+'.pdf';
+            IF Base64Node.Name = 'base64Value' THEN BEGIN
+              TempBlob.INIT;
+              TempBlob.FromBase64String(Base64Node.InnerText);
+              TempBlob."Primary Key" := Ctr;
+              TempBlob.INSERT;
+              TempBlob.Blob.CREATEINSTREAM(IStream);
+              LPHeader.GET(trecParam."License Plate No.");
+              Location.GET(LPHeader."Location Code");
+              IF Location."Print Address Label" AND (STRPOS(UniBOLFileName,'palletLabelOneDynamic')<>0) THEN
+                DOWNLOADFROMSTREAM(IStream,'','','',BOLFileName);
+              IF STRPOS(UniBOLFileName,'UnishippersBOL') <> 0 THEN BEGIN
+                DOWNLOADFROMSTREAM(IStream,'','','',BOLFileName);
+                DOWNLOADFROMSTREAM(IStream,'','','',UniBOLFileName);
+              END;
+             //MESSAGE(Base64Node.InnerText);
+            END;
+            //MESSAGE(XMLNodeValue.InnerText);
+          END;
+
+      END ELSE
+        XMLResponse.Load(HttpWebResponse.GetResponseStream);
+        EXIT(FALSE);
+      //</TPZ3187>
+    END;
+
+    LOCAL PROCEDURE UnishipTrackingRequest@1000000003() : Boolean;
+    VAR
+      ProgressWindow@1000000000 : Dialog;
+      XMLRequest@1000000005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      RootNode@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLDomMgt@1000000003 : Codeunit 6224;
+      BodyNode@1000000002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ChildNode@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      trackingNode@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      shipmentsNode@1000000007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      shipmentNode@1000000008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      HttpWebRequest@1000000009 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      ContentType@1000000011 : TextConst 'ENU=Content-type';
+      TypeValue@1000000010 : TextConst 'ENU="text/xml;charset=utf-8"';
+      HttpWebResponse@1000000012 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      TempBlob@1000000013 : TEMPORARY Record 99008535;
+      InStr@1000000014 : InStream;
+      JSONBuffer@1000000015 : TEMPORARY Record 1236;
+      HttpStatusCode@1000000017 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpStatusCode";
+      ResponseHeaders@1000000016 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NameValueCollection";
+      HttpWebRequestMgt@1000000018 : Codeunit 1297;
+      Doc@1000000019 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLResponse@1000000020 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      proNumberNode@1000000021 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ShippingAgent@1000000022 : Record 291;
+      LPHeader@1000000023 : Record 23044505;
+    BEGIN
+      //<TPZ3187>
+      IF NOT IsUnishipperEnable THEN
+        EXIT;
+      LPHeader.GET(trecParam."License Plate No.");
+      //>> Auth
+      DSHIPFreightIntegProvider.RESET;
+      //DSHIPFreightIntegProvider.SETRANGE(Code,'UNISHIPPER');
+      DSHIPFreightIntegProvider.SETRANGE("Location Code",LPHeader."Location Code");
+      DSHIPFreightIntegProvider.FINDFIRST;
+      //<<Auth
+      IF GUIALLOWED THEN
+        ProgressWindow.OPEN(Text50004);
+
+      XMLRequest := XMLRequest.XmlDocument;
+      XMLResponse := XMLResponse.XmlDocument;
+
+      RootNode := XMLRequest.CreateNode('element','requests','');
+        //XMLDomMgt.AddAttribute(RootNode,'username','U19346929517');
+        //XMLDomMgt.AddAttribute(RootNode,'password','');
+        //XMLDomMgt.AddAttribute(RootNode,'id','42');
+        XMLDomMgt.AddAttribute(RootNode,'id',DSHIPFreightIntegProvider."Unishipper ID");
+        //XMLDomMgt.AddAttribute(RootNode,'token','28e8c450-eefc-11e6-a435-0050560903bc');
+        XMLDomMgt.AddAttribute(RootNode,'token',DSHIPFreightIntegProvider."API Key");
+        XMLDomMgt.AddElement(RootNode,'request','','',BodyNode);
+          XMLDomMgt.AddAttribute(BodyNode,'service','tracking');
+          XMLDomMgt.AddElement(BodyNode,'tracking','','',trackingNode);
+            XMLDomMgt.AddElement(trackingNode,'shipments','','',shipmentsNode);
+              XMLDomMgt.AddElement(shipmentsNode,'shipment','','',shipmentNode);
+                XMLDomMgt.AddElement(shipmentNode,'scac',SCAC,'',ChildNode);
+                XMLDomMgt.AddElement(shipmentNode,'bolNumber',BOLNo,'',ChildNode);//VAH temp bol
+                XMLDomMgt.AddElement(shipmentNode,'proNumber','','',ChildNode);
+                XMLDomMgt.AddElement(shipmentNode,'originPostalCode',originPostalCode,'',ChildNode);
+                XMLDomMgt.AddElement(shipmentNode,'destinationPostalCode',destinationPostalCode,'',ChildNode);
+                XMLDomMgt.AddElement(shipmentNode,'shipmentDate','','',ChildNode);
+
+      XMLRequest.AppendChild(RootNode);
+
+      HttpWebRequest := HttpWebRequest.Create(DSHIPFreightIntegProvider."API URL");
+      HttpWebRequest.UseDefaultCredentials := TRUE;
+
+      HttpWebRequest.Method := 'POST';
+      HttpWebRequest.ContentType := TypeValue;
+      XMLRequest.Save(HttpWebRequest.GetRequestStream);
+      //XMLRequest.Save('U:\Lanham\UnishipTrackingRequest.xml'); //Save xml
+      //MESSAGE(XMLRequest.InnerXml); //VAH Document Request Msg
+      HttpWebResponse := HttpWebRequest.GetResponse;
+      ProgressWindow.CLOSE;
+      //TempBlob.INIT;
+      //TempBlob.Blob.CREATEINSTREAM(InStr);
+      IF HttpWebResponse.StatusCode = 200 THEN BEGIN
+        XMLResponse.Load(HttpWebResponse.GetResponseStream);
+        //XMLResponse.Save('U:\Lanham\TrackingResponse.xml');
+        //MESSAGE(XMLResponse.InnerXml);
+        {
+        proNumber := XMLResponse.DocumentElement.SelectSingleNode('//proNumber').InnerText;
+        trecParam."Package Tracking No." := proNumber;} // VAH temp pro
+        //IF proNumber <> '' THEN
+          IWXLicensePlateHeader.SETRANGE("Source No.",trecParam."Document No."); //TPZ3299
+          IF IWXLicensePlateHeader.FINDSET THEN
+            REPEAT
+              IF ShippingAgent.GET(SalesHeader."Shipping Agent Code") THEN
+                IWXLicensePlateHeader.VALIDATE("Shipment Tracking URL",STRSUBSTNO(ShippingAgent."Internet Address",proNumber));
+              IWXLicensePlateHeader.VALIDATE("BOL No.",BOLNo);
+              IWXLicensePlateHeader.VALIDATE("Package Tracking Number",proNumber);
+              IWXLicensePlateHeader.MODIFY(TRUE);
+
+            UNTIL IWXLicensePlateHeader.NEXT=0;
+
+        EXIT(TRUE);
+      END;
+      //</TPZ3187>
+    END;
+
+    LOCAL PROCEDURE isPalletEntry@1000000059(LPPara@1000000001 : Code[20]) : Boolean;
+    VAR
+      PalletEntry1@1000000000 : Record 50068;
+    BEGIN
+      //TPZ3299
+      PalletEntry1.RESET;
+      //PalletEntry1.SETFILTER("Order No.","Source ID");
+      PalletEntry1.SETRANGE("License Plate No.",LPPara);
+      PalletEntry1.SETRANGE(Status,PalletEntry1.Status::Released);
+      IF PalletEntry1.FINDFIRST THEN BEGIN
+        REPEAT
+          PalletEntry1.TESTFIELD(Weight);
+        UNTIL PalletEntry1.NEXT =0;
+        EXIT(TRUE);
+      END ELSE
+        EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE UnishipQuoteRequestPallet@1000000004(CarrierID@1000000020 : Code[20]);
+    VAR
+      OutStrm@1000000001 : OutStream;
+      TempBlob@1000000000 : Record 99008535;
+      XMLDocQ@1000000008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLNodeRef@1000000007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLNodeListRef@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      NodeCountRef@1000000005 : Integer;
+      XMLNodeValue@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      QuoteResponseValues@1000000003 : ARRAY [6] OF Text;
+      HttpWebRequestMgtQuote@1000000009 : Codeunit 1297;
+      RequestText@1000000010 : Text;
+      ResponseInStrm@1000000011 : InStream;
+      PalletEntry@1000000012 : Record 50068;
+      QuoteRequest@1000000013 : XMLport 50038;
+      Instrm@1000000014 : InStream;
+      Streamreader@1000000015 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      HttpStatusCode@1000000017 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpStatusCode";
+      ResponseHeaders@1000000018 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NameValueCollection";
+      XMLDOMManagement@1000000019 : Codeunit 6224;
+      ProgressWindow@1000000021 : Dialog;
+      ReqDoc@1000200012 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+    BEGIN
+      //<TPZ3187>
+      IF NOT IsUnishipperEnable THEN
+        EXIT;
+
+      IF GUIALLOWED THEN
+        ProgressWindow.OPEN(Text50001);
+      CLEAR(OutStrm);
+      CLEAR(TempBlob);
+      CLEAR(HttpWebRequestMgtQuote);
+      CLEAR(RequestText);
+      CLEAR(ResponseInStrm);
+      PalletEntry.RESET;
+      PalletEntry.SETRANGE("License Plate No.",trecParam."License Plate No.");
+      QuoteRequest.GetSourceDocument(trecParam."Document No.",CarrierID); //temp vah
+      QuoteRequest.SetDateTimeValues(SelectedRateTemp."Pickup Earliest Date",SelectedRateTemp."Pickup Earliest Time",SelectedRateTemp."Pickup Latest Date",SelectedRateTemp."Pickup Latest Time",
+        SelectedRateTemp."Drop Earliest Date",SelectedRateTemp."Drop Earliest Time",SelectedRateTemp."Drop Latest Date",SelectedRateTemp."Drop Latest Time");
+      QuoteRequest.SETTABLEVIEW(PalletEntry);
+      TempBlob.INIT;
+      TempBlob.Blob.CREATEOUTSTREAM(OutStrm);
+      QuoteRequest.SETDESTINATION(OutStrm);
+      QuoteRequest.EXPORT;
+      TempBlob.Blob.CREATEINSTREAM(Instrm);
+      Streamreader := Streamreader.StreamReader(Instrm);
+      RequestText := Streamreader.ReadToEnd;
+      RequestText := COPYSTR(RequestText,57,STRLEN(RequestText)-56);
+      IWXLicensePlateHeader.GET(trecParam."License Plate No.");
+      DSHIPFreightIntegProvider.SETRANGE("Location Code",IWXLicensePlateHeader."Location Code");
+      DSHIPFreightIntegProvider.FINDFIRST;
+      HttpWebRequestMgtQuote.Initialize(DSHIPFreightIntegProvider."API URL");
+      HttpWebRequestMgtQuote.DisableUI();
+      HttpWebRequestMgtQuote.SetMethod('POST');
+      ReqDoc := ReqDoc.XmlDocument();
+      ReqDoc.LoadXml(RequestText);
+      //ReqDoc.Save('U:\Lanham\QuoteRequest.xml');
+      HttpWebRequestMgtQuote.AddBodyAsText(RequestText);
+      TempBlob.INIT;
+      TempBlob.Blob.CREATEINSTREAM(ResponseInStrm);
+      IF HttpWebRequestMgtQuote.GetResponse(ResponseInStrm,HttpStatusCode,ResponseHeaders) THEN BEGIN
+        CLEAR(XMLDocQ);
+        XMLDocQ := XMLDocQ.XmlDocument();
+        XMLDOMManagement.LoadXMLDocumentFromInStream(ResponseInStrm,XMLDocQ);
+        //XMLDocQ.Save('U:\Lanham\QuoteResponse.xml'); //Save xml
+        XMLNodeListRef := XMLDocQ.SelectNodes('//ReferenceNumber');
+        FOREACH XMLNodeValue IN XMLNodeListRef DO BEGIN
+          NodeCountRef += 1;
+          QuoteResponseValues[NodeCountRef] := XMLNodeValue.InnerText;
+        END;
+        ProgressWindow.CLOSE;
+        gQuoteNo := QuoteResponseValues[1];
+        //UnishipperQuoteResponse.SetValues(QuoteResponseValues[1],QuoteResponseValues[2],QuoteResponseValues[3],QuoteResponseValues[4],QuoteResponseValues[5]);
+      END;
+      //</TPZ3187>
+    END;
+
+    LOCAL PROCEDURE JsonRequest@1000000006(VAR ltrecRateBuffer@1000000003 : TEMPORARY Record 23044603);
+    VAR
+      JsonDoc@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      OutStr@1000000001 : OutStream;
+      MyFile@1000000002 : File;
+      i@1000000004 : Integer;
+      PalletEntryLoc@1000000005 : Record 50068;
+      RatePath@1000000006 : TextConst 'ENU="/rate/ltl/v2?subscription-key="';
+      JsonRateUrl@1000000007 : Text;
+      LPHeader@1000000008 : Record 23044505;
+    BEGIN
+      IF NOT IsGTranzEnable THEN
+        EXIT;
+
+      JAddressElements;
+      JSONManagement.InitializeEmptyObject;
+      JSONManagement.GetJSONObject(JObject);
+      JSONManagement.InitializeEmptyObject;
+      JSONManagement.GetJSONObject(OriginObject);
+      JSONManagement.InitializeEmptyObject;
+      JSONManagement.GetJSONObject(DestinationObject);
+      JSONManagement.InitializeEmptyCollection;
+      JSONManagement.GetJsonArray(ItemsArray);
+      JSONManagement.AddJPropertyToJObject(JObject,'CustomerId','22');
+      JSONManagement.AddJPropertyToJObject(JObject,'GuaranteedRates','false');
+      JSONManagement.AddJPropertyToJObject(JObject,'PickupDate',TODAY);
+      JSONManagement.AddJPropertyToJObject(JObject,'ExtremeLength',0);
+      JSONManagement.AddJPropertyToJObject(JObject,'ExtremeLengthBundleCount',0);
+      JSONManagement.AddJPropertyToJObject(JObject,'Stackable',FALSE);
+      JSONManagement.AddJPropertyToJObject(JObject,'TerminalPickup',FALSE);
+      JSONManagement.AddJPropertyToJObject(JObject,'ContactName',ContactName);
+      JSONManagement.AddJPropertyToJObject(JObject,'ValueOfGoods',1234.5);
+      JSONManagement.AddJPropertyToJObject(JObject,'ShipmentNew',FALSE);
+      //vaseem test
+      JSONManagement.AddJPropertyToJObject(OriginObject,'Street',OriginStreet);
+      JSONManagement.AddJPropertyToJObject(OriginObject,'City',OriginCity);
+      JSONManagement.AddJPropertyToJObject(OriginObject,'State',OriginState);
+      JSONManagement.AddJPropertyToJObject(OriginObject,'Zip',OriginZip);
+      JSONManagement.AddJPropertyToJObject(OriginObject,'Country',OriginCountry);
+      JSONManagement.AddJObjectToJObject(JObject,'Origin',OriginObject);
+
+      JSONManagement.AddJPropertyToJObject(DestinationObject,'Street',DestStreet);
+      JSONManagement.AddJPropertyToJObject(DestinationObject,'City',DestCity);
+      JSONManagement.AddJPropertyToJObject(DestinationObject,'State',DestState);
+      JSONManagement.AddJPropertyToJObject(DestinationObject,'Zip',DestZip);
+      JSONManagement.AddJPropertyToJObject(DestinationObject,'Country',DestCountry);
+      JSONManagement.AddJObjectToJObject(JObject,'Destination',DestinationObject);
+      IWXLicensePlateHeader.CALCFIELDS("Source No.");
+      IWXLicensePlateHeader.SETRANGE("Source No.",trecParam."Document No.");
+      IF IWXLicensePlateHeader.FINDSET THEN BEGIN
+        REPEAT
+          //-->Pallet
+          PalletEntryLoc.RESET;
+          PalletEntryLoc.SETRANGE("License Plate No.",IWXLicensePlateHeader."No.");
+          PalletEntryLoc.SETRANGE(Status,PalletEntryLoc.Status::Released);
+          IF PalletEntryLoc.FINDFIRST THEN BEGIN
+            REPEAT
+              JSONManagement.InitializeEmptyObject;
+              JSONManagement.GetJSONObject(ItemsObject);
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'PieceCount',1);
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'PalletCount',PalletEntryLoc."No of Pallet/Box");
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'Length',20);
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'Width',20);
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'Height',20);
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'Weight',PalletEntryLoc.Weight);
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'WeightType',1);
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'ProductClass',50);
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'LinearFeet',0);
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'NmfcNumber','');
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'Description',IWXLicensePlateHeader.Description);
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'PackageType',PalletEntryLoc."Entry Type");
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'Hazmat',FALSE);
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'HazmatClass',10);
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'PackingGroupNumber','');
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'UnPoNumber','');
+              JSONManagement.AddJPropertyToJObject(ItemsObject,'Stackable',FALSE);
+              JSONManagement.AddJObjectToJArray(ItemsArray,ItemsObject);
+              //JSONManagement.AddJArrayToJObject(JObject,'Items',ItemsArray);
+            UNTIL PalletEntryLoc.NEXT = 0;
+          END ELSE BEGIN
+          //<---Pallet
+            JSONManagement.InitializeEmptyObject;
+            JSONManagement.GetJSONObject(ItemsObject);
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'PieceCount',1);
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'PalletCount',1);
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'Length',IWXLicensePlateHeader."Shipment Length");
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'Width',IWXLicensePlateHeader."Shipment Width");
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'Height',IWXLicensePlateHeader."Shipment Height");
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'Weight',IWXLicensePlateHeader."Shipment Gross Weight");
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'WeightType',1);
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'ProductClass',50);
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'LinearFeet',0);
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'NmfcNumber','');
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'Description',IWXLicensePlateHeader.Description);
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'PackageType',0);
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'Hazmat',FALSE);
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'HazmatClass',10);
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'PackingGroupNumber','');
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'UnPoNumber','');
+            JSONManagement.AddJPropertyToJObject(ItemsObject,'Stackable',FALSE);
+            JSONManagement.AddJObjectToJArray(ItemsArray,ItemsObject);
+            //JSONManagement.AddJArrayToJObject(JObject,'Items',ItemsArray);
+          END;
+        UNTIL IWXLicensePlateHeader.NEXT=0;
+        JSONManagement.AddJArrayToJObject(JObject,'Items',ItemsArray);
+      END;
+
+        MyFile.CREATE('U:\Lanham\JsoRateRq.json');
+        MyFile.CREATEOUTSTREAM(OutStr);
+        OutStr.WRITETEXT(FORMAT(JObject.ToString));
+        MyFile.CLOSE;
+      //MESSAGE(JObject.ToString);
+      //EXIT;
+
+      CLEAR(HttpWebRequestMgt);
+      CLEAR(ResponseInStrm);
+      CLEAR(TempBlob);
+      CLEAR(ResponseText);
+      //HttpWebRequestMgt.Initialize('https://api.gtzintegrate.com/docs/?identifier=r9-DxSKqWSCif78eFQLGvQ==jtBEpoLZ-VQIFKrMetluaTw6k6ZmGVNBe6fL3AmA7eO--f9JFPWUdQLLQu4xPRksl-J3s6YFTWZHZ87RB8HaQxTVr0p_93_piyTJcGrSspk');
+      IF DSHIPFreightIntegProvider.GET('GTRANZ') THEN
+        JsonRateUrl := DSHIPFreightIntegProvider."API URL"+RatePath+DSHIPFreightIntegProvider."API Key";
+      //HttpWebRequestMgt.Initialize('https://dev.gtzintegrate.com/rate/ltl/v2?subscription-key=bcc0ec4997814c74a854f9a738a58cbd');
+      HttpWebRequestMgt.Initialize(JsonRateUrl);
+      HttpWebRequestMgt.DisableUI;
+      HttpWebRequestMgt.SetMethod('POST');
+      HttpWebRequestMgt.SetReturnType('application/json');
+      HttpWebRequestMgt.SetContentType('application/json');
+      //HttpWebRequestMgt.AddHeader('subscription-key','bcc0ec4997814c74a854f9a738a58cbd');
+      HttpWebRequestMgt.AddHeader('subscription-key',DSHIPFreightIntegProvider."API Key");
+      //AuthString := STRSUBSTNO('%1:%2','apitesting','Agent%9999');
+      AuthString := STRSUBSTNO('%1:%2',DSHIPFreightIntegProvider."API Username",DSHIPFreightIntegProvider."API Password");
+      AuthString := TypeHelper.ConvertValueToBase64(AuthString);
+      AuthString := STRSUBSTNO('Basic %1',AuthString);
+      HttpWebRequestMgt.AddHeader('Authorization',AuthString);
+      HttpWebRequestMgt.AddBodyAsText(JObject.ToString);
+      TempBlob.INIT;
+      TempBlob.Blob.CREATEINSTREAM(ResponseInStrm);
+      IF HttpWebRequestMgt.GetResponse(ResponseInStrm,HttpStatusCode,ResponseHeaders) THEN BEGIN
+          ResponseInStrm.READ(ResponseText);
+        MyFile.CREATE('U:\Lanham\JsonRateRes.json');
+        MyFile.CREATEOUTSTREAM(OutStr);
+        OutStr.WRITETEXT(FORMAT(ResponseText));
+        JSONManagement.InitializeFromString(ResponseText);
+        JSONManagement.GetJSONObject(JResponseObject);
+        ArrayString := JResponseObject.SelectToken('RateResults').ToString;
+        CLEAR(JSONManagement);
+        CLEAR(JResponseObject);
+        JSONManagement.InitializeCollection(ArrayString);
+        JSONManagement.GetJsonArray(RateResultJArray);
+        FOREACH JResponseObject IN RateResultJArray DO BEGIN
+          //MESSAGE('%1',JResponseObject.GetValue('CustomerName'));
+          ChargesJArray := JResponseObject.GetValue('Charges');
+          TotalCharge := 0;
+          {
+          FOREACH ChargeJObject IN ChargesJArray DO BEGIN
+            EVALUATE(ChargeValue,FORMAT(ChargeJObject.GetValue('Charge')));
+            TotalCharge += ChargeValue;
+          END;}
+          CarrierDetailJObject := JResponseObject.GetValue('CarrierDetail');
+          //MESSAGE(FORMAT(CarrierDetailJObject.GetValue('CarrierName')));
+          i += 1;
+          ltrecRateBuffer.INIT;
+          ltrecRateBuffer.ID := 'extGeneric'+FORMAT(i+200);
+          ltrecRateBuffer."Carrier Name" := FORMAT(CarrierDetailJObject.GetValue('CarrierName'));
+          //ltrecRateBuffer.Service := ServiceNode.InnerText;
+          ltrecRateBuffer.Service := FORMAT(JResponseObject.GetValue('LtlServiceTypeName'));
+          ltrecRateBuffer."Carrier Account ID" := CarrierDetailJObject.GetValue('CarrierId').ToString;
+          //EVALUATE(ltrecRateBuffer."Rate Price" , RateNode.InnerText);
+          EVALUATE(ltrecRateBuffer."Rate Cost",JResponseObject.GetValue('LtlAmount').ToString);
+          EVALUATE(ltrecRateBuffer."Delivery Days" ,JResponseObject.GetValue('LtlServiceDays').ToString);
+          ltrecRateBuffer."Delivery Date" := CREATEDATETIME(TODAY+ltrecRateBuffer."Delivery Days",TIME);
+          ltrecRateBuffer.Currency := 'USD';
+          //ltrecRateBuffer."Contract ID" := ContractIDNode.InnerText;
+          ltrecRateBuffer."Pickup Earliest Date" := TODAY;
+          ltrecRateBuffer."Pickup Earliest Time" := TIME;
+          ltrecRateBuffer."Pickup Latest Date" := TODAY;
+          ltrecRateBuffer."Pickup Latest Time" := TIME+ 10800000;
+          ltrecRateBuffer."Drop Earliest Date" := TODAY;
+          ltrecRateBuffer."Drop Earliest Time" := TIME;
+          ltrecRateBuffer."Drop Latest Date" := TODAY;
+          ltrecRateBuffer."Drop Latest Time" := TIME+ 10800000;
+          //ltrecRateBuffer."Rate Type" := ltrecRateBuffer."Rate Type"::GlobalTranz;
+          ltrecRateBuffer."Direct/Indirect" := ltrecRateBuffer."Direct/Indirect"::Indirect;
+          ltrecRateBuffer."Shipping Agent" := ltrecRateBuffer."Shipping Agent"::"Global Tranz";
+          ltrecRateBuffer."Contract ID" := JResponseObject.SelectToken('QuoteId').ToString;
+          ltrecRateBuffer.INSERT;
+
+        END;
+
+        //ResponseInStrm.
+         // MESSAGE('Response\%1',ResponseText);
+      END;
+    END;
+
+    LOCAL PROCEDURE JAddressElements@1000000007();
+    VAR
+      WarehouseShipmentLine@1000000000 : Record 7321;
+      SalesHeader@1000000001 : Record 36;
+      IsSalesOrder@1000000002 : Boolean;
+      TransferHeader@1000000003 : Record 5740;
+      IsTranferOrder@1000000004 : Boolean;
+      LocationRec@1000000005 : Record 14;
+    BEGIN
+      WarehouseShipmentLine.RESET;
+      WarehouseShipmentLine.SETRANGE("No.",trecParam."Document No.");
+      WarehouseShipmentLine.SETFILTER("Source No.",'<>%1','');
+      IF WarehouseShipmentLine.FINDFIRST THEN BEGIN
+        IF SalesHeader.GET(SalesHeader."Document Type"::Order,WarehouseShipmentLine."Source No.") THEN
+          IsSalesOrder := TRUE;
+        IF TransferHeader.GET(WarehouseShipmentLine."Source No.") THEN
+          IsTranferOrder := TRUE;
+      END
+      ELSE BEGIN
+       IF SalesHeader.GET(SalesHeader."Document Type"::Order,trecParam."Document No.") THEN
+         IsSalesOrder := TRUE; //PKS new line
+       IF TransferHeader.GET(trecParam."Document No.") THEN
+         IsTranferOrder := TRUE;
+      END;
+
+      // Get Origin Address
+      IF IsSalesOrder THEN
+        LocationRec.GET(SalesHeader."Location Code");
+      IF IsTranferOrder THEN
+        LocationRec.GET(TransferHeader."Transfer-to Code");
+      OriginStreet := LocationRec.Address;
+      OriginCity := LocationRec.City;
+      OriginState := LocationRec.County;
+      OriginZip := LocationRec."Post Code";
+      OriginCountry := LocationRec."Country/Region Code";
+      ContactName := LocationRec.Contact;
+        //ShipmentDate := FORMAT(FORMAT(CURRENTDATETIME,0,'<Month,2>/<Day,2>/<Year4> <Hours24,2>:<Minutes,2>'));
+      IF IsSalesOrder THEN BEGIN
+        DestStreet := SalesHeader."Ship-to Address";
+        DestCity := SalesHeader."Ship-to City";
+        DestState := SalesHeader."Ship-to County";
+        DestZip := SalesHeader."Ship-to Post Code";
+        DestCountry := SalesHeader."Ship-to Country/Region Code";
+        trecParam."Order No." := SalesHeader."No.";// 3311
+        trecParam."Destination Zip Code" := DestZip; //3311
+        DestCompName := SalesHeader."Sell-to Customer Name";//new
+        DestPhoneNo := SalesHeader."Sell-to Contact No.";//new
+        DestContactName := SalesHeader."Sell-to Contact";//new
+      END;
+      IF IsTranferOrder THEN BEGIN
+        DestStreet := TransferHeader."Transfer-to Address";
+        DestCity := TransferHeader."Transfer-to City";
+        DestState := TransferHeader."Transfer-to County";;
+        DestZip := TransferHeader."Transfer-to Post Code";
+        DestCountry := TransferHeader."Trsf.-to Country/Region Code";
+        trecParam."Order No." := TransferHeader."No.";//3311
+        trecParam."Destination Zip Code" := DestZip;;//3311
+        DestCompName := TransferHeader."Transfer-to Name";//new
+        DestContactName := TransferHeader."Transfer-to Contact";
+        //DestPhoneNo := TransferHeader.transfer-to
+      END;
+      IF DestCountry = 'US' THEN
+        DestCountry := 'USA';
+      IF OriginCountry = 'US' THEN
+        OriginCountry := 'USA'
+        //ShipmentDate := FORMAT(FORMAT(CURRENTDATETIME,0,'<Month,2>/<Day,2>/<Year4> <Hours24,2>:<Minutes,2>'));
+    END;
+
+    LOCAL PROCEDURE JsonShipmentRequest@1000000008(QuoteID@1000000000 : Text);
+    VAR
+      MyFile@1000000001 : File;
+      OutStr@1000000002 : OutStream;
+      ShipmentPath@1000000003 : TextConst 'ENU="/shipment/ltl?subscription-key="';
+      JsonShipUrl@1000000004 : Text;
+    BEGIN
+      IF NOT IsGTranzEnable THEN
+        EXIT;
+
+      CLEAR(JObject);
+      CLEAR(JSONManagement);
+      CLEAR(OriginObject);
+      CLEAR(DestinationObject);
+      JAddressElements;
+      JSONManagement.InitializeEmptyObject;
+      JSONManagement.GetJSONObject(JObject);
+      JSONManagement.AddJPropertyToJObject(JObject,'CustomerId','22');
+      JSONManagement.AddJPropertyToJObject(JObject,'QuoteId',QuoteID);
+      JSONManagement.AddJPropertyToJObject(JObject,'CustomerBOLNo','');
+      JSONManagement.AddJPropertyToJObject(JObject,'ShipperRefNo',trecParam."Order No.");
+      JSONManagement.AddJPropertyToJObject(JObject,'PickupNumber','');
+      JSONManagement.AddJPropertyToJObject(JObject,'PONo','');
+      JSONManagement.AddJPropertyToJObject(JObject,'LabelNotes','');
+      JSONManagement.AddJPropertyToJObject(JObject,'PickupRemarks',SpecialInstruction);
+      JSONManagement.AddJPropertyToJObject(JObject,'DeliveryRemarks','');
+        JSONManagement.InitializeEmptyObject;
+        JSONManagement.GetJSONObject(OriginObject);
+        JSONManagement.AddJPropertyToJObject(OriginObject,'Street',OriginStreet);
+        JSONManagement.AddJPropertyToJObject(OriginObject,'Street2',OriginCity+','+OriginState+','+','+OriginCountry+OriginZip);
+        JSONManagement.AddJPropertyToJObject(OriginObject,'ContactName',ContactName);
+        JSONManagement.AddJPropertyToJObject(OriginObject,'PhoneNumber',OriginPhoneNo);
+        JSONManagement.AddJPropertyToJObject(OriginObject,'ReadyTime','13:00');
+        JSONManagement.AddJPropertyToJObject(OriginObject,'CloseTime','16:00');
+        JSONManagement.AddJObjectToJObject(JObject,'Origin',OriginObject);
+
+        JSONManagement.InitializeEmptyObject;
+        JSONManagement.GetJSONObject(DestinationObject);
+        JSONManagement.AddJPropertyToJObject(DestinationObject,'Street',DestStreet);
+        JSONManagement.AddJPropertyToJObject(DestinationObject,'Street2',DestCity+','+DestState+','+','+DestCountry+DestZip);
+        JSONManagement.AddJPropertyToJObject(DestinationObject,'ContactName',DestContactName);
+        JSONManagement.AddJPropertyToJObject(DestinationObject,'PhoneNumber',DestPhoneNo);
+        JSONManagement.AddJPropertyToJObject(DestinationObject,'ReadyTime','13:00');
+        JSONManagement.AddJPropertyToJObject(DestinationObject,'CloseTime','16:00');
+        JSONManagement.AddJObjectToJObject(JObject,'Destination',DestinationObject);
+
+      CLEAR(HttpWebRequestMgt);
+      CLEAR(ResponseInStrm);
+      CLEAR(TempBlob);
+      CLEAR(ResponseText);
+      IF DSHIPFreightIntegProvider.GET('GTRANZ') THEN
+        JsonShipUrl := DSHIPFreightIntegProvider."API URL"+ShipmentPath+DSHIPFreightIntegProvider."API Key";
+      //HttpWebRequestMgt.Initialize('https://api.gtzintegrate.com/docs/?identifier=r9-DxSKqWSCif78eFQLGvQ==jtBEpoLZ-VQIFKrMetluaTw6k6ZmGVNBe6fL3AmA7eO--f9JFPWUdQLLQu4xPRksl-J3s6YFTWZHZ87RB8HaQxTVr0p_93_piyTJcGrSspk');
+      //HttpWebRequestMgt.Initialize('https://dev.gtzintegrate.com/shipment/ltl?subscription-key=bcc0ec4997814c74a854f9a738a58cbd');
+      HttpWebRequestMgt.Initialize(JsonShipUrl);
+      HttpWebRequestMgt.DisableUI;
+      HttpWebRequestMgt.SetMethod('POST');
+      HttpWebRequestMgt.SetReturnType('application/json');
+      HttpWebRequestMgt.SetContentType('application/json');
+      //HttpWebRequestMgt.AddHeader('subscription-key','bcc0ec4997814c74a854f9a738a58cbd');
+      HttpWebRequestMgt.AddHeader('subscription-key',DSHIPFreightIntegProvider."API Key");
+      //AuthString := STRSUBSTNO('%1:%2','apitesting','Agent%9999');
+      AuthString := STRSUBSTNO('%1:%2',DSHIPFreightIntegProvider."API Username",DSHIPFreightIntegProvider."API Password");
+      AuthString := TypeHelper.ConvertValueToBase64(AuthString);
+      AuthString := STRSUBSTNO('Basic %1',AuthString);
+      HttpWebRequestMgt.AddHeader('Authorization',AuthString);
+      HttpWebRequestMgt.AddBodyAsText(JObject.ToString);
+
+        MyFile.CREATE('U:\Lanham\JsoShipmentRq.json');
+        MyFile.CREATEOUTSTREAM(OutStr);
+        OutStr.WRITETEXT(FORMAT(JObject.ToString));
+        MyFile.CLOSE;
+
+      TempBlob.INIT;
+      TempBlob.Blob.CREATEINSTREAM(ResponseInStrm);
+      IF HttpWebRequestMgt.GetResponse(ResponseInStrm,HttpStatusCode,ResponseHeaders) THEN BEGIN
+          ResponseInStrm.READ(ResponseText);
+        MyFile.CREATE('U:\Lanham\JsonShipment.json');
+        MyFile.CREATEOUTSTREAM(OutStr);
+        OutStr.WRITETEXT(FORMAT(ResponseText));
+        JSONManagement.InitializeFromString(ResponseText);
+        JSONManagement.GetJSONObject(JResponseObject);
+        BOLNo := FORMAT(JResponseObject.GetValue('BOLNumber'));
+        IWXLicensePlateHeader.SETRANGE("No.",trecParam."License Plate No.");
+        IF IWXLicensePlateHeader.FINDSET THEN
+          REPEAT
+            IWXLicensePlateHeader.VALIDATE("BOL No.",BOLNo);
+            IWXLicensePlateHeader.MODIFY(TRUE);
+          UNTIL IWXLicensePlateHeader.NEXT=0;
+          JsonShipTracking;
+          //<TPZ3366> //gg
+          {
+          CLEAR(GlobalTranzBOLReport);
+          //GlobalTranzBOLReport.SETTABLEVIEW(trecParam);
+          GlobalTranzBOLReport.SetValues(trecParam."Document No.",trecParam."Order No.",'test','test'); // add in last 2 param
+          GlobalTranzBOLReport.USEREQUESTPAGE(FALSE);
+          GlobalTranzBOLReport.RUN;}
+          //</TPZ3366>
+      END;
+    END;
+
+    LOCAL PROCEDURE JsonShipTracking@1000000010();
+    VAR
+      ShipTrackUrl@1000000000 : TextConst 'ENU=https://dev.gtzintegrate.com/tracking/v2/';
+      JsonTrackingReq@1000000001 : Text;
+      MyFile@1000000002 : File;
+      OutStr@1000000003 : OutStream;
+      TrackingPath@1000000004 : TextConst 'ENU="/tracking/v2/%1?destinationZip=%2&subscription-key=%3"';
+      ArrayString@1000000005 : Text;
+      JsonBuffer@1000000006 : TEMPORARY Record 1236;
+      ShippingAgent@1000000007 : Record 291;
+    BEGIN
+      IF NOT IsGTranzEnable THEN
+        EXIT;
+
+      //JsonTrackingReq := ShipTrackUrl+trecParam."Order No."+'?destinationZip='+trecParam."Destination Zip Code"+'&subscription-key=bcc0ec4997814c74a854f9a738a58cbd';
+      IF DSHIPFreightIntegProvider.GET('GTRANZ') THEN;
+      JsonTrackingReq := ShipTrackUrl+'21968714'+'?destinationZip='+'20171'+'&subscription-key=bcc0ec4997814c74a854f9a738a58cbd';
+      //JsonTrackingReq := STRSUBSTNO(TrackingPath,'21968714',trecParam."Destination Zip Code",DSHIPFreightIntegProvider."API Key");
+      CLEAR(HttpWebRequestMgt);
+      CLEAR(TempBlob);
+      CLEAR(ResponseText);
+      CLEAR(JSONManagement);
+      CLEAR(JResponseObject);
+      HttpWebRequestMgt.Initialize(JsonTrackingReq);
+      HttpWebRequestMgt.DisableUI;
+      HttpWebRequestMgt.SetMethod('GET');
+      HttpWebRequestMgt.SetReturnType('application/json');
+      HttpWebRequestMgt.SetContentType('application/json');
+      HttpWebRequestMgt.AddHeader('subscription-key','bcc0ec4997814c74a854f9a738a58cbd');
+      //HttpWebRequestMgt.AddHeader('subscription-key',DSHIPFreightIntegProvider."API Key");
+      AuthString := STRSUBSTNO('%1:%2','apitesting','Agent%9999');
+      //AuthString := STRSUBSTNO('%1:%2',DSHIPFreightIntegProvider."API Username",DSHIPFreightIntegProvider."API Password");
+      AuthString := TypeHelper.ConvertValueToBase64(AuthString);
+      AuthString := STRSUBSTNO('Basic %1',AuthString);
+      TempBlob.INIT;
+      TempBlob.Blob.CREATEINSTREAM(ResponseInStrm);
+      IF HttpWebRequestMgt.GetResponse(ResponseInStrm,HttpStatusCode,ResponseHeaders) THEN BEGIN
+        ResponseInStrm.READ(ResponseText);
+        MyFile.CREATE('U:\Lanham\JsonTrackingRes.json');
+        MyFile.CREATEOUTSTREAM(OutStr);
+        OutStr.WRITETEXT(FORMAT(ResponseText));
+        //JSONManagement.InitializeFromString(ResponseText);
+        JsonBuffer.ReadFromText(ResponseText);
+        JsonBuffer.SETRANGE(Path,'[0].ShipmentStatus.PRONo');
+        JsonBuffer.SETRANGE(Depth,3);
+        IF JsonBuffer.FINDSET THEN
+          MESSAGE(FORMAT(JsonBuffer.Value));
+        {
+        JSONManagement.InitializeCollection(ResponseText);
+        //JSONManagement.GetJSONObject(JResponseObject);
+        JSONManagement.GetJSONObject(ProNoJArrayObject);
+        ArrayString := ProNoJArrayObject.
+        JSONManagement.InitializeCollection(ArrayString);
+        JSONManagement.GetJSONObject(JResponseObject);
+        JsonProNo := FORMAT(JResponseObject.GetValue('PRONo'));
+        MESSAGE(JsonProNo);}
+      END;
+    END;
+
+    LOCAL PROCEDURE IsGTranzEnable@1000000009() : Boolean;
+    VAR
+      DSHIPFreightIntegProvider@1000000000 : Record 23044624;
+    BEGIN
+
+      IF (NOT DSHIPFreightIntegProvider.GET('GTRANZ')) OR (NOT DSHIPFreightIntegProvider."Enable API") THEN
+        EXIT(FALSE)
+      ELSE EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE IsUnishipperEnable@1000000013() : Boolean;
+    VAR
+      LPHeader@1000000000 : Record 23044505;
+    BEGIN
+      LPHeader.GET(trecParam."License Plate No.") ;
+      DSHIPFreightIntegProvider.SETRANGE("Location Code",LPHeader."Location Code");
+      IF (NOT DSHIPFreightIntegProvider.FINDSET) OR (NOT DSHIPFreightIntegProvider."Enable API") THEN
+        EXIT(FALSE)
+      ELSE EXIT(TRUE);
+    END;
+
+    PROCEDURE ManualUnishipDocumentRequest@1000000011(VAR LPNo@1000000022 : Code[20]) : Boolean;
+    VAR
+      XMLRequest@1000000002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      XMLResponse@1000000001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      RootNode@1000000000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLDomMgt@1000000003 : Codeunit 6224;
+      BodyNode@1000000004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      DocumentsNode@1000000005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      DocumentNode@1000000006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      ChildNode@1000000007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      HttpWebRequest@1000000010 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebRequest";
+      HttpWebResponse@1000000009 : DotNet "'System, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Net.HttpWebResponse";
+      ProgressWindow@1000000008 : Dialog;
+      ContentType@1000000012 : TextConst 'ENU=Content-type';
+      TypeValue@1000000011 : TextConst 'ENU="text/xml;charset=utf-8"';
+      DocumentRespNode@1000000013 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      XMLNodeListRef@1000000015 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList";
+      Ctr@1000000014 : Integer;
+      Base64Node@1000000016 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      TempBlob@1000000017 : TEMPORARY Record 99008535;
+      i@1170000000 : Integer;
+      IStream@1000000018 : InStream;
+      UniBOLFileName@1000000019 : Text;
+      Location@1000000020 : Record 14;
+      LPHeader@1000000021 : Record 23044505;
+    BEGIN
+      //<TPZ3187>
+      LPHeader.GET(LPNo) ;
+      DSHIPFreightIntegProvider.SETRANGE("Location Code",LPHeader."Location Code");
+      IF (NOT DSHIPFreightIntegProvider.FINDSET) OR (NOT DSHIPFreightIntegProvider."Enable API") THEN
+        EXIT;
+
+      //LPHeader.GET(LPNo);//1111
+      //>> Auth
+      DSHIPFreightIntegProvider.RESET;
+      //DSHIPFreightIntegProvider.SETRANGE(Code,'UNISHIPPER');
+      DSHIPFreightIntegProvider.SETRANGE("Location Code",LPHeader."Location Code");
+      DSHIPFreightIntegProvider.FINDFIRST;
+      //<<Auth
+      IF GUIALLOWED THEN
+        ProgressWindow.OPEN(Text50003);
+
+      XMLRequest := XMLRequest.XmlDocument;
+      XMLResponse := XMLResponse.XmlDocument;
+
+      RootNode := XMLRequest.CreateNode('element','requests','');
+        //XMLDomMgt.AddAttribute(RootNode,'username','U19346929517');
+        XMLDomMgt.AddAttribute(RootNode,'username',DSHIPFreightIntegProvider."API Username");
+        XMLDomMgt.AddAttribute(RootNode,'password','');
+        //XMLDomMgt.AddAttribute(RootNode,'id','42');
+        XMLDomMgt.AddAttribute(RootNode,'id',DSHIPFreightIntegProvider."Unishipper ID");
+        //XMLDomMgt.AddAttribute(RootNode,'token','28e8c450-eefc-11e6-a435-0050560903bc');
+        XMLDomMgt.AddAttribute(RootNode,'token',DSHIPFreightIntegProvider."API Key");
+        XMLDomMgt.AddElement(RootNode,'request','','',BodyNode);
+          XMLDomMgt.AddAttribute(BodyNode,'service','documentRequest');
+          XMLDomMgt.AddElement(BodyNode,'documents','','',DocumentsNode);
+            XMLDomMgt.AddElement(DocumentsNode,'document','','',DocumentNode);
+              XMLDomMgt.AddElement(DocumentNode,'referenceNumber',LPHeader."BOL No.",'',ChildNode);//VAH Temp BOL //1111
+              XMLDomMgt.AddElement(DocumentNode,'searchModifier','BOL','',ChildNode);
+      XMLRequest.AppendChild(RootNode);
+
+      HttpWebRequest := HttpWebRequest.Create(DSHIPFreightIntegProvider."API URL");
+      HttpWebRequest.UseDefaultCredentials := TRUE;
+
+      HttpWebRequest.Method := 'POST';
+      HttpWebRequest.ContentType := TypeValue;
+      XMLRequest.Save(HttpWebRequest.GetRequestStream);
+      XMLRequest.Save('U:\Lanham\UnishipDocumentRequest.xml'); //Save xml
+      //MESSAGE(XMLRequest.InnerXml); //VAH Document Request Msg
+      HttpWebResponse := HttpWebRequest.GetResponse;
+      ProgressWindow.CLOSE;
+      IF HttpWebResponse.StatusCode = 200 THEN BEGIN
+        //MESSAGE('BOL Request Completed');
+        XMLResponse.Load(HttpWebResponse.GetResponseStream);
+        //MESSAGE(XMLResponse.InnerXml);
+
+        DocumentRespNode := XMLResponse.DocumentElement.SelectSingleNode('//document');
+        XMLNodeListRef := DocumentRespNode.ChildNodes;
+          FOREACH Base64Node IN XMLNodeListRef DO BEGIN
+            //NodeCountRef += 1;
+            Ctr += 1;
+            IF Base64Node.Name = 'name' THEN
+              UniBOLFileName := Base64Node.InnerText;
+
+            BOLFileName := 'BOL'+FORMAT(Ctr)+'.pdf';
+            IF Base64Node.Name = 'base64Value' THEN BEGIN
+              TempBlob.INIT;
+              TempBlob.FromBase64String(Base64Node.InnerText);
+              TempBlob."Primary Key" := Ctr;
+              TempBlob.INSERT;
+              TempBlob.Blob.CREATEINSTREAM(IStream);
+              LPHeader.GET(LPNo);
+              Location.GET(LPHeader."Location Code");
+              IF Location."Print Address Label" AND (STRPOS(UniBOLFileName,'palletLabelOneDynamic')<>0) THEN
+                DOWNLOADFROMSTREAM(IStream,'','','',BOLFileName);
+              IF STRPOS(UniBOLFileName,'UnishippersBOL') <> 0 THEN BEGIN
+                DOWNLOADFROMSTREAM(IStream,'','','',BOLFileName);
+                //DOWNLOADFROMSTREAM(IStream,'','','',UniBOLFileName);
+              END;
+             //MESSAGE(Base64Node.InnerText);
+            END;
+            //MESSAGE(XMLNodeValue.InnerText);
+          END;
+
+      END ELSE
+        XMLResponse.Load(HttpWebResponse.GetResponseStream);
+        EXIT(FALSE);
+      //</TPZ3187>
+    END;
+
+    LOCAL PROCEDURE IsNonTBDOrder@1000000012();
+    VAR
+      WarehouseShipmentLine@1000000000 : Record 7321;
+      SalesHeader@1000000001 : Record 36;
+      DSHIPCarrier@1000000002 : Record 23044607;
+    BEGIN
+      CLEAR(NonTBDorder);
+      WarehouseShipmentLine.RESET;
+      WarehouseShipmentLine.SETRANGE("No.",trecParam."Document No.");
+      WarehouseShipmentLine.SETFILTER("Source No.",'<>%1','');
+      IF WarehouseShipmentLine.FINDFIRST THEN BEGIN
+      IF SalesHeader.GET(SalesHeader."Document Type"::Order,WarehouseShipmentLine."Source No.") THEN BEGIN
+        DSHIPCarrier.SETRANGE(Code,SalesHeader."Shipping Agent Code");
+        IF (DSHIPCarrier.FINDFIRST) AND (DSHIPCarrier."Freight Integ. Provider Code" = 'EXTERNAL') AND (SalesHeader."Shipping Agent Code"<>'TBD') THEN
+           NonTBDorder := TRUE;
+        END;
+      END;
+    END;
+
+    EVENT ProNoJArrayObject@1000000010::ListChanged@117(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.ListChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT ProNoJArrayObject@1000000010::AddingNew@118(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.AddingNewEventArgs");
+    BEGIN
+    END;
+
+    EVENT ProNoJArrayObject@1000000010::CollectionChanged@119(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NotifyCollectionChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT CarrierDetailJObject@1000000030::PropertyChanged@117(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT CarrierDetailJObject@1000000030::PropertyChanging@118(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangingEventArgs");
+    BEGIN
+    END;
+
+    EVENT CarrierDetailJObject@1000000030::ListChanged@119(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.ListChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT CarrierDetailJObject@1000000030::AddingNew@120(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.AddingNewEventArgs");
+    BEGIN
+    END;
+
+    EVENT CarrierDetailJObject@1000000030::CollectionChanged@121(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NotifyCollectionChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT ChargesJArray@1000000033::ListChanged@117(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.ListChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT ChargesJArray@1000000033::AddingNew@118(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.AddingNewEventArgs");
+    BEGIN
+    END;
+
+    EVENT ChargesJArray@1000000033::CollectionChanged@119(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NotifyCollectionChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT ChargeJObject@1000000034::PropertyChanged@117(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT ChargeJObject@1000000034::PropertyChanging@118(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangingEventArgs");
+    BEGIN
+    END;
+
+    EVENT ChargeJObject@1000000034::ListChanged@119(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.ListChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT ChargeJObject@1000000034::AddingNew@120(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.AddingNewEventArgs");
+    BEGIN
+    END;
+
+    EVENT ChargeJObject@1000000034::CollectionChanged@121(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NotifyCollectionChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT RateResultJArray@1000000035::ListChanged@117(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.ListChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT RateResultJArray@1000000035::AddingNew@118(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.AddingNewEventArgs");
+    BEGIN
+    END;
+
+    EVENT RateResultJArray@1000000035::CollectionChanged@119(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NotifyCollectionChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT JResponseObject@1000000037::PropertyChanged@117(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT JResponseObject@1000000037::PropertyChanging@118(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangingEventArgs");
+    BEGIN
+    END;
+
+    EVENT JResponseObject@1000000037::ListChanged@119(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.ListChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT JResponseObject@1000000037::AddingNew@120(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.AddingNewEventArgs");
+    BEGIN
+    END;
+
+    EVENT JResponseObject@1000000037::CollectionChanged@121(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NotifyCollectionChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT ItemsObject@1000000046::PropertyChanged@117(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT ItemsObject@1000000046::PropertyChanging@118(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangingEventArgs");
+    BEGIN
+    END;
+
+    EVENT ItemsObject@1000000046::ListChanged@119(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.ListChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT ItemsObject@1000000046::AddingNew@120(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.AddingNewEventArgs");
+    BEGIN
+    END;
+
+    EVENT ItemsObject@1000000046::CollectionChanged@121(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NotifyCollectionChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT ItemsArray@1000000047::ListChanged@117(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.ListChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT ItemsArray@1000000047::AddingNew@118(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.AddingNewEventArgs");
+    BEGIN
+    END;
+
+    EVENT ItemsArray@1000000047::CollectionChanged@119(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NotifyCollectionChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DestinationObject@1000000048::PropertyChanged@117(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DestinationObject@1000000048::PropertyChanging@118(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangingEventArgs");
+    BEGIN
+    END;
+
+    EVENT DestinationObject@1000000048::ListChanged@119(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.ListChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DestinationObject@1000000048::AddingNew@120(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.AddingNewEventArgs");
+    BEGIN
+    END;
+
+    EVENT DestinationObject@1000000048::CollectionChanged@121(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NotifyCollectionChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT OriginObject@1000000049::PropertyChanged@117(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT OriginObject@1000000049::PropertyChanging@118(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangingEventArgs");
+    BEGIN
+    END;
+
+    EVENT OriginObject@1000000049::ListChanged@119(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.ListChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT OriginObject@1000000049::AddingNew@120(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.AddingNewEventArgs");
+    BEGIN
+    END;
+
+    EVENT OriginObject@1000000049::CollectionChanged@121(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NotifyCollectionChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT JObject@1000000050::PropertyChanged@117(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT JObject@1000000050::PropertyChanging@118(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.PropertyChangingEventArgs");
+    BEGIN
+    END;
+
+    EVENT JObject@1000000050::ListChanged@119(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.ListChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT JObject@1000000050::AddingNew@120(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.ComponentModel.AddingNewEventArgs");
+    BEGIN
+    END;
+
+    EVENT JObject@1000000050::CollectionChanged@121(sender@1000000001 : Variant;e@1000000000 : DotNet "'System, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Collections.Specialized.NotifyCollectionChangedEventArgs");
+    BEGIN
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+      2019-12-18 TPZ2723 VAHAMAD
+       Code modified in function handleGetRates to display multiple External carrier in Rate List Page and message page
+
+      001 TPZ3187 VAH 10052021 Added new functions UnishipQuoteRequest,UnishipBOLRequest,UnishipDocumentRequest,UnishipTrackingRequest,
+          isPalletEntry,UnishipQuoteRequestPallet,JsonRequest,JAddressElements,JsonShipmentRequest,JsonShipTracking,IsGTranzEnable,IsUnishipperEnable
+          Added Code in function handleGetLabels,handleGetRates
+      001 TPZ3299 PKS 08052021 Added code to flow pallet dimension to Unishipper
+    }
+    END.
+  }
+}
+

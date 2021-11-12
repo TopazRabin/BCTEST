@@ -1,0 +1,184 @@
+OBJECT Codeunit 50022 Topaz Usage Redirect
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/10/16;
+    Time=[ 8:58:52 AM];
+    Version List=LA006,HF;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            Update;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InvMgtSetup@1240030001 : Record 14000551;
+      LocationInventoryPeriodTmp@1240030000 : TEMPORARY Record 14000553;
+      ProcUnit@1240030002 : Record 14000555;
+      ProcUnit2@1240030003 : Record 14000555;
+
+    PROCEDURE Update@1240030003();
+    VAR
+      Location@1240030003 : Record 14;
+      ProcUnit@1240030013 : Record 14000555;
+      UsageLedgerEntry@1240030001 : Record 14000556;
+      InvMgt@1240030014 : Codeunit 14000553;
+      DisplayWindow@1240030007 : Dialog;
+      Text000@1240030008 : TextConst 'ENU=Redirecting Usage...';
+      Text001@1240030009 : TextConst 'ENU=Customer Division';
+      Text002@1240030010 : TextConst 'ENU=Ship To Division';
+      UsageRedirectTemp@1000000002 : TEMPORARY Record 14000582;
+      ToRedirect@1240030011 : Integer;
+      Redirected@1240030012 : Integer;
+      Text003@1240030015 : TextConst 'ENU=Topaz Division Usage Redirect';
+      LogEntryNo@1240030016 : Integer;
+      CustDivRedirect@1000000000 : Query 50009;
+      ShipToDivRedirect@1000000001 : Query 50008;
+    BEGIN
+      InvMgtSetup.GET;
+      InvMgt.CreateLogEntry('',Text003,LogEntryNo);
+      COMMIT;
+
+      IF GUIALLOWED THEN BEGIN
+        DisplayWindow.OPEN(
+          '#1############################\' +
+          '#2############################\' +
+          PADSTR(Text000,30) + '#3##################\');
+        DisplayWindow.UPDATE(1,Text003);
+      END;
+
+      IF GUIALLOWED THEN BEGIN
+        DisplayWindow.UPDATE(2, Text001);
+      END;
+
+      // customer division redirect - no ship-to on usage history
+      CustDivRedirect.SETFILTER(Cust_Location, '<>%1', '');
+      IF CustDivRedirect.OPEN THEN BEGIN
+        WHILE CustDivRedirect.READ DO BEGIN
+          IF CustDivRedirect.Cust_Location <> CustDivRedirect.Location_Code THEN BEGIN
+            UsageLedgerEntry.GET(CustDivRedirect.Entry_No);
+            UsageLedgerEntry."Location Code" := CustDivRedirect.Cust_Location;
+            UpdateProcUnit(UsageLedgerEntry);
+            CheckForecastCustomer(UsageLedgerEntry);
+            UsageLedgerEntry.MODIFY(FALSE);
+            Redirected := Redirected + 1;
+            IF GUIALLOWED THEN BEGIN
+              IF (Redirected MOD 10) = 0 THEN
+                DisplayWindow.UPDATE(3, Redirected);
+            END;
+            IF (Redirected MOD 1000) = 0 THEN
+              COMMIT;
+          END;
+        END;
+        CustDivRedirect.CLOSE;
+      END;
+
+       IF GUIALLOWED THEN BEGIN
+         DisplayWindow.UPDATE(2, Text002);
+       END;
+
+
+      // ship-to division redirect - matching ship-to code
+      ShipToDivRedirect.SETFILTER(Ship_to_Location, '<>%1', '');
+      IF ShipToDivRedirect.OPEN THEN BEGIN
+        WHILE ShipToDivRedirect.READ DO BEGIN
+          IF ShipToDivRedirect.Ship_to_Location <> ShipToDivRedirect.Location_Code THEN BEGIN
+            UsageLedgerEntry.GET(ShipToDivRedirect.Entry_No);
+            UsageLedgerEntry."Location Code" := ShipToDivRedirect.Ship_to_Location;
+            UpdateProcUnit(UsageLedgerEntry);
+            CheckForecastCustomer(UsageLedgerEntry);
+            UsageLedgerEntry.MODIFY(FALSE);
+            Redirected := Redirected + 1;
+            IF GUIALLOWED THEN BEGIN
+              IF (Redirected MOD 10) = 0 THEN
+                DisplayWindow.UPDATE(3, Redirected);
+            END;
+            IF (Redirected MOD 1000) = 0 THEN
+              COMMIT;
+          END;
+        END;
+        ShipToDivRedirect.CLOSE;
+      END;
+
+      COMMIT;
+      IF GUIALLOWED THEN
+        DisplayWindow.CLOSE;
+
+      InvMgt.CloseLogEntry(LogEntryNo,'');
+      COMMIT;
+    END;
+
+    PROCEDURE UpdateProcUnit@1000000001(VAR CurrUsageLedgerEntry@1240030000 : Record 14000556);
+    BEGIN
+      IF (CurrUsageLedgerEntry."Location Code" <> CurrUsageLedgerEntry."Original Location Code") OR
+         (CurrUsageLedgerEntry."Item No." <> CurrUsageLedgerEntry."Original Item No.") OR
+         (CurrUsageLedgerEntry."Variant Code" <> CurrUsageLedgerEntry."Original Variant Code") THEN BEGIN
+        IF ProcUnit.GET(
+          CurrUsageLedgerEntry."Location Code",
+          CurrUsageLedgerEntry."Item No.",
+          CurrUsageLedgerEntry."Variant Code") THEN BEGIN
+            ProcUnit."Change Reforecast Required" := TRUE;
+            IF InvMgtSetup."Roll Up Via Repl. Path" THEN
+              ProcUnit."Reforecast Item" := TRUE;
+          IF (ProcUnit."First Stocked Date" = 0D) OR
+             (ProcUnit."First Stocked Date" > CurrUsageLedgerEntry."Usage Date") THEN
+            ProcUnit."First Stocked Date" := CurrUsageLedgerEntry."Usage Date";
+          ProcUnit.MODIFY(FALSE);
+        END ELSE BEGIN
+          ProcUnit.INIT;
+          ProcUnit."Location Code" := CurrUsageLedgerEntry."Location Code";
+          ProcUnit."Item No." := CurrUsageLedgerEntry."Item No.";
+          ProcUnit."Variant Code" := CurrUsageLedgerEntry."Variant Code";
+          ProcUnit.SetAutoInsert;
+          ProcUnit.INSERT(TRUE);
+        END;
+        IF ProcUnit.GET(
+          CurrUsageLedgerEntry."Original Location Code",
+          CurrUsageLedgerEntry."Original Item No.",
+          CurrUsageLedgerEntry."Original Variant Code") THEN BEGIN
+            ProcUnit."Change Reforecast Required" := TRUE;
+            IF InvMgtSetup."Roll Up Via Repl. Path" THEN
+              ProcUnit."Reforecast Item" := TRUE;
+          IF (ProcUnit."First Stocked Date" = 0D) OR
+             (ProcUnit."First Stocked Date" > CurrUsageLedgerEntry."Usage Date") THEN
+            ProcUnit."First Stocked Date" := CurrUsageLedgerEntry."Usage Date";
+          ProcUnit.MODIFY(FALSE);
+        END ELSE BEGIN
+          ProcUnit.INIT;
+          ProcUnit."Location Code" := CurrUsageLedgerEntry."Original Location Code";
+          ProcUnit."Item No." := CurrUsageLedgerEntry."Original Item No.";
+          ProcUnit."Variant Code" := CurrUsageLedgerEntry."Original Variant Code";
+          ProcUnit.SetAutoInsert;
+          ProcUnit.INSERT(TRUE);
+        END;
+      END;
+    END;
+
+    PROCEDURE CheckForecastCustomer@1240030007(VAR CurrUsageLedgerEntry@1240030000 : Record 14000556);
+    VAR
+      ForCustItem@1240030001 : Record 14002602;
+    BEGIN
+      IF CurrUsageLedgerEntry."Entry Type" = CurrUsageLedgerEntry."Entry Type"::Sale THEN BEGIN
+        ForCustItem.RESET;
+        IF ForCustItem.GET(
+          CurrUsageLedgerEntry."Source No.",CurrUsageLedgerEntry."Location Code",
+          CurrUsageLedgerEntry."Item No.",CurrUsageLedgerEntry."Variant Code")
+        THEN BEGIN
+          IF ForCustItem."Forecast Type" = ForCustItem."Forecast Type"::Total THEN
+            CurrUsageLedgerEntry."Forecast Customer" := TRUE
+          ELSE
+            CurrUsageLedgerEntry."Forecast Customer" := FALSE;
+        END ELSE
+          CurrUsageLedgerEntry."Forecast Customer" := FALSE;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

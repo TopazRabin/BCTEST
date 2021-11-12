@@ -1,0 +1,295 @@
+OBJECT Codeunit 14000571 Reforecast
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/27/19;
+    Time=12:00:00 PM;
+    Version List=UBP3.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InvMgtSetup@1240030004 : Record 14000551;
+      AdvForSetup@1240020003 : Record 14002651;
+      ItemUsage@1240030000 : Record 14000557;
+      Location@1240030010 : Record 14;
+      LocInvPeriod@1240030002 : Record 14000553;
+      ProcUnit@1240030001 : Record 14000555;
+      ForecastSummaryEntry@1240030020 : Record 14000587;
+      PeriodEndCalculation@1240030006 : Codeunit 14000557;
+      PeriodEndPreparation@1240030017 : Codeunit 14000576;
+      UBP@1240030015 : Codeunit 14000564;
+      DispWindow@1240430012 : Dialog;
+      EntryNo@1240030008 : Integer;
+      FirstTranDate@1240030007 : Date;
+      Text001@1240030011 : TextConst 'ENU=Do you wish to Re-Forecast changed items for the selected locations?';
+      Text002@1240030012 : TextConst 'ENU=Reforecasting Procurement Units...';
+      Text003@1240030013 : TextConst 'ENU=Location';
+      Text004@1240030014 : TextConst 'ENU=Item';
+      Counter@1240030018 : Integer;
+      CommitCount@1240020000 : Integer;
+      FirstForecastDate@1240020001 : Date;
+      InventoryMgtSetupRetrieved@1240020002 : Boolean;
+      SkipDialog@1000 : Boolean;
+
+    PROCEDURE YesNo@1240030004();
+    BEGIN
+      IF NOT CONFIRM(Text001) THEN
+        EXIT;
+      Location.RESET;
+      Location.SETRANGE("Select Period End Processing",USERID);
+      IF Location.FIND('-') THEN
+        REPEAT
+          ProcessLocation(Location);
+        UNTIL Location.NEXT = 0;
+    END;
+
+    PROCEDURE ProcessLocation@1240030003(CurrLocation@1240030000 : Record 14);
+    VAR
+      InvMgt@1240030001 : Codeunit 14000553;
+      LogEntryNo@1240030002 : Integer;
+      Text001@1240030003 : TextConst 'ENU=Reforecast Items';
+    BEGIN
+      InvMgt.CreateLogEntry(CurrLocation.Code,Text001,LogEntryNo);
+      COMMIT;
+
+      SkipDialog := FALSE;
+
+      ProcessChange(CurrLocation);
+
+      InvMgt.CloseLogEntry(LogEntryNo,'');
+      COMMIT;
+    END;
+
+    PROCEDURE ProcessChange@1240030002(CurrLocation@1240030001 : Record 14);
+    BEGIN
+      IF GUIALLOWED AND (NOT SkipDialog) THEN BEGIN
+        DispWindow.OPEN(
+          Text002 + '\' +
+          PADSTR(Text003,20) + '#1##################\' +
+          PADSTR(Text004,20) + '#2##################');
+        DispWindow.UPDATE(1,CurrLocation.Code);
+      END;
+
+      GetInventoryMgtSetup;
+
+      ForecastSummaryEntry.RESET;
+      ForecastSummaryEntry.SETCURRENTKEY("Location Code","Item No.","Variant Code");
+      ProcUnit.RESET;
+      ProcUnit.SETCURRENTKEY("Location Code", "Usage Location Filter String");
+      ProcUnit.SETRANGE("Location Code",CurrLocation.Code);
+      ProcUnit.SETRANGE("Change Reforecast Required",TRUE);
+      IF ProcUnit.FINDSET THEN BEGIN
+        IF GUIALLOWED AND (NOT SkipDialog) THEN
+          DispWindow.UPDATE(2,ProcUnit."Item No.");
+        REPEAT
+          IF GUIALLOWED AND (NOT SkipDialog) THEN BEGIN
+            Counter := Counter + 1;
+            IF Counter MOD 10 = 0 THEN
+              DispWindow.UPDATE(2,ProcUnit."Item No.");
+          END;
+          Update(ProcUnit);
+          ForecastSummaryEntry.SETRANGE("Location Code",ProcUnit."Location Code");
+          ForecastSummaryEntry.SETRANGE("Item No.",ProcUnit."Item No.");
+          ForecastSummaryEntry.SETRANGE("Variant Code",ProcUnit."Variant Code");
+          IF ForecastSummaryEntry.FIND('-') THEN
+            REPEAT
+              ForecastSummaryEntry."Review Pending" := TRUE;
+              ForecastSummaryEntry.MODIFY;
+            UNTIL ForecastSummaryEntry.NEXT = 0;
+          CommitCount := CommitCount + 1;
+          IF CommitCount >= 100 THEN BEGIN
+            COMMIT;
+            CommitCount := 0;
+          END;
+        UNTIL ProcUnit.NEXT = 0;
+      END;
+
+      IF GUIALLOWED AND (NOT SkipDialog) THEN
+        DispWindow.CLOSE;
+    END;
+
+    PROCEDURE Update@1240030001(CurrProcUnit@1240030000 : Record 14000555);
+    VAR
+      LocItemUsage@1240030002 : Record 14000557;
+      LocProcUnit@1240030001 : Record 14000555;
+      LastClosedPeriodDate@1240020000 : Date;
+    BEGIN
+      ItemUsage.RESET;
+
+      IF ItemUsage.FINDLAST THEN
+        EntryNo := ItemUsage."Entry No."
+      ELSE
+        EntryNo := 0;
+
+      CurrProcUnit."First Stocked Date" := 0D;
+
+      FirstTranDate := UBP.GetFirstStockedDate(CurrProcUnit,'');
+
+      GetInventoryMgtSetup;
+      IF FirstForecastDate = 0D THEN
+        FirstForecastDate := FindFirstForecastDate;
+
+      LastClosedPeriodDate := 0D;
+      IF FirstTranDate <> 0D THEN BEGIN
+        LocInvPeriod.RESET;
+        LocInvPeriod.SETFILTER("Ending Date",'%1..',FirstTranDate);
+        LocInvPeriod.SETRANGE("Location Code",CurrProcUnit."Location Code");
+        LocInvPeriod.SETRANGE("Day End Closed",TRUE);
+        IF LocInvPeriod.FINDSET THEN BEGIN
+          ItemUsage.RESET;
+          ItemUsage.SETCURRENTKEY("Location Code","Item No.","Variant Code","Starting Date","Ending Date");
+          ItemUsage.SETFILTER("Location Code",CurrProcUnit."Location Code");
+          ItemUsage.SETRANGE("Item No.",CurrProcUnit."Item No.");
+          ItemUsage.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+          ItemUsage.SETFILTER("Ending Date",'<%1',FirstTranDate);
+          ItemUsage.SETFILTER("Source No.",'=%1','');
+          IF NOT ItemUsage.ISEMPTY THEN
+            ItemUsage.DELETEALL;
+          REPEAT
+            ItemUsage.SETRANGE(ItemUsage."Starting Date",LocInvPeriod."Starting Date");
+            ItemUsage.SETRANGE(ItemUsage."Ending Date",LocInvPeriod."Ending Date");
+            IF ItemUsage.ISEMPTY THEN BEGIN
+              LocItemUsage.INIT;
+              EntryNo := EntryNo + 1;
+              LocItemUsage."Entry No." := EntryNo;
+              LocItemUsage."Location Code" := CurrProcUnit."Location Code";
+              LocItemUsage."Item No." := CurrProcUnit."Item No.";
+              LocItemUsage."Variant Code" := CurrProcUnit."Variant Code";
+              LocItemUsage."Starting Date" := LocInvPeriod."Starting Date";
+              LocItemUsage."Ending Date" := LocInvPeriod."Ending Date";
+              LocItemUsage.INSERT;
+              IF LocInvPeriod."Period End Closed" THEN BEGIN
+                IF (LocInvPeriod."Starting Date" < FirstForecastDate) THEN BEGIN
+                  CLEAR(PeriodEndPreparation);
+                  PeriodEndPreparation.Process(LocInvPeriod,CurrProcUnit);
+                END ELSE BEGIN
+                  CLEAR(PeriodEndCalculation);
+                  PeriodEndCalculation.PeriodForecast(LocInvPeriod,CurrProcUnit,'');
+                END;
+              END;
+            END ELSE BEGIN
+              IF LocInvPeriod."Period End Closed" THEN BEGIN
+               IF (LocInvPeriod."Starting Date" < FirstForecastDate) THEN BEGIN
+                  CLEAR(PeriodEndPreparation);
+                  PeriodEndPreparation.Process(LocInvPeriod,CurrProcUnit);
+                END ELSE BEGIN
+                  CLEAR(PeriodEndCalculation);
+                  PeriodEndCalculation.PeriodForecast(LocInvPeriod,CurrProcUnit,'');
+                END;
+              END;
+            END;
+            LastClosedPeriodDate := LocInvPeriod."Ending Date";
+          UNTIL LocInvPeriod.NEXT = 0;
+        END ELSE BEGIN
+          ItemUsage.RESET;
+          ItemUsage.SETCURRENTKEY(
+            "Location Code","Item No.","Variant Code","Starting Date","Ending Date");
+          ItemUsage.SETFILTER("Location Code",CurrProcUnit."Location Code");
+          ItemUsage.SETRANGE("Item No.",CurrProcUnit."Item No.");
+          ItemUsage.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+          ItemUsage.SETFILTER("Source No.",'=%1','');
+          ItemUsage.DELETEALL;
+        END;
+      END ELSE BEGIN
+        ItemUsage.RESET;
+        ItemUsage.SETCURRENTKEY(
+          "Location Code","Item No.","Variant Code","Starting Date","Ending Date");
+        ItemUsage.SETFILTER("Location Code",CurrProcUnit."Location Code");
+        ItemUsage.SETRANGE("Item No.",CurrProcUnit."Item No.");
+        ItemUsage.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+        ItemUsage.SETFILTER("Source No.",'=%1','');
+        ItemUsage.DELETEALL;
+      END;
+
+      // update PUC
+      LocProcUnit.GET(
+        CurrProcUnit."Location Code",CurrProcUnit."Item No.",CurrProcUnit."Variant Code");
+      LocProcUnit."First Stocked Date" := FirstTranDate;
+      LocProcUnit."Change Reforecast Required" := FALSE;
+      LocProcUnit."Reforecast Item" := FALSE;
+
+      ItemUsage.SETRANGE("Location Code",CurrProcUnit."Location Code");
+      ItemUsage.SETRANGE("Item No.",CurrProcUnit."Item No.");
+      ItemUsage.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+      ItemUsage.SETFILTER("Source No.",'=%1','');
+      ItemUsage.SETRANGE("Ending Date",LastClosedPeriodDate);
+      IF ItemUsage.FINDFIRST THEN BEGIN
+        IF  (LocProcUnit."Usage Formula Status" <> ItemUsage.Status) THEN
+         LocProcUnit."Usage Formula Status" := ItemUsage.Status;
+        IF (ProcUnit."Usage Formula Status" = ProcUnit."Usage Formula Status"::Reoccuring) OR
+          (ProcUnit."Usage Formula Status" = ProcUnit."Usage Formula Status"::Sporadic) OR
+          (ProcUnit."Usage Formula Status" = ProcUnit."Usage Formula Status"::Seasonal) THEN BEGIN
+          IF ProcUnit."Sporadic Rule" = AdvForSetup."New Proc. Unit Sporadic Rule" THEN
+            ProcUnit."Sporadic Rule" := '';
+        END;
+      END;
+      LocProcUnit.MODIFY(FALSE);
+    END;
+
+    PROCEDURE ByItem@1240020000(ItemNo@1240020000 : Code[50]);
+    VAR
+      LocProcUnit@1240020001 : Record 14000555;
+      ProgWindow@1240020002 : Dialog;
+    BEGIN
+      SkipDialog := FALSE;
+      IF GUIALLOWED AND (NOT SkipDialog) THEN BEGIN
+        ProgWindow.OPEN(
+          'Location #1########\' +
+          'Item     #2##################');
+      END;
+
+      LocProcUnit.RESET;
+      LocProcUnit.SETRANGE("Item No.",ItemNo);
+      IF LocProcUnit.FIND('-') THEN
+        REPEAT
+          IF GUIALLOWED AND (NOT SkipDialog) THEN BEGIN
+            ProgWindow.UPDATE(1,LocProcUnit."Location Code");
+            ProgWindow.UPDATE(2,LocProcUnit."Item No.");
+          END;
+
+          Update(LocProcUnit);
+        UNTIL LocProcUnit.NEXT = 0;
+
+      IF GUIALLOWED AND (NOT SkipDialog) THEN
+        ProgWindow.CLOSE;
+    END;
+
+    PROCEDURE GetInventoryMgtSetup@1240020001();
+    BEGIN
+      IF NOT InventoryMgtSetupRetrieved THEN BEGIN
+        InvMgtSetup.GET;
+        InventoryMgtSetupRetrieved := TRUE;
+        AdvForSetup.GET;
+      END;
+    END;
+
+    PROCEDURE FindFirstForecastDate@1240020002() BeginForecastDate : Date;
+    VAR
+      ForecastInvPeriod@1240020000 : Record 14000552;
+    BEGIN
+      BeginForecastDate := InvMgtSetup."Usage Start Date";
+      IF InvMgtSetup."Forecast Calc. Prev. Periods" = 0 THEN
+        EXIT(BeginForecastDate);
+      ForecastInvPeriod.RESET;
+      ForecastInvPeriod.SETRANGE(Type, ForecastInvPeriod.Type::" ");
+      ForecastInvPeriod.SETRANGE("Starting Date", 0D, WORKDATE);
+      ForecastInvPeriod.FIND('+');
+      IF NOT (ForecastInvPeriod.COUNT <= (InvMgtSetup."Forecast Calc. Prev. Periods"+1)) THEN BEGIN
+        IF (ForecastInvPeriod.NEXT(-(InvMgtSetup."Forecast Calc. Prev. Periods"+1)) <> 0) THEN
+          BeginForecastDate := ForecastInvPeriod."Starting Date";
+      END;
+      EXIT(BeginForecastDate);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

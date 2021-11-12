@@ -1,0 +1,496 @@
+OBJECT Codeunit 14099302 E.D.I. XML Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/05/18;
+    Time=12:00:00 PM;
+    Version List=SE0.60.19;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NormalCaseMode@1000 : Boolean;
+
+    PROCEDURE AddAttribute@2(VAR XMLNode@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";Name@1002 : Text[250];NodeValue@1003 : Text[250]) ExitStatus@1000 : Integer;
+    VAR
+      XMLNewAttributeNode@1004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      IF NOT NormalCaseMode THEN
+        Name := UPPERCASE(Name);
+
+      XMLNewAttributeNode := XMLNode.OwnerDocument.CreateAttribute(Name);
+      IF ISNULL(XMLNewAttributeNode) THEN BEGIN
+        ExitStatus := 60;
+        EXIT(ExitStatus)
+      END;
+
+      IF NodeValue <> '' THEN
+        XMLNewAttributeNode.Value := NodeValue;
+
+      XMLNode.Attributes.SetNamedItem(XMLNewAttributeNode);
+    END;
+
+    PROCEDURE AddElement@1(VAR XMLNode@1240030004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";NodeName@1002 : Text[250];NodeText@1003 : Text[250];NameSpace@1004 : Text[250];VAR CreatedXMLNode@1005 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode") ExitStatus@1000 : Integer;
+    VAR
+      NewChildNode@1006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      IF NOT NormalCaseMode THEN
+        NodeName := UPPERCASE(NodeName);
+
+      NewChildNode := XMLNode.OwnerDocument.CreateNode('element',NodeName,NameSpace);
+
+      IF ISNULL(NewChildNode) THEN BEGIN
+        ExitStatus := 50;
+        EXIT;
+      END;
+
+      IF NodeText <> '' THEN
+        NewChildNode.InnerText := NodeText;
+
+      XMLNode.AppendChild(NewChildNode);
+      CreatedXMLNode := NewChildNode;
+
+      ExitStatus := 0;
+    END;
+
+    PROCEDURE SetParentNode@1240020005(VAR CurrNode@1240020001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode") ParentNodeSet : Boolean;
+    BEGIN
+      CurrNode := CurrNode.ParentNode;
+      ParentNodeSet := TRUE;
+
+      EXIT(ParentNodeSet);
+    END;
+
+    PROCEDURE CheckCleanString@1240030092(Data@1240030010 : Text[250];IsAttribute@1240020003 : Boolean;EDIDocument@1240020005 : Record 14002353) : Text[250];
+    VAR
+      EDIInvalidCharacter@1240020006 : Record 14002389;
+      BadValues@1240030012 : Text[250];
+      CleanString@1240030013 : Text[250];
+      NewValue@1240020004 : Text[250];
+      Loop@1240030014 : Integer;
+      Position@1240020000 : Integer;
+      PreviousPosition@1240020001 : Integer;
+      Finished@1240020002 : Boolean;
+      LoopEnd@1240020008 : Integer;
+      TempCleanString@1240020009 : Text[250];
+      EndPosition@1240020010 : Integer;
+      BadValue@1240020011 : Text[10];
+      BadValueArray@1240020012 : ARRAY [20] OF Text[10];
+      i@1240020013 : Integer;
+    BEGIN
+      CleanString := ReturnCleanString(EDIDocument);
+      BadValues := '';
+
+      IF EDIDocument.Type = EDIDocument.Type::Import THEN BEGIN
+        Finished := FALSE;
+        TempCleanString := CleanString;
+        i := 0;
+        REPEAT
+          Position := STRPOS(TempCleanString,' ');
+          IF Position = 0 THEN BEGIN
+            Finished := TRUE;
+            i := i + 1;
+            BadValueArray[i] := TempCleanString;
+          END ELSE BEGIN
+            i := i + 1;
+            BadValueArray[i] := COPYSTR(TempCleanString,1,Position);
+            BadValueArray[i] := DELCHR(BadValueArray[i],'=',' ');
+            TempCleanString := COPYSTR(TempCleanString,Position + 1);
+          END;
+        UNTIL Finished;
+
+        i := 1;
+        LoopEnd := 0;
+        REPEAT
+          Position := 0;
+          Position := STRPOS(Data,BadValueArray[i]);
+          IF Position > 0 THEN
+            IF STRPOS(BadValues,BadValueArray[i]) = 0 THEN BEGIN
+              BadValues := BadValues + BadValueArray[i] + ' ';
+              LoopEnd := LoopEnd + 1;
+            END;
+          i := i + 1;
+        UNTIL BadValueArray[i] = '';
+        BadValues := DELCHR(BadValues,'>',' ');
+
+        IF BadValues = '' THEN
+          EXIT(Data);
+
+        FOR Loop := 1 TO LoopEnd DO BEGIN
+          Finished := FALSE;
+          PreviousPosition := 0;
+          NewValue := Data;
+          REPEAT
+            EndPosition := STRPOS(BadValues,' ');
+            IF EndPosition = 0 THEN
+              BadValue := BadValues
+            ELSE
+              BadValue := COPYSTR(BadValues,1,EndPosition);
+            IF EndPosition = 0 THEN
+              BadValues := ''
+            ELSE
+              BadValues := COPYSTR(BadValues,EndPosition);
+            BadValue := DELCHR(BadValue,'=',' ');
+            Position := STRPOS(Data,FORMAT(BadValue));
+
+            IF Position > 0 THEN BEGIN
+              IF Position > PreviousPosition THEN BEGIN
+                EDIInvalidCharacter.RESET;
+                EDIInvalidCharacter.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+                EDIInvalidCharacter.SETRANGE(Substitution,FORMAT(BadValue));
+                IF EDIInvalidCharacter.FIND('-') THEN BEGIN
+                  Data := DELSTR(Data,Position,STRLEN(EDIInvalidCharacter.Substitution));
+                  Data := INSSTR(Data,EDIInvalidCharacter."Invalid Character",Position);
+                  PreviousPosition := Position;
+                END;
+              END ELSE
+                Finished := TRUE;
+            END;
+          UNTIL (Finished) OR (Position = 0);
+        END;
+        EXIT(Data);
+      END;
+
+      FOR Loop := 1 TO STRLEN(CleanString) DO BEGIN
+        Position := 0;
+        Position := STRPOS(Data,FORMAT(CleanString[Loop]));
+        IF Position > 0 THEN BEGIN
+          IF STRPOS(BadValues,FORMAT(CleanString[Loop])) = 0 THEN
+            BadValues := BadValues + FORMAT(CleanString[Loop]);
+        END;
+      END;
+
+      IF BadValues = '' THEN
+        EXIT(Data);
+
+      FOR Loop := 1 TO STRLEN(BadValues) DO BEGIN
+        Finished := FALSE;
+        PreviousPosition := 0;
+        NewValue := Data;
+        REPEAT
+          Position := STRPOS(Data,FORMAT(BadValues[Loop]));
+          IF Position > 0 THEN BEGIN
+            IF Position > PreviousPosition THEN BEGIN
+              EDIInvalidCharacter.RESET;
+              EDIInvalidCharacter.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+              EDIInvalidCharacter.SETRANGE("Invalid Character",FORMAT(BadValues[Loop]));
+              IF EDIInvalidCharacter.FIND('-') THEN BEGIN
+                Data := DELSTR(Data,Position,1);
+                IF UPPERCASE(EDIInvalidCharacter.Substitution) = 'NULL;' THEN
+                  Data := INSSTR(Data,' ',Position)
+                ELSE
+                  Data := INSSTR(Data,EDIInvalidCharacter.Substitution,Position);
+                PreviousPosition := Position;
+              END;
+            END ELSE
+              Finished := TRUE;
+          END;
+        UNTIL (Finished) OR (Position = 0);
+      END;
+
+      EXIT(Data);
+    END;
+
+    PROCEDURE FindNode@3(XMLRootNode@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";NodePath@1001 : Text[250];VAR FoundXMLNode@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode") : Boolean;
+    BEGIN
+      IF ISNULL(XMLRootNode) THEN
+        EXIT(FALSE);
+
+      IF NOT NormalCaseMode THEN
+        NodePath := UPPERCASE(NodePath);
+      FoundXMLNode := XMLRootNode.SelectSingleNode(NodePath);
+
+      EXIT(NOT ISNULL(FoundXMLNode));
+    END;
+
+    PROCEDURE FindNodeText@5(XMLRootNode@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";NodePath@1001 : Text[250]) : Text[260];
+    VAR
+      FoundXMLNode@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+    BEGIN
+      IF ISNULL(XMLRootNode) THEN
+        EXIT('');
+
+      IF NOT NormalCaseMode THEN
+        NodePath := UPPERCASE(NodePath);
+      FoundXMLNode := XMLRootNode.SelectSingleNode(NodePath);
+
+      IF ISNULL(FoundXMLNode) THEN
+        EXIT('')
+      ELSE
+        EXIT(FoundXMLNode.InnerText);
+    END;
+
+    PROCEDURE FindNodes@4(XMLRootNode@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";NodePath@1001 : Text[250];VAR ReturnedXMLNodeList@1002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeList") : Boolean;
+    BEGIN
+      IF NOT NormalCaseMode THEN
+        NodePath := UPPERCASE(NodePath);
+      ReturnedXMLNodeList := XMLRootNode.SelectNodes(NodePath);
+
+      EXIT(NOT ISNULL(ReturnedXMLNodeList));
+    END;
+
+    PROCEDURE GetVersion@1240030068(EDIDocument@1240020000 : Record 14002353) Version : Code[10];
+    BEGIN
+      Version := FORMAT(EDIDocument."Declaration Version");
+
+      EXIT(Version);
+    END;
+
+    PROCEDURE ReturnCleanString@1240030091(EDIDocument@1240020001 : Record 14002353) CleanString : Text[250];
+    VAR
+      EDIInvalidCharacter@1240020000 : Record 14002389;
+      Inbound@1240020002 : Boolean;
+    BEGIN
+      Inbound := EDIDocument.Type = EDIDocument.Type::Import;
+
+      EDIInvalidCharacter.RESET;
+      EDIInvalidCharacter.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+      EDIInvalidCharacter.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+      EDIInvalidCharacter.SETRANGE("Navision Document",EDIDocument."Navision Document");
+      IF EDIInvalidCharacter.FIND('-') THEN
+        REPEAT
+          IF Inbound THEN BEGIN
+            IF STRPOS(CleanString,EDIInvalidCharacter.Substitution) = 0 THEN
+              CleanString := CleanString + ' ' + EDIInvalidCharacter.Substitution;
+          END ELSE
+            IF STRPOS(CleanString,EDIInvalidCharacter."Invalid Character") = 0 THEN
+              CleanString := CleanString + EDIInvalidCharacter."Invalid Character";
+        UNTIL EDIInvalidCharacter.NEXT = 0;
+
+      EDIInvalidCharacter.SETRANGE("EDI Document No.");
+      EDIInvalidCharacter.SETRANGE("Navision Document");
+      IF EDIInvalidCharacter.FIND('-') THEN
+        REPEAT
+          IF Inbound THEN
+            CleanString := CleanString + ' ' + EDIInvalidCharacter.Substitution
+          ELSE
+            CleanString := CleanString + EDIInvalidCharacter."Invalid Character";
+        UNTIL EDIInvalidCharacter.NEXT = 0;
+      EXIT(CleanString);
+    END;
+
+    PROCEDURE SetNormalCase@6();
+    BEGIN
+      NormalCaseMode := TRUE;
+    END;
+
+    PROCEDURE ResponseIDSubstitution@1240020002(EDISendDocHdr@1240020001 : Record 14002369);
+    VAR
+      EDISendDocField@1240020000 : Record 14002370;
+      EDIDocument@1240020005 : Record 14002353;
+      ResponseID@1240020004 : Text[250];
+      cXMLDoc@1240020006 : Boolean;
+      DefaultID@1240020007 : Boolean;
+      ResponseIDOne@1240020017 : Text[250];
+      ResponseIDTwo@1240020016 : Text[250];
+      ResponseIDThree@1240020015 : Text[250];
+      ResponseIDFour@1240020014 : Text[250];
+      ResponseIDFive@1240020013 : Text[250];
+      UseReferenceID@1240020002 : Boolean;
+    BEGIN
+      ResponseID := '';
+      DefaultID := FALSE;
+      cXMLDoc := FALSE;
+      UseReferenceID := FALSE;
+
+      EDISendDocField.RESET;
+      EDISendDocField.SETRANGE("No.",EDISendDocHdr."No.");
+      EDISendDocField.SETRANGE("NAV Table No.",DATABASE::"E.D.I. Document");
+      EDISendDocField.SETRANGE("NAV Field No.",EDIDocument.FIELDNO("cXML Payload ID"));
+      IF NOT EDISendDocField.FIND('-') THEN BEGIN
+        EDISendDocField.SETRANGE("NAV Field No.");
+        EDISendDocField.SETRANGE("NAV Field No.",EDIDocument.FIELDNO("Response ID"));
+        IF EDISendDocField.FIND('-') THEN
+          ResponseID := EDISendDocField."Field Text Value"
+        ELSE
+          UseReferenceID := TRUE;
+      END ELSE BEGIN
+        cXMLDoc := TRUE;
+        ResponseID := EDISendDocField."Field Text Value";
+      END;
+      IF UseReferenceID THEN BEGIN
+        GetResponseReferenceID(EDISendDocHdr);
+        EXIT;
+      END;
+      IF ResponseID <> '' THEN BEGIN
+        EDISendDocField.RESET;
+        EDISendDocField.SETRANGE("No.",EDISendDocHdr."No.");
+        EDISendDocField.SETFILTER(
+          "Response ID Substitution",'%1|%2|%3|%4|%5',
+          EDISendDocField."Response ID Substitution"::"ResponseID 1",
+          EDISendDocField."Response ID Substitution"::"ResponseID 2",
+          EDISendDocField."Response ID Substitution"::"ResponseID 3",
+          EDISendDocField."Response ID Substitution"::"ResponseID 4",
+          EDISendDocField."Response ID Substitution"::"ResponseID 5");
+        IF EDISendDocField.FIND('-') THEN BEGIN
+          DefaultID := FALSE;
+          REPEAT
+            CASE EDISendDocField."Response ID Substitution" OF
+              EDISendDocField."Response ID Substitution"::"ResponseID 1":
+                IF EDISendDocField."Field Text Value" <> '' THEN
+                  ResponseIDOne := EDISendDocField."Field Text Value";
+              EDISendDocField."Response ID Substitution"::"ResponseID 2":
+                IF EDISendDocField."Field Text Value" <> '' THEN
+                  ResponseIDTwo := EDISendDocField."Field Text Value";
+              EDISendDocField."Response ID Substitution"::"ResponseID 3":
+                IF EDISendDocField."Field Text Value" <> '' THEN
+                  ResponseIDThree := EDISendDocField."Field Text Value";
+              EDISendDocField."Response ID Substitution"::"ResponseID 4":
+                IF EDISendDocField."Field Text Value" <> '' THEN
+                  ResponseIDFour := EDISendDocField."Field Text Value";
+              EDISendDocField."Response ID Substitution"::"ResponseID 5":
+                IF EDISendDocField."Field Text Value" <> '' THEN
+                  ResponseIDFive := EDISendDocField."Field Text Value";
+              END;
+          UNTIL EDISendDocField.NEXT = 0;
+          ResponseID :=
+            STRSUBSTNO(
+              ResponseID,
+              ResponseIDOne,ResponseIDTwo,ResponseIDThree,ResponseIDFour,ResponseIDFive);
+          CreateResponseID(EDISendDocHdr,ResponseID,DefaultID,cXMLDoc);
+        END ELSE
+          DefaultID := TRUE;
+          CreateResponseID(EDISendDocHdr,ResponseID,DefaultID,cXMLDoc);
+      END ELSE BEGIN
+        DefaultID := TRUE;
+        CreateResponseID(EDISendDocHdr,ResponseID,DefaultID,cXMLDoc);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateResponseID@1240020000(EDISendDocHdr@1240020000 : Record 14002369;ResponseID@1240020001 : Text[250];DefaultID@1240020004 : Boolean;cXMLDoc@1240020005 : Boolean);
+    VAR
+      EDISendDocHdr2@1240020003 : Record 14002369;
+      EDISendDocField@1240020006 : Record 14002370;
+      EDISendDocField2@1240020007 : Record 14002370;
+      EDIDocument@1240020008 : Record 14002353;
+      EDIElement@1240020010 : Record 14002355;
+      FieldValue@1240020002 : Text[250];
+      DefaultResponseID@1240020009 : Text[100];
+    BEGIN
+      WITH EDISendDocHdr DO BEGIN
+        EDIDocument.RESET;
+        EDIDocument.SETRANGE("Trade Partner No.","Trade Partner No.");
+        EDIDocument.SETRANGE("Navision Document","Navision Document");
+        EDIDocument.SETRANGE("EDI Document No.","EDI Document No.");
+        EDIDocument.SETRANGE(Type,EDIDocument.Type::Export);
+        EDIDocument.FIND('-');
+      END;
+
+      DefaultResponseID := '';
+      WITH EDISendDocHdr DO
+        DefaultResponseID := "Trade Partner No." + ' ' + "EDI Document No." + ' ' + "Document No.";
+
+      FieldValue := ResponseID;
+      IF DefaultID THEN BEGIN
+        FieldValue := STRSUBSTNO(FieldValue,DefaultResponseID);
+        IF FieldValue = '' THEN
+          FieldValue := DefaultResponseID;
+        FieldValue := DELCHR(FieldValue,'=','*');
+      END;
+
+      EDISendDocHdr2.GET(EDISendDocHdr."No.");
+      IF cXMLDoc THEN
+        EDISendDocHdr2."cXML Payload ID" := FieldValue
+      ELSE
+        EDISendDocHdr2."Response ID" := FieldValue;
+      EDISendDocHdr2.MODIFY;
+
+      EDISendDocField.RESET;
+      EDISendDocField.SETRANGE("No.",EDISendDocHdr."No.");
+      EDISendDocField.SETRANGE("NAV Table No.",DATABASE::"E.D.I. Document");
+      IF cXMLDoc THEN
+        EDISendDocField.SETRANGE("NAV Field No.",EDIDocument.FIELDNO("cXML Payload ID"))
+      ELSE
+        EDISendDocField.SETRANGE("NAV Field No.",EDIDocument.FIELDNO("Response ID"));
+      IF EDISendDocField.FIND('-') THEN
+        REPEAT
+          EDISendDocField2.GET(EDISendDocField."No.",EDISendDocField."Line No.");
+          EDISendDocField2."Field Text Value" := FieldValue;
+          WITH EDISendDocField2 DO BEGIN
+            EDIElement.RESET;
+            EDIElement.SETRANGE("Trade Partner No.","Trade Partner No.");
+            EDIElement.SETRANGE("Navision Document","Navision Document");
+            EDIElement.SETRANGE("EDI Document No.","EDI Document No.");
+            EDIElement.SETRANGE(Version,EDIDocument.Version);
+            EDIElement.SETRANGE(Type,EDIElement.Type::Export);
+            EDIElement.SETRANGE(Segment,Segment);
+            EDIElement.SETRANGE(Element,Element);
+            EDIElement.SETRANGE(Origin,EDIElement.Origin::Navision);
+            EDIElement.SETRANGE("NAV Table No.",DATABASE::"E.D.I. Document");
+            EDIElement.SETRANGE("NAV Field No.",EDIDocument.FIELDNO("cXML Payload ID"));
+          END;
+          IF EDIElement.FIND('-') THEN BEGIN
+            IF (EDIElement."Minimum Length" <> 0) AND
+               ((STRLEN(EDISendDocField2."Field Text Value")) < EDIElement."Minimum Length")
+            THEN
+              EDISendDocField2."Data Error" := TRUE
+            ELSE
+              EDISendDocField2."Data Error" := FALSE;
+          END;
+          EDISendDocField2.MODIFY;
+        UNTIL EDISendDocField.NEXT = 0;
+    END;
+
+    PROCEDURE GetResponseReferenceID@1240020001(EDISendDocHdr@1240020000 : Record 14002369);
+    VAR
+      EDIRecDocHdr@1240020001 : Record 14002358;
+      EDISendDocHdr2@1240020002 : Record 14002369;
+      EDIDocument@1240020003 : Record 14002353;
+      BillOfLading@1240020004 : Record 14000822;
+      BillOfLadingLine@1240020006 : Record 14000823;
+      SalesShipmentHdr@1240020005 : Record 110;
+      InternalDocNoFound@1240020007 : Boolean;
+    BEGIN
+      InternalDocNoFound := FALSE;
+      WITH EDISendDocHdr DO BEGIN
+        EDIDocument.RESET;
+        EDIDocument.SETRANGE("Trade Partner No.","Trade Partner No.");
+        EDIDocument.SETRANGE("Navision Document","Navision Document");
+        EDIDocument.SETRANGE("EDI Document No.","EDI Document No.");
+        EDIDocument.SETRANGE(Type,EDIDocument.Type::Export);
+        EDIDocument.FIND('-');
+      END;
+
+      EDISendDocHdr2.GET(EDISendDocHdr."No.");
+      IF EDISendDocHdr2."Navision Document" IN ['E_SLSASN','E_SLSBSN','E_EMCBOL'] THEN BEGIN
+        IF BillOfLading.GET(EDISendDocHdr2."Document No.") THEN BEGIN
+          BillOfLadingLine.RESET;
+          BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+          IF BillOfLadingLine.FIND('-') THEN
+            CASE BillOfLadingLine.Type OF
+              BillOfLadingLine.Type::"Sales Shipment (Posted)":
+                BEGIN
+                  IF SalesShipmentHdr.GET(BillOfLadingLine."No.") THEN
+                    IF EDIRecDocHdr.GET(SalesShipmentHdr."EDI Internal Doc. No.") THEN
+                      InternalDocNoFound := TRUE
+                    ELSE
+                      InternalDocNoFound := FALSE;
+                END;
+            END;
+        END
+      END ELSE
+       IF EDIRecDocHdr.GET(EDISendDocHdr."Internal Doc No.") THEN
+         InternalDocNoFound := TRUE;
+      IF NOT InternalDocNoFound THEN
+        EXIT;
+      EDISendDocHdr2."Reference ID" := EDIRecDocHdr."Reference ID";
+      IF EDISendDocHdr."Navision Document" = 'E_FUNCTACK' THEN BEGIN
+        EDISendDocHdr2."Reference Type" := EDIRecDocHdr."Reference Type";
+        EDISendDocHdr2."cXML Payload ID" := EDIRecDocHdr."cXML Payload ID";
+        EDISendDocHdr2."Response ID":= EDIRecDocHdr."Response ID";
+      END ELSE
+        EDISendDocHdr2."Reference Type" := EDIDocument."Reference Type";
+      EDISendDocHdr2.MODIFY
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

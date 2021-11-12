@@ -1,0 +1,242 @@
+OBJECT Codeunit 14000576 Period End Preparation
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/27/19;
+    Time=12:00:00 PM;
+    Version List=UBP3.00;
+  }
+  PROPERTIES
+  {
+    TableNo=14000553;
+    OnRun=BEGIN
+            InvMgt.CreateLogEntry("Location Code",Text000,UBPLogEntryNo);
+            ProcUnit.INIT;
+            Process(Rec,ProcUnit);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Formula@1240030028 : Record 14002652;
+      InvMgmtSetup@14000506 : Record 14000551;
+      Item@14000507 : Record 27;
+      ItemUsage@14000510 : Record 14000557;
+      ItemUsageTemp@14000511 : TEMPORARY Record 14000557;
+      Location@14000513 : Record 14;
+      LocInvPeriod@1240030050 : Record 14000553;
+      ProcUnit@14000514 : Record 14000555;
+      ProcUnitTemp@14000515 : TEMPORARY Record 14000555;
+      Vendor@1240030135 : Record 23;
+      InvMgt@1240030066 : Codeunit 14000553;
+      UBP@1240430068 : Codeunit 14000564;
+      Window@14000523 : Dialog;
+      DaysInPeriod@14000526 : Integer;
+      First@1240030000 : Boolean;
+      i@1240030027 : Integer;
+      WindowProcCount@14000532 : Integer;
+      WindowTotalCount@14000533 : Integer;
+      Text000@14000534 : TextConst 'ENU=Period End Processing';
+      Text001@14000535 : TextConst 'ENU=Date';
+      Text002@14000536 : TextConst 'ENU=Location';
+      Text003@14000537 : TextConst 'ENU=Item Usage Calculation';
+      Text004@14000538 : TextConst 'ENU=Update Vendor Buying Calendar';
+      Text005@14000539 : TextConst 'ENU=Identify Dead Stock';
+      Text007@14000541 : TextConst 'ENU=Update Procurement Units';
+      Text008@14000542 : TextConst 'ENU=Update Item Usage';
+      Text009@14000543 : TextConst 'ENU=Create Calculation Line';
+      Text010@14000544 : TextConst 'ENU=Create Usage Review Line';
+      Text015@1240030055 : TextConst 'ENU=Create Formula Details';
+      Text021@1240030082 : TextConst 'ENU=Save Unusual Usage Adj.';
+      Text022@1240030099 : TextConst 'ENU=Rank Items';
+      j@1240030124 : Integer;
+      UBPLogEntryNo@1240030125 : Integer;
+      EntryNo@1240030140 : Integer;
+      ByProcUnit@1240030020 : Boolean;
+
+    PROCEDURE Process@1240030006(CurrLocInvPeriod@1240030000 : Record 14000553;CurrProcUnit@1240030001 : Record 14000555);
+    VAR
+      ProcUnitPrim@1000 : Record 14000555;
+      CreateProcUnit@1240020000 : Codeunit 14000575;
+    BEGIN
+      InvMgmtSetup.GET;
+      InvMgmtSetup.TESTFIELD("Usage Start Date");
+
+      Location.GET(CurrLocInvPeriod."Location Code");
+      LocInvPeriod.GET(CurrLocInvPeriod."Starting Date",CurrLocInvPeriod."Location Code");
+
+      DaysInPeriod := (LocInvPeriod."Ending Date" - LocInvPeriod."Starting Date") + 1;
+
+      InitialSetup(CurrLocInvPeriod);
+
+      IF CurrProcUnit."Item No." <> '' THEN
+        ByProcUnit := TRUE
+      ELSE
+        ByProcUnit := FALSE;
+
+      IF GUIALLOWED AND NOT ByProcUnit THEN BEGIN
+        Window.OPEN(
+          '#1########################################\' +
+          PADSTR(Text001,30) + '#2########\' +
+          PADSTR(Text002,30) + '#3########\' +
+          PADSTR(Text003,30) + '@4@@@@@@@@@@@@@@@@@@\' +
+          PADSTR(Text004,30) + '@5@@@@@@@@@@@@@@@@@@\' +
+          PADSTR(Text005,30) + '@6@@@@@@@@@@@@@@@@@@\' +
+          PADSTR(Text004,30) + '@7@@@@@@@@@@@@@@@@@@\' +
+          PADSTR(Text022,30) + '@14@@@@@@@@@@@@@@@@@\' +
+          PADSTR(Text007,30) + '@8@@@@@@@@@@@@@@@@@@\' +
+          PADSTR(Text008,30) + '@9@@@@@@@@@@@@@@@@@@\' +
+          PADSTR(Text009,30) + '@10@@@@@@@@@@@@@@@@@\' +
+          PADSTR(Text010,30) + '@11@@@@@@@@@@@@@@@@@\' +
+          PADSTR(Text015,30) + '@12@@@@@@@@@@@@@@@@@\' +
+          PADSTR(Text021,30) + '@13@@@@@@@@@@@@@@@@@');
+
+        Window.UPDATE(1,Text000);
+        Window.UPDATE(2,FORMAT(CurrLocInvPeriod."Starting Date"));
+        Window.UPDATE(3,Location.Code);
+      END;
+
+      ItemUsage.RESET;
+      ItemUsage.SETCURRENTKEY("Location Code","Starting Date","Item No.","Variant Code");
+      ItemUsage.SETRANGE("Location Code",Location.Code);
+      ItemUsage.SETRANGE("Starting Date",LocInvPeriod."Starting Date");
+      IF ByProcUnit THEN BEGIN
+        ItemUsage.SETRANGE("Item No.",CurrProcUnit."Item No.");
+        ItemUsage.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+      END;
+      WindowTotalCount := ItemUsage.COUNT;
+      ProcUnitPrim.RESET;
+      ProcUnitPrim.SETCURRENTKEY("Location Code", "Usage Location Filter String");
+      ProcUnitPrim.SETFILTER("Location Code",Location.Code);
+      IF ByProcUnit THEN BEGIN
+        ProcUnitPrim.SETRANGE("Item No.",CurrProcUnit."Item No.");
+        ProcUnitPrim.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+      END;
+      IF ProcUnitPrim.FINDSET THEN BEGIN
+        REPEAT
+          ItemUsage.SETRANGE("Item No.",ProcUnitPrim."Item No.");
+          ItemUsage.SETRANGE("Variant Code",ProcUnitPrim."Variant Code");
+          IF ItemUsage.FINDFIRST THEN BEGIN
+            ItemUsage.SETRANGE("Date Filter",CurrLocInvPeriod."Starting Date",CurrLocInvPeriod."Ending Date");
+            // Calc Usage Single Location for Period Usage
+            ItemUsage.SETFILTER("Location Filter", ProcUnitPrim."Location Code");
+            ItemUsage.CALCFIELDS(
+              "Usage Quantity","Adjustment Quantity","Exclude Usage Quantity",
+              "Transfer Usage","Drop Ship Usage Quantity",
+              "Forecast Cust. Actual Usage");
+            ItemUsage."Single Loc. Per. End Adj. Usg." := ItemUsage.AdjustedUsage;
+          ItemUsage.SETFILTER(
+            "Location Filter",UBP.GetUsageLocationFilter(
+              ItemUsage."Location Code",ItemUsage."Item No.",ItemUsage."Variant Code",FALSE));
+          ItemUsage.CALCFIELDS(
+            "Usage Quantity","Adjustment Quantity","Exclude Usage Quantity",
+            "Transfer Usage","Drop Ship Usage Quantity",
+              "Forecast Cust. Actual Usage");
+          ItemUsage."Period End Adjusted Usage" := ItemUsage.AdjustedUsage;
+          ItemUsage."Net Period End Usage" :=
+            ItemUsage."Period End Adjusted Usage" - ItemUsage."Forecast Cust. Actual Usage";
+          IF ItemUsage."Period End Adjusted Usage" <> 0 THEN
+            ItemUsage."Daily Usage Rate" :=
+              ItemUsage."Period End Adjusted Usage" / DaysInPeriod
+          ELSE
+            ItemUsage."Daily Usage Rate" := 0;
+
+          ProcUnit.GET(ItemUsage."Location Code",ItemUsage."Item No.",ItemUsage."Variant Code");
+
+          IF ProcUnit."First Stocked Date" = 0D THEN BEGIN
+            ProcUnit."First Stocked Date" := UBP.GetFirstStockedDate(ProcUnit,'');
+            ProcUnitTemp.COPY(ProcUnit);
+            IF NOT ProcUnitTemp.INSERT THEN
+              ProcUnitTemp.MODIFY;
+          END;
+
+          ItemUsage."Adj. After Close" := FALSE;
+          ItemUsage."Item Class Ranking" := 0;
+          ItemUsage."Nonstock Unit" := ProcUnit."Nonstock Unit";
+          ItemUsage."Include Drop Ship Usage" := ProcUnit."Include Drop Ship Usage";
+
+          ItemUsageTemp.COPY(ItemUsage);
+          ItemUsageTemp.INSERT;
+
+          WindowProcCount := WindowProcCount + 1;
+          IF GUIALLOWED AND NOT ByProcUnit THEN
+            IF WindowProcCount MOD 50 = 0 THEN
+              Window.UPDATE(4,ROUND(10000 * (WindowProcCount / WindowTotalCount),1));
+          END;
+        UNTIL ProcUnitPrim.NEXT = 0;
+      END;
+
+      IF GUIALLOWED AND NOT ByProcUnit THEN
+        Window.UPDATE(4,10000);
+
+      // Update Procurement Unit Table
+      WindowProcCount := 0;
+
+      ProcUnitTemp.RESET;
+      WindowTotalCount := ProcUnitTemp.COUNT;
+      IF ProcUnitTemp.FINDSET THEN
+        REPEAT
+          IF ProcUnit.GET(
+            ProcUnitTemp."Location Code",ProcUnitTemp."Item No.",ProcUnitTemp."Variant Code") THEN BEGIN
+            ProcUnit.COPY(ProcUnitTemp);
+            ProcUnit.VALIDATE("Replenishment Source Code",ProcUnit."Replenishment Source Code");
+            ProcUnit.MODIFY;
+          END ELSE BEGIN
+            ProcUnit.INIT;
+            ProcUnit.COPY(ProcUnitTemp);
+            ProcUnit.SetAutoInsert;
+            ProcUnit.VALIDATE("Replenishment Source Code",ProcUnit."Replenishment Source Code");
+            ProcUnit.INSERT(TRUE);
+            CreateProcUnit.CheckReplPath(ProcUnit);
+          END;
+          WindowProcCount := WindowProcCount + 1;
+          IF GUIALLOWED AND NOT ByProcUnit THEN
+            IF WindowProcCount MOD 50 = 0 THEN
+              Window.UPDATE(8,ROUND(10000 * (WindowProcCount / WindowTotalCount),1));
+        UNTIL ProcUnitTemp.NEXT = 0;
+      IF GUIALLOWED AND NOT ByProcUnit THEN
+        Window.UPDATE(8,10000);
+
+      // Update Item Usage Table
+      WindowProcCount := 0;
+
+      ItemUsageTemp.RESET;
+      WindowTotalCount := ItemUsageTemp.COUNT;
+      IF ItemUsageTemp.FIND('-') THEN
+        REPEAT
+          ItemUsage.COPY(ItemUsageTemp);
+          ItemUsage.MODIFY;
+          WindowProcCount := WindowProcCount + 1;
+          IF GUIALLOWED AND NOT ByProcUnit THEN
+            IF WindowProcCount MOD 50 = 0 THEN
+              Window.UPDATE(9,ROUND(10000 * (WindowProcCount / WindowTotalCount),1));
+        UNTIL ItemUsageTemp.NEXT = 0;
+
+      IF NOT ByProcUnit THEN BEGIN
+        LocInvPeriod."Period End Closed" := TRUE;
+        LocInvPeriod.MODIFY;
+        Location."Last Closed Period Date" := LocInvPeriod."Ending Date";
+        Location."Re-Close Last Closed Period" := FALSE;
+        Location.MODIFY;
+
+        IF GUIALLOWED THEN
+          Window.CLOSE;
+
+        InvMgt.CloseLogEntry(UBPLogEntryNo,'');
+      END;
+    END;
+
+    PROCEDURE InitialSetup@1240030004(CurrLocInvPeriod@1240030000 : Record 14000553);
+    BEGIN
+      Location.GET(CurrLocInvPeriod."Location Code");
+
+      InvMgmtSetup.GET;
+      InvMgmtSetup.TESTFIELD("Usage Start Date");
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

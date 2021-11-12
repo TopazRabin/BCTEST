@@ -1,0 +1,173 @@
+OBJECT Report 51015 Update ABC Code
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=TPZ000.00.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Update ABC Code;
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  StartingDate :=  CALCDATE('-CM-1Y',TODAY);
+                  EndingDate :=  CALCDATE('1Y-1D',StartingDate);
+                END;
+
+  }
+  DATASET
+  {
+    { 1000000000;;DataItem;Item              ;
+               DataItemTable=Table27;
+               OnPreDataItem=BEGIN
+                               SETFILTER("Date Filter",'%1..%2',StartingDate,EndingDate);
+
+                               InvSetup.GET;
+                               InvSetup.TESTFIELD("Default ABC Code");
+                               InvSetup.TESTFIELD("Negative ABC Code");
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  FindFirstReceivedDate;
+
+                                  DaysIn := TODAY - FirstReceivedDate;
+
+                                  CALCFIELDS("Sales (LCY)");
+
+                                  IF ABCCode.GET(InvSetup."Default ABC Code") AND (DaysIn <= ABCCode.Max) THEN BEGIN
+                                    Item."ABC Code" := InvSetup."Default ABC Code";
+                                    Item.MODIFY;
+                                  END ELSE IF "Sales (LCY)" <= 0 THEN BEGIN
+                                    Item."ABC Code" := InvSetup."Negative ABC Code";
+                                    Item.MODIFY;
+                                  END ELSE BEGIN
+                                    Idx := Idx + 1;
+                                    Itemq[Idx] := Item."No.";
+                                    ItmSalesq[Idx] := "Sales (LCY)";
+                                    TotalS := TotalS + "Sales (LCY)";
+                                  END;
+                                END;
+
+               OnPostDataItem=BEGIN
+                                DBubbleSort(Idx,ItmSalesq,Itemq);
+                                AssignABC;
+                              END;
+                               }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      InvSetup@1000000015 : Record 313;
+      ItemLedgerEntry@1000000002 : Record 32;
+      ABCCode@1000000014 : Record 51401;
+      StartingDate@1000000000 : Date;
+      EndingDate@1000000001 : Date;
+      FirstReceivedDate@1000000003 : Date;
+      DaysIn@1000000004 : Integer;
+      DollarUsage@1000000005 : Decimal;
+      Idx@1000000006 : Integer;
+      l@1000000007 : Integer;
+      Itemq@1000000008 : ARRAY [20000] OF Text[30];
+      FibdV@1000000009 : Boolean;
+      TotalS@1000000012 : Decimal;
+      TotalA@1000000011 : Decimal;
+      Cprecent@1000000010 : Decimal;
+      ItmSalesq@1000000013 : ARRAY [20000] OF Decimal;
+
+    PROCEDURE FindFirstReceivedDate@1000000000();
+    BEGIN
+      ItemLedgerEntry.RESET;
+      ItemLedgerEntry.SETCURRENTKEY("Item No.","Posting Date");
+      ItemLedgerEntry.SETRANGE("Item No.",Item."No.");
+      ItemLedgerEntry.SETFILTER("Posting Date",'<>%1',0D);
+      ItemLedgerEntry.SETFILTER(
+        "Entry Type",
+        '%1|%2|%3',
+        ItemLedgerEntry."Entry Type"::Purchase,
+        ItemLedgerEntry."Entry Type"::"Positive Adjmt.",
+        ItemLedgerEntry."Entry Type"::Transfer);
+      IF ItemLedgerEntry.FINDFIRST THEN
+        FirstReceivedDate := ItemLedgerEntry."Posting Date"
+      ELSE
+        FirstReceivedDate := TODAY;
+    END;
+
+    PROCEDURE DBubbleSort@1000000020(idx@1000000000 : Integer;VAR Buffer@1000000001 : ARRAY [20000] OF Decimal;VAR Itemq@1000000005 : ARRAY [20000] OF Text[30]);
+    VAR
+      j@1000000002 : Integer;
+      k@1000000003 : Integer;
+      temp@1000000004 : Decimal;
+      tempx@1000000006 : Text[30];
+    BEGIN
+      IF idx < 1 THEN
+        EXIT;
+
+      FOR j := 1 TO idx DO BEGIN
+        FOR k := 1 TO idx-1 DO BEGIN
+          temp := 0;
+          IF Buffer[k] < Buffer[k+1] THEN BEGIN
+            temp := Buffer[k];
+            Buffer[k] := Buffer[k+1];
+            Buffer[k+1] := temp;
+            tempx := Itemq[k];
+            Itemq[k] := Itemq[k+1];
+            Itemq[k+1] := tempx;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE AssignABC@1000000014();
+    BEGIN
+      IF Idx >= 1 THEN
+        FOR l := 1 TO Idx DO BEGIN
+          CLEAR(FibdV);
+          TotalA += ItmSalesq[l];
+          IF TotalS <> 0 THEN
+            Cprecent := ROUND( (100 * TotalA) / TotalS, 0.000001);
+          Item.GET(Itemq[l]);
+          ABCCode.RESET;
+          ABCCode.SETRANGE(Method,ABCCode.Method::Percentage);
+          IF ABCCode.FINDSET THEN
+            REPEAT
+              CASE  ABCCode.Method OF
+                ABCCode.Method::Percentage: BEGIN
+                  IF (ABCCode.Min < Cprecent) AND (Cprecent <= ABCCode.Max) THEN BEGIN
+                    Item."ABC Code" := ABCCode.Code;
+                    Item.MODIFY;
+                    COMMIT;
+                    FibdV := TRUE;
+                  END;
+                END;
+              END;
+            UNTIL (ABCCode.NEXT = 0) OR FibdV;
+        END;
+    END;
+
+    BEGIN
+    {
+      2015-10-15 TPZ868 TAKHMETO
+        Report has been created
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

@@ -1,0 +1,717 @@
+OBJECT Codeunit 14000582 Create Repl. Sug. Transfer
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InvMgmtSetup@1240030004 : Record 14000551;
+      AdvForSetup@1240020018 : Record 14002651;
+      Item@1240030033 : Record 27;
+      Location@1240030000 : Record 14;
+      LocationInvPeriod@1240030008 : Record 14000553;
+      ProcUnit@1240030001 : Record 14000555;
+      SugTransferHdr@1240030042 : Record 14000592;
+      SugTransferLine@1240030043 : Record 14000593;
+      UBP@1240030018 : Codeunit 14000564;
+      ProgWindow@1240030051 : Dialog;
+      CalcMethod@1240030015 : Integer;
+      LineNo@1240030045 : Integer;
+      Lines@1240030046 : Integer;
+      TargetDate@1240030021 : Date;
+      TransferQty@1240030012 : Decimal;
+      TransferOnlyBOItems@1240030017 : Boolean;
+      Text000@1240030027 : TextConst 'ENU=Do you wish to view the Created Transfer Documents?';
+      Text001@1240030026 : TextConst 'ENU=Procurement Unit %1 %2 is setup to use Days Supply however a closed Inventory Period can not be found for location %3.';
+      Text002@1240030025 : TextConst 'ENU=Qty.';
+      Text003@1240030024 : TextConst 'ENU=Days';
+      Text004@1240030023 : TextConst 'ENU=Transfer only Back Ordered Items';
+      Text006@1240030022 : TextConst 'ENU=Procurement Unit for Location %1 Item %2 %3 has an incorrect Min/Max Setting.';
+      TransferUOM@1240030035 : Code[10];
+      Text007@1240030050 : TextConst 'ENU=Creating Suggested Transfer Orders';
+      Text008@1240030048 : TextConst 'ENU=Location';
+      Text009@1240030049 : TextConst 'ENU=Item';
+      Text010@1240030052 : TextConst 'ENU=Writing Suggested Transfer Orders';
+      Text011@1240030055 : TextConst 'ENU=Allocating Inventory';
+      Text012@1240030058 : TextConst 'ENU="Transfer Qty. %1 = From Loc. Exp. Inv. %2 - (From Inbound Qty %3 + From Other Suggested Transfer Qty. %4) "';
+      Text013@1240030059 : TextConst 'ENU="Transfer Multiple Transfer Qty %1 = Round Down(Transfer Qty. %2 / Order Multiple %3)"';
+      Text014@1240030060 : TextConst 'ENU="Transfer Multiple Transfer Qty %1 = Round UP(Transfer Qty. %2 / Order Multiple %3)"';
+      Text015@1240030061 : TextConst 'ENU=Expected Available Qty. %1 through Allocated Date %2';
+      Text016@1240030062 : TextConst 'ENU=Need Quantity (Base) %1 through Horizon Date %2';
+      SuggestedTransferQty@1240030063 : Decimal;
+      Text017@1240030066 : TextConst 'ENU=Suggested Quantity (Base) %1 or Suggested Quantity %2 %3';
+      Text018@1240030065 : TextConst 'ENU=Transfer Quantity (Base) %1  or Transfer Quantity %2 %3 %4';
+      Text019@1240030067 : TextConst 'ENU=Remaining Need (Base) %1';
+      Text020@1240020000 : TextConst 'ENU=Roll-Up increment days can not be zero.';
+      Text021@1240020001 : TextConst 'ENU=Source Qty.  %1 Allocated Date %2';
+      Text022@1240020002 : TextConst 'ENU="Available To Transfer Under Roof %1 = Loc. Exp. Inv. %2 - Inbound %3"';
+      Text023@1240020003 : TextConst 'ENU=Transfer Out Qty. %1 > Available To Transfer Under Roof %2';
+      Text024@1240020004 : TextConst 'ENU="Transfer Quantity (Base) %1 = (Available to Transfer Under Roof %2 / Transfer Out Qty. %3) * Transfer In Qty. %4"';
+      ModifiedByShelfStockMax@1240020011 : Boolean;
+      Text025@1240020012 : TextConst 'ENU=Modified by Minimum Shelf Stock %1';
+      ModifiedByShelfStockMin@1240020015 : Boolean;
+      MinTransferQty@1240020013 : Decimal;
+      MaxTransferQty@1240020014 : Decimal;
+      Text026@1240020016 : TextConst 'ENU=Modified by Maximum Shelf Stock %1';
+      Text027@1240020017 : TextConst 'ENU=Creating Suggested Replenishment Transfers to %1';
+      AllocationStopDate@1240020006 : Date;
+      Text061@1240020037 : TextConst 'ENU="Order Qty (Base) %1 = MinSOQ (Base) %2 - Supply Orders Outside LTH (Base) %3."';
+      Text077@1240020021 : TextConst 'ENU=Order Qty.increased from %1 to %2 because of Order Multiple of %3';
+      NeedQuantity@1000000003 : Decimal;
+      CalcLineArray@1000000000 : ARRAY [10] OF Text[250];
+      Text078@1240020005 : TextConst 'ENU=Order Qty. increased from %1 to %2 because of Order Minimum';
+
+    PROCEDURE CalcReplForLoc@1240030001(CurrLocation@1240030000 : Record 14);
+    VAR
+      LogEntryNo@1240020001 : Integer;
+      InvMgmt@1240020000 : Codeunit 14000553;
+      BypassTransferAllocation@1240020002 : Boolean;
+      TransferCalendar@1000000000 : Record 14000597;
+    BEGIN
+      IF GUIALLOWED THEN BEGIN
+        ProgWindow.OPEN(
+          '#1#######################################\' +
+          PADSTR(Text008,10) + '#2########\' +
+          PADSTR(Text009,10) + '#3##################');
+        ProgWindow.UPDATE(1,Text007);
+      END;
+
+      IF NOT GUIALLOWED THEN BEGIN
+        InvMgmt.CreateLogEntry(CurrLocation.Code,STRSUBSTNO(Text027,CurrLocation.Code),LogEntryNo);
+      END;
+
+      SugTransferHdr.RESET;
+      SugTransferHdr.SETRANGE("Document Type",SugTransferHdr."Document Type"::"Repl. Path");
+      SugTransferHdr.SETRANGE("Transfer-to Code",CurrLocation.Code);
+      SugTransferHdr.DELETEALL(TRUE);
+      COMMIT;
+
+      ProcUnit.RESET;
+      ProcUnit.SETCURRENTKEY("Location Code","Replenishment Source Type","Replenishment Source Code");
+      ProcUnit.SETRANGE("Location Code",CurrLocation.Code);
+      ProcUnit.SETRANGE(ProcUnit."Replenishment Source Type",ProcUnit."Replenishment Source Type"::Location);
+      ProcUnit.SETRANGE("Manual Bypass Replenishment", FALSE);
+      ProcUnit.SETRANGE("Exclude From Replenishment", FALSE);
+      ProcUnit.SETAUTOCALCFIELDS("Item Blocked");
+      IF ProcUnit.FINDSET THEN BEGIN
+          InvMgmtSetup.GET;
+          AdvForSetup.GET;
+
+          LocationInvPeriod.SETCURRENTKEY("Location Code","Starting Date","Period End Closed");
+          LocationInvPeriod.SETRANGE("Location Code",CurrLocation.Code);
+          LocationInvPeriod.SETRANGE("Period End Closed",TRUE);
+          IF NOT LocationInvPeriod.FINDFIRST THEN
+            LocationInvPeriod.INIT;
+
+            AllocationStopDate := WORKDATE;
+
+        REPEAT
+          IF NOT ProcUnit."Item Blocked" THEN BEGIN
+            IF GUIALLOWED THEN BEGIN
+              ProgWindow.UPDATE(2,ProcUnit."Location Code");
+              ProgWindow.UPDATE(3,ProcUnit."Item No.");
+            END;
+          CalcReplByProcUnit;
+          END;
+        UNTIL ProcUnit.NEXT = 0;
+      END;
+
+      IF GUIALLOWED THEN
+        ProgWindow.UPDATE(1,Text010);
+
+      SugTransferHdr.RESET;
+      SugTransferHdr.SETRANGE("Document Type",SugTransferLine."Document Type"::"Repl. Path");
+      SugTransferHdr.SETRANGE("Transfer-to Code", CurrLocation.Code);
+      SugTransferLine.RESET;
+      SugTransferLine.SETRANGE("Document Type",SugTransferLine."Document Type"::"Repl. Path");
+      SugTransferLine.SETRANGE("Transfer-to Code", CurrLocation.Code);
+      OnBeforeSugTransferAllocation(BypassTransferAllocation, SugTransferHdr, SugTransferLine);
+      IF NOT BypassTransferAllocation THEN BEGIN
+        IF NOT InvMgmtSetup."Bypass Sug. Transfer Alloc." THEN
+      AllocateInventory(CurrLocation);
+      END;
+
+      TransferCalendar.GET(CurrLocation.Code);
+      TransferCalendar."Last R.P. Create Date" := TODAY;
+      TransferCalendar."Last R.P. Create Time" := TIME;
+      TransferCalendar."Last Repl. Path Creation" := CURRENTDATETIME;
+      TransferCalendar."Last R.P. Create User" := USERID;
+      TransferCalendar.MODIFY(TRUE);
+
+      IF GUIALLOWED THEN
+        ProgWindow.CLOSE;
+
+      IF NOT GUIALLOWED THEN
+        InvMgmt.CloseLogEntry(LogEntryNo,'');
+    END;
+
+    PROCEDURE CalcReplByProcUnit@1240030000();
+    VAR
+      Text006@1240030001 : TextConst 'ENU=Procurement Unit for Location %1 Item %2 %3 has an incorrect Min/Max Setting.';
+      CreateLocInvrollUp@1000000003 : Codeunit 14000574;
+      Forecast@1000000000 : Codeunit 14000567;
+      OrderMultipleQty@1000000001 : Decimal;
+      QuantityExpected@1000000002 : Decimal;
+      ItemUOM@1000000004 : Record 5404;
+      MinDaysInvPos@1000000005 : Decimal;
+      MaxDaysInvPos@1000000006 : Decimal;
+      Text080@1000000007 : TextConst 'ENU=Min %1 Max %2 Days';
+      NewTransferQty@1240020000 : Decimal;
+    BEGIN
+      TransferQty := 0;
+      CLEAR(CalcLineArray);
+      CalcMethod := 1;
+      CASE CalcMethod OF
+        0: // Transfer Only Back Ordered Items
+          BEGIN
+            TargetDate := WORKDATE;
+            ProcUnit.SETFILTER("Date Filter",STRSUBSTNO('..%1', TargetDate));
+            ProcUnit.SETFILTER("Prod. Order Status Filter",UBP.GetProductionStatusFilter);
+            ProcUnit.SETFILTER("Location Filter", UBP.GetLocationFilter(ProcUnit,FALSE));
+            ProcUnit.SETFILTER("Expire Date Filter",'>=%1',WORKDATE);
+            QuantityExpected := ProcUnit.QtyExpected;
+            IF QuantityExpected < 0 THEN
+              TransferQty := ABS(QuantityExpected)
+            ELSE
+              TransferQty := 0;
+            CalcMethod := SugTransferLine.Reason::"B/O Only";
+          END;
+          ELSE BEGIN
+            IF (ProcUnit."Replenishment Model" = ProcUnit."Replenishment Model"::"Min/Max") THEN BEGIN
+              IF NOT BottomLevel() THEN BEGIN
+                // order max for interim levels
+                TargetDate := UBP.GetLeadTimeHoriz(ProcUnit);
+                CLEAR(CreateLocInvrollUp);
+                CreateLocInvrollUp.CalcRollUp(ProcUnit,FALSE,0,TargetDate);
+                TransferQty := CreateLocInvrollUp.GetTransferIn(ProcUnit);
+                //CalcMethod := SugTransferLine.Reason::;
+              END ELSE BEGIN
+                IF ((ProcUnit."Maximum Inventory" <> 0) OR
+                   (ProcUnit."Minimum Inventory" <> 0)) AND
+                   ((ProcUnit."Minimum Days Supply" <> 0) OR
+                   (ProcUnit."Maximum Days Supply" <> 0)) THEN BEGIN
+                     TargetDate := UBP.GetLeadTimeHoriz(ProcUnit);
+                     CLEAR(Forecast);
+                     Forecast.SetForecastOnlyReqPeriods;
+                     Forecast.CalcNetNeed(ProcUnit, '', TargetDate,FALSE);
+                     TransferQty := Forecast.GetMinSOQ;
+                     CalcLineArray[1] := Forecast.GetNetInvPosSource();
+                     CalcMethod := SugTransferLine.Reason::"Min/Max Qty.";
+                END ELSE BEGIN
+                  TargetDate := WORKDATE + ProcUnit."Minimum Days Supply";
+                  CLEAR(Forecast);
+                  Forecast.SetForecastOnlyReqPeriods;
+                  Forecast.CalcNetNeed(ProcUnit, '', TargetDate,FALSE);
+                  TransferQty := Forecast.GetMinSOQ;
+                  MinDaysInvPos := TransferQty;
+                  IF TransferQty > 0 THEN BEGIN
+                    TargetDate := WORKDATE + ProcUnit."Maximum Days Supply";
+                    CLEAR(Forecast);
+                    Forecast.SetForecastOnlyReqPeriods;
+                    Forecast.CalcNetNeed(ProcUnit, '', TargetDate,FALSE);
+                    TransferQty := Forecast.GetMinSOQ;
+                    MaxDaysInvPos := TransferQty;
+                    CalcLineArray[1] := STRSUBSTNO(Text080, MinDaysInvPos, MaxDaysInvPos);
+                    CalcMethod := SugTransferLine.Reason::"Min/Max Days";
+                  END;
+                END;
+              END;
+            END;
+          END;
+      END;
+      IF (TransferQty <= 0) THEN
+        EXIT;
+      // Max Shelf Stock
+      ModifiedByShelfStockMax := FALSE;
+      IF (ProcUnit."Maximum Shelf Stock" > 0) THEN BEGIN
+        IF ((NOT ProcUnit."Nonstock Unit") AND
+           (BottomLevel))
+        THEN BEGIN
+          IF (TransferQty > ProcUnit."Maximum Shelf Stock") THEN BEGIN
+            TransferQty := ProcUnit."Maximum Shelf Stock";
+            ModifiedByShelfStockMax := TRUE;
+          END;
+        END;
+      END;
+      // adjust order min/mult/uom
+      NeedQuantity := TransferQty;
+      SuggestedTransferQty := TransferQty;
+      IF NOT (ModifiedByShelfStockMax) THEN BEGIN
+        IF (ProcUnit."Order Minimum" > 0) THEN
+          IF TransferQty < ProcUnit."Order Minimum" THEN BEGIN
+            NewTransferQty := ProcUnit."Order Minimum";
+            CalcLineArray[2] := STRSUBSTNO(Text078,TransferQty,NewTransferQty);
+            TransferQty := NewTransferQty;
+          END;
+        IF ProcUnit."Order Multiple" > 0 THEN BEGIN
+          OrderMultipleQty := TransferQty MOD ProcUnit."Order Multiple";
+          IF OrderMultipleQty > 0 THEN BEGIN
+            NewTransferQty := TransferQty + (ProcUnit."Order Multiple"  - OrderMultipleQty);
+            CalcLineArray[3] := STRSUBSTNO(Text077,TransferQty,NewTransferQty,ProcUnit."Order Multiple");
+            TransferQty := NewTransferQty;
+          END;
+        END;
+        Item.GET(ProcUnit."Item No.");
+        TransferUOM := Item."Base Unit of Measure";
+        IF (NOT TransferOnlyBOItems) AND (ProcUnit."Purchase Unit of Measure" <> '') THEN BEGIN
+          IF ItemUOM.GET(ProcUnit."Item No.",ProcUnit."Purchase Unit of Measure") THEN BEGIN
+            TransferQty := ROUND(TransferQty / ItemUOM."Qty. per Unit of Measure", 1.0,'>');
+            TransferUOM := ProcUnit."Purchase Unit of Measure";
+          END;
+        END;
+      END ELSE
+        TransferUOM := Item."Base Unit of Measure";
+      CreateTransferLine;
+    END;
+
+    PROCEDURE BottomLevel@1240030004() Resp : Boolean;
+    VAR
+      locProcUnit@1240030000 : Record 14000555;
+    BEGIN
+
+      locProcUnit.RESET;
+      locProcUnit.SETCURRENTKEY("Item No.","Variant Code","Location Code");
+      locProcUnit.SETRANGE("Item No.",ProcUnit."Item No.");
+      locProcUnit.SETRANGE("Variant Code",ProcUnit."Variant Code");
+      locProcUnit.SETRANGE(
+        "Replenishment Source Type",ProcUnit."Replenishment Source Type"::Location);
+      locProcUnit.SETRANGE("Replenishment Source Code",ProcUnit."Location Code");
+      IF locProcUnit.ISEMPTY THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE CreateTransferLine@1240030005();
+    VAR
+      LocProcUnitFrom@1000 : Record 14000555;
+      i@1240020000 : Integer;
+    BEGIN
+      SugTransferHdr.SETRANGE("Document Type",SugTransferHdr."Document Type"::"Repl. Path");
+      SugTransferHdr.SETRANGE("Transfer-to Code",ProcUnit."Location Code");
+      SugTransferHdr.SETRANGE("Transfer-from Code",ProcUnit."Replenishment Source Code");
+      IF NOT SugTransferHdr.FINDFIRST THEN BEGIN
+        SugTransferHdr.INIT;
+        SugTransferHdr."Document Type" := SugTransferHdr."Document Type"::"Repl. Path";
+        SugTransferHdr."No." := '';
+        SugTransferHdr."Transfer-from Code" := ProcUnit."Replenishment Source Code";
+        SugTransferHdr."Transfer-to Code" := ProcUnit."Location Code";
+        SugTransferHdr."In-Transit Code" := InvMgmtSetup."In-Transit Code";
+        SugTransferHdr."Creation Date" := WORKDATE;
+        SugTransferHdr."Transfer Date" := WORKDATE;
+        SugTransferHdr.INSERT(TRUE);
+        LineNo := 0;
+      END;
+
+      SugTransferLine.INIT;
+      SugTransferLine."Document Type" := SugTransferHdr."Document Type";
+      SugTransferLine."Suggested Transfer No." := SugTransferHdr."No.";
+      LineNo := LineNo + 10000;
+      SugTransferLine."Line No." := LineNo;
+      SugTransferLine."Transfer-from Code" := ProcUnit."Replenishment Source Code";
+      SugTransferLine."Transfer-to Code" := ProcUnit."Location Code";
+      SugTransferLine."In-Transit Code" := InvMgmtSetup."In-Transit Code";
+      SugTransferLine.VALIDATE("Item No.",ProcUnit."Item No.");
+      SugTransferLine.VALIDATE("Variant Code",ProcUnit."Variant Code");
+      SugTransferLine.VALIDATE("Unit of Measure Code",TransferUOM);
+      SugTransferLine."Need Quantity (Base)" := NeedQuantity;
+      SugTransferLine."Date Horizon" := TargetDate;
+
+      CheckFutureSupply(SugTransferLine, ProcUnit, TransferQty);
+
+      SugTransferLine.VALIDATE("Suggested Quantity", TransferQty);
+      SugTransferLine.VALIDATE("Transfer Quantity", 0);
+      SugTransferLine."Original Unit of Measure Code" := TransferUOM;
+      SugTransferLine."Allocated Date" := AllocationStopDate;
+      SugTransferLine.Reason := CalcMethod;
+
+      SugTransferLine."Back Order Qty." := ABS(UBP.SugTransferBackOrderQty(ProcUnit, SugTransferLine."Date Horizon"));
+
+      SugTransferLine."Transfer Reason" := SugTransferLine."Transfer Reason"::"Repl. Path";
+      SugTransferLine."Order Multiple" := ProcUnit."Order Multiple";
+
+      SugTransferLine."Modified By Shelf Stock Min" := ModifiedByShelfStockMin;
+      SugTransferLine."Modified By Shelf Stock Max" := ModifiedByShelfStockMax;
+
+      SugTransferLine."To Item Class Ranking" := ProcUnit."Item Class Ranking";
+      SugTransferLine."To Ranking Code" := ProcUnit."Ranking Code";
+      SugTransferLine."Usage Formula Status" := ProcUnit."Usage Formula Status";
+      SugTransferLine."Replenishment Hierarchy" := ProcUnit."Replenishment Hierarchy";
+      IF LocProcUnitFrom.GET(SugTransferLine."Transfer-from Code",SugTransferLine."Item No.",SugTransferLine."Variant Code")
+      THEN BEGIN
+        SugTransferLine."From Item Class Ranking" := LocProcUnitFrom."Item Class Ranking";
+        SugTransferLine."From Ranking Code" := LocProcUnitFrom."Ranking Code";
+        SugTransferLine."Purchaser Code" := LocProcUnitFrom."Purchaser Code";
+      END;
+      GetReviewInfo(SugTransferLine);
+      SugTransferLine.INSERT(TRUE);
+
+      CreateCalcLine(
+             SugTransferLine."Document Type",
+             SugTransferLine."Suggested Transfer No.",
+             SugTransferLine."Line No.",
+             STRSUBSTNO(
+               Text016,SugTransferLine."Need Quantity (Base)",SugTransferLine."Date Horizon"));
+      FOR i := 1 TO ARRAYLEN(CalcLineArray) DO BEGIN
+        IF CalcLineArray[i] <> '' THEN
+          CreateCalcLine(
+                 SugTransferLine."Document Type",
+                 SugTransferLine."Suggested Transfer No.",
+                 SugTransferLine."Line No.",
+                 STRSUBSTNO(CalcLineArray[i]));
+      END;
+
+
+      IF SugTransferLine."Modified By Shelf Stock Max" THEN BEGIN
+        CreateCalcLine(
+          SugTransferLine."Document Type",
+          SugTransferLine."Suggested Transfer No.",
+          SugTransferLine."Line No.",
+          STRSUBSTNO(
+            Text026,ProcUnit."Maximum Shelf Stock"));
+              END;
+
+
+      Lines := Lines + 1;
+    END;
+
+    PROCEDURE AllocateInventory@1240030007(CurrLocation@1240030004 : Record 14);
+    VAR
+      CreateLocInvrollUp@1000000001 : Codeunit 14000574;
+      LocInvRollUp@1240030003 : Record 14000583;
+      LocProcUnitFrom@1240030006 : Record 14000555;
+      LocProcUnitTo@1240030015 : Record 14000555;
+      LocSugTranLine@1240030011 : Record 14000593;
+      Finished@1240030002 : Boolean;
+      First@1240030005 : Boolean;
+      LocMinSOQ@1240030000 : Decimal;
+      LocMaxSOQ@1240030001 : Decimal;
+      OnHandQty@1240030007 : Decimal;
+      TotalTransferOutQty@1240030008 : Decimal;
+      FinalTransferQty@1240030009 : Decimal;
+      UnitsOver@1240030010 : Decimal;
+      ResultQty@1240030012 : Decimal;
+      OtherTransferQty@1240030013 : Decimal;
+      AvailableQty@1240030014 : Decimal;
+      AdditionalAvailQty@1240030016 : Decimal;
+      LocExpInvFrom@1240030017 : Decimal;
+      Found@1240030018 : Boolean;
+      AvailableToTransfer@1240020000 : Decimal;
+      TransferOutQty@1240020001 : Decimal;
+      LocExpInv@1240020002 : Decimal;
+      FirstIncrement@1240020003 : Boolean;
+      InvRatio@1240020004 : Decimal;
+      AllocateNow@1240020005 : Boolean;
+      DoNotUseRatio@1240020006 : Boolean;
+      CertainDateSourceAvailableQty@1240020007 : Boolean;
+      SourceAvailableQty@1000000000 : Decimal;
+      OrderMultipleQty@1000000002 : Decimal;
+      InboundQty@1000000003 : Decimal;
+      InTrQty@1000000005 : Decimal;
+      OutTrQty@1000000004 : Decimal;
+    BEGIN
+      IF NOT InvMgmtSetup."Roll Up Via Repl. Path" THEN
+        EXIT;
+      IF InvMgmtSetup."Roll Up Increment Days" = 0 THEN
+        ERROR(Text020);
+      IF GUIALLOWED THEN
+         ProgWindow.UPDATE(1,Text011);
+      SugTransferLine.RESET;
+      SugTransferLine.SETCURRENTKEY("Item No.");
+      SugTransferLine.SETRANGE("Document Type",SugTransferLine."Document Type"::"Repl. Path");
+      SugTransferLine.SETRANGE("Transfer-to Code",CurrLocation.Code);
+      IF SugTransferLine.FINDSET THEN BEGIN
+        REPEAT
+          DoNotUseRatio := NOT InvMgmtSetup."Allocate Transfers by Ratio";
+          IF GUIALLOWED THEN BEGIN
+            ProgWindow.UPDATE(2,SugTransferLine."Transfer-to Code");
+            ProgWindow.UPDATE(3,SugTransferLine."Item No.");
+          END;
+
+
+          ProcUnit.GET(SugTransferLine."Transfer-to Code",SugTransferLine."Item No.",SugTransferLine."Variant Code");
+          TargetDate := CALCDATE(STRSUBSTNO('<+%1D>',ProcUnit."Maximum Days Supply"),WORKDATE);
+          LocProcUnitFrom.GET(SugTransferLine."Transfer-from Code",SugTransferLine."Item No.",SugTransferLine."Variant Code");
+          LocProcUnitFrom.SETFILTER("Location Filter",LocProcUnitFrom."Location Code");
+          LocProcUnitFrom.SETFILTER("Date Filter",STRSUBSTNO('..%1',TargetDate));
+          LocProcUnitFrom.CALCFIELDS(Inventory);
+          OnHandQty := LocProcUnitFrom.Inventory;
+          IF OnHandQty > 0 THEN BEGIN
+            Finished := FALSE;
+            FirstIncrement := TRUE;
+            REPEAT
+              TransferQty := 0;
+              OutTrQty := 0;
+              InTrQty := 0;
+              SourceAvailableQty := 0;
+              IF NOT FirstIncrement THEN BEGIN
+                TargetDate := CALCDATE(STRSUBSTNO('<-%1D>',InvMgmtSetup."Roll Up Increment Days"),TargetDate);
+              IF TargetDate < AllocationStopDate THEN BEGIN
+                TargetDate := AllocationStopDate;
+                Finished := TRUE;
+              END;
+              CLEAR(CreateLocInvrollUp);
+              CreateLocInvrollUp.CalcRollUp(ProcUnit,FALSE,0,TargetDate);
+              First := TRUE;
+              REPEAT
+                CreateLocInvrollUp.GetNextRollUpLine(LocInvRollUp,First);
+                First := FALSE;
+              UNTIL LocInvRollUp."Individual Location Code" = SugTransferLine."Transfer-from Code";
+              END ELSE BEGIN
+                FirstIncrement := FALSE;
+                CLEAR(CreateLocInvrollUp);
+                CreateLocInvrollUp.CalcRollUp(ProcUnit,FALSE,0,TargetDate);
+                First := TRUE;
+                REPEAT
+                  CreateLocInvrollUp.GetNextRollUpLine(LocInvRollUp,First);
+                  First := FALSE;
+                UNTIL LocInvRollUp."Individual Location Code" = SugTransferLine."Transfer-from Code";
+                PushDateBecauseAvailable(LocInvRollUp,SugTransferLine."Transfer-from Code",TargetDate);
+              END;
+              // Inbound Quantity calc
+              LocProcUnitFrom.SETFILTER("Date Filter",STRSUBSTNO('..%1',TargetDate));
+              LocProcUnitFrom.CALCFIELDS("Qty. on Purchase Order","Qty. on Transfer In","Qty. on Prod. Order","Qty. on Assy. Order");
+              InboundQty :=
+                LocProcUnitFrom."Qty. on Purchase Order" + LocProcUnitFrom."Qty. on Transfer In" +
+                LocProcUnitFrom."Qty. on Prod. Order" + LocInvRollUp."Transfer In Qty." +
+                LocProcUnitFrom."Qty. on Assy. Order";
+              OutTrQty := ABS(LocInvRollUp."Transfer Out Qty.");
+              SourceAvailableQty := LocInvRollUp."Avail. to Send";
+              AllocateNow := FALSE;
+              IF DoNotUseRatio THEN BEGIN
+                IF (SourceAvailableQty >= OutTrQty) THEN
+                  AllocateNow := TRUE
+              END ELSE
+                AllocateNow := TRUE;
+
+              // available at any date
+              IF (SourceAvailableQty > 0) THEN
+                CertainDateSourceAvailableQty := TRUE;
+
+              // always allocate at WORKDATE using ratio
+              IF (TargetDate = AllocationStopDate) AND (AllocateNow = FALSE) THEN BEGIN
+                AllocateNow := TRUE;
+                DoNotUseRatio := FALSE;
+              END;
+
+              IF ((SourceAvailableQty > 0) AND (OutTrQty > 0)) AND (AllocateNow) THEN BEGIN
+                Finished := TRUE;
+                // fetch individual transfer in
+                First := TRUE;
+                REPEAT
+                  IF NOT CreateLocInvrollUp.GetNextRollUpLine(LocInvRollUp,First) THEN
+                    Finished := TRUE;
+                  First := FALSE;
+                UNTIL (LocInvRollUp."Individual Location Code" = ProcUnit."Location Code");
+                InTrQty := LocInvRollUp."Transfer In Qty.";
+                IF DoNotUseRatio THEN
+                  TransferQty := InTrQty
+                ELSE BEGIN
+                  InvRatio := InTrQty/OutTrQty;
+                  TransferQty := ROUND((InvRatio) * SourceAvailableQty,1.0,'<');
+                END;
+
+                IF (TransferQty <> InTrQty) // equals requested
+                  AND (InTrQty <> SourceAvailableQty) // equals all available
+                  AND (SourceAvailableQty <> TransferQty) //everything available is to be transfered out
+                  AND (TransferQty < SugTransferLine."Suggested Quantity (Base)") // too much
+                    THEN
+                    SugTransferLine."Check Alloc. Transfer Qty." := TRUE;
+
+                // Allocated b/c of current date
+                IF (SourceAvailableQty < OutTrQty) AND (DoNotUseRatio) AND (TargetDate = AllocationStopDate) THEN
+                  SugTransferLine."Check Alloc. Transfer Qty." := TRUE;
+
+                // Curr Horizon no transfer quantity requested
+                IF (SourceAvailableQty > 0) AND (InTrQty = 0) THEN
+                 SugTransferLine."Check Alloc. Transfer Qty." := TRUE;
+
+                // round down for order multiple
+                IF InvMgmtSetup."Force Ord. Mult. Trans. Alloc." THEN BEGIN
+                  IF (SugTransferLine."Order Multiple" <> 0) AND (SugTransferLine."Order Multiple" <> 1) AND
+                    (SugTransferLine."Suggested Quantity (Base)" <> TransferQty) THEN BEGIN
+                    OrderMultipleQty := TransferQty MOD SugTransferLine."Order Multiple";
+                    IF OrderMultipleQty <> 0 THEN BEGIN
+                     TransferQty := TransferQty - OrderMultipleQty;
+                     SugTransferLine."Check Alloc. Transfer Qty." := TRUE;
+                    END;
+                  END;
+                END;
+
+                // Round down for UOM
+                TransferQty := ROUND(TransferQty / SugTransferLine."Qty. per Unit of Measure",1.0,'<');
+
+                IF TransferQty > SugTransferLine."Suggested Quantity" THEN
+                    TransferQty := SugTransferLine."Suggested Quantity";
+                SugTransferLine.Allocated := TRUE;
+                SugTransferLine."Allocated Date" := TargetDate;
+                IF TransferQty > 0 THEN BEGIN
+                  SugTransferLine.VALIDATE("Transfer Quantity",TransferQty);
+                  SugTransferLine."Original Transfer Quantity" := TransferQty;
+                END;
+                SugTransferLine.MODIFY(FALSE);
+              END ELSE BEGIN
+                // allocated all the way back and nothing to allocate equally
+                IF Finished THEN BEGIN
+                  // some quantity available
+                  IF CertainDateSourceAvailableQty THEN BEGIN
+                    SugTransferLine.GET(SugTransferLine."Document Type",SugTransferLine."Suggested Transfer No.",SugTransferLine."Line No.");
+                    SugTransferLine."Check Alloc. Transfer Qty." := TRUE;
+                    SugTransferLine.MODIFY(FALSE);
+                  END;
+                END;
+              END;
+            UNTIL Finished;
+          END;
+
+          CertainDateSourceAvailableQty := FALSE;
+        UNTIL SugTransferLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateCalcLine@1240030009(CurrDocType@1240030001 : Integer;CurrDocNo@1240030002 : Code[20];CurrLineNo@1240030003 : Integer;CurrLineText@1240030000 : Text[200]);
+    VAR
+      LocSugTranCalcLine@1240030004 : Record 14000594;
+      LineNo@1240030005 : Integer;
+    BEGIN
+      LocSugTranCalcLine.RESET;
+      LocSugTranCalcLine.SETRANGE("Document Type",CurrDocType);
+      LocSugTranCalcLine.SETRANGE("Suggested Transfer No.",CurrDocNo);
+      LocSugTranCalcLine.SETRANGE("Suggested Transfer Line No.",CurrLineNo);
+      IF LocSugTranCalcLine.FIND('+') THEN
+        LineNo := LocSugTranCalcLine."Line No." + 10000
+      ELSE
+        LineNo := 10000;
+      LocSugTranCalcLine."Document Type" := CurrDocType;
+      LocSugTranCalcLine."Suggested Transfer No." := CurrDocNo;
+      LocSugTranCalcLine."Suggested Transfer Line No." := CurrLineNo;
+      LocSugTranCalcLine."Line No." := LineNo;
+      LocSugTranCalcLine.Detail := CurrLineText;
+      LocSugTranCalcLine.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetReviewInfo@1(VAR CurrSugTransferLine@1240030000 : Record 14000593);
+    VAR
+      ItemCategory@1000 : Record 5722;
+    BEGIN
+      IF CurrSugTransferLine."Item No." <> '' THEN BEGIN
+        Item.GET(CurrSugTransferLine."Item No.");
+        CurrSugTransferLine."Item Category Code" := Item."Item Category Code";
+        CurrSugTransferLine."Base Unit of Measure Code" := Item."Base Unit of Measure";
+        IF CurrSugTransferLine."Item Category Code" <> '' THEN BEGIN
+          ItemCategory.GET(CurrSugTransferLine."Item Category Code");
+          CurrSugTransferLine."Review Code" := ItemCategory."Review Code";
+        END ELSE
+          CurrSugTransferLine."Review Code" := '';
+      END;
+    END;
+
+    LOCAL PROCEDURE PushDateBecauseAvailable@1240020007(VAR CurrLocInvRollUp@1240020003 : Record 14000583;VAR CurrTransferFromLocCode@1240020000 : Code[10];VAR CurrTargetDate@1240020004 : Date);
+    VAR
+      First@1240020001 : Boolean;
+      NewTargetDate@1240020005 : Date;
+      i@1240020002 : Integer;
+      completed@1240020006 : Boolean;
+      CreateLocInvrollUp@1000000000 : Codeunit 14000574;
+    BEGIN
+      EXIT;  // Not Released - 2.99
+      IF AdvForSetup."Max. LTH Days" = 0 THEN
+        AdvForSetup."Max. LTH Days" := 365;
+      IF CurrLocInvRollUp."Avail. to Send" > ABS(CurrLocInvRollUp."Transfer Out Qty.") THEN BEGIN
+        NewTargetDate := CurrTargetDate;
+        REPEAT
+          NewTargetDate := CALCDATE(STRSUBSTNO('<+%1D>',InvMgmtSetup."Roll Up Increment Days"), NewTargetDate);
+          IF NewTargetDate < CALCDATE(STRSUBSTNO('<+%1D>', AdvForSetup."Max. LTH Days"),WORKDATE) THEN BEGIN
+            CLEAR(CreateLocInvrollUp);
+            CreateLocInvrollUp.CalcRollUp(ProcUnit,FALSE,0,NewTargetDate);
+            First := TRUE;
+            REPEAT
+              CreateLocInvrollUp.GetNextRollUpLine(CurrLocInvRollUp,First);
+              First := FALSE;
+            UNTIL CurrLocInvRollUp."Individual Location Code" = CurrTransferFromLocCode;
+            IF (CurrLocInvRollUp."Avail. to Send" < ABS(CurrLocInvRollUp."Transfer Out Qty.")) THEN BEGIN
+              completed := TRUE;
+              CurrTargetDate := NewTargetDate;
+            END;
+          END ELSE
+            completed := TRUE;
+          i := i + 1;
+        UNTIL (i >= 52) OR (completed);
+      END;
+    END;
+
+    PROCEDURE CheckFutureSupply@1240020000(VAR CurrSugTransferLine@1240020007 : TEMPORARY Record 14000593;CurrProcUnit@1240030000 : Record 14000555;VAR CurrOrderQty@1240030001 : Decimal);
+    VAR
+      locOrderQtyBase@1240020000 : Decimal;
+      AdjustedByMultiple@1240020001 : Boolean;
+      PrevOrderQty@1240020003 : Decimal;
+      SupplyOutsideLTH@1240020002 : Decimal;
+      CurrOrderQtyBase@1240020005 : Decimal;
+      OrigOrderQty@1240020004 : Decimal;
+      OrderMultipleQty@1000000000 : Decimal;
+    BEGIN
+      OrigOrderQty := CurrOrderQty;
+
+      SupplyOutsideLTH := UBP.CheckFutureSupply(ProcUnit, CurrSugTransferLine."Date Horizon");
+
+      IF SupplyOutsideLTH <> 0 THEN BEGIN
+        CurrOrderQtyBase := CurrOrderQty * CurrSugTransferLine."Qty. per Unit of Measure";
+        CurrOrderQtyBase := CurrOrderQtyBase - SupplyOutsideLTH;
+        IF CurrOrderQtyBase < 0 THEN
+          CurrOrderQtyBase := 0;
+
+        IF CurrOrderQtyBase > 0 THEN BEGIN
+          locOrderQtyBase := 0;
+          AdjustedByMultiple := FALSE;
+          PrevOrderQty := 0;
+          OrderMultipleQty := 0;
+          IF (CurrProcUnit."Order Multiple" > 0) AND
+              (CurrOrderQtyBase > 0) THEN BEGIN
+            OrderMultipleQty := CurrOrderQtyBase MOD CurrProcUnit."Order Multiple";
+            IF OrderMultipleQty <> 0 THEN BEGIN
+              locOrderQtyBase := CurrOrderQtyBase + (CurrProcUnit."Order Multiple"  - OrderMultipleQty);
+              AdjustedByMultiple := TRUE;
+              PrevOrderQty := ROUND(CurrOrderQtyBase / CurrSugTransferLine."Qty. per Unit of Measure",1.0,'>');
+            END;
+          END;
+        END;
+        CreateCalcLine(
+          CurrSugTransferLine."Document Type",
+          CurrSugTransferLine."Suggested Transfer No.",
+          CurrSugTransferLine."Line No.",
+          STRSUBSTNO(Text061,CurrOrderQtyBase,OrigOrderQty*CurrSugTransferLine."Qty. per Unit of Measure",SupplyOutsideLTH));
+
+        IF AdjustedByMultiple THEN
+          CurrOrderQtyBase := locOrderQtyBase;
+
+        CurrOrderQty := ROUND(CurrOrderQtyBase / CurrSugTransferLine."Qty. per Unit of Measure",1.0,'>');
+
+        IF AdjustedByMultiple THEN
+          CreateCalcLine(
+            CurrSugTransferLine."Document Type",
+            CurrSugTransferLine."Suggested Transfer No.",
+            CurrSugTransferLine."Line No.",
+            STRSUBSTNO(Text077,PrevOrderQty,CurrOrderQty,CurrProcUnit."Order Multiple"));
+      END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeSugTransferAllocation@1240020009(VAR BypassTransferAllocation@1240020000 : Boolean;VAR CurrSugTransferHdr@1240020003 : Record 14000592;VAR CurrSugTransferLine@1240020002 : Record 14000593);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

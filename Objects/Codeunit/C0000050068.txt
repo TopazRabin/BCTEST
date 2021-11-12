@@ -1,0 +1,115 @@
+OBJECT Codeunit 50068 Pick Email Handling
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=TPZ000.00.00;
+  }
+  PROPERTIES
+  {
+    TableNo=472;
+    OnRun=BEGIN
+            SalesHeader.GET(SalesHeader."Document Type"::Order,SELECTSTR(2,"Parameter String"));
+            WarehouseActivityHeader.SETCURRENTKEY("Source Document","Source No.","Location Code");
+            WarehouseActivityHeader.SETRANGE("Source Document",WarehouseActivityHeader."Source Document"::"Sales Order");
+            WarehouseActivityHeader.SETRANGE("Source No.",SalesHeader."No.");
+            IF WarehouseActivityHeader.FINDLAST THEN BEGIN //EB
+               SendPickEmail(WarehouseActivityHeader);
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SalesHeader@1000000003 : Record 36;
+      WarehouseActivityHeader@1000000004 : Record 5766;
+      ReceiverTo@1000000002 : Text;
+      ReceiverCC@1000000001 : Text;
+      ReceiverBCC@1000000000 : Text;
+
+    LOCAL PROCEDURE SendPickEmail@1000000000(WarehouseActivityHeader@1000000000 : Record 5766);
+    VAR
+      SMTPSetup@1000000002 : Record 409;
+      MailVar@1000000001 : Codeunit 400;
+      Text0001@1000000007 : TextConst 'ENU=Pick Report';
+      Text0003@1000000005 : TextConst 'ENU=please find the PDF file Attached';
+      Excel@1000000004 : TextConst 'ENU=.xlsx';
+      PDF@1000000003 : TextConst 'ENU=.pdf';
+      MessageText@1000000008 : Text;
+      PickingListWebclient@1000000006 : Report 51055;
+      EMailSetup@1000000009 : Record 14000905;
+      WarehouseActHdr@1000000010 : Record 5766;
+    BEGIN
+      EMailSetup.GET;
+      EMailSetup.TESTFIELD("E-Mail Buffer Directory");
+      WarehouseActHdr.SETRANGE("No.",WarehouseActivityHeader."No.");
+      PickingListWebclient.SETTABLEVIEW(WarehouseActHdr);
+      PickingListWebclient.SAVEASPDF(EMailSetup."E-Mail Buffer Directory"+'\'+PickingListWebclient.OBJECTID(TRUE)+WarehouseActivityHeader."No."+PDF);
+      GetEmailAddress(SalesHeader);
+      SMTPSetup.GET('');
+      MailVar.CreateMessage(Text0001,SMTPSetup."From Address",ReceiverTo,Text0001+' '+WarehouseActivityHeader."No.",'',TRUE);
+      IF ReceiverCC<>'' THEN
+        MailVar.AddCC(ReceiverCC);
+      IF ReceiverBCC<>'' THEN
+        MailVar.AddBCC(ReceiverBCC);
+      MailVar.AddAttachment(EMailSetup."E-Mail Buffer Directory"+'\'+PickingListWebclient.OBJECTID(TRUE)+WarehouseActivityHeader."No."+PDF,
+                            PickingListWebclient.OBJECTID(TRUE)+WarehouseActivityHeader."No."+PDF);
+      MessageText := 'Pick '+WarehouseActivityHeader."No."+' has been successsfully created for Sales Order '+SalesHeader."No."+'.Please find the attached Pick Report.';
+      MailVar.AppendBody(MessageText);
+      MailVar.Send;
+
+      ERASE(EMailSetup."E-Mail Buffer Directory"+'\'+PickingListWebclient.OBJECTID(TRUE)+WarehouseActivityHeader."No."+PDF);
+    END;
+
+    LOCAL PROCEDURE GetEmailAddress@1000000002(SalesHeader@1000000000 : Record 36);
+    VAR
+      EMailListEntry@1000000001 : Record 14000908;
+    BEGIN
+      EMailListEntry.RESET;
+      //EMailListEntry.SETRANGE("Table ID",DATABASE::"Sales Header");
+      EMailListEntry.SETRANGE("Table ID",DATABASE::Location);
+      //EMailListEntry.SETRANGE(Type,1);
+      //EMailListEntry.SETRANGE(Code,SalesHeader."No.");
+      EMailListEntry.SETRANGE(Code,SalesHeader."Location Code");
+      EMailListEntry.SETFILTER("Pick Report E-Mail",'<>%1',EMailListEntry."Pick Report E-Mail"::" ");
+      IF EMailListEntry.FINDSET THEN REPEAT
+        CASE EMailListEntry."Pick Report E-Mail" OF
+          EMailListEntry."Pick Report E-Mail"::"To":
+            CreateRecipientList(EMailListEntry."E-Mail",'TO');
+          EMailListEntry."Pick Report E-Mail"::CC:
+            CreateRecipientList(EMailListEntry."E-Mail",'CC');
+          EMailListEntry."Pick Report E-Mail"::BCC:
+            CreateRecipientList(EMailListEntry."E-Mail",'BCC');
+        END;
+      UNTIL EMailListEntry.NEXT=0;
+    END;
+
+    LOCAL PROCEDURE CreateRecipientList@1240020000(EmailAddressText@1240020000 : Text[250];Type@1240020001 : Text[10]);
+    BEGIN
+      CASE Type OF
+        'TO':
+          IF ReceiverTo = '' THEN
+            ReceiverTo := EmailAddressText
+          ELSE
+            ReceiverTo := ReceiverTo + ';' + EmailAddressText;
+        'CC':
+          IF ReceiverCC = '' THEN
+            ReceiverCC := EmailAddressText
+          ELSE
+            ReceiverCC := ReceiverCC + ';' + EmailAddressText;
+        'BCC':
+          IF ReceiverBCC = '' THEN
+            ReceiverBCC := EmailAddressText
+          ELSE
+            ReceiverBCC := ReceiverBCC + ';' + EmailAddressText;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

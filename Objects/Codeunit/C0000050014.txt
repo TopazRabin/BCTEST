@@ -1,0 +1,839 @@
+OBJECT Codeunit 50014 WMS GoLive
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/23/20;
+    Time=[ 3:43:48 PM];
+    Modified=Yes;
+    Version List=TPZ000.00.00;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            NewPDA@1000000000 : Record 23044504;
+            OldPDA@1000000001 : Record 23044504;
+            ItemLabelTemp@1000000002 : Record 50012;
+            Item@1000000003 : Record 27;
+            DialogBox@1000000004 : Dialog;
+            Index@1000000005 : Integer;
+            PU@1000000006 : Record 14000555;
+            ItemBlock@1000000007 : Record 50019;
+            SSL@1000000008 : Record 50000;
+            x@1000000009 : DateTime;
+            Package@1000000010 : Record 14000701;
+            Shipping@1000000011 : Codeunit 14000701;
+            PackageLine@1000000012 : Record 14000702;
+            PickLine@1000000013 : Record 5767;
+            WhseShptLine@1000000015 : Record 7321;
+            WS@1000000016 : Record 7320;
+            WhseEntry@1000000017 : Record 7312;
+            PackingStation@1000000018 : Record 14000709;
+            CarrierPackingSattion@1000000019 : Record 14000729;
+            ItemE@1000000014 : Record 27;
+          BEGIN
+
+            PackingStation.FINDSET;
+            REPEAT
+              IF PackingStation."UCC/UPC Label Printer Port" = '' THEN BEGIN
+                IF CarrierPackingSattion.GET(PackingStation."Carrier Packing Station Code") THEN BEGIN
+                  PackingStation."UCC/UPC Label Printer Port" := CarrierPackingSattion."UPS Label Printer Port";
+                  PackingStation.MODIFY;
+                END;
+              END;
+
+            UNTIL PackingStation.NEXT = 0;
+
+            MESSAGE('DONE');
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Window@1000000000 : Dialog;
+      Counter@1000000001 : Integer;
+      ShipmentUpdate@1000000002 : Record 50035;
+
+    LOCAL PROCEDURE DeleteWhseShptLine@1000000030(No@1000000000 : Code[10];LineNo@1000000001 : Integer);
+    VAR
+      WhseShptLine@1000000002 : Record 7321;
+    BEGIN
+      WhseShptLine.GET(No, LineNo);
+      WhseShptLine.DELETE;
+    END;
+
+    LOCAL PROCEDURE PostPackage@1000000029(PackageNo@1000000000 : Code[20]);
+    VAR
+      Package@1000000001 : Record 14000701;
+      SalesShptHeader@1000000002 : Record 110;
+      Shipping@1000000003 : Codeunit 14000701;
+      BillOfLading@1000000009 : Record 14000822;
+      BillOfLadingLine@1000000008 : Record 14000823;
+      SalesLine@1000000007 : Record 37;
+      BillOfLadingInfo@1000000006 : Record 14000827;
+      BOLMgt@1000000005 : Codeunit 14000821;
+      OldBillOfLadingLine@1000000004 : Record 14000823;
+      Package2@1000000010 : Record 14000701;
+      TranHeader@1000000011 : Record 5740;
+      TranShptHeader@1000000012 : Record 5744;
+    BEGIN
+      Counter+= 1;
+      Window.UPDATE(1, Counter);
+
+      IF Package.GET(PackageNo) = FALSE THEN
+        EXIT;
+
+      //IF Package."Source ID" = '' THEN
+      //  EXIT;
+
+      IF Package.Closed = FALSE THEN
+        EXIT;
+
+      IF Package."Source ID" = '' THEN BEGIN
+        Shipping.PostPackage(Package, '', '', Package."Packing Date");
+        EXIT;
+      END;
+
+      IF Package."Source Type" = 5740 THEN BEGIN
+        //TranHeader.GET(Package."Source ID");
+        TranShptHeader.SETRANGE("Transfer Order No.", Package."Source ID");
+        TranShptHeader.FINDFIRST;
+
+        Shipping.PostPackage(
+            Package,TranShptHeader."No.",TranShptHeader."Bill of Lading No.",
+            TranShptHeader."Posting Date");
+
+        EXIT;
+      END;
+
+
+      SalesShptHeader.SETRANGE("Order No.", Package."Source ID");
+      //SalesShptHeader.SETRANGE("Posting Date", Package."Packing Date");
+      IF SalesShptHeader.FINDLAST = FALSE THEN BEGIN
+        MESSAGE('no shipmetn found');
+        EXIT;
+      END;
+
+      Shipping.PostPackage( Package,SalesShptHeader."No.",SalesShptHeader."Bill of Lading No.", SalesShptHeader."Posting Date");
+
+      IF Package."Multi Document Package" THEN BEGIN
+        Package2.RESET;
+        Package2.SETCURRENTKEY("Original Package No.");
+        Package2.SETRANGE("Original Package No.",Package."Original Package No.");
+        IF NOT Package2.FIND('-') THEN BEGIN
+          Package2.GET(Package."Original Package No.");
+          Shipping.PostPackage(Package2,'','',WORKDATE);
+        END;
+      END;
+
+      BillOfLadingLine.RESET;
+      BillOfLadingLine.SETCURRENTKEY(Type,"No.",Closed,"Location Code");
+      BillOfLadingLine.SETRANGE(Type,BillOfLadingLine.Type::Order);
+      BillOfLadingLine.SETRANGE("No.",SalesShptHeader."Order No.");
+      BillOfLadingLine.SETRANGE(Closed,FALSE);
+      BillOfLadingLine.SETRANGE("Location Code", SalesShptHeader."Location Code");
+      BillOfLadingLine.SETRANGE("Source Type",DATABASE::"Sales Header");
+      BillOfLadingLine.SETRANGE("Source Subtype",1);
+      BillOfLadingLine.SETRANGE("Source ID",SalesShptHeader."Order No.");
+      IF BillOfLadingLine.FIND('-') THEN BEGIN
+        BillOfLading.GET(BillOfLadingLine."Bill of Lading No.");
+
+        //TM BEG 080415 - Comment out because so that user can release BOL first before posting BOL
+        //BillOfLading.TESTFIELD(Released,FALSE);
+        OldBillOfLadingLine := BillOfLadingLine;
+        //TM END 080415
+
+        BillOfLadingLine.LOCKTABLE;
+        BillOfLadingLine.RESET;
+        BillOfLadingLine.SETRANGE("Bill of Lading No.",BillOfLading."No.");
+        IF NOT BillOfLadingLine.FIND('+') THEN BEGIN
+          BillOfLadingLine."Bill of Lading No." := BillOfLading."No.";
+          BillOfLadingLine."Line No." := 10000;
+        END;
+        BillOfLadingLine.INIT;
+
+        //TM BEG 080415
+        BillOfLadingLine.SuspendTestReleased(TRUE);
+        //TM END 080415
+
+        BillOfLadingLine."Line No." := BillOfLadingLine."Line No." + 10000;
+        BillOfLadingLine."Source Type" := DATABASE::"Sales Header";
+        BillOfLadingLine."Source Subtype" := 1;
+        BillOfLadingLine."Source ID" := SalesShptHeader."Order No.";
+        BillOfLadingLine."Posted Source ID" := SalesShptHeader."No.";
+        BillOfLadingLine.Type := BillOfLadingLine.Type::"Sales Shipment (Posted)";
+        BillOfLadingLine.VALIDATE("No.",SalesShptHeader."No.");
+        BillOfLadingLine.INSERT(TRUE);
+
+
+        //TM BEG 080415 - Update bill of lading info line
+        BillOfLadingInfo.SETRANGE("Bill of Lading No.", BillOfLading."No.");
+        BillOfLadingInfo.SETRANGE("Source Type", BillOfLadingLine."Source Type");
+        BillOfLadingInfo.SETRANGE("Source Subtype", BillOfLadingLine."Source Subtype");
+        BillOfLadingInfo.SETRANGE("Source ID", BillOfLadingLine."Source ID");
+        IF BillOfLadingInfo.FINDSET THEN
+        REPEAT
+          BillOfLadingInfo."Posted Source ID" := BillOfLadingLine."Posted Source ID";
+          BillOfLadingInfo.MODIFY;
+        UNTIL BillOfLadingInfo.NEXT = 0;
+        //TM END 080415
+
+      END;
+    END;
+
+    LOCAL PROCEDURE ResendEDIInvoice@1000000028(InvoiceNo@1000000000 : Code[10]);
+    VAR
+      SalesInvHeader@1000000001 : Record 112;
+      EDIIntegration@1000000002 : Codeunit 14000363;
+    BEGIN
+      SalesInvHeader.GET(InvoiceNo);
+      SalesInvHeader."EDI Invoice Generated" := FALSE;
+      SalesInvHeader.MODIFY;
+
+      EDIIntegration.SendEDIInvoice(SalesInvHeader);
+    END;
+
+    PROCEDURE InsertMail@1000000026();
+    VAR
+      UPSMail@1000000000 : Record 14050006;
+      ShippingCommentLine@1000000001 : Record 14000706;
+    BEGIN
+      UPSMail.GET(63);
+      WITH UPSMail DO BEGIN
+          "Reference No." := '17122501225943.31180916';
+          "File Name" := 'rm6588_1514688895';
+          "Message Type" := 8;
+          "First Read By" := 'TOPAZ\TMEI';
+          "First Read Date" := 123017D;
+          "Host Config. Account No." := 'A0R415';
+          "Distribution ID" := '4187055567';
+          "Enable Date" := 122417D;
+          "Object Distribution Type" := 17;
+          "Large Distributed Object" := TRUE;
+          MODIFY;
+      END;
+
+      WITH ShippingCommentLine DO BEGIN
+        "Table ID" := 14050006;
+        Integer := 63;
+        "Line No." := 10000;
+        Date := 123017D;
+        Comment := '0000017418705556720171224000014309712';
+        INSERT;
+      END;
+    END;
+
+    PROCEDURE UpdateIntCustPrint@1000000027(CustNo@1000000000 : Code[10]);
+    VAR
+      Customer@1000000001 : Record 18;
+      SalesHeader@1000000002 : Record 36;
+    BEGIN
+      Customer.GET(CustNo);
+      Customer.Mail := FALSE;
+      Customer.MODIFY;
+
+      SalesHeader.SETRANGE("Sell-to Customer No.", Customer."No.");
+      IF SalesHeader.FINDSET THEN
+      REPEAT
+        SalesHeader.Mail := FALSE;
+        SalesHeader.MODIFY;
+      UNTIL SalesHeader.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateUserPermission@1000000025(UserName@1000000000 : Code[50]);
+    VAR
+      User@1000000001 : Record 2000000120;
+      AccessControl@1000000002 : Record 2000000053;
+    BEGIN
+      User.SETRANGE("User Name", UserName);
+      User.FINDFIRST;
+
+      {
+      AccessControl.SETRANGE("User Security ID", User."User Security ID");
+      AccessControl.SETRANGE("Role ID", 'WM-R/PA/A/P/S');
+      AccessControl.SETRANGE("Company Name", 'Topaz');
+      AccessControl.FINDFIRST;
+      AccessControl.DELETE;
+      EXIT;
+      }
+
+      AccessControl.INIT;
+      AccessControl."Company Name" := 'Topaz';
+      AccessControl."Role ID" := 'WMS READ ALL';
+      AccessControl."User Security ID" := User."User Security ID";
+      AccessControl.INSERT;
+    END;
+
+    PROCEDURE UpdateItemDescription@1000000022(ItemNo@1000000005 : Code[20];Description@1000000004 : Text[50];Description2@1000000003 : Text);
+    VAR
+      Item@1000000000 : Record 27;
+    BEGIN
+      Item.GET(ItemNo);
+      Item.Description := Description;
+      Item."Description 2" := Description2;
+      Item.MODIFY;
+    END;
+
+    PROCEDURE FixSKU@1000000023();
+    VAR
+      Window@1000000000 : Dialog;
+      Counter@1000000001 : Integer;
+      LM@1000000002 : Record 50009;
+      SKU@1000000003 : Record 5700;
+    BEGIN
+      Window.OPEN('#1##### OF #2######');
+      LM.FINDSET;
+      Window.UPDATE(1, LM.COUNT);
+      REPEAT
+        Counter += 1;
+        Window.UPDATE(2, Counter);
+
+        SKU.GET('1',LM."Activity Type",'');
+        //SKU."Next Counting Period" := LM."Line No."; //Field removed in 2018
+        SKU.MODIFY;
+      UNTIL LM.NEXT = 0;
+    END;
+
+    PROCEDURE PrintInvoice@1000000021(SalesOrderNumber@1000000000 : Code[20]);
+    VAR
+      SalesInvHeader@1000000001 : Record 112;
+      JobQueueEntry@1000000002 : Record 472;
+    BEGIN
+      SalesInvHeader.SETCURRENTKEY("Order No.");
+      SalesInvHeader.SETRANGE("Order No.", SalesOrderNumber);
+      SalesInvHeader.SETRANGE("Posting Date", 050117D);
+      SalesInvHeader.FIND('-');
+      IF SalesInvHeader.COUNT() > 1 THEN
+        ERROR ('%1 more than one invoice', SalesOrderNumber);
+
+      SalesInvHeader.SETRANGE("No.", SalesInvHeader."No.");
+      SalesInvHeader.PrintRecords(FALSE);
+
+      JobQueueEntry.SETFILTER(Description, '*'+SalesOrderNumber+'*');
+      JobQueueEntry.FIND('-');
+      IF JobQueueEntry.COUNT > 1 THEN
+        ERROR('%1 more than 1 job queue entry');
+
+      JobQueueEntry.DELETE;
+    END;
+
+    PROCEDURE DeleteWhseActivQtyToHandle@1000000024();
+    VAR
+      WhseActLine@1000000000 : Record 5767;
+    BEGIN
+      WhseActLine.SETRANGE("Location Code", '30');
+      WITH WhseActLine DO BEGIN
+        IF FIND('-') THEN
+          REPEAT
+            VALIDATE("Qty. to Handle",0);
+            MODIFY;
+          UNTIL NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE CopyUserPermission@1000000020(FromUserID@1000000000 : Code[50];ToUserID@1000000001 : Code[50]);
+    VAR
+      FromUserSetup@1000000002 : Record 91;
+      ToUserSetup@1000000003 : Record 91;
+      FromUserPersonalization@1000000004 : Record 2000000073;
+      ToUserPersonalization@1000000005 : Record 2000000073;
+      FromUser@1000000006 : Record 2000000120;
+      ToUser@1000000007 : Record 2000000120;
+      FromWhseEmployee@1000000008 : Record 7301;
+      ToWhseEmployee@1000000009 : Record 7301;
+      FromAccessControl@1000000010 : Record 2000000053;
+      ToAccessControl@1000000011 : Record 2000000053;
+    BEGIN
+
+      FromUser.SETRANGE("User Name", FromUserID);
+      FromUser.FINDFIRST;
+
+      ToUser.SETRANGE("User Name", ToUserID);
+      ToUser.FINDFIRST;
+
+      FromUserSetup.GET(FromUserID);
+      ToUserSetup.INIT;
+      ToUserSetup.TRANSFERFIELDS(FromUserSetup);
+      ToUserSetup."User ID" := ToUser."User Name";
+      ToUserSetup."E-Mail Sender Name" := '';
+      ToUserSetup."E-Mail Sender Address" := '';
+      ToUserSetup.INSERT;
+
+      FromUserPersonalization.GET(FromUser."User Security ID");
+      ToUserPersonalization.INIT;
+      ToUserPersonalization.TRANSFERFIELDS(FromUserPersonalization);
+      ToUserPersonalization."User SID" := ToUser."User Security ID";
+      ToUserPersonalization."User ID" := ToUser."User Name";
+      ToUserPersonalization.INSERT;
+
+      FromWhseEmployee.SETRANGE("User ID", FromUserID);
+      IF FromWhseEmployee.FINDSET THEN
+      REPEAT
+        ToWhseEmployee.RESET;
+        ToWhseEmployee.TRANSFERFIELDS(FromWhseEmployee);
+        ToWhseEmployee."User ID" := ToUserID;
+        ToWhseEmployee.INSERT;
+      UNTIL FromWhseEmployee.NEXT = 0;
+
+      FromAccessControl.SETRANGE("User Security ID", FromUser."User Security ID");
+      IF FromAccessControl.FINDSET THEN
+      REPEAT
+        ToAccessControl.INIT;
+        ToAccessControl.TRANSFERFIELDS(FromAccessControl);
+        ToAccessControl."User Security ID" := ToUser."User Security ID";
+        ToAccessControl.INSERT;
+      UNTIL FromAccessControl.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateItemLabelFields@1000000019(ItemNo@1000000000 : Code[20];Label1@1000000001 : Text;Label2@1000000002 : Text;Label3@1000000003 : Text;Label4@1000000004 : Text;Size@1000000005 : Text);
+    VAR
+      Item@1000000006 : Record 27;
+    BEGIN
+      IF Item.GET(ItemNo) = FALSE THEN
+        EXIT;
+
+      Item."Label Description" := Label1;
+      Item."Label Description 2" := Label2;
+      Item."Label Description 3" := Label3;
+      Item."Label Description 4" := Label4;
+      Item.Size := Size;
+      Item.MODIFY(TRUE);
+    END;
+
+    PROCEDURE UpdateWhseEntryCreationDateTime@1000000018();
+    VAR
+      WhseEntry@1000000002 : Record 7312;
+      WhseReg@1000000003 : Record 7313;
+    BEGIN
+      Window.OPEN('#1####### OF #2######');
+      Window.UPDATE(2, WhseReg.COUNT);
+      WhseReg.FINDSET;
+      REPEAT
+        Counter += 1;
+        Window.UPDATE(1, Counter);
+        IF WhseReg."Creation Date Time" <> 0DT THEN BEGIN
+          WhseEntry.SETRANGE("Entry No.", WhseReg."From Entry No.", WhseReg."To Entry No.");
+          WhseEntry.MODIFYALL("Creation Date Time", WhseReg."Creation Date Time");
+        END;
+      UNTIL WhseReg.NEXT = 0;
+    END;
+
+    PROCEDURE CreateProcUnit@1000000016(LocationCode@1000000001 : Code[10];ItemNo@1000000000 : Code[20]);
+    VAR
+      ProcUnitCreate@1000000002 : Report 14000561;
+    BEGIN
+      ProcUnitCreate.CreateProcUnit(LocationCode,ItemNo,'');
+    END;
+
+    PROCEDURE UpdateWhseShipmentLine@1000000015(WhseShptNo@1000000000 : Code[10];WhseShptLineNo@1000000001 : Integer;QtyPicked@1000000002 : Decimal);
+    VAR
+      WhseShipmentLine@1000000003 : Record 7321;
+    BEGIN
+      WhseShipmentLine.GET(WhseShptNo, WhseShptLineNo);
+      WhseShipmentLine."Qty. Picked" := QtyPicked;
+      WhseShipmentLine."Qty. Picked (Base)" := QtyPicked;
+      WhseShipmentLine.MODIFY;
+    END;
+
+    PROCEDURE UpdateItemABC@1000000010(ItemNo@1000000000 : Code[20];ABCCode@1000000001 : Code[10]);
+    VAR
+      Item@1000000002 : Record 27;
+    BEGIN
+      Counter += 1;
+      IF Counter MOD 100 = 0 THEN
+        Window.UPDATE(1, Counter);
+
+      IF Item.GET(ItemNo) = FALSE THEN
+        EXIT;
+
+      Item."ABC Code" := ABCCode;
+      Item.MODIFY;
+    END;
+
+    PROCEDURE UpdateHotItem@1000000014(ItemNo@1000000000 : Code[20]);
+    VAR
+      Item@1000000001 : Record 27;
+    BEGIN
+      Counter += 1;
+      Window.UPDATE(1, Counter);
+      IF Item.GET(ItemNo) = FALSE THEN
+        EXIT;
+      Item.Hot := TRUE;
+      Item.MODIFY;
+    END;
+
+    PROCEDURE UpdateDivDefaultLoc@1000000012(CustomerNo@1000000000 : Code[10];ShipToCode@1000000001 : Code[10];DivisionCode@1000000002 : Code[10];NewLocationCode@1000000003 : Code[10]);
+    VAR
+      CustDiv@1000000004 : Record 50007;
+      ShipToAddrDiv@1000000005 : Record 51002;
+    BEGIN
+      IF ShipToCode = '' THEN BEGIN
+        CustDiv.GET(CustomerNo,DivisionCode);
+        CustDiv."Location Code" := NewLocationCode;
+        CustDiv.MODIFY;
+      END ELSE BEGIN
+        ShipToAddrDiv.GET(CustomerNo,ShipToCode,DivisionCode);
+        ShipToAddrDiv."Location Code" := NewLocationCode;
+        ShipToAddrDiv.MODIFY;
+      END;
+    END;
+
+    PROCEDURE CreateSKU@1000000011(ItemNo@1000000000 : Code[20];LocationCode@1000000001 : Code[10];MinQty@1000000002 : Decimal;MaxQty@1000000003 : Decimal);
+    VAR
+      Item@1000000004 : Record 27;
+      SKU@1000000005 : Record 5700;
+      CreateSKU@1000000006 : Report 5706;
+      SKULoc1@1000000007 : Record 5700;
+    BEGIN
+      IF Item.GET(ItemNo) = FALSE THEN
+        EXIT;
+
+      Item.SETRANGE("No.", ItemNo);
+      Item.SETRANGE("Location Filter", LocationCode);
+
+      //CreateSKU.SETTABLEVIEW(Item);
+      //CreateSKU.SETREQUESTWINDOW(FALSE);
+      //CreateSKU.RUNMODAL(FALSE);
+      IF SKU.GET(LocationCode, ItemNo, '') = FALSE THEN
+        REPORT.RUNMODAL(REPORT::"Create Stockkeeping Unit", FALSE, FALSE, Item);
+
+      SKU.GET(LocationCode, ItemNo, '');
+      SKU."Replenishment Model" := SKU."Replenishment Model"::"Min/Max";
+      SKU."Minimum Inventory" := MinQty;
+      SKU."Maximum Inventory" := MaxQty;
+
+      IF Item."Shortcut Dimension 5 Code" = 'E' THEN BEGIN
+        IF SKULoc1.GET('1', ItemNo, '') THEN BEGIN
+          SKU."Vendor No." := SKULoc1."Vendor No.";
+          SKU."Vendor Item No." := SKULoc1."Vendor Item No.";
+        END;
+      END;
+
+      SKU.MODIFY;
+    END;
+
+    PROCEDURE CreatePABins@1000000009(Aisle@1000000007 : Code[2];MaxBay@1000000006 : Code[2]);
+    VAR
+      CopyFromBin@1000000000 : Record 7354;
+      Bay@1000000001 : Code[2];
+      Level@1000000002 : Char;
+      RackLocation@1000000003 : Code[2];
+      NewBinCode@1000000004 : Code[10];
+      NewBin@1000000005 : Record 7354;
+    BEGIN
+      CopyFromBin.GET('1', '0100A');
+
+      //Aile one
+      Bay := '00';
+      Level := 'A';
+      RackLocation := '00';
+      REPEAT
+        Bay := INCSTR(Bay);
+        REPEAT
+          REPEAT
+            RackLocation := INCSTR(RackLocation);
+            NewBinCode := Aisle + Bay + FORMAT(Level) + RackLocation;
+            NewBin.INIT;
+            NewBin.TRANSFERFIELDS(CopyFromBin);
+            NewBin."Location Code" := '76';
+            NewBin.Code := NewBinCode;
+            NewBin.Description := NewBinCode;
+            NewBin.INSERT;
+          UNTIL RackLocation = '02';
+          RackLocation := '00';
+          Level += 1;
+        UNTIL Level > 'E';
+        Level := 'A';
+      UNTIL Bay = MaxBay;
+    END;
+
+    PROCEDURE CreatePALocation@1000000008();
+    VAR
+      Location@1000000000 : Record 14;
+      NewLocation@1000000001 : Record 14;
+    BEGIN
+      Location.GET('1');
+      NewLocation.INIT;
+      NewLocation.TRANSFERFIELDS(Location);
+      NewLocation.Code := '76';
+      NewLocation.Name := 'TOPAZ LANGHORNE (76)';
+      NewLocation.Address := UPPERCASE('905 Wheeler Way');
+      NewLocation.City := UPPERCASE('Langhorne');
+      NewLocation.County := 'PA';
+      NewLocation."Post Code" := '19047';
+      NewLocation.Contact := 'KERRY OHLINGER';
+      NewLocation.INSERT;
+
+      CopyZoneFromLocation(Location.Code, NewLocation.Code);
+
+      //Create the bins
+      CopyBinFromLocation(Location.Code, Location."Receipt Bin Code", NewLocation.Code, NewLocation."Receipt Bin Code");
+      CopyBinFromLocation(Location.Code, Location."Shipment Bin Code", NewLocation.Code, NewLocation."Shipment Bin Code");
+      CopyBinFromLocation(Location.Code, Location."Adjustment Bin Code", NewLocation.Code, NewLocation."Adjustment Bin Code");
+      CopyBinFromLocation(Location.Code, Location."Cross-Dock Bin Code", NewLocation.Code, NewLocation."Cross-Dock Bin Code");
+
+      CopyBinFromLocation(Location.Code, Location."To-Assembly Bin Code", NewLocation.Code, NewLocation."To-Assembly Bin Code");
+      CopyBinFromLocation(Location.Code, Location."From-Assembly Bin Code", NewLocation.Code, NewLocation."From-Assembly Bin Code");
+    END;
+
+    PROCEDURE CopyZoneFromLocation@1000000013(FromLocationCode@1000000000 : Code[10];ToLocationCode@1000000001 : Code[10]);
+    VAR
+      FromZone@1000000002 : Record 7300;
+      ToZone@1000000003 : Record 7300;
+    BEGIN
+      FromZone.SETRANGE("Location Code", FromLocationCode);
+      IF FromZone.FINDSET THEN
+      REPEAT
+        ToZone.INIT;
+        ToZone.TRANSFERFIELDS(FromZone);
+        ToZone."Location Code" := ToLocationCode;
+        ToZone.INSERT;
+      UNTIL FromZone.NEXT = 0;
+    END;
+
+    PROCEDURE CopyBinFromLocation@1000000017(FromLocationCode@1000000000 : Code[10];FromBinCode@1000000001 : Code[20];ToLocationCode@1000000002 : Code[10];ToBinCode@1000000003 : Code[20]);
+    VAR
+      FromBin@1000000004 : Record 7354;
+      ToBin@1000000005 : Record 7354;
+    BEGIN
+      FromBin.GET(FromLocationCode, FromBinCode);
+      ToBin.INIT;
+      ToBin.TRANSFERFIELDS(FromBin);
+      ToBin."Location Code" := ToLocationCode;
+      ToBin.Code := ToBinCode;
+      ToBin.Description := ToBinCode;
+      ToBin.INSERT;
+    END;
+
+    PROCEDURE CreateLastSalesPriceInvoice@1000000007();
+    VAR
+      Customer@1000000000 : Record 18;
+      LastSalesPrice@1000000001 : Record 50004;
+      NewLastSalesPrice@1000000002 : Record 50004;
+      InvLastSalesPrice@1000000003 : Record 50004;
+      Window@1000000004 : Dialog;
+      Counter@1000000005 : Integer;
+    BEGIN
+      LastSalesPrice.RESET;
+      LastSalesPrice.ASCENDING;
+      LastSalesPrice.SETCURRENTKEY("Sell-to Customer No.","Item No.","Document Date");
+
+      Customer.SETFILTER("No.", '9*');
+      Customer.FINDSET;
+      Window.OPEN('#1###### OF #2######');
+      Window.UPDATE(2, Customer.COUNT);
+
+      REPEAT
+        Counter += 1;
+        Window.UPDATE(1, Counter);
+        LastSalesPrice.SETRANGE("Document Type", LastSalesPrice."Document Type"::Order);
+        LastSalesPrice.SETRANGE("Sell-to Customer No.", Customer."No.");
+        IF LastSalesPrice.FINDSET THEN
+        REPEAT
+          LastSalesPrice.SETRANGE("Item No.", LastSalesPrice."Item No.");
+          LastSalesPrice.FIND('+');
+          InvLastSalesPrice.RESET;
+          InvLastSalesPrice.SETRANGE("Sell-to Customer No.", LastSalesPrice."Sell-to Customer No.");
+          InvLastSalesPrice.SETRANGE("Item No.", LastSalesPrice."Item No.");
+          InvLastSalesPrice.SETRANGE("Document Type", InvLastSalesPrice."Document Type"::"Posted Sales Invoice");
+          IF InvLastSalesPrice.ISEMPTY THEN BEGIN
+            NewLastSalesPrice.INIT;
+            NewLastSalesPrice.TRANSFERFIELDS(LastSalesPrice);
+            NewLastSalesPrice."Document Type" := NewLastSalesPrice."Document Type"::"Posted Sales Invoice";
+            IF NewLastSalesPrice.INSERT THEN;
+          END;
+          LastSalesPrice.SETRANGE("Item No.");
+        UNTIL LastSalesPrice.NEXT = 0;
+        LastSalesPrice.SETRANGE("Item No.");
+        LastSalesPrice.SETRANGE("Sell-to Customer No.");
+        COMMIT;
+      UNTIL Customer.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateTODivisionCode@1000000001();
+    VAR
+      TransferHeader@1000000000 : Record 5740;
+      TransferLine@1000000001 : Record 5741;
+      ReleaseTO@1000000002 : Codeunit 5708;
+    BEGIN
+      IF TransferHeader.FINDSET THEN
+      REPEAT
+        CLEAR(ReleaseTO);
+        TransferLine.SETRANGE("Document No.", TransferHeader."No.");
+        IF TransferLine.ISEMPTY = FALSE THEN BEGIN
+          IF TransferHeader."Shortcut Dimension 5 Code" = '' THEN BEGIN
+            IF TransferHeader.Status = TransferHeader.Status::Released THEN
+              ReleaseTO.Reopen(TransferHeader);
+            TransferHeader.SetHideValidationDialog(TRUE);
+            CASE COPYSTR(TransferHeader."No.", 1, 1) OF
+              'E' : TransferHeader.VALIDATE("Shortcut Dimension 5 Code", 'E');
+              ELSE
+               TransferHeader.VALIDATE("Shortcut Dimension 5 Code", 'L');
+            END;
+            TransferHeader.MODIFY;
+          END;
+
+          IF (TransferHeader.Status = TransferHeader.Status::Open) AND
+             (TransferHeader."Shortcut Dimension 5 Code" <> '') THEN
+           ReleaseTO.RUN(TransferHeader);
+        END;
+      UNTIL TransferHeader.NEXT = 0;
+    END;
+
+    PROCEDURE UpdateWhseRqstRDD@1000000000();
+    VAR
+      WhseRequest@1000000000 : Record 5765;
+      SalesHeader@1000000001 : Record 36;
+    BEGIN
+      WhseRequest.SETRANGE("Source Type", DATABASE::"Sales Line");
+      WhseRequest.SETRANGE("Source Subtype", SalesHeader."Document Type"::Order);
+      IF WhseRequest.FINDSET THEN
+      REPEAT
+        IF SalesHeader.GET(WhseRequest."Source Subtype", WhseRequest."Source No.") THEN BEGIN
+          IF WhseRequest."Ship-to Code" <> SalesHeader."Ship-to Code" THEN BEGIN
+            WhseRequest."Ship-to Code" := SalesHeader."Ship-to Code";
+            WhseRequest.MODIFY;
+          END;
+
+          IF WhseRequest."Requested Delivery Date" <> SalesHeader."Requested Delivery Date" THEN BEGIN
+            WhseRequest."Requested Delivery Date" := SalesHeader."Requested Delivery Date";
+            WhseRequest.MODIFY;
+          END;
+        END;
+      UNTIL WhseRequest.NEXT = 0;
+    END;
+
+    PROCEDURE CreateSpecialBin@1000000002();
+    VAR
+      Bin@1000000000 : Record 7354;
+    BEGIN
+      Bin.INIT;
+      Bin.Code := 'CROSS-DOCK';
+      Bin."Cross-Dock Bin" := TRUE;
+      Bin."Location Code" := '1';
+      Bin."Bin Type Code" := 'PICKPUT';
+      Bin.Description := 'CROSS-DOCK';
+      Bin."Zone Code" := 'CROSSDOCK';
+      IF Bin.INSERT = FALSE THEN
+        Bin.MODIFY;
+
+      Bin.INIT;
+      Bin.Code := 'CROSS-DOCK';
+      Bin."Cross-Dock Bin" := TRUE;
+      Bin."Location Code" := '25';
+      Bin."Bin Type Code" := 'PICKPUT';
+      Bin.Description := 'CROSS-DOCK';
+      Bin."Zone Code" := 'CROSSDOCK';
+      IF Bin.INSERT = FALSE THEN
+        Bin.MODIFY;
+
+      Bin.INIT;
+      Bin.Code := 'CROSS-DOCK';
+      Bin."Cross-Dock Bin" := TRUE;
+      Bin."Location Code" := '30';
+      Bin."Bin Type Code" := 'PICKPUT';
+      Bin.Description := 'CROSS-DOCK';
+      Bin."Zone Code" := 'CROSSDOCK';
+      IF Bin.INSERT = FALSE THEN
+        Bin.MODIFY;
+
+      CLEAR(Bin);
+      Bin.INIT;
+      Bin.Code := 'ASSEMBLY-IN';
+      Bin."Location Code" := '1';
+      Bin."Bin Type Code" := 'QC';
+      Bin.Description := 'Assembly-In';
+      Bin."Zone Code" := 'PICKPUT';
+      IF Bin.INSERT THEN;
+
+      CLEAR(Bin);
+      Bin.INIT;
+      Bin.Code := 'ASSEMBLY-OUT';
+      Bin."Location Code" := '1';
+      Bin."Bin Type Code" := 'QC';
+      Bin.Description := 'Assembly-Out';
+      Bin."Zone Code" := 'PICKPUT';
+      IF Bin.INSERT THEN;
+
+      CLEAR(Bin);
+      Bin.INIT;
+      Bin.Code := 'RECEIPT';
+      Bin."Location Code" := '30';
+      Bin."Bin Type Code" := 'RECEIVE';
+      Bin.Description := 'RECEIPT';
+      Bin."Zone Code" := 'RECEIPT';
+      IF Bin.INSERT THEN;
+    END;
+
+    PROCEDURE CreateWMSProfile@1000000003();
+    VAR
+      Profile@1000000000 : Record 2000000072;
+    BEGIN
+      Profile.INIT;
+      Profile."Profile ID" := 'E-SHIP';
+      Profile.Description := 'E-SHIP';
+      Profile."Role Center ID" := 14050119;
+      IF Profile.INSERT THEN;
+    END;
+
+    PROCEDURE ConfigureALC@1000000004();
+    VAR
+      Vendor@1000000000 : Record 23;
+    BEGIN
+      Vendor.GET('V11298');
+      Vendor."Assembly Location Code" := 'ALC';
+      Vendor.MODIFY;
+
+      Vendor.GET('V11087');
+      Vendor."Assembly Location Code" := 'ALC';
+      Vendor.MODIFY;
+    END;
+
+    PROCEDURE FixShipmentBinZoneCode@1000000005();
+    VAR
+      Bin@1000000000 : Record 7354;
+      BinContent@1000000001 : Record 7302;
+      WarehouseEntry@1000000002 : Record 7312;
+    BEGIN
+      Bin.SETRANGE(Code, 'SHIPMENT');
+      IF Bin.FINDSET THEN
+      REPEAT
+        IF Bin."Zone Code" <> 'SHIPPING' THEN BEGIN
+          Bin."Zone Code" := 'SHIPPING';
+          Bin.MODIFY;
+        END;
+      UNTIL Bin.NEXT = 0;
+
+      BinContent.SETRANGE("Bin Code", 'SHIPMENT');
+      IF BinContent.FINDSET THEN
+      REPEAT
+        IF BinContent."Zone Code" <> 'SHIPPING' THEN BEGIN
+          BinContent."Zone Code" := 'SHIPPING';
+          BinContent.MODIFY;
+        END;
+      UNTIL BinContent.NEXT = 0;
+
+      WarehouseEntry.SETRANGE("Bin Code", 'SHIPMENT');
+      IF WarehouseEntry.FINDSET THEN
+      REPEAT
+        IF WarehouseEntry."Zone Code" <> 'SHIPPING' THEN BEGIN
+          WarehouseEntry."Zone Code" := 'SHIPPING';
+          WarehouseEntry.MODIFY;
+        END;
+      UNTIL WarehouseEntry.NEXT = 0;
+    END;
+
+    PROCEDURE SetUpDropShipLoc@1000000006();
+    VAR
+      Location@1000000000 : Record 14;
+    BEGIN
+      Location.GET('DROPSHIP');
+      Location."Default Purchasing Code" := 'DROPSHIP';
+      Location.MODIFY;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

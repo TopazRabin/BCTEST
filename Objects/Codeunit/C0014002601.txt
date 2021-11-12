@@ -1,0 +1,505 @@
+OBJECT Codeunit 14002601 Release Forecast Customer
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      SetupRetrieved@1240020000 : Boolean;
+      CollaborativeFCSetup@1240020005 : Record 14002607;
+      InvMgtSetup@1240020001 : Record 14000551;
+
+    PROCEDURE ForcastCustRelease@1240030000(ForecastCust@1240030000 : Record 14002601);
+    VAR
+      Text000@1240030006 : TextConst 'ENU=Do you wish to release this Forecast Customer?';
+      ForecastEntry@1240030002 : Record 14002603;
+      ForecastSummary@1240020001 : Record 14000586;
+      ForecastSummaryEntry@1240020000 : Record 14000587;
+    BEGIN
+      ForecastCust.TESTFIELD(ForecastCust.Released,FALSE);
+
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(Text000,FALSE) THEN
+          EXIT;
+
+      UpdateItemUsage(ForecastCust);
+
+      ForecastEntry.SETCURRENTKEY("Customer No.","Location Code","Item No.","Variant Code","Starting Date");
+      ForecastEntry.SETRANGE("Customer No.",ForecastCust."Customer No.");
+
+      ForecastEntry.SETRANGE("New Entry", TRUE);
+      IF ForecastEntry.FINDSET THEN BEGIN
+        ForecastSummaryEntry.SETCURRENTKEY("Location Code","Item No.","Variant Code");
+        REPEAT
+          IF (ForecastEntry."Location Code" <> ForecastSummaryEntry."Location Code") OR
+             (ForecastEntry."Item No." <> ForecastSummaryEntry."Item No.") OR
+             (ForecastEntry."Variant Code" <> ForecastSummaryEntry."Variant Code")
+          THEN BEGIN
+            ForecastSummaryEntry.SETRANGE("Location Code",ForecastEntry."Location Code");
+            ForecastSummaryEntry.SETRANGE("Item No.",ForecastEntry."Item No.");
+            ForecastSummaryEntry.SETRANGE("Variant Code",ForecastEntry."Variant Code");
+            IF ForecastSummaryEntry.FINDFIRST THEN BEGIN
+              ForecastSummaryEntry."Review Pending" := TRUE;
+              ForecastSummaryEntry.MODIFY(FALSE);
+            END;
+          END;
+        UNTIL ForecastEntry.NEXT = 0;
+        ForecastEntry.MODIFYALL("New Entry", FALSE, FALSE);
+      END;
+      ForecastEntry.SETRANGE("New Entry");
+
+      ForecastEntry.SETRANGE(Released,FALSE);
+      ForecastEntry.MODIFYALL(Released, TRUE);
+
+      ForecastCust.Released := TRUE;
+      ForecastCust."Released Date" := TODAY;
+      ForecastCust."Released By" := USERID;
+      ForecastCust.MODIFY(FALSE);
+    END;
+
+    PROCEDURE ForecastCustReOpen@1240030001(VAR ForecastCust@1240030004 : Record 14002601);
+    VAR
+      Text000@1240030010 : TextConst 'ENU=Do you wish to re-open this Forecast Customer?';
+      ChangedForCustItem@1240030005 : Record 14002604;
+      ForecastEntry@1240030006 : Record 14002603;
+      ForecastCustItem@1240020000 : Record 14002602;
+    BEGIN
+      IF NOT ForecastCust.Released THEN
+        EXIT;
+
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(Text000,FALSE) THEN
+          EXIT;
+
+      ChangedForCustItem.RESET;
+      ChangedForCustItem.SETRANGE("Customer No.",ForecastCust."Customer No.");
+      ChangedForCustItem.DELETEALL(TRUE);
+
+      ForecastCustItem.SETRANGE("Customer No.", ForecastCust."Customer No.");
+      ForecastCustItem.SETRANGE("Forecast Type", ForecastCustItem."Forecast Type"::Total);
+      ForecastCustItem.SETFILTER("Location Code", '<>%1', '');
+      ForecastCustItem.SETFILTER("Item No.", '<>%1', '');
+      IF ForecastCustItem.FINDSET THEN BEGIN
+        REPEAT
+          ChangedForCustItem.INIT;
+          ChangedForCustItem.TRANSFERFIELDS(ForecastCustItem,TRUE);
+          ChangedForCustItem.Reopened  := TRUE;
+          ChangedForCustItem.INSERT;
+        UNTIL ForecastCustItem.NEXT = 0;
+      END;
+
+      ForecastEntry.SETCURRENTKEY("Customer No.","Location Code","Item No.","Variant Code","Starting Date");
+      ForecastEntry.SETRANGE("Customer No.",ForecastCust."Customer No.");
+      ForecastEntry.MODIFYALL(Released, FALSE);
+
+      ForecastCust.Released := FALSE;
+      ForecastCust."Released Date" := 0D;
+      ForecastCust."Released By" := '';
+      ForecastCust.MODIFY(FALSE);
+    END;
+
+    PROCEDURE UpdateItemUsage@1240030002(ForecastCust@1240030000 : Record 14002601);
+    VAR
+      ChangedForCustItem@1240030009 : Record 14002604;
+      ForecastCustItem@1240030007 : Record 14002602;
+      ForecastEntry@1240030006 : Record 14002603;
+      ItemUsage@1240030017 : Record 14000557;
+      Location@1240030005 : Record 14;
+      ProcUnit@1240030015 : Record 14000555;
+      UsageLedgerEntry@1240030004 : Record 14000556;
+      UBP@1240020000 : Codeunit 14000564;
+      ProgressWindow@1240030003 : Dialog;
+      Text001@1240030014 : TextConst 'ENU=Updating Item Usage';
+      Text002@1240030013 : TextConst 'ENU=Customer';
+      Text003@1240030012 : TextConst 'ENU=Location';
+      Text004@1240030011 : TextConst 'ENU=Item';
+    BEGIN
+      IF GUIALLOWED THEN BEGIN
+        ProgressWindow.OPEN(
+          Text001 + '\' +
+          PADSTR(Text002,20) + '#1##################\' +
+          PADSTR(Text003,20) + '#2##################\' +
+          PADSTR(Text004,20) + '#3##################');
+
+        ProgressWindow.UPDATE(1,ForecastCust."Customer No.");
+      END;
+
+      // check reopened values:  Modifying, deleting, or inserting removes the reopen flag
+
+      // Remove items that have been reopened but not updated
+      ChangedForCustItem.SETRANGE("Customer No.",ForecastCust."Customer No.");
+      ChangedForCustItem.SETRANGE(Reopened, TRUE);
+      ChangedForCustItem.DELETEALL(FALSE);
+      ChangedForCustItem.SETRANGE(Reopened);
+
+      // check inserted and modified
+      ForecastCustItem.SETRANGE("Customer No.", ForecastCust."Customer No.");
+      IF ForecastCustItem.FINDSET THEN BEGIN
+        UsageLedgerEntry.SETCURRENTKEY(
+          "Entry Type","Source No.","Location Code","Item No.","Variant Code",
+          "Exclude from Usage","Usage Date","Forecast Customer");
+        REPEAT
+          IF GUIALLOWED THEN BEGIN
+            ProgressWindow.UPDATE(2,ForecastCustItem."Location Code");
+            ProgressWindow.UPDATE(3,ForecastCustItem."Item No.");
+          END;
+
+          UsageLedgerEntry.SETRANGE("Entry Type",UsageLedgerEntry."Entry Type"::Sale);
+          UsageLedgerEntry.SETRANGE("Source No.",ForecastCustItem."Customer No.");
+          UsageLedgerEntry.SETRANGE("Location Code",ForecastCustItem."Location Code");
+          UsageLedgerEntry.SETRANGE("Item No.",ForecastCustItem."Item No.");
+          UsageLedgerEntry.SETRANGE("Variant Code",ForecastCustItem."Variant Code");
+          UsageLedgerEntry.SETRANGE("Exclude from Usage",FALSE);
+          UsageLedgerEntry.SETFILTER("Usage Date", '%1..', InvMgtSetup."Usage Start Date");
+          UsageLedgerEntry.SETRANGE("Forecast Customer", FALSE);
+          IF NOT UsageLedgerEntry.ISEMPTY THEN BEGIN
+            UsageLedgerEntry.MODIFYALL(UsageLedgerEntry."Forecast Customer",TRUE);
+
+            IF CollaborativeFCSetup."Reforecast Items on Release" THEN
+              ReForecastItem(ChangedForCustItem)
+            ELSE BEGIN
+              GetProcUnit(ProcUnit, ForecastCustItem."Location Code", ForecastCustItem."Item No.", ForecastCustItem."Variant Code");
+              ProcUnit."Change Reforecast Required" := TRUE;
+              IF UBP.SpokesExist(ProcUnit) OR
+                (ProcUnit."Replenishment Source Type" = ProcUnit."Replenishment Source Type"::Location) THEN
+                ProcUnit."Reforecast Item" := TRUE;
+              ProcUnit.MODIFY(FALSE);
+            END;
+          END;
+        UNTIL ForecastCustItem.NEXT = 0;
+      END;
+
+      // check deleted
+      ChangedForCustItem.RESET;
+      ChangedForCustItem.SETRANGE("Customer No.",ForecastCust."Customer No.");
+      ChangedForCustItem.SETRANGE(Deleted, TRUE);
+      IF ChangedForCustItem.FINDSET THEN BEGIN
+        UsageLedgerEntry.SETCURRENTKEY(
+          "Entry Type","Source No.","Location Code","Item No.","Variant Code",
+          "Exclude from Usage","Usage Date","Forecast Customer");
+        REPEAT
+
+          IF GUIALLOWED THEN BEGIN
+            ProgressWindow.UPDATE(2,ForecastCustItem."Location Code");
+            ProgressWindow.UPDATE(3,ForecastCustItem."Item No.");
+          END;
+
+          UsageLedgerEntry.SETRANGE("Entry Type",UsageLedgerEntry."Entry Type"::Sale);
+          UsageLedgerEntry.SETRANGE("Source No.",ChangedForCustItem."Customer No.");
+          UsageLedgerEntry.SETRANGE("Location Code",ChangedForCustItem."Location Code");
+          UsageLedgerEntry.SETRANGE("Item No.",ChangedForCustItem."Item No.");
+          UsageLedgerEntry.SETRANGE("Variant Code",ChangedForCustItem."Variant Code");
+          UsageLedgerEntry.SETRANGE("Exclude from Usage",FALSE);
+          UsageLedgerEntry.SETFILTER("Usage Date", '%1..', InvMgtSetup."Usage Start Date");
+          UsageLedgerEntry.SETRANGE("Forecast Customer", TRUE);
+          IF NOT UsageLedgerEntry.ISEMPTY THEN BEGIN
+            UsageLedgerEntry.MODIFYALL(UsageLedgerEntry."Forecast Customer",FALSE);
+
+            IF CollaborativeFCSetup."Reforecast Items on Release" THEN
+              ReForecastItem(ChangedForCustItem)
+            ELSE BEGIN
+              GetProcUnit(ProcUnit, ChangedForCustItem."Location Code", ChangedForCustItem."Item No.", ChangedForCustItem."Variant Code");
+              ProcUnit."Change Reforecast Required" := TRUE;
+              IF UBP.SpokesExist(ProcUnit) OR
+                (ProcUnit."Replenishment Source Type" = ProcUnit."Replenishment Source Type"::Location) THEN
+                ProcUnit."Reforecast Item" := TRUE;
+              ProcUnit.MODIFY(FALSE);
+            END;
+          END;
+        UNTIL ChangedForCustItem.NEXT = 0;
+      END;
+
+      ChangedForCustItem.DELETEALL(TRUE);
+
+      IF GUIALLOWED THEN
+        ProgressWindow.CLOSE;
+    END;
+
+    LOCAL PROCEDURE ReForecastItem@1240030003(CurrChangedForCustItem@1240030000 : Record 14002604);
+    VAR
+      ItemUsage@1240030001 : Record 14000557;
+      LocInvPeriod@1240030004 : Record 14000553;
+      ProcUnit@1240030006 : Record 14000555;
+      PeriodEndCalc@1240030005 : Codeunit 14000557;
+      Reforecast@1240030007 : Codeunit 14000571;
+      UBP@1240020002 : Codeunit 14000564;
+      EntryNo@1240030002 : Integer;
+      FirstTranDate@1240020001 : Date;
+    BEGIN
+      GetSetup;
+
+      ItemUsage.RESET;
+      ItemUsage.SETCURRENTKEY("Location Code","Item No.","Variant Code","Starting Date","Ending Date");
+      ItemUsage.SETRANGE("Location Code",CurrChangedForCustItem."Location Code");
+      ItemUsage.SETRANGE("Item No.",CurrChangedForCustItem."Item No.");
+      ItemUsage.SETRANGE("Variant Code",CurrChangedForCustItem."Variant Code");
+      ItemUsage.SETRANGE("Source No.",CurrChangedForCustItem."Customer No.");
+      ItemUsage.DELETEALL(TRUE);
+
+      // collaborative Item usage create
+      IF NOT CurrChangedForCustItem.Deleted THEN BEGIN
+        ItemUsage.RESET;
+        IF ItemUsage.FINDLAST THEN
+          EntryNo := ItemUsage."Entry No."
+        ELSE
+          EntryNo := 0;
+
+        GetProcUnit(ProcUnit, CurrChangedForCustItem."Location Code", CurrChangedForCustItem."Item No.", CurrChangedForCustItem."Variant Code");
+
+        FirstTranDate := UBP.GetFirstStockedDate(ProcUnit,CurrChangedForCustItem."Customer No.");
+
+        LocInvPeriod.RESET;
+        LocInvPeriod.SETFILTER("Starting Date",'%1..', FirstTranDate);
+        LocInvPeriod.SETRANGE("Location Code",CurrChangedForCustItem."Location Code");
+        LocInvPeriod.SETRANGE("Period End Closed",TRUE);
+        IF LocInvPeriod.FIND('-') THEN
+          REPEAT
+            EntryNo := EntryNo + 1;
+            ItemUsage.INIT;
+            ItemUsage."Entry No." := EntryNo;
+            ItemUsage."Location Code" := CurrChangedForCustItem."Location Code";
+            ItemUsage."Item No." := CurrChangedForCustItem."Item No.";
+            ItemUsage."Variant Code" := CurrChangedForCustItem."Variant Code";
+            ItemUsage."Starting Date" := LocInvPeriod."Starting Date";
+            ItemUsage."Ending Date" := LocInvPeriod."Ending Date";
+            ItemUsage."Source No." := CurrChangedForCustItem."Customer No.";
+            ItemUsage.INSERT;
+            ProcUnit.GET(ItemUsage."Location Code",ItemUsage."Item No.",ItemUsage."Variant Code");
+            CLEAR(PeriodEndCalc);
+            PeriodEndCalc.PeriodForecast(LocInvPeriod,ProcUnit,CurrChangedForCustItem."Customer No.");
+          UNTIL LocInvPeriod.NEXT = 0;
+      END;
+
+      IF ProcUnit.GET(
+        CurrChangedForCustItem."Location Code",
+        CurrChangedForCustItem."Item No.",
+        CurrChangedForCustItem."Variant Code") THEN BEGIN
+          CLEAR(Reforecast);
+          Reforecast.Update(ProcUnit);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetProcUnit@1240020001(VAR CurrProcUnit@1240020003 : Record 14000555;LocationCode@1240020000 : Code[10];ItemNo@1240020001 : Code[50];VariantCode@1240020002 : Code[10]);
+    VAR
+      CreateProcUnit@1240020004 : Codeunit 14000575;
+    BEGIN
+      IF NOT CurrProcUnit.GET(LocationCode, ItemNo, VariantCode) THEN BEGIN
+        CurrProcUnit.INIT;
+        CurrProcUnit."Location Code" := LocationCode;
+        CurrProcUnit."Item No." := ItemNo;
+        CurrProcUnit."Variant Code" := VariantCode;
+        CurrProcUnit.SetAutoInsert;
+        CurrProcUnit."User ID" := USERID;
+        CurrProcUnit."Date Created" := TODAY;
+        CurrProcUnit.INSERT(TRUE);
+        CreateProcUnit.CheckReplPath(CurrProcUnit);
+      END;
+    END;
+
+    PROCEDURE MaintainItemUsageForOpenCollaborative@1240020008();
+    VAR
+      ForecastCust@1240020000 : Record 14002601;
+    BEGIN
+      IF NOT ForecastCust.READPERMISSION THEN
+        EXIT;
+
+      ForecastCust.SETRANGE(Released, FALSE);
+      IF ForecastCust.FINDSET THEN BEGIN
+        REPEAT
+          UpdateItemUsageOpenCollaborative(ForecastCust);
+          UpdateItemUsageDeletedCollaborative(ForecastCust);
+        UNTIL ForecastCust.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateItemUsageOpenCollaborative@1240020003(VAR CurrForecastCust@1240020000 : Record 14002601);
+    VAR
+      ChangedForCustItem@1240020010 : Record 14002604;
+      ForecastCustItem@1240020009 : Record 14002602;
+      ProcUnit@1240020005 : Record 14000555;
+      UsageLedgerEntry@1240020004 : Record 14000556;
+      UBP@1240020001 : Codeunit 14000564;
+    BEGIN
+      IF CurrForecastCust.Released THEN
+        EXIT;
+
+      GetSetup;
+
+      ChangedForCustItem.SETRANGE("Customer No.",CurrForecastCust."Customer No.");
+      ChangedForCustItem.SETRANGE(Reopened, TRUE);
+
+      IF ChangedForCustItem.FINDSET THEN BEGIN
+        UsageLedgerEntry.SETCURRENTKEY(
+          "Entry Type","Source No.","Location Code","Item No.","Variant Code",
+          "Exclude from Usage","Usage Date","Forecast Customer");
+        REPEAT
+
+          UsageLedgerEntry.SETRANGE("Entry Type",UsageLedgerEntry."Entry Type"::Sale);
+          UsageLedgerEntry.SETRANGE("Source No.",ChangedForCustItem."Customer No.");
+          UsageLedgerEntry.SETRANGE("Location Code",ChangedForCustItem."Location Code");
+          UsageLedgerEntry.SETRANGE("Item No.",ChangedForCustItem."Item No.");
+          UsageLedgerEntry.SETRANGE("Variant Code",ChangedForCustItem."Variant Code");
+          UsageLedgerEntry.SETRANGE("Exclude from Usage",FALSE);
+
+          UsageLedgerEntry.MODIFYALL(UsageLedgerEntry."Forecast Customer",FALSE);
+
+          IF CollaborativeFCSetup."Reforecast Items on Release" THEN
+            ReForecastItem(ChangedForCustItem)
+          ELSE BEGIN
+            IF ProcUnit.GET(ChangedForCustItem."Location Code", ChangedForCustItem."Item No.", ChangedForCustItem."Variant Code") THEN BEGIN
+              ProcUnit."Change Reforecast Required" := TRUE;
+              IF UBP.SpokesExist(ProcUnit) OR
+                (ProcUnit."Replenishment Source Type" = ProcUnit."Replenishment Source Type"::Location) THEN
+                ProcUnit."Reforecast Item" := TRUE;
+              ProcUnit.MODIFY(FALSE);
+            END;
+          END;
+        UNTIL ChangedForCustItem.NEXT = 0;
+      END;
+
+      ChangedForCustItem.DELETEALL(TRUE);
+    END;
+
+    LOCAL PROCEDURE UpdateItemUsageDeletedCollaborative@1240020002(VAR CurrForecastCust@1240020000 : Record 14002601);
+    VAR
+      ChangedForCustItem@1240020010 : Record 14002604;
+      ForecastCustItem@1240020009 : Record 14002602;
+      ProcUnit@1240020005 : Record 14000555;
+      UsageLedgerEntry@1240020004 : Record 14000556;
+      UBP@1240020001 : Codeunit 14000564;
+    BEGIN
+      IF CurrForecastCust.Released THEN
+        EXIT;
+
+      GetSetup;
+
+      ChangedForCustItem.SETRANGE("Customer No.",CurrForecastCust."Customer No.");
+      ChangedForCustItem.SETRANGE(Deleted, TRUE);
+
+      IF ChangedForCustItem.FINDSET THEN BEGIN
+        UsageLedgerEntry.SETCURRENTKEY(
+          "Entry Type","Source No.","Location Code","Item No.","Variant Code",
+          "Exclude from Usage","Usage Date","Forecast Customer");
+        REPEAT
+
+          UsageLedgerEntry.SETRANGE("Entry Type",UsageLedgerEntry."Entry Type"::Sale);
+          UsageLedgerEntry.SETRANGE("Source No.",ChangedForCustItem."Customer No.");
+          UsageLedgerEntry.SETRANGE("Location Code",ChangedForCustItem."Location Code");
+          UsageLedgerEntry.SETRANGE("Item No.",ChangedForCustItem."Item No.");
+          UsageLedgerEntry.SETRANGE("Variant Code",ChangedForCustItem."Variant Code");
+          UsageLedgerEntry.SETRANGE("Exclude from Usage",FALSE);
+
+          UsageLedgerEntry.MODIFYALL(UsageLedgerEntry."Forecast Customer",FALSE);
+
+          IF CollaborativeFCSetup."Reforecast Items on Release" THEN
+            ReForecastItem(ChangedForCustItem)
+          ELSE BEGIN
+            IF ProcUnit.GET(ChangedForCustItem."Location Code", ChangedForCustItem."Item No.", ChangedForCustItem."Variant Code") THEN BEGIN
+              ProcUnit."Change Reforecast Required" := TRUE;
+              IF UBP.SpokesExist(ProcUnit) OR
+                (ProcUnit."Replenishment Source Type" = ProcUnit."Replenishment Source Type"::Location) THEN
+                ProcUnit."Reforecast Item" := TRUE;
+              ProcUnit.MODIFY(FALSE);
+            END;
+          END;
+        UNTIL ChangedForCustItem.NEXT = 0;
+      END;
+
+      ChangedForCustItem.DELETEALL(TRUE);
+    END;
+
+    PROCEDURE CheckDeleted@1240020000();
+    VAR
+      ChangedForCustItem@1240020008 : Record 14002604;
+      ProcUnit@1240020003 : Record 14000555;
+      UsageLedgerEntry@1240020002 : Record 14000556;
+      UBP@1240020001 : Codeunit 14000564;
+      Text001@1240020009 : TextConst 'ENU=Updating Item Usage';
+      Text002@1240020007 : TextConst 'ENU=Customer';
+      Text003@1240020006 : TextConst 'ENU=Location';
+      Text004@1240020005 : TextConst 'ENU=Item';
+      CheckDeleted@1240020004 : TextConst 'ENU=Are you sure you want to use the pending deleted collaborative entries to reset the usage ledger?';
+      ProgressWindow@1240020010 : Dialog;
+    BEGIN
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(CheckDeleted,FALSE) THEN
+          EXIT;
+
+      GetSetup;
+
+      ChangedForCustItem.RESET;
+      ChangedForCustItem.SETRANGE(Deleted, TRUE);
+      IF ChangedForCustItem.FINDSET THEN BEGIN
+
+        IF GUIALLOWED THEN BEGIN
+          ProgressWindow.OPEN(
+            Text001 + '\' +
+            PADSTR(Text002,20) + '#1##################\' +
+            PADSTR(Text003,20) + '#2##################\' +
+            PADSTR(Text004,20) + '#3##################');
+        END;
+
+        UsageLedgerEntry.SETCURRENTKEY(
+          "Entry Type","Source No.","Location Code","Item No.","Variant Code",
+          "Exclude from Usage","Usage Date","Forecast Customer");
+        REPEAT
+          ProgressWindow.UPDATE(1,ChangedForCustItem."Customer No.");
+          ProgressWindow.UPDATE(2,ChangedForCustItem."Location Code");
+          ProgressWindow.UPDATE(3,ChangedForCustItem."Item No.");
+
+          UsageLedgerEntry.SETRANGE("Entry Type",UsageLedgerEntry."Entry Type"::Sale);
+          UsageLedgerEntry.SETRANGE("Source No.",ChangedForCustItem."Customer No.");
+          UsageLedgerEntry.SETRANGE("Location Code",ChangedForCustItem."Location Code");
+          UsageLedgerEntry.SETRANGE("Item No.",ChangedForCustItem."Item No.");
+          UsageLedgerEntry.SETRANGE("Variant Code",ChangedForCustItem."Variant Code");
+          UsageLedgerEntry.SETRANGE("Exclude from Usage",FALSE);
+          UsageLedgerEntry.SETFILTER("Usage Date", '%1..', InvMgtSetup."Usage Start Date");
+          UsageLedgerEntry.SETRANGE("Forecast Customer", TRUE);
+          IF NOT UsageLedgerEntry.ISEMPTY THEN BEGIN
+            UsageLedgerEntry.MODIFYALL(UsageLedgerEntry."Forecast Customer",FALSE);
+
+            IF CollaborativeFCSetup."Reforecast Items on Release" THEN
+              ReForecastItem(ChangedForCustItem)
+            ELSE BEGIN
+              GetProcUnit(ProcUnit, ChangedForCustItem."Location Code", ChangedForCustItem."Item No.", ChangedForCustItem."Variant Code");
+              ProcUnit."Change Reforecast Required" := TRUE;
+              IF UBP.SpokesExist(ProcUnit) OR
+                (ProcUnit."Replenishment Source Type" = ProcUnit."Replenishment Source Type"::Location) THEN
+                ProcUnit."Reforecast Item" := TRUE;
+              ProcUnit.MODIFY(FALSE);
+            END;
+          END;
+        UNTIL ChangedForCustItem.NEXT = 0;
+        ChangedForCustItem.DELETEALL(TRUE);
+      END;
+
+
+      IF GUIALLOWED THEN BEGIN
+        ProgressWindow.CLOSE();
+      END;
+    END;
+
+    LOCAL PROCEDURE GetSetup@1240020005();
+    BEGIN
+      IF NOT SetupRetrieved THEN BEGIN
+        InvMgtSetup.GET;
+        CollaborativeFCSetup.GET;
+        SetupRetrieved := TRUE;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

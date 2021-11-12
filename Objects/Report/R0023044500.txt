@@ -1,0 +1,260 @@
+OBJECT Report 23044500 WHI Transfer Cons. Entries
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/25/21;
+    Time=[ 4:07:08 PM];
+    Modified=Yes;
+    Version List=WHI2.4.7684.0;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Transfer Consumption Entries;
+               ESM=Entradas de consumo de transferencia;
+               FRC=Reportez la consommation;
+               ENC=Transfer Consumption Entries];
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   iNextLineNumber := 0;
+                   CLEAR(codTemplateName);
+                   CLEAR(codBatchName);
+                 END;
+
+  }
+  DATASET
+  {
+    { 1000000000;;DataItem;                  ;
+               DataItemTable=Table233;
+               MaxIteration=1;
+               OnAfterGetRecord=BEGIN
+
+                                  codBatchName := "Item Journal Batch".Name;
+                                END;
+
+               ReqFilterFields=Journal Template Name,Name }
+
+    { 8654;    ;DataItem;                    ;
+               DataItemTable=Table23044503;
+               DataItemTableView=SORTING(Line No.)
+                                 ORDER(Ascending);
+               OnPreDataItem=VAR
+                               ltcBatchNameMissing@1000000000 : TextConst 'ENU=The Journal Batch Name must be specified.';
+                             BEGIN
+                               IF( codBatchName = '' ) THEN
+                                 ERROR(ltcBatchNameMissing);
+
+                               IF( codConfigIDToFilter <> '' ) THEN
+                                 SETRANGE("Config ID", codConfigIDToFilter);
+
+                               IF (codProductionOrder <>'') THEN BEGIN
+                               SETRANGE("Prod. Order No.", codProductionOrder);
+                               END;
+                               recItemJournalLine.LOCKTABLE;
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  copyLine();
+                                END;
+
+               ReqFilterFields=Batch Name,Location Code,User ID,Posting Date,Prod. Order No.,Cons. Item No. }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      codTemplateName@1000000002 : Code[10];
+      codBatchName@1000000000 : Code[10];
+      recItemJournalLine@1000000001 : Record 83;
+      iNextLineNumber@1000000003 : Integer;
+      cuCreateResEntry@1000000004 : Codeunit 99000830;
+      codConfigIDToFilter@1000000005 : Code[20];
+      codProductionOrder@1000000006 : Code[20];
+
+    PROCEDURE setTemplateBatchName@1000000001(pcodTemplateName@1000000001 : Code[10];pcodBatchName@1000000000 : Code[10]);
+    BEGIN
+      codTemplateName := pcodTemplateName;
+      codBatchName := pcodBatchName;
+    END;
+
+    LOCAL PROCEDURE copyLine@1000000003();
+    VAR
+      lcuProdMgmt@1000000000 : Codeunit 23044512;
+    BEGIN
+
+      CLEAR(recItemJournalLine);
+      recItemJournalLine.INIT;
+
+      IF ( codTemplateName = '' ) THEN BEGIN
+        codTemplateName := lcuProdMgmt.getTemplate(PAGE::"Consumption Journal");
+      END;
+
+      recItemJournalLine.VALIDATE("Journal Template Name",codTemplateName);
+
+      IF ("WMDM Consumption Entry"."Batch Name" = '') THEN BEGIN
+        recItemJournalLine.VALIDATE("Journal Batch Name",codBatchName);
+      END ELSE BEGIN
+        recItemJournalLine.VALIDATE("Journal Batch Name", "WMDM Consumption Entry"."Batch Name");
+      END;
+
+      recItemJournalLine.VALIDATE("Posting Date","WMDM Consumption Entry"."Posting Date");
+      recItemJournalLine.VALIDATE("Entry Type",recItemJournalLine."Entry Type"::Consumption);
+
+      recItemJournalLine."WHI Entry" := TRUE;//<IW author="R.Letts" date="06/05/14" version="IW14.06" issue="TFS990" />
+
+      recItemJournalLine.VALIDATE("Order Type", recItemJournalLine."Order Type"::Production);
+      recItemJournalLine.VALIDATE("Order No.","WMDM Consumption Entry"."Prod. Order No.");
+      recItemJournalLine.VALIDATE("Order Line No.","WMDM Consumption Entry"."Prod. Order Line No.");
+
+
+      recItemJournalLine.VALIDATE("Item No.","WMDM Consumption Entry"."Cons. Item No."); //<IW author="R.Trudeau" date="03/02/19" issue="TFS4455" />
+
+      IF "WMDM Consumption Entry"."Prod. Order Comp. Line No." <> 0 THEN
+        recItemJournalLine.VALIDATE("Prod. Order Comp. Line No.", "WMDM Consumption Entry"."Prod. Order Comp. Line No.");
+
+      recItemJournalLine.VALIDATE("Document No.","WMDM Consumption Entry"."Prod. Order No.");
+
+      recItemJournalLine.VALIDATE("Variant Code","WMDM Consumption Entry"."Cons. Variant Code");
+      recItemJournalLine.VALIDATE("Location Code","WMDM Consumption Entry"."Location Code");
+      recItemJournalLine.VALIDATE(Quantity,"WMDM Consumption Entry"."Cons. Quantity");
+
+      IF("WMDM Consumption Entry"."Cons. Unit of Measure Code" <> '') THEN BEGIN
+        recItemJournalLine.VALIDATE("Unit of Measure Code", "WMDM Consumption Entry"."Cons. Unit of Measure Code");
+      END;
+
+      recItemJournalLine.VALIDATE("WHI Prod. Serial No.","WMDM Consumption Entry"."Prod. Serial No.");
+      recItemJournalLine.VALIDATE("WHI Prod. Lot No.", "WMDM Consumption Entry"."Prod. Lot No.");
+      recItemJournalLine.VALIDATE("WHI Barcode Data","WMDM Consumption Entry"."Cons. Barcode Data");
+      recItemJournalLine.VALIDATE("WHI Cons. Serial No.","WMDM Consumption Entry"."Cons. Serial No.");
+      recItemJournalLine.VALIDATE("WHI Cons. Lot No.","WMDM Consumption Entry"."Cons. Lot No.");
+      recItemJournalLine.VALIDATE("Line No.", getNextLineNumber());
+
+      recItemJournalLine.VALIDATE("Bin Code","WMDM Consumption Entry"."Bin Code");
+
+      recItemJournalLine."WHI Config ID" := "WMDM Consumption Entry"."Config ID";
+
+      recItemJournalLine.INSERT(TRUE);
+
+      createItemTrackingLine(
+        recItemJournalLine,
+        "WMDM Consumption Entry"."Cons. Serial No.",
+        "WMDM Consumption Entry"."Cons. Lot No."
+      );
+
+
+
+      "WMDM Consumption Entry".DELETE;
+    END;
+
+    LOCAL PROCEDURE getNextLineNumber@1000000005() : Integer;
+    VAR
+      lrecItemJournalLineTemp@1000000000 : Record 83;
+    BEGIN
+      IF( iNextLineNumber = 0 ) THEN BEGIN
+        lrecItemJournalLineTemp.SETRANGE("Journal Template Name", codTemplateName);
+        lrecItemJournalLineTemp.SETRANGE("Journal Batch Name", codBatchName);
+        IF( lrecItemJournalLineTemp.FINDLAST ) THEN BEGIN
+          iNextLineNumber := lrecItemJournalLineTemp."Line No." + 10000;
+        END;
+      END;
+
+      iNextLineNumber := iNextLineNumber + 10000;
+      EXIT(iNextLineNumber);
+    END;
+
+    PROCEDURE createItemTrackingLine@1000000000(precItemJnlLine@1000000000 : Record 83;psSerialNumber@1000000002 : Text;psLotNumber@1000000003 : Text);
+    BEGIN
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      //
+      // Create the reservation
+      //
+
+      cuCreateResEntry.CreateReservEntryFor(
+        DATABASE::"Item Journal Line",              // ForType (option)
+        5,                                          // ForSubType (integer)
+        precItemJnlLine."Journal Template Name",    // ForID (code)
+        precItemJnlLine."Journal Batch Name",       // ForBatchName (code)
+        0,                                          // ForProdOrderLine (integer)
+        precItemJnlLine."Line No.",                 // ForRefNo (integer)
+        precItemJnlLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+        precItemJnlLine.Quantity,                                      // Passed in quantity
+        precItemJnlLine.Quantity * precItemJnlLine."Qty. per Unit of Measure", // Quantity base (decimal)
+        psSerialNumber,                           // ForSerialNo (Code)
+        psLotNumber                               // ForLotNo (Code)
+      );
+
+
+
+      cuCreateResEntry.CreateEntry(
+        precItemJnlLine."Item No.",         // ItemNo (code)
+        precItemJnlLine."Variant Code",     // VariantCode (code)
+        precItemJnlLine."Location Code",    // LocationCode (code)
+        precItemJnlLine.Description,        // Description (text)
+        TODAY,              // ExpectedReceiptDate (Date)
+        0D,                 // ShipmentDate (Date)
+        0,                  // TransferredFromEntryNo (integer)
+        3                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+      );
+    END;
+
+    PROCEDURE setConfigIDFilter@1000000002(pcodConfigID@1000000000 : Code[20]);
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Sets the config id to filter the consumption lines to.
+      //</Summary>
+      //<Author>R.Trudeau</Author>
+      //<Date>06/11/2014</Date>
+      //<Issue>TFS1529</Issue>
+      //<Version>IW14.11</Version>
+      //////////////////////////////////////////////
+
+      codConfigIDToFilter := pcodConfigID;
+    END;
+
+    PROCEDURE setProductionOrder@1000000004(pcodProductionOrder@1000000000 : Code[20]);
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Sets the production order to filter the consumption lines to.
+      //</Summary>
+      //<Author>H.Zhao</Author>
+      //<Date>03/15/2016</Date>
+      //<Issue>TFS2254</Issue>
+      //<Version>IW16.03</Version>
+      //////////////////////////////////////////////
+
+      codProductionOrder := pcodProductionOrder;
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

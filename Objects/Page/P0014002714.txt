@@ -1,0 +1,190 @@
+OBJECT Page 14002714 Forecast Adjustment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Forecast Adjustment;
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    SourceTable=Table14002708;
+    PageType=List;
+    SourceTableTemporary=Yes;
+    OnOpenPage=BEGIN
+                 AdvForSetup.GET;
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       Rec.CALCFIELDS("Adjustment Qty.");
+                       AdjustmentQty := Rec."Adjustment Qty.";
+                       AdjustedForecast := Rec."Adjusted Forecast Qty.";
+                     END;
+
+    ActionList=ACTIONS
+    {
+      { 1240020005;  ;ActionContainer;
+                      CaptionML=ENU=Related Information;
+                      ActionContainerType=RelatedInformation }
+      { 1240020006;1 ;Action    ;
+                      Name=Forecast Adjust Lines;
+                      Image=AdjustEntries;
+                      OnAction=BEGIN
+                                 ShowForecastAdj;
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1900000001;0;Container;
+                ContainerType=ContentArea }
+
+    { 1240020003;1;Group  ;
+                CaptionML=ENU=Note;
+                GroupType=Group;
+                Layout=Columns }
+
+    { 1240020002;2;Field  ;
+                CaptionML=ENU=Single Note;
+                ApplicationArea=#All;
+                SourceExpr=Note;
+                OnValidate=BEGIN
+                             Rec.MODIFYALL("Adjustment Note", Note);
+                           END;
+                            }
+
+    { 1240030000;1;Group  ;
+                GroupType=Repeater }
+
+    { 1240030004;2;Field  ;
+                CaptionML=ENU=Starting Date;
+                ApplicationArea=#All;
+                SourceExpr="Starting Date";
+                Editable=FALSE }
+
+    { 1240030008;2;Field  ;
+                CaptionML=ENU=Forecast;
+                ApplicationArea=#All;
+                DecimalPlaces=0:5;
+                SourceExpr="Forecast Qty." }
+
+    { 1240020001;2;Field  ;
+                Name=NoteLine;
+                CaptionML=ENU=Individual Note;
+                SourceExpr="Adjustment Note" }
+
+    { 1240030010;2;Field  ;
+                CaptionML=ENU=Adjustment;
+                ApplicationArea=#All;
+                DecimalPlaces=0:5;
+                SourceExpr=AdjustmentQty;
+                OnValidate=VAR
+                             TempQty@1240020000 : Decimal;
+                           BEGIN
+                             CALCFIELDS("Adjustment Qty.");
+                             TempQty := AdjustmentQty - "Adjustment Qty.";
+
+                             IF TempQty <> 0 THEN
+                               Changed := TRUE;
+
+                             IF Changed THEN BEGIN
+                               IF "Adjustment Note" = '' THEN
+                                 IF AdvForSetup."Require Forc. Adj. Notes" THEN
+                                   ERROR(txtNoteError, "Starting Date");
+                               CreateAdjustment(Rec,TempQty);
+                               "Adjustment Note" := '';
+                             END;
+
+                             CALCFIELDS("Adjustment Qty.");
+                             "Adjusted Forecast Qty." := "Forecast Qty." + "Adjustment Qty.";
+                             MODIFY;
+
+                             AdjustedForecast := "Adjusted Forecast Qty.";
+                           END;
+                            }
+
+    { 1240020000;2;Field  ;
+                Name=FrozenForecast;
+                CaptionML=ENU=Freeze Forecast;
+                SourceExpr="Frozen Forecast" }
+
+    { 1240030012;2;Field  ;
+                CaptionML=ENU=Adjusted Forecast;
+                ApplicationArea=#All;
+                DecimalPlaces=0:5;
+                SourceExpr=AdjustedForecast;
+                OnValidate=VAR
+                             TempQty@1240020000 : Decimal;
+                           BEGIN
+                             Rec.CALCFIELDS("Adjustment Qty.");
+                             TempQty := AdjustedForecast - Rec."Forecast Qty." - Rec."Adjustment Qty.";
+                             IF TempQty <> AdjustedForecast THEN
+                               Changed := TRUE;
+
+                             IF Changed THEN BEGIN
+                               IF "Adjustment Note" = '' THEN
+                                 IF AdvForSetup."Require Forc. Adj. Notes" THEN
+                                   ERROR(txtNoteError, "Starting Date");
+                               IF "Frozen Forecast" THEN
+                                 CreateAdjustment(Rec, AdjustedForecast)
+                               ELSE
+                                 CreateAdjustment(Rec,TempQty);
+                               "Adjustment Note" := '';
+                             END;
+
+                             CALCFIELDS("Adjustment Qty.");
+                             AdjustmentQty := Rec."Adjustment Qty.";
+                             "Adjusted Forecast Qty." := AdjustedForecast;
+                             MODIFY;
+                           END;
+                            }
+
+    { 1240020004;2;Field  ;
+                SourceExpr="Is Frozen";
+                Editable=FALSE }
+
+  }
+  CODE
+  {
+    VAR
+      AdvForSetup@1240030001 : Record 14002651;
+      AdjustmentQty@1240030002 : Decimal;
+      AdjustedForecast@1240030003 : Decimal;
+      Note@1240020000 : Text[250];
+      txtNoteError@1240020001 : TextConst 'ENU=Manditory notes are required for Forecast Adjustments.  Check period %1.';
+
+    PROCEDURE SetForecastAdjTmp@1240030001(CurrForecastAdjTmp@1240030000 : Record 14002708);
+    BEGIN
+      IF CurrForecastAdjTmp.Period = 1 THEN
+        Rec.DELETEALL;
+
+      Rec.INIT;
+      Rec := CurrForecastAdjTmp;
+      Rec.INSERT;
+
+      Rec.FINDFIRST;
+    END;
+
+    PROCEDURE ShowForecastAdj@1240030013();
+    VAR
+      ForecastAdj@1240030002 : Record 14002707;
+    BEGIN
+      ForecastAdj.SETCURRENTKEY(
+        "Item No.","Variant Code","Location Code","Starting Date",
+        ForecastAdj."Date Adjusted",ForecastAdj."Time Adjusted");
+      ForecastAdj.SETRANGE("Item No.","Item No.");
+      ForecastAdj.SETRANGE("Variant Code","Variant Code");
+      ForecastAdj.SETRANGE("Location Code",  "Location Code");
+      ForecastAdj.SETRANGE("Starting Date", "Starting Date");
+      PAGE.RUNMODAL(PAGE::"Forecast Adjust Lines",ForecastAdj);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

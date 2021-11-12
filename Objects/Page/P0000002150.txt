@@ -1,0 +1,262 @@
+OBJECT Page 2150 O365 Sales Email Dialog
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/22/18;
+    Time=12:00:00 PM;
+    Version List=NAVW111.00.00.20783;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Send Email;
+               ESM=Enviar correo electr¢nico;
+               FRC=Envoyer courriel;
+               ENC=Send Email];
+    SourceTable=Table9500;
+    PageType=StandardDialog;
+    SourceTableTemporary=Yes;
+    RefreshOnActivate=Yes;
+    OnOpenPage=BEGIN
+                 // Set CC and BCC field
+                 TempEmailItem.FINDFIRST;
+                 UpdateCcBccText(TempEmailItem."Send CC",TempEmailItem."Send BCC");
+                 SendTo := COPYSTR(TempEmailItem."Send to",1,MAXSTRLEN(SendTo));
+                 SubjectText := TempEmailItem.Subject;
+
+                 IsPhoneClient := ClientTypeManagement.GetCurrentClientType = CLIENTTYPE::Phone;
+               END;
+
+    OnQueryClosePage=BEGIN
+                       TempEmailItem.MODIFY(TRUE);
+                       Rec := TempEmailItem;
+                       IF CloseAction <> ACTION::OK THEN
+                         EXIT;
+                       IF TempEmailItem."Send to" = '' THEN
+                         ERROR(MustSpecifyToEmailAddressErr);
+                     END;
+
+    OnAfterGetCurrRecord=BEGIN
+                           IF NOT DocumentHeaderRecordVariant.ISRECORD THEN
+                             EXIT;
+                           UpdateNoOfAttachmentsLabel(O365SalesAttachmentMgt.GetNoOfAttachments(DocumentHeaderRecordVariant));
+                         END;
+
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 10  ;1   ;Field     ;
+                Name=SendToText;
+                ExtendedDatatype=E-Mail;
+                CaptionML=[ENU=To;
+                           ESM=Para;
+                           FRC=·;
+                           ENC=To];
+                ToolTipML=[ENU=Specifies the recipient of the email.;
+                           ESM=Especifica el destinatario del mensaje de correo electr¢nico.;
+                           FRC=Sp‚cifie le destinataire du courriel.;
+                           ENC=Specifies the recipient of the email.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=SendTo;
+                OnValidate=VAR
+                             MailManagement@1000 : Codeunit 9520;
+                           BEGIN
+                             MailManagement.CheckValidEmailAddresses(SendTo);
+                             IF SendTo <> TempEmailItem."Send to" THEN
+                               GetEmailBody(SendTo);
+                             TempEmailItem."Send to" := SendTo;
+                           END;
+                            }
+
+    { 4   ;1   ;Field     ;
+                Name=CcBccText;
+                CaptionML=[ENU=CC/BCC;
+                           ESM=CC/CCO;
+                           FRC=Cc/Cci;
+                           ENC=CC/BCC];
+                ToolTipML=[ENU=Specifies one or more additional recipients.;
+                           ESM=Especifica uno o varios destinatarios adicionales.;
+                           FRC=Sp‚cifie un ou plusieurs destinataires suppl‚mentaires.;
+                           ENC=Specifies one or more additional recipients.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=CcAndBcc;
+                Importance=Additional;
+                Editable=IsPhoneClient;
+                OnAssistEdit=BEGIN
+                               IF ClientTypeManagement.GetCurrentClientType = CLIENTTYPE::Tablet THEN
+                                 PAGE.RUNMODAL(PAGE::"BC O365 Email Settings")
+                               ELSE
+                                 PAGE.RUNMODAL(PAGE::"O365 Email CC and BCC Settings");
+
+                               TempEmailItem.AddCcBcc;
+                               UpdateCcBccText(TempEmailItem."Send CC",TempEmailItem."Send BCC");
+                             END;
+
+                QuickEntry=FALSE }
+
+    { 11  ;1   ;Field     ;
+                Name=Subject;
+                CaptionML=[ENU=Subject;
+                           ESM=Asunto;
+                           FRC=Objet;
+                           ENC=Subject];
+                ToolTipML=[ENU=Specifies the text that will display as the subject of the email.;
+                           ESM=Especifica el texto que se mostrar  como asunto del mensaje de correo electr¢nico.;
+                           FRC=Sp‚cifie le texte qui s'affiche comme objet du courriel.;
+                           ENC=Specifies the text that will display as the subject of the email.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=SubjectText;
+                OnValidate=BEGIN
+                             TempEmailItem.Subject := SubjectText;
+                           END;
+                            }
+
+    { 15  ;1   ;Field     ;
+                Name=ShowEmailContentLbl;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=ShowEmailContentLbl;
+                Editable=FALSE;
+                OnDrillDown=VAR
+                              O365EmailPreview@1000 : Page 2159;
+                            BEGIN
+                              O365EmailPreview.LoadHTMLFile(TempEmailItem."Body File Path");
+                              O365EmailPreview.RUNMODAL;
+                            END;
+
+                ShowCaption=No }
+
+    { 13  ;1   ;Group     ;
+                CaptionML=[ENU=Attachments;
+                           ESM=Datos adjuntos;
+                           FRC=PiŠces jointes;
+                           ENC=Attachments];
+                GroupType=Group }
+
+    { 12  ;1   ;Field     ;
+                Name=AttachmentName;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=ViewPdfInvoiceLbl;
+                Visible=HasInvoiceAttachment;
+                Editable=FALSE;
+                OnDrillDown=BEGIN
+                              IF HasInvoiceAttachment THEN
+                                DOWNLOAD(TempEmailItem."Attachment File Path",'','','',TempEmailItem."Attachment File Path");
+                            END;
+
+                ShowCaption=No }
+
+    { 16  ;1   ;Field     ;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=NoOfAttachmentsValueTxt;
+                Editable=FALSE;
+                OnDrillDown=VAR
+                              SalesHeader@1001 : Record 36;
+                              RecRef@1000 : RecordRef;
+                            BEGIN
+                              IF NOT DocumentHeaderRecordVariant.ISRECORD THEN
+                                EXIT;
+                              UpdateNoOfAttachmentsLabel(O365SalesAttachmentMgt.EditAttachments(DocumentHeaderRecordVariant));
+                              IF NOT GetSalesHeader(DocumentHeaderRecordVariant,SalesHeader) THEN
+                                EXIT;
+                              RecRef.GETTABLE(DocumentHeaderRecordVariant);
+                              IF RecRef.NUMBER = DATABASE::"Sales Header" THEN BEGIN
+                                SalesHeader := DocumentHeaderRecordVariant;
+                                IF SalesHeader.FIND THEN
+                                  DocumentHeaderRecordVariant := SalesHeader;
+                              END;
+                            END;
+
+                ShowCaption=No }
+
+  }
+  CODE
+  {
+    VAR
+      TempEmailItem@1000 : TEMPORARY Record 9500;
+      O365SalesAttachmentMgt@1005 : Codeunit 2112;
+      ClientTypeManagement@1010 : Codeunit 4;
+      DocumentHeaderRecordVariant@1007 : Variant;
+      SendTo@1008 : Text[80];
+      CcAndBcc@1001 : Text;
+      MustSpecifyToEmailAddressErr@1003 : TextConst 'ENU=Please enter a recipient email address.;ESM=Escriba la direcci¢n de correo electr¢nico del destinatario.;FRC=Veuillez entrer une adresse de courriel pour le destinataire.;ENC=Please enter a recipient email address.';
+      ShowEmailContentLbl@1014 : TextConst 'ENU=View email message;ESM=Ver mensaje de correo electr¢nico;FRC=Afficher le message ‚lectronique;ENC=View email message';
+      NoOfAttachmentsTxt@1012 : TextConst '@@@="%1=an integer number, starting at 0";ENU=Other attachments (%1);ESM=Otros archivos adjuntos (%1);FRC=Autres piŠces jointes (%1);ENC=Other attachments (%1)';
+      NoOfAttachmentsValueTxt@1006 : Text;
+      AddAttachmentTxt@1004 : TextConst 'ENU=Add attachment;ESM=Agregar archivo adjunto;FRC=Ajouter une piŠce jointe;ENC=Add attachment';
+      ViewPdfInvoiceLbl@1019 : TextConst 'ENU=PDF invoice;ESM=Factura en PDF;FRC=Facture PDF;ENC=PDF invoice';
+      SubjectText@1002 : Text[250];
+      HasInvoiceAttachment@1011 : Boolean;
+      IsPhoneClient@1009 : Boolean;
+
+    [External]
+    PROCEDURE SetValues@1(NewDocumentHeaderRecordVariant@1001 : Variant;VAR NewTempEmailItem@1000 : TEMPORARY Record 9500);
+    VAR
+      DummyVariant@1002 : Variant;
+    BEGIN
+      TempEmailItem.COPY(NewTempEmailItem,TRUE);
+      DocumentHeaderRecordVariant := NewDocumentHeaderRecordVariant;
+      HasInvoiceAttachment := FORMAT(DocumentHeaderRecordVariant) <> FORMAT(DummyVariant);
+      GetEmailBody('');
+    END;
+
+    LOCAL PROCEDURE GetEmailBody@3(SendTo@1003 : Text[250]);
+    VAR
+      SalesHeader@1000 : Record 36;
+      ReportSelections@1001 : Record 77;
+      ReportUsage@1002 : Option;
+    BEGIN
+      IF NOT GetSalesHeader(DocumentHeaderRecordVariant,SalesHeader) THEN
+        EXIT;
+      CASE SalesHeader."Document Type" OF
+        SalesHeader."Document Type"::Quote:
+          ReportUsage := ReportSelections.Usage::"S.Quote";
+        SalesHeader."Document Type"::Invoice:
+          ReportUsage := ReportSelections.Usage::"S.Invoice Draft";
+        ELSE
+          ReportUsage := ReportSelections.Usage::"S.Invoice Draft"; // default
+      END;
+      IF ReportSelections.GetEmailBody(
+           TempEmailItem."Body File Path",ReportUsage,DocumentHeaderRecordVariant,SalesHeader."Sell-to Customer No.",SendTo)
+      THEN
+        TempEmailItem.MODIFY;
+      COMMIT;
+    END;
+
+    LOCAL PROCEDURE GetSalesHeader@4(DocVariant@1000 : Variant;VAR SalesHeader@1001 : Record 36) : Boolean;
+    VAR
+      RecRef@1002 : RecordRef;
+    BEGIN
+      IF NOT DocVariant.ISRECORD THEN
+        EXIT(FALSE);
+      RecRef.GETTABLE(DocVariant);
+      IF RecRef.NUMBER <> DATABASE::"Sales Header" THEN
+        EXIT(FALSE);
+      SalesHeader := DocVariant;
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE UpdateCcBccText@2(SendCC@1001 : Text;SendBCC@1002 : Text);
+    BEGIN
+      CcAndBcc := SendCC;
+      IF SendBCC <> '' THEN BEGIN
+        IF CcAndBcc <> '' THEN
+          CcAndBcc += '; ';
+        CcAndBcc += SendBCC;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateNoOfAttachmentsLabel@7(NoOfAttachments@1000 : Integer);
+    BEGIN
+      IF NoOfAttachments = 0 THEN
+        NoOfAttachmentsValueTxt := AddAttachmentTxt
+      ELSE
+        NoOfAttachmentsValueTxt := STRSUBSTNO(NoOfAttachmentsTxt,NoOfAttachments);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

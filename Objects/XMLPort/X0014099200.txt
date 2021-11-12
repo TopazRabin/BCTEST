@@ -1,0 +1,559 @@
+OBJECT XMLport 14099200 Import Advanced Ship Notice
+{
+  OBJECT-PROPERTIES
+  {
+    Date=09/04/20;
+    Time=[ 9:25:10 AM];
+    Modified=Yes;
+    Version List=IBA1.11.01,001;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Import Advanced Ship Notice;
+    Direction=Import;
+    OnInitXMLport=BEGIN
+                    ShowDialog := GUIALLOWED;
+                    FileIncludesHeader := TRUE;
+                    //VerifySerialNo := TRUE;
+                  END;
+
+    OnPreXMLport=BEGIN
+                   GLSetup.GET;
+                   IF ShowDialog THEN BEGIN
+                     Window.OPEN('#1##################\'+
+                            '#2##################\'+
+                            '#3##################\'+
+                            '#4##################\'+
+                            '#5##################');
+
+                     Window.UPDATE(1,'Reading Lines');
+                   END;
+                 END;
+
+    OnPostXMLport=VAR
+                    ASNHdr@1240020000 : Record 14099200;
+                  BEGIN
+                    IF ShowDialog THEN
+                      Window.CLOSE;
+
+                    ProcessRecords;
+
+                    IF ErrorCounter<>0 THEN BEGIN
+                      IF ShowDialog THEN BEGIN
+                        MESSAGE(STRSUBSTNO(txt016,ErrorCounter));
+                        ShowTempLogError();
+                      END;
+                      // remove headers inserted from commit before error log form.runmodal
+                      IF TempASNhdr.FINDSET THEN BEGIN
+                        REPEAT
+                          IF ASNHdr.GET(TempASNhdr."ASN No.") THEN BEGIN
+                            ASNHdr.DELETE(TRUE);
+                          END;
+                        UNTIL TempASNhdr.NEXT = 0;
+                        COMMIT;
+                      END;
+                      ERROR('');
+                    END;
+
+                    IF ShowDialog THEN BEGIN
+                      IF FileIncludesHeader THEN
+                        Counter := Counter - 1;
+                      MESSAGE(STRSUBSTNO(txt015,Counter, SkipCounter, ASNCounter));
+                    END;
+
+                    //ShowASNs;
+                  END;
+
+    Format=Variable Text;
+    FieldDelimiter=<None>;
+    FieldSeparator=<TAB>;
+  }
+  ELEMENTS
+  {
+    { [{870E1B44-727A-4739-9653-7A4D6F9EF1DC}];  ;Root                ;Element ;Text     }
+
+    { [{B9196C37-6F7E-4218-BAAC-3B7E33744024}];1 ;ImportLoop          ;Element ;Table   ;
+                                                  SourceTable=Table2000000026;
+                                                  SourceTableView=SORTING(Field1);
+                                                  Import::OnAfterInitRecord=BEGIN
+                                                                              ClearGlobalText;
+                                                                              CleanGlobalText;
+                                                                            END;
+
+                                                  Import::OnBeforeInsertRecord=VAR
+                                                                                 Item@1240020000 : Record 27;
+                                                                                 LocASNhdr@1240020001 : Record 14099200;
+                                                                                 LocPostedASNhdr@1240020003 : Record 14099203;
+                                                                                 SkipRow@1240020002 : Boolean;
+                                                                                 PurchLine@1240020005 : Record 39;
+                                                                                 PurchHdr@1240020004 : Record 38;
+                                                                                 tempCode@1000 : Code[250];
+                                                                               BEGIN
+                                                                                 Counter += 1;
+                                                                                 IF FileIncludesHeader THEN
+                                                                                   IF Counter = 1 THEN
+                                                                                     currXMLport.SKIP;
+
+                                                                                 //>>001 TPZ2911
+                                                                                 CheckContainerNo(ContainerCode);
+                                                                                 //<<001 TPZ2911
+                                                                                 SkipRow := FALSE;
+                                                                                 IF ContainerCode = '' THEN BEGIN
+                                                                                   AddTempLogError(STRSUBSTNO(txt001,ContainerCode,OrderNo),ItemNo);
+                                                                                   SkipRow := TRUE;
+                                                                                 END;
+
+                                                                                 //
+                                                                                 // IF VerifySerialNo THEN BEGIN
+                                                                                 //   IF SerialNo = '' THEN BEGIN
+                                                                                 //     AddTempLogError(
+                                                                                 //     STRSUBSTNO(
+                                                                                 //           'Container %1\'+
+                                                                                 //           'Order No. %2',ContainerCode,OrderNo),ItemNo);
+                                                                                 //     SkipRow := TRUE;
+                                                                                 //   END;
+                                                                                 // END;
+
+
+                                                                                 UnitCostText := DELCHR(UnitCostText,'=','"$,');
+                                                                                 IF UnitCostText = '' THEN
+                                                                                   UnitCostText := '0';
+                                                                                 IF NOT EVALUATE(UnitCost,UnitCostText) THEN
+                                                                                    BEGIN
+                                                                                      AddTempLogError(
+                                                                                        STRSUBSTNO(txt002,UnitCostText,OrderNo),ItemNo);
+                                                                                      SkipRow := TRUE;
+                                                                                    END;
+
+                                                                                 IF NOT EVALUATE(Qty,QtyToReceiveText) THEN
+                                                                                    BEGIN
+                                                                                      AddTempLogError(
+                                                                                        STRSUBSTNO(txt003,QtyToReceiveText,OrderNo),ItemNo);
+                                                                                      SkipRow := TRUE;
+                                                                                    END;
+
+
+                                                                                 IF OrderLineNoText <> '' THEN BEGIN
+                                                                                   IF NOT EVALUATE(OrderLineNo,OrderLineNoText) THEN
+                                                                                      BEGIN
+                                                                                        AddTempLogError(
+                                                                                          STRSUBSTNO(txt004,OrderLineNoText,OrderNo),ItemNo);
+                                                                                        SkipRow := TRUE;
+                                                                                      END;
+                                                                                 END;
+
+                                                                                 IF ItemNo = '' THEN BEGIN
+                                                                                   AddTempLogError(
+                                                                                     STRSUBSTNO(txt005,ItemNo,OrderNo),ItemNo);
+                                                                                   SkipRow := TRUE;
+                                                                                 END ELSE BEGIN
+                                                                                   IF NOT Item.GET(ItemNo) THEN BEGIN
+                                                                                     AddTempLogError(
+                                                                                       STRSUBSTNO(txt005,ItemNo,OrderNo),ItemNo);
+                                                                                     SkipRow := TRUE;
+                                                                                   END;
+                                                                                 END;
+
+                                                                                 IF LocASNhdr.GET(ASNNo) THEN BEGIN
+                                                                                   ERROR(STRSUBSTNO(txt006,ASNNo,OrderNo),ItemNo);
+                                                                                 END;
+
+                                                                                 IF LocPostedASNhdr.GET(ASNNo) THEN BEGIN
+                                                                                   AddTempLogError(
+                                                                                     STRSUBSTNO(txt007,ASNNo,OrderNo),ItemNo);
+                                                                                   SkipRow := TRUE;
+                                                                                 END;
+
+                                                                                 IF ShowDialog THEN BEGIN
+                                                                                   Window.UPDATE(2,STRSUBSTNO(txt008,ASNNo));
+                                                                                   Window.UPDATE(3,STRSUBSTNO(txt009,OrderNo));
+                                                                                   Window.UPDATE(4,STRSUBSTNO(txt010,ContainerCode));
+                                                                                   Window.UPDATE(5,STRSUBSTNO(txt011,ItemNo));
+                                                                                 END;
+
+                                                                                 PurchLine.RESET;
+                                                                                 PurchLine.SETRANGE("Document Type",PurchLine."Document Type"::Order);
+                                                                                 PurchLine.SETRANGE("Document No.",OrderNo);
+                                                                                 PurchLine.SETRANGE("Original Line No.", OrderLineNo);
+                                                                                 PurchLine.SETRANGE(Type,PurchLine.Type::Item);
+                                                                                 PurchLine.SETRANGE("No.",ItemNo);
+                                                                                 PurchLine.SETFILTER("Outstanding Quantity",'<>0');
+                                                                                 IF PurchLine.ISEMPTY THEN BEGIN
+                                                                                   PurchLine.SETRANGE("Line No.", OrderLineNo);
+                                                                                   PurchLine.SETRANGE("Original Line No.");
+                                                                                 END;
+
+                                                                                 //HF >>
+                                                                                 IF PurchLine.ISEMPTY THEN BEGIN
+                                                                                     PurchLine.SETRANGE("Line No.");
+                                                                                 END;
+                                                                                 //HF <<
+
+                                                                                 IF PurchLine.FINDFIRST THEN BEGIN
+
+                                                                                   OrderLineNo := PurchLine."Line No.";
+                                                                                   IF (PurchHdr."No."<>PurchLine."Document No.") THEN BEGIN
+                                                                                     PurchHdr.GET(PurchLine."Document Type",PurchLine."Document No.");
+                                                                                     //IF PurchHdr.Status=PurchHdr.Status::Released THEN
+                                                                                     //   ReleasePurchDoc.Reopen(PurchHdr);
+                                                                                     //PurchHdr."Vendor Shipment No." := ;
+                                                                                   END;
+
+                                                                                   IF Currency <> '' THEN BEGIN
+                                                                                     IF GLSetup."LCY Code" <> Currency THEN BEGIN
+                                                                                       IF PurchHdr."Currency Code" <> Currency THEN BEGIN
+                                                                                         AddTempLogError(
+                                                                                           STRSUBSTNO(txt012,PurchHdr."Currency Code", Currency),ItemNo);
+                                                                                         SkipRow := TRUE;
+                                                                                       END;
+                                                                                     END;
+                                                                                   END ELSE BEGIN
+                                                                                     IF PurchHdr."Currency Code" <> Currency THEN BEGIN
+                                                                                        IF Currency = '' THEN
+                                                                                          Currency := '<Blank>';
+                                                                                         AddTempLogError(
+                                                                                           STRSUBSTNO(txt012,PurchHdr."Currency Code", Currency),ItemNo);
+                                                                                         Currency := '';
+                                                                                         SkipRow := TRUE;
+                                                                                     END;
+                                                                                   END;
+
+                                                                                 //   GetLocation(PurchLine."Location Code");
+                                                                                 //   IF (Location."Directed Put-away and Pick" OR Location."Require Put-away") THEN BEGIN
+                                                                                 //     AddTempLogError(
+                                                                                 //       STRSUBSTNO(txt013,PurchLine."Document No.", PurchLine."Line No."),ItemNo);
+                                                                                 //     SkipRow := TRUE;
+                                                                                 //   END;
+
+                                                                                 //IF NOT EVALUATE(PurchLine."Expected REceipt Date", ETA) THEN
+                                                                                 //IF PurchLine."Expected Receipt Date"<>ExpRcptDate THEN BEGIN
+                                                                                 //  PurchLine.VALIDATE("Expected Receipt Date",ExpRcptDate);
+                                                                                 //END;
+
+                                                                                 //   IF TrackingEntryExists(PurchLine,SerialNo) THEN BEGIN
+                                                                                 //     AddTempLogError(
+                                                                                 //       STRSUBSTNO(
+                                                                                 //           'Tracking Info already exists for '+
+                                                                                 //           'Order No. %1 Item %2 Container Code %3', PurchLine."Document No.",PurchLine."No.",ContainerCode),PurchLine."No.");
+                                                                                 //     SkipRow := TRUE;
+                                                                                 //   END ELSE BEGIN
+                                                                                 //     //InsertReservEntry(PurchLine, 1, SerialNo);
+                                                                                 //     //InsertSerialNoInfo(PurchLine."No.", PurchLine."Variant Code", SerialNo, SerialNoInfo);
+                                                                                 //   END;
+
+                                                                                   IF NOT SkipRow THEN BEGIN
+                                                                                     TempASNLine.INIT;
+                                                                                     TempASNLine."Line No." := Counter;
+                                                                                     TempASNLine."ASN No." := ASNNo;
+                                                                                     // IBA1.11.01 >>
+                                                                                     tempCode := ContainerCode;
+                                                                                     TempASNLine."Description 2" := tempCode;
+                                                                                     // IBA1.11.01 <<
+                                                                                     TempASNLine."Purchase Order No." := OrderNo;
+                                                                                     TempASNLine."Purchase Order Line No." := OrderLineNo;
+                                                                                     TempASNLine."Item No." := ItemNo;
+                                                                                     TempASNLine."Cost Discrepancy" := (PurchLine."Direct Unit Cost"<>UnitCost);
+                                                                                     TempASNLine."Variant Code" := PurchLine."Variant Code";
+                                                                                     TempASNLine."Purchase Line Direct Unit Cost" := PurchLine."Direct Unit Cost";
+                                                                                     TempASNLine."Currency Code" := PurchHdr."Currency Code";
+                                                                                     TempASNLine."Imported Unit Cost" := UnitCost;
+                                                                                     TempASNLine."Ship Qty." := Qty;
+                                                                                     TempASNLine.INSERT(FALSE);
+                                                                                   END;
+
+                                                                                 END ELSE BEGIN
+                                                                                     AddTempLogError(
+                                                                                       STRSUBSTNO(txt014, OrderNo, ItemNo, ContainerCode),ItemNo);
+                                                                                     SkipRow := TRUE;
+                                                                                 END;
+
+                                                                                 IF SkipRow THEN BEGIN
+                                                                                   SkipCounter := SkipCounter + 1;
+                                                                                 END;
+
+                                                                                 currXMLport.SKIP;
+                                                                               END;
+                                                                                }
+
+    { [{22393165-3592-4C0A-94A4-212F56741476}];2 ;ASNNo               ;Element ;Text     }
+
+    { [{65C98B1B-E0A5-4FF0-8428-97F8859EB1CD}];2 ;ContainerCode       ;Element ;Text     }
+
+    { [{135C92F1-CA7C-4A29-B544-14276A8668F8}];2 ;ItemNo              ;Element ;Text     }
+
+    { [{A97750E8-A9C1-47E4-83EF-B81CA2AA32C4}];2 ;UnitCostText        ;Element ;Text     }
+
+    { [{7004389D-F2F3-4C7C-905F-E6370B5D0849}];2 ;Currency            ;Element ;Text     }
+
+    { [{5AF4D895-05B4-4447-8789-29748805DE62}];2 ;ETA                 ;Element ;Text     }
+
+    { [{4773F372-4FE4-49F7-9418-9FAF3F26F4C6}];2 ;OrderNo             ;Element ;Text     }
+
+    { [{CD4CF2F9-AD6A-4035-BFA2-97D7B99843B8}];2 ;OrderLineNoText     ;Element ;Text     }
+
+    { [{1CC577F1-8B0B-4EEB-9AC1-D40FBB83B6EE}];2 ;QtyToReceiveText    ;Element ;Text     }
+
+  }
+  EVENTS
+  {
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+      { 1240060000;;Container;
+                  Name=Heading;
+                  ContainerType=ContentArea }
+
+      { 1240060001;1;Field  ;
+                  CaptionML=ENU=File Includes a Header?;
+                  SourceExpr=FileIncludesHeader }
+
+    }
+  }
+  CODE
+  {
+    VAR
+      Qty@1240060005 : Decimal;
+      Counter@1240060000 : Integer;
+      SkipCounter@1240020001 : Integer;
+      Window@1240020002 : Dialog;
+      ShowDialog@1240060009 : Boolean;
+      UnitCost@1240060011 : Decimal;
+      OrderLineNo@1240020056 : Integer;
+      ErrorCounter@1240060016 : Integer;
+      FileIncludesHeader@1240060020 : Boolean;
+      VerifySerialNo@1240060021 : Boolean;
+      GLSetup@1240060001 : Record 98;
+      TempASNhdr@1240020000 : TEMPORARY Record 14099200;
+      ImportErrorLog@1240020003 : TEMPORARY Record 405;
+      TempASNLine@1240020004 : TEMPORARY Record 14099201;
+      TempItem@1240020007 : TEMPORARY Record 27;
+      Location@1240020055 : Record 14;
+      txt001@1240020005 : TextConst 'ENU=Container %1\Order No. %2';
+      txt002@1240020106 : TextConst 'ENU=Cost %1\Order No. %2';
+      txt003@1240020026 : TextConst 'ENU=Qty could not be converted %1\Order No. %2';
+      txt004@1240020027 : TextConst 'ENU=Line %1 Could not be converted to a line number.\Order No. %2';
+      txt005@1240020028 : TextConst 'ENU=Item is blank %1\Order No. %2';
+      txt006@1240020029 : TextConst 'ENU=ASN Number already exists %1\Order No. %2';
+      txt007@1240020030 : TextConst 'ENU=ASN Number already exists as a Posted ASN %1\Order No. %2';
+      txt008@1240020031 : TextConst 'ENU=ASN No. %1';
+      txt009@1240020032 : TextConst 'ENU=Order No.  %1';
+      txt010@1240020033 : TextConst 'ENU=Container Code  %1';
+      txt011@1240020034 : TextConst 'ENU=Item No. %1';
+      txt012@1240020035 : TextConst 'ENU=Currency Code %1 does not match the Purchase Order %2';
+      txt013@1240020036 : TextConst 'ENU=%1- Line No. %2\Purchase line Location must not require a put-away!';
+      txt014@1240020037 : TextConst 'ENU=Order Line could not found or is no longer open!\Order No. %1 Item %2 Container Code %3';
+      txt015@1240020038 : TextConst 'ENU=Lines Imported %1\Lines Skipped %2\ASN''s Created %3';
+      ASNCounter@1240020006 : Integer;
+      txt016@1240020008 : TextConst 'ENU=Import Failed! - Errors Found %1';
+
+    LOCAL PROCEDURE ShowASNs@1240020002();
+    VAR
+      DocNoFilter@1240020000 : Text[1024];
+      LocASNhdr@1240020001 : Record 14099200;
+    BEGIN
+      IF NOT ShowDialog THEN
+        EXIT;
+
+      IF TempASNhdr.FINDSET THEN BEGIN
+        REPEAT
+          DocNoFilter += TempASNhdr."ASN No." + '|';
+        UNTIL TempASNhdr.NEXT=0;
+        COMMIT;
+        DocNoFilter := DELCHR(DocNoFilter ,'>','|');
+        LocASNhdr.SETFILTER("ASN No.", DocNoFilter);
+        COMMIT;
+        PAGE.RUN(14099202,LocASNhdr);
+      END;
+    END;
+
+    LOCAL PROCEDURE AddTempLogError@1240020003(ErrorText@1240020000 : Text[250];ItemNo@1240020001 : Text[250]);
+    BEGIN
+       ErrorCounter += 1;
+       ImportErrorLog.INIT;
+       ImportErrorLog."Entry No." := ErrorCounter;
+       ImportErrorLog."Date and Time" := CURRENTDATETIME;
+       ImportErrorLog."User ID" := USERID;
+       ImportErrorLog."New Value" := ErrorText;
+       ImportErrorLog."Primary Key Field 1 Value" := COPYSTR(ItemNo, 1, 50);
+       ImportErrorLog.INSERT;
+    END;
+
+    LOCAL PROCEDURE ShowTempLogError@1240020004();
+    BEGIN
+      IF ShowDialog THEN BEGIN
+        COMMIT;
+        PAGE.RUNMODAL(0,ImportErrorLog);
+      END;
+    END;
+
+    LOCAL PROCEDURE ClearGlobalText@1240020005();
+    BEGIN
+      ItemNo := '';
+      //SerialNo := '';
+      UnitCostText := '';
+      Currency := ' ';
+      ETA := '';
+      OrderNo := '';
+      OrderLineNoText := '';
+      ContainerCode := '';
+      UnitCost := 0;
+      OrderLineNo := 0;
+      Qty := 0;
+      QtyToReceiveText := '';
+      ASNNo := '';
+    END;
+
+    LOCAL PROCEDURE CleanGlobalText@1240020006();
+    BEGIN
+      ItemNo := DELCHR(ItemNo ,'<>');
+      //SerialNo := DELCHR(SerialNo ,'<>');
+      UnitCostText := DELCHR(UnitCostText ,'<>');
+      Currency := DELCHR(Currency ,'<>');
+      ETA := DELCHR(ETA ,'<>');
+      OrderNo := DELCHR(OrderNo ,'<>');
+      OrderLineNoText := DELCHR(OrderLineNoText ,'<>');
+      ContainerCode := DELCHR(ContainerCode ,'<>');
+      QtyToReceiveText := DELCHR(QtyToReceiveText ,'<>');
+      ASNNo := DELCHR(ASNNo ,'<>');
+
+      ItemNo := DELCHR(ItemNo ,'<>','"');
+      //SerialNo := DELCHR(SerialNo ,'<>','"');
+      UnitCostText := DELCHR(UnitCostText ,'<>','"');
+      Currency := DELCHR(Currency ,'<>','"');
+      ETA := DELCHR(ETA ,'<>','"');
+      OrderNo := DELCHR(OrderNo ,'<>','"');
+      OrderLineNoText := DELCHR(OrderLineNoText ,'<>','"');
+      ContainerCode := DELCHR(ContainerCode ,'<>','"');
+      QtyToReceiveText := DELCHR(QtyToReceiveText ,'<>','"');
+      ASNNo := DELCHR(ASNNo ,'<>','"');
+    END;
+
+    LOCAL PROCEDURE ProcessRecords@1240020007();
+    VAR
+      ASNhdr@1240020000 : Record 14099200;
+      ASNLine@1240020001 : Record 14099201;
+      LocPurchaseLine@1240020002 : Record 39;
+      NextLineNo@1240020003 : Integer;
+    BEGIN
+      // IBA1.11.01 >>
+      TempASNLine.SETCURRENTKEY("ASN No.", "Description 2");
+      // IBA1.11.01 <<
+      IF TempASNLine.FIND('-') THEN BEGIN
+        REPEAT
+          IF TempASNLine."ASN No." <> '' THEN BEGIN
+            IF (ASNhdr."ASN No." <> TempASNLine."ASN No.") OR (ASNhdr."Inbound Container Number" <> TempASNLine."Description 2")
+              THEN BEGIN
+              // IBA1.11.01 >>
+              IF (ASNhdr."Inbound Container Number" <> TempASNLine."Description 2") AND (ASNhdr."ASN No." = TempASNLine."ASN No.") THEN
+                InsertASNHeader(ASNhdr, '')
+              ELSE
+                InsertASNHeader(ASNhdr,TempASNLine."ASN No.");
+              // IBA1.11.01 <<
+              ASNhdr."Inbound Container Number" := TempASNLine."Description 2";
+              ASNhdr.MODIFY(FALSE);
+              NextLineNo := 0;
+            END;
+          END ELSE BEGIN
+            IF (ASNhdr."ASN No." = '') OR (ASNhdr."Inbound Container Number" <> TempASNLine."Description 2") THEN BEGIN
+              InsertASNHeader(ASNhdr,'');
+              ASNhdr."Inbound Container Number" := TempASNLine."Description 2";
+              ASNhdr.MODIFY(FALSE);
+              NextLineNo := 0;
+            END;
+          END;
+
+          IF LocPurchaseLine.GET(LocPurchaseLine."Document Type"::Order,TempASNLine."Purchase Order No.",
+              TempASNLine."Purchase Order Line No.") THEN BEGIN
+            ASNLine.INIT;
+            ASNLine."ASN No." := ASNhdr."ASN No.";
+            NextLineNo := NextLineNo + 10000;
+            ASNLine."Line No." := NextLineNo;
+            ASNLine."Purchase Order No." := LocPurchaseLine."Document No.";
+            ASNLine."Purchase Order Line No." := LocPurchaseLine."Line No.";
+            ASNLine.VALIDATE("Item No.",LocPurchaseLine."No.");
+            ASNLine.VALIDATE("Variant Code",LocPurchaseLine."Variant Code");
+            ASNLine.Description := LocPurchaseLine.Description;
+            ASNLine."Description 2" := LocPurchaseLine."Description 2";
+            ASNLine."Currency Code" := LocPurchaseLine."Currency Code";
+            ASNLine.VALIDATE("Purchase Line Direct Unit Cost",LocPurchaseLine."Direct Unit Cost");
+            ASNLine.VALIDATE("Vendor Item No.",LocPurchaseLine."Vendor Item No.");
+            ASNLine.VALIDATE("Final Dest. Location",LocPurchaseLine."Location Code");
+            ASNLine.VALIDATE("Unit of Measure Code",LocPurchaseLine."Unit of Measure Code");
+            ASNLine.VALIDATE("Open PO Qty.", LocPurchaseLine."Outstanding Quantity");
+            ASNLine.VALIDATE("Ship Qty.",TempASNLine."Ship Qty.");
+            ASNLine."Cost Discrepancy" := TempASNLine."Cost Discrepancy";
+            ASNLine."Imported Unit Cost" := TempASNLine."Imported Unit Cost";
+            ASNLine.INSERT(TRUE);
+          END;
+        UNTIL TempASNLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetLocation@1240020008(LocCode@1240020000 : Code[10]);
+    BEGIN
+      IF LocCode = '' THEN
+        EXIT;
+
+      IF Location.Code <> LocCode THEN BEGIN
+        Location.GET(LocCode);
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertASNHeader@1240020009(VAR CurrASNHdr@1240020001 : Record 14099200;CurrASNNo@1240020000 : Code[20]);
+    BEGIN
+      // IBA1.11.01 >>
+      IF NOT CurrASNHdr.GET(CurrASNNo) THEN BEGIN
+        CurrASNHdr.INIT;
+        IF CurrASNNo <> '' THEN
+          CurrASNHdr."ASN No." := CurrASNNo
+        ELSE
+          CurrASNHdr."ASN No." := '';
+        CurrASNHdr.INSERT(TRUE);
+        ASNCounter := ASNCounter + 1;
+        IF ShowDialog THEN BEGIN
+          IF NOT TempASNhdr.GET(CurrASNHdr."ASN No.") THEN BEGIN
+            TempASNhdr."ASN No." := CurrASNHdr."ASN No.";
+            TempASNhdr.INSERT(FALSE);
+          END;
+        END;
+      END;
+      // IBA1.11.01 <<
+    END;
+
+    LOCAL PROCEDURE CheckContainerNo@1000000000(pContainerCode@1000000000 : Text);
+    VAR
+      TEXT001@1000000001 : TextConst 'ENU=Lenght of Container No.: %1  must be equal to 11 characters. Please fix and re-import again.';
+      TEXT002@1000000002 : TextConst 'ENU="The Format of Container No.: %1 must have 4 Numbers followed by 7 Alphabets. Please fix and re-import again. "';
+      i@1000000003 : Integer;
+    BEGIN
+      //>>001 TPZ2911
+      IF STRLEN(pContainerCode) <> 11 THEN
+        ERROR(TEXT001,pContainerCode);
+      i := 1;
+      WHILE i < 5 DO BEGIN
+        IF NOT(COPYSTR(pContainerCode,i,1) IN ['A'..'Z']) THEN
+          ERROR(TEXT002,pContainerCode);
+        i := i+1;
+      END;
+      i := 5;
+      WHILE i <= 11  DO BEGIN
+        IF NOT(COPYSTR(pContainerCode,i,1) IN ['0'..'9']) THEN
+          ERROR(TEXT002,pContainerCode);
+        i := i+1;
+      END;
+      //<<001 TPZ2911
+    END;
+
+    BEGIN
+    {
+      001 TPZ2911 RPS 08/26/2020 - Add validation for ASN Manifest upload |Procurement
+    }
+    END.
+  }
+}
+

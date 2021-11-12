@@ -1,0 +1,2243 @@
+OBJECT Codeunit 23044514 IWX Reservation Mgmt.2
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/24/20;
+    Time=[ 4:47:47 PM];
+    Version List=IWX2.4.7684.0;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 6550=rimd;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      cuCreateResEntry@1000000001 : Codeunit 99000830;
+      recItem@1000000000 : Record 27;
+      recReservationEntry@1000000002 : Record 337;
+      tc001@1000000004 : TextConst 'ENU=Cannot create negative tracking entries.;ENC=Cannot create negative tracking entries.';
+      tc002@1000000003 : TextConst 'ENU=Serial Number: %1 has already been entered.;ENC=Serial Number: %1 has already been entered.';
+      tc003@1000000005 : TextConst 'ENU=You cannot define item tracking on this line because it is linked to production order %1.;ENC=You cannot define item tracking on this line because it is linked to production order %1.';
+      cuCommonBase@1000000006 : Codeunit 23044519;
+      tcAssemblyOrderNotSupported@1000000007 : TextConst 'ENU=NAV 2009R2 does not support assembly orders.;ESM=NAV 2009R2 no es compatible con las ¢rdenes de montaje.;FRC=NAV 2009R2 ne prend pas en charge les commandes de montage.;ENC=NAV 2009R2 does not support assembly orders.';
+      tcNotShippedLotSerial@1000000008 : TextConst 'ENU=The entered Lot :%1, Serial: %2  is not shipped lot/serial.;ESM=El Lote ingresado: %1, Serie:%2 no se env¡a lote/serie.;FRC=Le lot saisi: %1, s‚rie: %2 n''est pas un lot/s‚rie exp‚di‚.;ENC=The entered Lot :%1, Serial: %2  is not shipped lot/serial.';
+
+    PROCEDURE AddRemoveReclassTracking@1000000003(precItemJnlLine@1000000002 : Record 83;psSerialNumber@1000000001 : Text;psLotNumber@1000000005 : Text;pdChangeQty@1000000006 : Decimal;pcodUOM@1000000007 : Code[10];pdtExpirationDate@1000000008 : Date);
+    VAR
+      ldExistingQuantity@1000000000 : Decimal;
+      lrecItemLedgerEntry@1000000003 : Record 32;
+      litemTrackingMgt@1000000004 : Codeunit 6500;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds/Removes Reclass journal item tracking entries.
+      //</Summary>
+      //<Author>R.Trudeau</Author>
+      //<Date>10/27/2010</Date>
+      //<Issue></Issue>
+      //<Version>IWX1.0</Version>
+      //////////////////////////////////////////////
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+      // ensure actually requires reservation entries
+      recItem.GET(precItemJnlLine."Item No.");
+      recItem.TESTFIELD("Item Tracking Code");
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+          EXIT;
+
+      // make sure quantity specified
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      //<IW author="Howie Zhao" date="10/19/16" issue="TFS2699" >
+      pdChangeQty := cuCommonBase.ConvertUnitOfMeasure(
+        recItem,
+        pdChangeQty,  // input (from quantity)
+        pcodUOM,      // from unit of measure
+        recItem."Base Unit of Measure" // to unit of measure
+         );
+
+      //
+      // get the existing reservation entries and sum up the quantities
+      // delete the entries once totaled
+      //
+      ldExistingQuantity := 0;
+      recReservationEntry.RESET;
+      recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Prospect);
+      recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+      recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+      recReservationEntry.SETRANGE("Location Code",precItemJnlLine."Location Code");
+      recReservationEntry.SETRANGE("Source Type",DATABASE::"Item Journal Line");
+      recReservationEntry.SETRANGE("Source ID",precItemJnlLine."Journal Template Name");
+      recReservationEntry.SETRANGE("Source Batch Name",precItemJnlLine."Journal Batch Name");
+      recReservationEntry.SETRANGE("Source Ref. No.",precItemJnlLine."Line No.");
+      IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ldExistingQuantity := ldExistingQuantity + ABS(recReservationEntry."Qty. to Handle (Base)"); //<IW author="h.z" date="03/19/2019" issue="TFS4480" />
+        UNTIL(recReservationEntry.NEXT=0);
+
+        recReservationEntry.DELETEALL;
+      END
+      ELSE BEGIN
+        IF( pdChangeQty < 0 ) THEN // do not allow 'negative' reclasses
+          ERROR(tc001);
+      END;
+
+      // determine the new total
+      IF( ldExistingQuantity <> 0 ) THEN BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          pdChangeQty := ldExistingQuantity - ABS(pdChangeQty)
+        ELSE
+          pdChangeQty := pdChangeQty + ldExistingQuantity;
+      END;
+
+      // possible that the decrease in quantity causes the last entry to be negated thus
+      // don't and a 0 one back in
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdChangeQty > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+      //
+      // Create the reservation
+      //
+
+      cuCreateResEntry.SetNewSerialLotNo(psSerialNumber,psLotNumber);
+
+      // set the new expiration date if required
+      IF (pdtExpirationDate <> 0D) THEN BEGIN
+        cuCreateResEntry.SetNewExpirationDate(pdtExpirationDate);
+      END ELSE BEGIN
+        lrecItemLedgerEntry.SETRANGE("Lot No.",psLotNumber);
+        lrecItemLedgerEntry.SETRANGE("Serial No.",psSerialNumber);
+        lrecItemLedgerEntry.SETRANGE("Location Code",precItemJnlLine."Location Code");
+        lrecItemLedgerEntry.SETRANGE("Item No.",precItemJnlLine."Item No.");
+        lrecItemLedgerEntry.SETRANGE("Variant Code",precItemJnlLine."Variant Code");
+        lrecItemLedgerEntry.SETFILTER("Remaining Quantity",'>%1',0);
+        lrecItemLedgerEntry.SETFILTER("Expiration Date",'<>%1',0D);
+        IF( lrecItemLedgerEntry.FINDFIRST ) THEN BEGIN
+          cuCreateResEntry.SetNewExpirationDate(lrecItemLedgerEntry."Expiration Date");
+        END;
+      END;
+
+      cuCreateResEntry.CreateReservEntryFor(
+        DATABASE::"Item Journal Line",              // ForType (option)
+        4,                                          // ForSubType (integer)
+        precItemJnlLine."Journal Template Name",    // ForID (code)
+        precItemJnlLine."Journal Batch Name",       // ForBatchName (code)
+        0,                                          // ForProdOrderLine (integer)
+        precItemJnlLine."Line No.",                 // ForRefNo (integer)
+        precItemJnlLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+        pdChangeQty / precItemJnlLine."Qty. per Unit of Measure",   // Quantity (decimal)
+        pdChangeQty,                                // QuantityBase (decimal)
+        psSerialNumber,                           // ForSerialNo (Code)
+        psLotNumber                               // ForLotNo (Code)
+      );
+
+
+      cuCreateResEntry.CreateEntry(
+        precItemJnlLine."Item No.",         // ItemNo (code)
+        precItemJnlLine."Variant Code",     // VariantCode (code)
+        precItemJnlLine."Location Code",    // LocationCode (code)
+        precItemJnlLine.Description,      // Description (text)
+        TODAY,              // ExpectedReceiptDate (Date)
+        0D,                 // ShipmentDate (Date)
+        0,                  // TransferredFromEntryNo (integer)
+        3                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+      );
+    END;
+
+    PROCEDURE AddRemovePurchaseTracking@1000000004(precPurchLine@1000000002 : Record 39;psSerialNumber@1000000001 : Text;psLotNumber@1000000005 : Text;pdChangeQty@1000000006 : Decimal;pcodUOM@1000000007 : Code[10];pdtExpirationDate@1000000003 : Date);
+    VAR
+      ldExistingQuantity@1000000000 : Decimal;
+      ldtExpirationDate@1000000004 : Date;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds/Removes Purchase Line item tracking entries.
+      //</Summary>
+      //<Author>R.Trudeau</Author>
+      //<Date>10/27/2010</Date>
+      //<Issue></Issue>
+      //<Version>IWX1.0</Version>
+      //////////////////////////////////////////////
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+
+      precPurchLine.TESTFIELD(Type,precPurchLine.Type::Item);
+      precPurchLine.TESTFIELD("No.");
+      IF precPurchLine."Prod. Order No." <> '' THEN
+        ERROR(tc003,precPurchLine."Prod. Order No.");
+
+      precPurchLine.TESTFIELD("Quantity (Base)");
+
+      // ensure actually requires reservation entries
+      recItem.GET(precPurchLine."No.");
+      recItem.TESTFIELD("Item Tracking Code");
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      //<IW author="Howie Zhao" date="05/17/16" issue="TFS2594" >
+      pdChangeQty := cuCommonBase.ConvertUnitOfMeasure(
+        recItem,
+        pdChangeQty,  // input (from quantity)
+        pcodUOM,      // from unit of measure
+        recItem."Base Unit of Measure" // to unit of measure
+         );
+
+      //
+      // get the existing reservation entries and sum up the quantities
+      // delete the entries once totaled
+      //
+      ldExistingQuantity := 0;
+      recReservationEntry.RESET;
+      recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Surplus);
+      recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+      recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+      recReservationEntry.SETRANGE("Location Code",precPurchLine."Location Code");
+      recReservationEntry.SETRANGE("Source Type",DATABASE::"Purchase Line");
+      recReservationEntry.SETRANGE("Source ID",precPurchLine."Document No.");
+      recReservationEntry.SETRANGE("Source Ref. No.",precPurchLine."Line No.");
+      IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ldExistingQuantity := ldExistingQuantity + ABS(recReservationEntry."Qty. to Handle (Base)");
+        UNTIL(recReservationEntry.NEXT=0);
+
+        recReservationEntry.DELETEALL;
+      END
+      ELSE BEGIN
+        IF( pdChangeQty < 0 ) THEN  // do not allow 'negative'
+          ERROR(tc001);
+      END;
+
+      // determine the new total
+      IF( ldExistingQuantity <> 0 ) THEN BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          pdChangeQty := ldExistingQuantity - ABS(pdChangeQty)
+        ELSE
+          pdChangeQty := pdChangeQty + ldExistingQuantity;
+      END;
+
+
+      // possible that the decrease in quantity causes the last entry to be negated thus
+      // don't and a 0 one back in
+      IF( pdChangeQty = 0) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdChangeQty > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+
+      //
+      // Create the reservation
+      //
+      cuCreateResEntry.CreateReservEntryFor(
+        DATABASE::"Purchase Line",      // ForType (option)
+        1,                              // ForSubType (integer)
+        precPurchLine."Document No.",   // ForID (code)
+        '',                             // ForBatchName (code)
+        0,                              // ForProdOrderLine (integer)
+        precPurchLine."Line No.",       // ForRefNo (integer)
+        precPurchLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+        pdChangeQty / precPurchLine."Qty. per Unit of Measure", // Quantity (decimal)      //
+        pdChangeQty,
+        psSerialNumber,               // ForSerialNo (Code)
+        psLotNumber                   // ForLotNo (Code)
+      );
+
+      IF( pdtExpirationDate <> 0D ) THEN BEGIN
+        cuCreateResEntry.SetDates(0D, pdtExpirationDate);
+      END;
+
+
+      cuCreateResEntry.CreateEntry(
+        precPurchLine."No.",              // ItemNo (code)
+        precPurchLine."Variant Code",     // VariantCode (code)
+        precPurchLine."Location Code",    // LocationCode (code)
+        precPurchLine.Description,      // Description (text)
+        TODAY,              // ExpectedReceiptDate (Date)
+        0D,                 // ShipmentDate (Date)
+        0,                  // TransferredFromEntryNo (integer)
+        2                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+      );
+    END;
+
+    PROCEDURE AddRemoveSalesShipTracking@1000000002(precSalesLine@1000000003 : Record 37;psSerialNumber@1000000002 : Text;psLotNumber@1000000001 : Text;pdChangeQty@1000000000 : Decimal;pcodUOM@1000000005 : Code[10];pdtExpirationDate@100000000 : Date;VAR precWarehouseActivityLine@1000000007 : Record 5767);
+    VAR
+      ldExistingQuantity@1000000004 : Decimal;
+      ldExistingQtyToHandleBase@1000000009 : Decimal;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds/Removes Sales Line item tracking entries (for shipment).
+      //</Summary>
+      //<Author>R.Trudeau</Author>
+      //<Date>10/27/2010</Date>
+      //<Issue></Issue>
+      //<Version>IWX1.0</Version>
+      //////////////////////////////////////////////
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+
+      precSalesLine.TESTFIELD(Type,precSalesLine.Type::Item);
+      precSalesLine.TESTFIELD("No.");
+      precSalesLine.TESTFIELD("Quantity (Base)");
+
+      // ensure actually requires reservation entries
+      recItem.GET(precSalesLine."No.");
+      recItem.TESTFIELD("Item Tracking Code");
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      RemoveReservedEntries(precSalesLine."Location Code", DATABASE::"Sales Line", precSalesLine."Document No.",
+                            precSalesLine."Line No.", precSalesLine."No.", psSerialNumber, psLotNumber); //<IW author="MM" date="02/20/2019" issue="TFS4435" />
+      recReservationEntry.RESET;
+
+      IF ((NOT precWarehouseActivityLine.ISEMPTY) AND (precWarehouseActivityLine."No." <> '')) THEN BEGIN
+        IF (pdChangeQty > 0) THEN BEGIN
+          recReservationEntry.RESET;
+          recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Surplus);
+          recReservationEntry.SETRANGE("Location Code",precSalesLine."Location Code");
+          recReservationEntry.SETRANGE("Source Type",DATABASE::"Sales Line");
+          recReservationEntry.SETRANGE("Source ID",precSalesLine."Document No.");
+          recReservationEntry.SETRANGE("Source Ref. No.",precSalesLine."Line No.");
+          IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+            REPEAT
+              ldExistingQtyToHandleBase := ldExistingQtyToHandleBase + ABS(recReservationEntry."Qty. to Handle (Base)");
+            UNTIL(recReservationEntry.NEXT=0);
+          END;
+
+          // IF pre-filled in item tracking lines, return
+          IF (ldExistingQtyToHandleBase >= precWarehouseActivityLine."Qty. to Handle (Base)") THEN
+            EXIT;
+        END;
+      END;
+
+      // convert the incoming quantity into the base quantity.
+      pdChangeQty := cuCommonBase.ConvertUnitOfMeasure(
+        recItem,
+        pdChangeQty,  // input (from quantity)
+        pcodUOM,      // from unit of measure
+        recItem."Base Unit of Measure" // to unit of measure  //<IW author="h.z" date="3/19/2019" issue="TFS4480" />
+         );
+
+      //
+      // get the existing reservation entries and sum up the quantities
+      // delete the entries once totaled
+      //
+      ldExistingQuantity := 0;
+      recReservationEntry.RESET;
+      recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Surplus);
+      recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+      recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+      recReservationEntry.SETRANGE("Location Code",precSalesLine."Location Code");
+      recReservationEntry.SETRANGE("Source Type",DATABASE::"Sales Line");
+      recReservationEntry.SETRANGE("Source ID",precSalesLine."Document No.");
+      recReservationEntry.SETRANGE("Source Ref. No.",precSalesLine."Line No.");
+
+      IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ldExistingQuantity := ldExistingQuantity + ABS(recReservationEntry."Qty. to Handle (Base)");
+        UNTIL(recReservationEntry.NEXT=0);
+
+        recReservationEntry.DELETEALL;
+      END
+      ELSE BEGIN
+        //IF( pdChangeQty < 0 ) THEN  // do not allow 'negative' reclasses
+        //  ERROR(tc001);
+        IF ( pdChangeQty < 0 ) THEN BEGIN
+          //
+          // This scenario can occur when a user has assigned a license plate,
+          // but removed the item tracking lines either manually or with a different
+          // process (can occur with Columbus vertical).
+          //
+          // Upon trying to remove the license plate lines, the lp reassignment
+          // will attempt to create negative entries, which will fail, which will
+          // prevent the user from correcting the mistake.
+          //
+          EXIT;
+        END;
+
+
+      END;
+
+      // determine the new total
+      IF( ldExistingQuantity <> 0 ) THEN BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          pdChangeQty := ldExistingQuantity - ABS(pdChangeQty)
+        ELSE
+          pdChangeQty := pdChangeQty + ldExistingQuantity;
+      END;
+
+
+      // possible that the decrease in quantity causes the last entry to be negated thus
+      // don't add a 0 one back in
+      IF( pdChangeQty = 0) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdChangeQty > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+
+      //
+      // Create the reservation
+      //
+      cuCreateResEntry.CreateReservEntryFor(
+        DATABASE::"Sales Line",         // ForType (option)
+        1,                              // ForSubType (integer)
+        precSalesLine."Document No.",   // ForID (code)
+        '',                             // ForBatchName (code)
+        0,                              // ForProdOrderLine (integer)
+        precSalesLine."Line No.",       // ForRefNo (integer)
+        precSalesLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+        pdChangeQty / precSalesLine."Qty. per Unit of Measure", // Quantity (decimal)
+        pdChangeQty,                  // QuantityBase (decimal)
+        psSerialNumber,               // ForSerialNo (Code)
+        psLotNumber                   // ForLotNo (Code)
+      );
+
+      IF( pdtExpirationDate <> 0D ) THEN BEGIN
+        cuCreateResEntry.SetDates(0D, pdtExpirationDate);
+      END;
+
+
+      cuCreateResEntry.CreateEntry(
+        precSalesLine."No.",              // ItemNo (code)
+        precSalesLine."Variant Code",     // VariantCode (code)
+        precSalesLine."Location Code",    // LocationCode (code)
+        precSalesLine.Description,      // Description (text)
+        TODAY,              // ExpectedReceiptDate (Date)
+        TODAY,              // ShipmentDate (Date)
+        0,                  // TransferredFromEntryNo (integer)
+        2                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+      );
+    END;
+
+    PROCEDURE AddRemoveWhseRecTracking@1000000000(precWhseReceiptLine@1000000003 : Record 7317;psSerialNumber@1000000002 : Text;psLotNumber@1000000001 : Text;pdChangeQty@1000000000 : Decimal;pdtExpirationDate@1000000005 : Date;pcodUOM@1000000007 : Code[10]);
+    VAR
+      ldExistingQuantity@1000000004 : Decimal;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds/Removes Whse. Receipt Line item tracking entries.
+      //</Summary>
+      //<Author>R.Trudeau</Author>
+      //<Date>10/27/2010</Date>
+      //<Issue></Issue>
+      //<Version>IWX1.0</Version>
+      //////////////////////////////////////////////
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+      precWhseReceiptLine.TESTFIELD("No.");
+      precWhseReceiptLine.TESTFIELD("Qty. (Base)");
+
+      // ensure actually requires reservation entries
+      recItem.GET(precWhseReceiptLine."Item No.");
+      recItem.TESTFIELD("Item Tracking Code");
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      IF( precWhseReceiptLine."Source Type" = DATABASE::"Transfer Line") THEN BEGIN
+        modifyWhseRecForTransferIn(precWhseReceiptLine, psSerialNumber, psLotNumber, pdChangeQty, pdtExpirationDate, pcodUOM);
+      END ELSE BEGIN
+        //<IW author="Howie Zhao" date="11/24/14" issue="TFS1554" >
+        pdChangeQty := cuCommonBase.ConvertUnitOfMeasure(
+          recItem,
+          pdChangeQty,  // input (from quantity)
+          pcodUOM,      // from unit of measure
+          recItem."Base Unit of Measure" // to unit of measure  //<IW author="h.z" date="3/19/2019" issue="TFS4480" />
+           );
+         //<IW>
+
+        //
+        // get the existing reservation entries and sum up the quantities
+        // delete the entries once totaled
+        //
+        ldExistingQuantity := 0;
+        recReservationEntry.RESET;
+        recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Surplus);
+        recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+        recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+        recReservationEntry.SETRANGE("Location Code",precWhseReceiptLine."Location Code");
+        recReservationEntry.SETRANGE("Source Type",precWhseReceiptLine."Source Type");
+        recReservationEntry.SETRANGE("Source ID",precWhseReceiptLine."Source No.");
+        recReservationEntry.SETRANGE("Source Ref. No.",precWhseReceiptLine."Source Line No.");
+
+        IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+          REPEAT
+            ldExistingQuantity := ldExistingQuantity + ABS(recReservationEntry."Qty. to Handle (Base)");
+          UNTIL(recReservationEntry.NEXT=0);
+
+          recReservationEntry.DELETEALL;
+        END
+        ELSE BEGIN
+          IF( pdChangeQty < 0 ) THEN
+            ERROR(tc001);
+        END;
+
+        // determine the new total
+        IF( ldExistingQuantity <> 0 ) THEN BEGIN
+          IF( pdChangeQty < 0 ) THEN
+            pdChangeQty := ldExistingQuantity - ABS(pdChangeQty)
+          ELSE
+            pdChangeQty := pdChangeQty + ldExistingQuantity;
+        END;
+
+
+        // possible that the decrease in quantity causes the last entry to be negated thus
+        // don't add a 0 one back in
+        IF( pdChangeQty = 0) THEN
+          EXIT;
+
+        // limit serialized parts to 1
+        IF( (pdChangeQty > 1) AND (psSerialNumber <> '')) THEN
+          ERROR(tc002, psSerialNumber);
+
+
+        //
+        // Create the reservation
+        //
+        cuCreateResEntry.CreateReservEntryFor(
+          precWhseReceiptLine."Source Type",      // ForType (option)
+          precWhseReceiptLine."Source Subtype",   // ForSubType (integer)
+          precWhseReceiptLine."Source No.",       // ForID (code)
+          '',                                     // ForBatchName (code)
+          0,                                      // ForProdOrderLine (integer)
+          precWhseReceiptLine."Source Line No.",         // ForRefNo (integer)
+          precWhseReceiptLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+          pdChangeQty / precWhseReceiptLine."Qty. per Unit of Measure", // Quantity (decimal)
+          pdChangeQty,                  // QuantityBase (decimal)
+          psSerialNumber,               // ForSerialNo (Code)
+          psLotNumber                   // ForLotNo (Code)
+        );
+
+        //IF( precWhseReceiptLine."Source Document" = precWhseReceiptLine."Source Document"::"Purchase Order" ) THEN BEGIN
+          //<IW author="h.z" date="02/19/15" issue="TFS1646" />
+          IF( pdtExpirationDate <> 0D ) THEN BEGIN
+            //<IW author="h.z" date="02/19/15" issue="TFS1646" />
+            cuCreateResEntry.SetDates(0D, pdtExpirationDate);
+          END;
+        //END;
+
+
+        cuCreateResEntry.CreateEntry(
+          precWhseReceiptLine."Item No.",              // ItemNo (code)
+          precWhseReceiptLine."Variant Code",     // VariantCode (code)
+          precWhseReceiptLine."Location Code",    // LocationCode (code)
+          precWhseReceiptLine.Description,      // Description (text)
+          TODAY,              // ExpectedReceiptDate (Date)
+          0D,                 // ShipmentDate (Date)
+          0,                  // TransferredFromEntryNo (integer)
+          2                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+        );
+      END;
+    END;
+
+    PROCEDURE AddRemoveWhseShipTracking@1000000005(precWhseShipmentLine@1000000003 : Record 7321;psSerialNumber@1000000002 : Text;psLotNumber@1000000001 : Text;pdChangeQty@1000000000 : Decimal;pcodUOM@1000000005 : Code[10];pdtExpirationDate@100000000 : Date);
+    VAR
+      ldExistingQuantity@1000000004 : Decimal;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds/Removes Whse. Shipment Line item tracking entries.
+      //</Summary>
+      //<Author>R.Trudeau</Author>
+      //<Date>12/21/2010</Date>
+      //<Issue></Issue>
+      //<Version>IWX1.0</Version>
+      //////////////////////////////////////////////
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+      precWhseShipmentLine.TESTFIELD("No.");
+      precWhseShipmentLine.TESTFIELD("Qty. (Base)");
+
+      // ensure actually requires reservation entries
+      recItem.GET(precWhseShipmentLine."Item No.");
+      recItem.TESTFIELD("Item Tracking Code");
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      //<IW author="Howie Zhao" date="11/7/2018" issue="TFS4308" >
+      RemoveReservedEntries(precWhseShipmentLine."Location Code", precWhseShipmentLine."Source Type",
+                            precWhseShipmentLine."Source No.", precWhseShipmentLine."Source Line No.",
+                            precWhseShipmentLine."Item No.", psSerialNumber, psLotNumber);
+      recReservationEntry.RESET;
+
+      //<IW author="Howie Zhao" date="11/21/14" issue="TFS1554" >
+      pdChangeQty := cuCommonBase.ConvertUnitOfMeasure(
+                                  recItem,
+                                  pdChangeQty,  // input (from quantity)
+                                  pcodUOM,      // from unit of measure
+                                  recItem."Base Unit of Measure" // to unit of measure
+                                  );
+
+      //
+      // get the existing reservation entries and sum up the quantities
+      // delete the entries once totaled
+      //
+      ldExistingQuantity := 0;
+      recReservationEntry.RESET;
+      recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Surplus);
+      recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+      recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+      recReservationEntry.SETRANGE("Location Code",precWhseShipmentLine."Location Code");
+      recReservationEntry.SETRANGE("Source Type",precWhseShipmentLine."Source Type");
+      recReservationEntry.SETRANGE("Source ID",precWhseShipmentLine."Source No.");
+      recReservationEntry.SETRANGE("Source Ref. No.",precWhseShipmentLine."Source Line No.");
+
+      IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ldExistingQuantity := ldExistingQuantity + ABS(recReservationEntry."Qty. to Handle (Base)");
+        UNTIL(recReservationEntry.NEXT=0);
+
+        recReservationEntry.DELETEALL;
+      END
+      ELSE BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          ERROR(tc001);
+      END;
+
+      // determine the new total
+      IF( ldExistingQuantity <> 0 ) THEN BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          pdChangeQty := ldExistingQuantity - ABS(pdChangeQty)
+        ELSE
+          pdChangeQty := pdChangeQty + ldExistingQuantity;
+      END;
+
+
+      // possible that the decrease in quantity causes the last entry to be negated thus
+      // don't add a 0 one back in
+      IF( pdChangeQty = 0) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdChangeQty > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+
+      //
+      // Create the reservation
+      //
+      cuCreateResEntry.CreateReservEntryFor(
+        precWhseShipmentLine."Source Type",      // ForType (option)
+        precWhseShipmentLine."Source Subtype",   // ForSubType (integer)
+        precWhseShipmentLine."Source No.",       // ForID (code)
+        '',                                     // ForBatchName (code)
+        0,                                      // ForProdOrderLine (integer)
+        precWhseShipmentLine."Source Line No.",         // ForRefNo (integer)
+        precWhseShipmentLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+        pdChangeQty / precWhseShipmentLine."Qty. per Unit of Measure", // Quantity (decimal)
+        pdChangeQty,                  // QuantityBase (decimal)
+        psSerialNumber,               // ForSerialNo (Code)
+        psLotNumber                   // ForLotNo (Code)
+      );
+
+      IF( pdtExpirationDate <> 0D ) THEN BEGIN
+        cuCreateResEntry.SetDates(0D, pdtExpirationDate);
+      END;
+
+
+      cuCreateResEntry.CreateEntry(
+        precWhseShipmentLine."Item No.",              // ItemNo (code)
+        precWhseShipmentLine."Variant Code",     // VariantCode (code)
+        precWhseShipmentLine."Location Code",    // LocationCode (code)
+        precWhseShipmentLine.Description,      // Description (text)
+        TODAY,              // ExpectedReceiptDate (Date)
+        TODAY,                 // ShipmentDate (Date)
+        0,                  // TransferredFromEntryNo (integer)
+        2                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+      );
+
+      IF( precWhseShipmentLine."Source Type" = DATABASE::"Transfer Line") THEN BEGIN
+        AddRemoveWhseRecTransferIn(precWhseShipmentLine, psSerialNumber, psLotNumber, pdChangeQty, pcodUOM);
+      END;
+    END;
+
+    PROCEDURE AddRemoveTransferTracking@1000000001(precTransferLine@1000000002 : Record 5741;psSerialNumber@1000000001 : Text;psLotNumber@1000000010 : Text;pbShipping@1000000006 : Boolean;pdChangeQty@1000000011 : Decimal;pdtExpirationDate@1000000007 : Date);
+    VAR
+      lrecItem@1000000005 : Record 27;
+      loptDirection@1000000003 : 'Outbound,Inbound';
+      ldExistingQuantity@1000000000 : Decimal;
+    BEGIN
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+      precTransferLine.TESTFIELD("Item No.");
+      precTransferLine.TESTFIELD("Quantity (Base)");
+
+      lrecItem.GET(precTransferLine."Item No.");
+      lrecItem.TESTFIELD("Item Tracking Code");
+
+      IF( pbShipping ) THEN BEGIN
+        AddRemoveInboundTransferTrack(precTransferLine, psSerialNumber, psLotNumber, pdChangeQty, pdtExpirationDate);
+        AddRemoveOutboundTransferTrack(precTransferLine, psSerialNumber, psLotNumber, pdChangeQty, pdtExpirationDate);
+      END
+      ELSE BEGIN
+        recReservationEntry.SETRANGE(Positive,TRUE);
+        recReservationEntry.SETRANGE("Item No.", precTransferLine."Item No.");
+        recReservationEntry.SETRANGE("Location Code", precTransferLine."Transfer-to Code");
+        recReservationEntry.SETRANGE("Source ID", precTransferLine."Document No.");
+        //recReservationEntry.SETRANGE("Source Ref. No.",precTransferLine."Line No.");
+        recReservationEntry.SETRANGE("Source Prod. Order Line",precTransferLine."Line No.");
+        recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+        recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+
+        IF (NOT recReservationEntry.FINDFIRST) THEN BEGIN
+          ERROR(tcNotShippedLotSerial, psLotNumber, psSerialNumber);
+        END;
+
+        ldExistingQuantity :=  ABS(recReservationEntry."Qty. to Handle (Base)");
+
+        pdChangeQty := pdChangeQty * precTransferLine."Qty. per Unit of Measure";
+
+        // determine the new total
+        IF( ldExistingQuantity <> 0 ) THEN BEGIN
+          IF( pdChangeQty < 0 ) THEN
+            pdChangeQty := ldExistingQuantity - ABS(pdChangeQty)
+          ELSE
+            pdChangeQty := pdChangeQty + ldExistingQuantity;
+        END;
+
+
+        //<IW author="h.z" date="02/19/15" issue="TFS1646" />
+        IF( pdtExpirationDate <> 0D ) THEN BEGIN
+          //<IW author="h.z" date="02/19/15" issue="TFS1646" />
+          recReservationEntry."Expiration Date" := pdtExpirationDate;
+        END;
+
+        IF (pdChangeQty > recReservationEntry."Quantity (Base)") THEN BEGIN
+          pdChangeQty := recReservationEntry."Quantity (Base)";
+        END;
+
+        recReservationEntry.VALIDATE("Qty. to Handle (Base)", pdChangeQty);
+        recReservationEntry.VALIDATE("Qty. to Invoice (Base)",recReservationEntry."Qty. to Handle (Base)");
+        recReservationEntry.MODIFY(TRUE);
+      END;
+    END;
+
+    PROCEDURE AddOutputTracking@1000000007(precItemJnlLine@1000000002 : Record 83;psSerialNumber@1000000001 : Text;psLotNumber@1000000005 : Text;pdQuantity@1000000006 : Decimal;pdtExpirationDate@1000000003 : Date);
+    VAR
+      ldExistingQuantity@1000000000 : Decimal;
+      lrecItemTrackingCode@1000000008 : Record 6502;
+      lrecItem@1000000007 : Record 27;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds Output item tracking entries.
+      //</Summary>
+      //<Author>R.Trudeau</Author>
+      //<Date>03/07/12</Date>
+      //<Issue></Issue>
+      //<Version>IWX1.4</Version>
+      //////////////////////////////////////////////
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+
+      precItemJnlLine.TESTFIELD("Item No.");
+      precItemJnlLine.TESTFIELD("Journal Template Name");
+      precItemJnlLine.TESTFIELD("Journal Batch Name");
+      precItemJnlLine.TESTFIELD("Order Type",precItemJnlLine."Order Type"::Production);
+      precItemJnlLine.TESTFIELD("Order No.");
+      precItemJnlLine.TESTFIELD("Order Line No.");
+
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdQuantity = 0 ) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdQuantity > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+
+      //
+      // Create the reservation
+      //
+      cuCreateResEntry.CreateReservEntryFor(
+        DATABASE::"Item Journal Line",              // ForType (option)
+        6,                                          // ForSubType (integer)
+        precItemJnlLine."Journal Template Name",    // ForID (code)
+        precItemJnlLine."Journal Batch Name",       // ForBatchName (code)
+        0,                                          // ForProdOrderLine (integer)
+        precItemJnlLine."Line No.",                 // ForRefNo (integer)
+        precItemJnlLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+        pdQuantity,                                 // Quantity (decimal)
+        // 0,
+        pdQuantity * precItemJnlLine."Qty. per Unit of Measure", // QuantityBase (decimal)
+        psSerialNumber,                           // ForSerialNo (Code)
+        psLotNumber                               // ForLotNo (Code)
+      );
+
+      //<IW author="R.Trudeau" date="11/18/14" issue="TFS1393" >
+      // if no expiration date provided try to auto-create one
+      //<IW author="h.z" date="02/19/15" issue="TFS1646" />
+      IF( pdtExpirationDate = 0D ) THEN BEGIN
+        lrecItem.GET(precItemJnlLine."Item No.");
+        lrecItemTrackingCode.GET(lrecItem."Item Tracking Code");
+        IF( lrecItemTrackingCode."Man. Expir. Date Entry Reqd." ) THEN BEGIN
+          cuCreateResEntry.SetDates(0D, CALCDATE(lrecItem."Expiration Calculation",TODAY));
+        END;
+      END
+      ELSE BEGIN
+        //IF( psExpirationDate <> '' ) THEN BEGIN
+        cuCreateResEntry.SetDates(0D,pdtExpirationDate);
+      END;
+
+
+
+
+      cuCreateResEntry.CreateEntry(
+        precItemJnlLine."Item No.",         // ItemNo (code)
+        precItemJnlLine."Variant Code",     // VariantCode (code)
+        precItemJnlLine."Location Code",    // LocationCode (code)
+        precItemJnlLine.Description,        // Description (text)
+        TODAY,              // ExpectedReceiptDate (Date)
+        0D,                 // ShipmentDate (Date)
+        0,                  // TransferredFromEntryNo (integer)
+        3                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+      );
+    END;
+
+    PROCEDURE AddRemoveInvtPickPutAwayTrack@1000000006(precActivityLine@1000000000 : Record 5767;psSerialNumber@1000000001 : Text;psLotNumber@1000000002 : Text;pdChangeQty@1000000003 : Decimal;pdtExpirationDate@1000000004 : Date);
+    VAR
+      ldExistingQuantity@1000000005 : Decimal;
+      ldtExpirationDate@1000000006 : Date;
+      lrecPurchLine@1000000007 : Record 39;
+      lrecSalesLine@1000000008 : Record 37;
+      lrecItemJnlLine@1000000010 : Record 83;
+      lprodOrderComp@1000000009 : Record 5407;
+      lrecProdOrderLine@1000000011 : Record 5406;
+      lrecTransferLine@1000000012 : Record 5741;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds Output item tracking entries.
+      //</Summary>
+      //<Author>Howie Zhao</Author>
+      //<Date>12/23/12</Date>
+      //<Issue></Issue>
+      //<Version>IWX1.5</Version>
+      //////////////////////////////////////////////
+
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+      IF ((precActivityLine."Activity Type" <> precActivityLine."Activity Type"::"Invt. Pick") AND
+          (precActivityLine."Activity Type" <> precActivityLine."Activity Type"::"Invt. Put-away")) THEN
+        EXIT;
+
+      precActivityLine.TESTFIELD("No.");
+
+      // ensure actually requires reservation entries
+      recItem.GET(precActivityLine."Item No.");
+      recItem.TESTFIELD("Item Tracking Code");
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      CASE precActivityLine."Source Document" OF
+        precActivityLine."Source Document"::"Sales Order":
+          BEGIN
+            lrecSalesLine.GET(lrecSalesLine."Document Type"::Order, precActivityLine."Source No.", precActivityLine."Source Line No.");
+            //<IW author="t.dimsdale" date="11/20/14" issue="TFS1554" >
+            // Added unit of measure code on the pick line.
+            // Note: it's possible for the pick uom to be differeant than the sales line uom
+            AddRemoveSalesShipTracking(lrecSalesLine, psSerialNumber, psLotNumber, pdChangeQty,
+                                       precActivityLine."Unit of Measure Code",
+                                       pdtExpirationDate,
+                                       precActivityLine);  //<IW author="h.z" date="02/24/16" issue="TFS2292" />
+            //</IW>
+          END;
+        precActivityLine."Source Document"::"Purchase Order":
+          BEGIN
+            lrecPurchLine.GET(lrecPurchLine."Document Type"::Order, precActivityLine."Source No.", precActivityLine."Source Line No.");
+            // Because purchase order already fixed by changing quantity to base quantity
+            // we convert quantity to base quantity
+            // pdChangeQty := cuCommonBase.ConvertUnitOfMeasure(
+            //                      recItem,
+            //                      pdChangeQty,  // input (from quantity)
+            //                      lrecPurchLine."Unit of Measure Code", // from unit of measure
+            //                      recItem."Base Unit of Measure"      // to unit of measure
+            //                      );
+            // Comment out by TFS2594
+            //<IW author="Howie Zhao" date="05/17/16" issue="TFS2594" >
+            AddRemovePurchaseTracking(lrecPurchLine, psSerialNumber, psLotNumber, pdChangeQty, precActivityLine."Unit of Measure Code", pdtExpirationDate);  //<IW author="h.z" date="10/19/16" issue="TFS2699" />
+            //</IW>
+          END;
+        precActivityLine."Source Document"::"Prod. Consumption":
+          BEGIN
+            lprodOrderComp.GET(precActivityLine."Source Subtype",      // activity line::source sub type ( 3 == released)
+                               precActivityLine."Source No.",          // activity line :: source no.
+                               precActivityLine."Source Line No.",     // activity line :: source line no.
+                               precActivityLine."Source Subline No."); // activity line :: source subline no.
+            AddRemoveProdConsumptionTrack(lprodOrderComp, psSerialNumber, psLotNumber, pdChangeQty, pdtExpirationDate);
+          END;
+        precActivityLine."Source Document"::"Prod. Output":
+          BEGIN
+            lrecItemJnlLine.SETRANGE("Order Type", lrecItemJnlLine."Order Type"::Production);
+            lrecItemJnlLine.SETRANGE("Order No.", precActivityLine."Source No.");
+            lrecItemJnlLine.SETRANGE("Order Line No.", precActivityLine."Source Line No.");
+            lrecItemJnlLine.SETRANGE("Item No.", precActivityLine."Item No.");
+            IF (lrecItemJnlLine.FIND('-')) THEN BEGIN
+              AddOutputTracking(lrecItemJnlLine, psSerialNumber, psLotNumber, pdChangeQty, pdtExpirationDate);
+            END ELSE BEGIN
+              lrecProdOrderLine.GET(lrecProdOrderLine.Status::Released, precActivityLine."Source No.", precActivityLine."Source Line No.");
+              AddRemoveProductionTracking(lrecProdOrderLine, psSerialNumber, psLotNumber, pdChangeQty, pdtExpirationDate, precActivityLine."Qty. to Handle", precActivityLine."Unit of Measure Code");
+            END;
+          END;
+        precActivityLine."Source Document"::"Outbound Transfer":
+          BEGIN
+            lrecTransferLine.GET(precActivityLine."Source No.", precActivityLine."Source Line No.");
+            AddRemoveTransferTracking(lrecTransferLine, psSerialNumber, psLotNumber, TRUE, pdChangeQty, pdtExpirationDate);
+          END;
+        precActivityLine."Source Document"::"Inbound Transfer":
+          BEGIN
+            lrecTransferLine.GET(precActivityLine."Source No.", precActivityLine."Source Line No.");
+            AddRemoveTransferTracking(lrecTransferLine, psSerialNumber, psLotNumber, FALSE, pdChangeQty, pdtExpirationDate);
+          END;
+      END; // end case
+    END;
+
+    PROCEDURE AddRemoveProdConsumptionTrack@1000000008(VAR prodOrderComp@1000000000 : Record 5407;psSerialNumber@1000000004 : Text;psLotNumber@1000000003 : Text;pdQuantity@1000000002 : Decimal;pdtExpirationDate@1000000001 : Date);
+    VAR
+      loptCurrentStatus@1000000006 : 'Reservation,Tracking,Surplus,Prospect';
+      ldExistingQuantity@1000000007 : Decimal;
+      litemTrackingMgt@1000000008 : Codeunit 6500;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds product consumption item tracking entries.
+      //</Summary>
+      //<Author>Howie Zhao</Author>
+      //<Date>14/01/10</Date>
+      //<Issue>TFS871</Issue>
+      //<Version>IWX1.5</Version>
+      //////////////////////////////////////////////
+      // ensure tracking info supplied
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdQuantity = 0 ) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdQuantity > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+      //<IW author="Howie Zhao" date="11/12/15" issue="TFS2060" >
+      recReservationEntry.RESET;
+      recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Reservation);
+      recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+      recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+      recReservationEntry.SETRANGE("Location Code",prodOrderComp."Location Code");
+      recReservationEntry.SETRANGE("Source Type",DATABASE::"Prod. Order Component");
+      recReservationEntry.SETRANGE("Source ID",prodOrderComp."Prod. Order No.");
+      recReservationEntry.SETRANGE("Source Ref. No.",prodOrderComp."Line No.");
+      IF (recReservationEntry.FINDSET(TRUE)) THEN BEGIN
+        // Found specific lot/serial which was created by nav, update quantity to handle(base);
+        recReservationEntry.VALIDATE("Qty. to Handle (Base)", recReservationEntry."Qty. to Handle (Base)" - pdQuantity);
+        recReservationEntry.VALIDATE("Qty. to Invoice (Base)", recReservationEntry."Qty. to Invoice (Base)" - pdQuantity);
+        recReservationEntry.MODIFY;
+      END ELSE BEGIN
+        //
+        // get the existing reservation entries and sum up the quantities
+        // delete the entries once totaled
+        //
+        ldExistingQuantity := 0;
+        recReservationEntry.RESET;
+        recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Surplus);
+        recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+        recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+        recReservationEntry.SETRANGE("Location Code",prodOrderComp."Location Code");
+        recReservationEntry.SETRANGE("Source Type",DATABASE::"Prod. Order Component");
+        recReservationEntry.SETRANGE("Source ID",prodOrderComp."Prod. Order No.");
+        recReservationEntry.SETRANGE("Source Ref. No.",prodOrderComp."Line No.");
+
+        IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+          REPEAT
+            ldExistingQuantity := ldExistingQuantity + ABS(recReservationEntry."Qty. to Handle (Base)");
+          UNTIL(recReservationEntry.NEXT=0);
+
+          recReservationEntry.DELETEALL;
+        END
+        ELSE BEGIN
+          IF( pdQuantity < 0 ) THEN
+            ERROR(tc001);
+        END;
+
+        // determine the new total
+        IF( ldExistingQuantity <> 0 ) THEN BEGIN
+          IF( pdQuantity < 0 ) THEN
+            pdQuantity := ldExistingQuantity - ABS(pdQuantity)
+          ELSE
+            pdQuantity := pdQuantity + ldExistingQuantity;
+        END;
+
+        IF (pdQuantity = 0) THEN
+          EXIT;
+
+        //
+        // Create the reservation
+        //
+
+        IF litemTrackingMgt.IsOrderNetworkEntity(DATABASE::"Prod. Order Component", prodOrderComp.Status)
+        THEN
+          loptCurrentStatus := loptCurrentStatus::Surplus
+        ELSE
+          loptCurrentStatus := loptCurrentStatus::Prospect;
+
+        cuCreateResEntry.CreateReservEntryFor(
+          DATABASE::"Prod. Order Component",              // ForType (option)
+          prodOrderComp.Status,                         // ForSubType (integer)
+          prodOrderComp."Prod. Order No.",                // ForID (code)
+          '',                                             // ForBatchName (code)
+          prodOrderComp."Prod. Order Line No.",         // ForProdOrderLine (integer)
+          prodOrderComp."Line No.",                     // ForRefNo (integer)
+          prodOrderComp."Qty. per Unit of Measure",     // ForQtyPerUOM (integer)
+          pdQuantity / prodOrderComp."Qty. per Unit of Measure",  // Quantity (decimal)
+          pdQuantity,                               // QuantityBase (decimal)
+          psSerialNumber,                           // ForSerialNo (Code)
+          psLotNumber                               // ForLotNo (Code)
+        );
+
+        //<IW author="h.z" date="02/19/15" issue="TFS1646" />
+        IF( pdtExpirationDate <> 0D ) THEN BEGIN
+          cuCreateResEntry.SetDates(0D, pdtExpirationDate);
+        END;
+
+        cuCreateResEntry.CreateEntry(
+          prodOrderComp."Item No.",       // ItemNo (code)
+          prodOrderComp."Variant Code",   // VariantCode (code)
+          prodOrderComp."Location Code",  // LocationCode (code)
+          prodOrderComp.Description,      // Description (text)
+          TODAY,                          // ExpectedReceiptDate (Date)
+          0D,                             // ShipmentDate (Date)
+          0,                              // TransferredFromEntryNo (integer)
+          loptCurrentStatus               // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+        );
+      END;
+    END;
+
+    PROCEDURE AddRemoveWhseReclassTracking@1000000009(precWhseJnlLine@1000000002 : Record 7311;psSerialNumber@1000000001 : Text;psLotNumber@1000000005 : Text;pdChangeQtyInWhseUOM@1000000006 : Decimal;pdtExpirationDate@1000000010 : Date);
+    VAR
+      ldExistingQuantity@1000000000 : Decimal;
+      lrecItemLedgerEntry@1000000003 : Record 32;
+      litemTrackingMgt@1000000004 : Codeunit 6500;
+      lrecWhseItemTrackingLine@1000000007 : Record 6550;
+      liNextEntryNo@1000000008 : Integer;
+      ldChangeQtyInBaseUom@1000000009 : Decimal;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds/Removes Whse. Reclass journal item tracking entries.
+      //</Summary>
+      //<Author>R.Trudeau</Author>
+      //<Date>21/02/2014</Date>
+      //<Issue>TFS1129</Issue>
+      //<Version>IW14.02</Version>
+      //////////////////////////////////////////////
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+      // ensure actually requires reservation entries
+      recItem.GET(precWhseJnlLine."Item No.");
+      recItem.TESTFIELD("Item Tracking Code");
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+
+
+      // make sure quantity specified
+      IF( pdChangeQtyInWhseUOM = 0 ) THEN
+        EXIT;
+
+      //<IW author="t.dimsdale" date="02/27/14" issue="TFS1144" >
+      // determine base quanity
+      //Changed to calc base qty
+      //ldChangeQtyInBaseUom := precWhseJnlLine.CalcQty( pdChangeQtyInWhseUOM );
+      ldChangeQtyInBaseUom := precWhseJnlLine."Qty. per Unit of Measure" * pdChangeQtyInWhseUOM;
+
+
+      //
+      // get the existing tracking lines and sum up the quantities
+      // delete the lines once totaled
+      //
+      ldExistingQuantity := 0;
+      lrecWhseItemTrackingLine.RESET;
+      //recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Prospect);
+      lrecWhseItemTrackingLine.SETRANGE("Lot No.",psLotNumber);
+      lrecWhseItemTrackingLine.SETRANGE("Serial No.",psSerialNumber);
+      lrecWhseItemTrackingLine.SETRANGE("Location Code",precWhseJnlLine."Location Code");
+      lrecWhseItemTrackingLine.SETRANGE("Source Type",DATABASE::"Warehouse Journal Line");
+
+      lrecWhseItemTrackingLine.SETRANGE("Source ID",precWhseJnlLine."Journal Batch Name");
+      lrecWhseItemTrackingLine.SETRANGE("Source Batch Name",precWhseJnlLine."Journal Template Name");
+      lrecWhseItemTrackingLine.SETRANGE("Source Ref. No.",precWhseJnlLine."Line No.");
+      IF( lrecWhseItemTrackingLine.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ldExistingQuantity := ldExistingQuantity + ABS(lrecWhseItemTrackingLine."Quantity (Base)");
+        UNTIL(lrecWhseItemTrackingLine.NEXT=0);
+
+        lrecWhseItemTrackingLine.DELETEALL;
+      END
+      ELSE BEGIN
+        IF( ldChangeQtyInBaseUom < 0 ) THEN // do not allow 'negative' reclasses
+          ERROR(tc001);
+      END;
+
+      // determine the new total
+      IF( ldExistingQuantity <> 0 ) THEN BEGIN
+        IF( ldChangeQtyInBaseUom < 0 ) THEN
+          ldChangeQtyInBaseUom := ldExistingQuantity - ABS(ldChangeQtyInBaseUom)
+        ELSE
+          ldChangeQtyInBaseUom := ldChangeQtyInBaseUom + ldExistingQuantity;
+      END;
+
+      // possible that the decrease in quantity causes the last entry to be negated thus
+      // don't and a 0 one back in
+      IF( ldChangeQtyInBaseUom = 0 ) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (ldChangeQtyInBaseUom > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+      liNextEntryNo := 1;
+      lrecWhseItemTrackingLine.RESET;
+      IF( lrecWhseItemTrackingLine.FINDLAST ) THEN
+        liNextEntryNo := lrecWhseItemTrackingLine."Entry No." + 1;
+
+      lrecWhseItemTrackingLine.RESET;
+      lrecWhseItemTrackingLine.INIT;
+      lrecWhseItemTrackingLine."Entry No." := liNextEntryNo;
+      lrecWhseItemTrackingLine.VALIDATE("Item No.",precWhseJnlLine."Item No.");
+      lrecWhseItemTrackingLine.VALIDATE("Location Code",precWhseJnlLine."Location Code");
+      lrecWhseItemTrackingLine.VALIDATE("Quantity (Base)", ldChangeQtyInBaseUom);
+      lrecWhseItemTrackingLine.VALIDATE("Qty. per Unit of Measure",precWhseJnlLine."Qty. per Unit of Measure");
+      //lrecWhseItemTrackingLine.VALIDATE("Qty. per Unit of Measure",1);  //<IW author="h.z" date="10/20/16" issue="TFS2699" />
+      lrecWhseItemTrackingLine.VALIDATE("Source Type",DATABASE::"Warehouse Journal Line");
+
+      lrecWhseItemTrackingLine.VALIDATE("Source ID",precWhseJnlLine."Journal Batch Name");
+      lrecWhseItemTrackingLine.VALIDATE("Source Batch Name",precWhseJnlLine."Journal Template Name");
+      lrecWhseItemTrackingLine.VALIDATE("Source Ref. No.",precWhseJnlLine."Line No.");
+      IF psSerialNumber <> '' THEN BEGIN
+        lrecWhseItemTrackingLine.VALIDATE("Serial No.",psSerialNumber);
+        lrecWhseItemTrackingLine.VALIDATE("New Serial No.",psSerialNumber);
+      END;
+
+      //<IW author="t.dimsdale" date="2/27/2014" issue="TFS1144" >
+      // Note: cannot use original change quantity (in the unit of measure on the line), because
+      //       it may have been altered.
+      lrecWhseItemTrackingLine.VALIDATE("Qty. to Handle (Base)", ldChangeQtyInBaseUom);
+      //lrecWhseItemTrackingLine.VALIDATE("Qty. to Handle", (pdChangeQty * precWhseJnlLine."Qty. per Unit of Measure"));
+      IF psLotNumber <> '' THEN BEGIN
+        lrecWhseItemTrackingLine.VALIDATE("Lot No.",psLotNumber);
+        lrecWhseItemTrackingLine.VALIDATE("New Lot No.",psLotNumber);
+      END;
+
+      lrecWhseItemTrackingLine.VALIDATE("Variant Code",precWhseJnlLine."Variant Code");
+
+      IF (pdtExpirationDate <> 0D) THEN BEGIN
+        lrecWhseItemTrackingLine.VALIDATE("Expiration Date", pdtExpirationDate);
+      END;
+      lrecWhseItemTrackingLine.INSERT(TRUE);
+    END;
+
+    PROCEDURE AddRemoveItemJournalTracking@1000000011(precItemJnlLine@1000000002 : Record 83;psSerialNumber@1000000001 : Text;psLotNumber@1000000005 : Text;pdChangeQty@1000000006 : Decimal);
+    VAR
+      ldExistingQuantity@1000000000 : Decimal;
+      lrecItemLedgerEntry@1000000003 : Record 32;
+      litemTrackingMgt@1000000004 : Codeunit 6500;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds/Removes item journal tracking entries.
+      //</Summary>
+      //<Author>H.Zhao</Author>
+      //<Date>03/31/2014</Date>
+      //<Issue>TFS1217</Issue>
+      //<Version>IWX1.5</Version>
+      //////////////////////////////////////////////
+
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+
+      // ensure actually requires reservation entries
+      recItem.GET(precItemJnlLine."Item No.");
+      recItem.TESTFIELD("Item Tracking Code");
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+
+      pdChangeQty := pdChangeQty * precItemJnlLine."Qty. per Unit of Measure";
+
+      //
+      // get the existing reservation entries and sum up the quantities
+      // delete the entries once totaled
+      //
+      ldExistingQuantity := 0;
+      recReservationEntry.RESET;
+      recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Prospect);
+      recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+      recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+      recReservationEntry.SETRANGE("Location Code",precItemJnlLine."Location Code");
+      recReservationEntry.SETRANGE("Source Type",DATABASE::"Item Journal Line");
+      recReservationEntry.SETRANGE("Source ID",precItemJnlLine."Journal Template Name");
+      recReservationEntry.SETRANGE("Source Batch Name",precItemJnlLine."Journal Batch Name");
+      recReservationEntry.SETRANGE("Source Ref. No.",precItemJnlLine."Line No.");
+      IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ldExistingQuantity := ldExistingQuantity + ABS(recReservationEntry."Qty. to Handle (Base)");
+        UNTIL(recReservationEntry.NEXT=0);
+
+        recReservationEntry.DELETEALL;
+      END
+      ELSE BEGIN
+        IF( pdChangeQty < 0 ) THEN // do not allow 'negative' reclasses
+          ERROR(tc001);
+      END;
+
+      // determine the new total
+      IF( ldExistingQuantity <> 0 ) THEN BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          pdChangeQty := ldExistingQuantity - ABS(pdChangeQty)
+        ELSE
+          pdChangeQty := pdChangeQty + ldExistingQuantity;
+      END;
+
+      // possible that the decrease in quantity causes the last entry to be negated thus
+      // don't and a 0 one back in
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdChangeQty > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+      //
+      // Create the reservation
+      //
+
+      cuCreateResEntry.SetNewSerialLotNo(psSerialNumber,psLotNumber);
+
+      // set the new expiration date if required
+      lrecItemLedgerEntry.SETRANGE("Lot No.",psLotNumber);
+      lrecItemLedgerEntry.SETRANGE("Serial No.",psSerialNumber);
+      lrecItemLedgerEntry.SETRANGE("Location Code",precItemJnlLine."Location Code");
+      lrecItemLedgerEntry.SETRANGE("Item No.",precItemJnlLine."Item No.");
+      lrecItemLedgerEntry.SETRANGE("Variant Code",precItemJnlLine."Variant Code");
+      lrecItemLedgerEntry.SETFILTER("Remaining Quantity",'>%1',0);
+      lrecItemLedgerEntry.SETFILTER("Expiration Date",'<>%1',0D);
+      IF( lrecItemLedgerEntry.FINDFIRST ) THEN BEGIN
+        cuCreateResEntry.SetNewExpirationDate(lrecItemLedgerEntry."Expiration Date");
+      END;
+
+      cuCreateResEntry.CreateReservEntryFor(
+        DATABASE::"Item Journal Line",              // ForType (option)
+        2,                                          // ForSubType (integer)
+        precItemJnlLine."Journal Template Name",    // ForID (code)
+        precItemJnlLine."Journal Batch Name",       // ForBatchName (code)
+        0,                                          // ForProdOrderLine (integer)
+        precItemJnlLine."Line No.",                 // ForRefNo (integer)
+        precItemJnlLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+        pdChangeQty / precItemJnlLine."Qty. per Unit of Measure",// Quantity (decimal)
+        pdChangeQty,                              // QuantityBase (decimal)
+        psSerialNumber,                           // ForSerialNo (Code)
+        psLotNumber                               // ForLotNo (Code)
+      );
+
+      cuCreateResEntry.CreateEntry(
+        precItemJnlLine."Item No.",         // ItemNo (code)
+        precItemJnlLine."Variant Code",     // VariantCode (code)
+        precItemJnlLine."Location Code",    // LocationCode (code)
+        precItemJnlLine.Description,      // Description (text)
+        TODAY,              // ExpectedReceiptDate (Date)
+        0D,                 // ShipmentDate (Date)
+        0,                  // TransferredFromEntryNo (integer)
+        3                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+      );
+    END;
+
+    PROCEDURE AddRemoveInboundTransferTrack@1000000014(precTransferLine@1000000002 : Record 5741;psSerialNumber@1000000001 : Text;psLotNumber@1000000010 : Text;pdChangeQty@1000000011 : Decimal;pdtExpirationDate@1000000007 : Date);
+    VAR
+      lrecItem@1000000005 : Record 27;
+      loptDirection@1000000003 : 'Outbound,Inbound';
+      ldExistingQuantity@1000000000 : Decimal;
+    BEGIN
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+      precTransferLine.TESTFIELD("Item No.");
+      precTransferLine.TESTFIELD("Quantity (Base)");
+
+      lrecItem.GET(precTransferLine."Item No.");
+      lrecItem.TESTFIELD("Item Tracking Code");
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      pdChangeQty := pdChangeQty * precTransferLine."Qty. per Unit of Measure";
+
+      recReservationEntry.SETRANGE(Positive, TRUE);
+      recReservationEntry.SETRANGE("Item No.", precTransferLine."Item No.");
+      recReservationEntry.SETRANGE("Location Code", precTransferLine."Transfer-to Code");
+      recReservationEntry.SETRANGE("Source ID", precTransferLine."Document No.");
+      recReservationEntry.SETRANGE("Source Ref. No.",precTransferLine."Line No.");
+      recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+      recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+
+      //
+      // get the existing reservation entries and sum up the quantities
+      // delete the entries once totaled
+      //
+      ldExistingQuantity := 0;
+
+      IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ldExistingQuantity := ldExistingQuantity + ABS(recReservationEntry."Qty. to Handle (Base)");
+        UNTIL(recReservationEntry.NEXT=0);
+
+        recReservationEntry.DELETEALL;
+      END
+      ELSE BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          ERROR(tc001);
+      END;
+
+      // determine the new total
+      IF( ldExistingQuantity <> 0 ) THEN BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          pdChangeQty := ldExistingQuantity - ABS(pdChangeQty)
+        ELSE
+          pdChangeQty := pdChangeQty + ldExistingQuantity;
+      END;
+
+
+      // possible that the decrease in quantity causes the last entry to be negated thus
+      // don't add a 0 one back in
+      IF( pdChangeQty = 0) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdChangeQty > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+
+      //
+      // Create the reservation
+      //
+      cuCreateResEntry.CreateReservEntryFor(
+        DATABASE::"Transfer Line",      // ForType (option)
+        1,   // ForSubType (integer)      inbound
+        precTransferLine."Document No.",       // ForID (code)
+        '',                                     // ForBatchName (code)
+        0,                                      // ForProdOrderLine (integer)
+        precTransferLine."Line No.",         // ForRefNo (integer)
+        precTransferLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+        pdChangeQty / precTransferLine."Qty. per Unit of Measure", // Quantity (decimal)
+        pdChangeQty,                  // QuantityBase (decimal)
+        psSerialNumber,               // ForSerialNo (Code)
+        psLotNumber                   // ForLotNo (Code)
+      );
+
+
+
+      //IF( precWhseReceiptLine."Source Document" = precWhseReceiptLine."Source Document"::"Purchase Order" ) THEN BEGIN
+        //<IW author="h.z" date="02/19/15" issue="TFS1646" />
+        IF( pdtExpirationDate <> 0D ) THEN BEGIN
+          //<IW author="h.z" date="02/19/15" issue="TFS1646" />
+          cuCreateResEntry.SetDates(0D, pdtExpirationDate);
+        END;
+      //END;
+
+      cuCreateResEntry.CreateEntry(
+        precTransferLine."Item No.",              // ItemNo (code)
+        precTransferLine."Variant Code",     // VariantCode (code)
+        precTransferLine."Transfer-to Code",    // LocationCode (code)
+        precTransferLine.Description,      // Description (text)
+        TODAY,              // ExpectedReceiptDate (Date)
+        0D,                 // ShipmentDate (Date)
+        0,                  // TransferredFromEntryNo (integer)
+        2);                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+    END;
+
+    PROCEDURE AddRemoveOutboundTransferTrack@1000000016(precTransferLine@1000000002 : Record 5741;psSerialNumber@1000000001 : Text;psLotNumber@1000000010 : Text;pdChangeQty@1000000011 : Decimal;pdtExpirationDate@1000000007 : Date);
+    VAR
+      lrecItem@1000000005 : Record 27;
+      loptDirection@1000000003 : 'Outbound,Inbound';
+      ldExistingQuantity@1000000000 : Decimal;
+    BEGIN
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+      precTransferLine.TESTFIELD("Item No.");
+      precTransferLine.TESTFIELD("Quantity (Base)");
+
+      lrecItem.GET(precTransferLine."Item No.");
+      lrecItem.TESTFIELD("Item Tracking Code");
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      pdChangeQty := pdChangeQty * precTransferLine."Qty. per Unit of Measure";
+
+      recReservationEntry.SETRANGE(Positive, FALSE);
+      recReservationEntry.SETRANGE("Item No.", precTransferLine."Item No.");
+      recReservationEntry.SETRANGE("Location Code", precTransferLine."Transfer-from Code");
+      recReservationEntry.SETRANGE("Source ID", precTransferLine."Document No.");
+      recReservationEntry.SETRANGE("Source Ref. No.",precTransferLine."Line No.");
+      recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+      recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+
+      //
+      // get the existing reservation entries and sum up the quantities
+      // delete the entries once totaled
+      //
+      ldExistingQuantity := 0;
+
+      IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ldExistingQuantity := ldExistingQuantity + ABS(recReservationEntry."Qty. to Handle (Base)");
+        UNTIL(recReservationEntry.NEXT=0);
+
+        recReservationEntry.DELETEALL;
+      END
+      ELSE BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          ERROR(tc001);
+      END;
+
+      // determine the new total
+      IF( ldExistingQuantity <> 0 ) THEN BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          pdChangeQty := ABS(ldExistingQuantity) - ABS(pdChangeQty)
+        ELSE
+          pdChangeQty := pdChangeQty + ABS(ldExistingQuantity);
+      END;
+
+
+      // possible that the decrease in quantity causes the last entry to be negated thus
+      // don't add a 0 one back in
+      IF( pdChangeQty = 0) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdChangeQty > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+
+      //
+      // Create the reservation
+      //
+      cuCreateResEntry.CreateReservEntryFor(
+        DATABASE::"Transfer Line",      // ForType (option)
+        0,   // ForSubType (integer)      outbound
+        precTransferLine."Document No.",       // ForID (code)
+        '',                                     // ForBatchName (code)
+        0,                                      // ForProdOrderLine (integer)
+        precTransferLine."Line No.",         // ForRefNo (integer)
+        precTransferLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+        pdChangeQty / precTransferLine."Qty. per Unit of Measure", // Quantity (decimal)
+        pdChangeQty,                  // QuantityBase (decimal)
+        psSerialNumber,               // ForSerialNo (Code)
+        psLotNumber                   // ForLotNo (Code)
+      );
+
+
+      //IF( precWhseReceiptLine."Source Document" = precWhseReceiptLine."Source Document"::"Purchase Order" ) THEN BEGIN
+        //<IW author="h.z" date="02/19/15" issue="TFS1646" />
+        IF( pdtExpirationDate <> 0D ) THEN BEGIN
+          //<IW author="h.z" date="02/19/15" issue="TFS1646" />
+          cuCreateResEntry.SetDates(0D, pdtExpirationDate);
+        END;
+      //END;
+
+
+      cuCreateResEntry.CreateEntry(
+        precTransferLine."Item No.",              // ItemNo (code)
+        precTransferLine."Variant Code",     // VariantCode (code)
+        precTransferLine."Transfer-from Code",    // LocationCode (code)
+        precTransferLine.Description,      // Description (text)
+        0D,              // ExpectedReceiptDate (Date)
+        TODAY,                 // ShipmentDate (Date)
+        0,                  // TransferredFromEntryNo (integer)
+        2);                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+    END;
+
+    PROCEDURE AddRemovePurchaseReturnTrack@1000000010(precPurchLine@1000000002 : Record 39;psSerialNumber@1000000001 : Text;psLotNumber@1000000005 : Text;pdChangeQty@1000000006 : Decimal;pdtExpirationDate@1000000003 : Date);
+    VAR
+      ldExistingQuantity@1000000000 : Decimal;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds/Removes Purchase Return Line item tracking entries.
+      //</Summary>
+      //<Author>H.Zhao</Author>
+      //<Date>05/01/2015</Date>
+      //<Issue>TFS1577</Issue>
+      //<Version>IWX1.5</Version>
+      //////////////////////////////////////////////
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+      precPurchLine.TESTFIELD(Type,precPurchLine.Type::Item);
+      precPurchLine.TESTFIELD("No.");
+      IF precPurchLine."Prod. Order No." <> '' THEN
+        ERROR(tc003,precPurchLine."Prod. Order No.");
+
+      precPurchLine.TESTFIELD("Quantity (Base)");
+
+      // ensure actually requires reservation entries
+      recItem.GET(precPurchLine."No.");
+      recItem.TESTFIELD("Item Tracking Code");
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      pdChangeQty := pdChangeQty * precPurchLine."Qty. per Unit of Measure";
+
+      //
+      // get the existing reservation entries and sum up the quantities
+      // delete the entries once totaled
+      //
+      ldExistingQuantity := 0;
+      recReservationEntry.RESET;
+      recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Surplus);
+      recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+      recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+      recReservationEntry.SETRANGE("Location Code",precPurchLine."Location Code");
+      recReservationEntry.SETRANGE("Source Type",DATABASE::"Purchase Line");
+      recReservationEntry.SETRANGE("Source ID",precPurchLine."Document No.");
+      recReservationEntry.SETRANGE("Source Ref. No.",precPurchLine."Line No.");
+      recReservationEntry.SETRANGE(Positive, FALSE);
+      IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ldExistingQuantity := ldExistingQuantity + ABS(recReservationEntry."Qty. to Handle (Base)");
+        UNTIL(recReservationEntry.NEXT=0);
+
+        recReservationEntry.DELETEALL;
+      END
+      ELSE BEGIN
+        IF( pdChangeQty < 0 ) THEN  // do not allow 'negative'
+          ERROR(tc001);
+      END;
+
+      // determine the new total
+      IF( ldExistingQuantity <> 0 ) THEN BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          pdChangeQty := ldExistingQuantity - ABS(pdChangeQty)
+        ELSE
+          pdChangeQty := pdChangeQty + ldExistingQuantity;
+      END;
+
+
+      // possible that the decrease in quantity causes the last entry to be negated thus
+      // don't and a 0 one back in
+      IF( pdChangeQty = 0) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdChangeQty > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+
+      //
+      // Create the reservation
+      //
+      cuCreateResEntry.CreateReservEntryFor(
+        DATABASE::"Purchase Line",      // ForType (option)
+        5,                              // ForSubType (integer)
+        precPurchLine."Document No.",   // ForID (code)
+        '',                             // ForBatchName (code)
+        0,                              // ForProdOrderLine (integer)
+        precPurchLine."Line No.",       // ForRefNo (integer)
+        precPurchLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+        pdChangeQty / precPurchLine."Qty. per Unit of Measure",   // Quantity (decimal)      //
+        pdChangeQty,                  // QuantityBase (decimal)
+        psSerialNumber,               // ForSerialNo (Code)
+        psLotNumber                   // ForLotNo (Code)
+      );
+
+
+      //<IW author="h.z" date="02/19/15" issue="TFS1646" />
+      IF( pdtExpirationDate <> 0D ) THEN BEGIN
+        //<IW author="h.z" date="02/19/15" issue="TFS1646" />
+        cuCreateResEntry.SetDates(0D,pdtExpirationDate);
+      END;
+
+
+      cuCreateResEntry.CreateEntry(
+        precPurchLine."No.",              // ItemNo (code)
+        precPurchLine."Variant Code",     // VariantCode (code)
+        precPurchLine."Location Code",    // LocationCode (code)
+        precPurchLine.Description,      // Description (text)
+        TODAY,              // ExpectedReceiptDate (Date)
+        0D,                 // ShipmentDate (Date)
+        0,                  // TransferredFromEntryNo (integer)
+        2                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+      );
+    END;
+
+    PROCEDURE AddRemoveWhseRecTransferIn@1000000015(precWhseShipmentLine@1000000004 : Record 7321;psSerialNumber@1000000003 : Text;psLotNumber@1000000002 : Text;pdChangeQty@1000000001 : Decimal;pcodUOM@1000000000 : Code[10]);
+    VAR
+      ldExistingQuantity@1000000005 : Decimal;
+      lcodLocationCode@1000000006 : Code[20];
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds/Removes warehouse shipment on transfer reservation entries.
+      //</Summary>
+      //<Author>H.Zhao</Author>
+      //<Date>16/03/2015</Date>
+      //<Issue>TFS1655</Issue>
+      //<Version>IWX1.5</Version>
+      //////////////////////////////////////////////
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+      precWhseShipmentLine.TESTFIELD("No.");
+      precWhseShipmentLine.TESTFIELD("Qty. (Base)");
+
+      // ensure actually requires reservation entries
+      recItem.GET(precWhseShipmentLine."Item No.");
+      recItem.TESTFIELD("Item Tracking Code");
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      //<IW author="Howie Zhao" date="11/21/14" issue="TFS1554" >
+      // convert the incoming quantity into
+      pdChangeQty := cuCommonBase.ConvertUnitOfMeasure(
+                                  recItem,
+                                  pdChangeQty,  // input (from quantity)
+                                  pcodUOM,      // from unit of measure
+                                  recItem."Base Unit of Measure" // to unit of measure
+                                  );
+      // the needed document line unit of measure quantity.
+      // Everything after this point, pdChangeQty is now
+      // in the UOM of the source sales line.
+      //
+
+      //
+      // get the existing reservation entries and sum up the quantities
+      // delete the entries once totaled
+      //
+      IF (precWhseShipmentLine."Destination Type" = precWhseShipmentLine."Destination Type"::Location) THEN BEGIN
+        lcodLocationCode := precWhseShipmentLine."Destination No.";
+      END;
+
+      ldExistingQuantity := 0;
+      recReservationEntry.RESET;
+      recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Surplus);
+      recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+      recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+      recReservationEntry.SETRANGE("Location Code", lcodLocationCode);
+      recReservationEntry.SETRANGE("Source Type",precWhseShipmentLine."Source Type");
+      recReservationEntry.SETRANGE("Source ID",precWhseShipmentLine."Source No.");
+      recReservationEntry.SETRANGE("Source Ref. No.",precWhseShipmentLine."Source Line No.");
+      recReservationEntry.SETRANGE(Positive,TRUE);
+
+      IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ldExistingQuantity := ldExistingQuantity + ABS(recReservationEntry."Qty. to Handle (Base)");
+        UNTIL(recReservationEntry.NEXT=0);
+
+        recReservationEntry.DELETEALL;
+      END
+      ELSE BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          ERROR(tc001);
+      END;
+
+      // determine the new total
+      IF( ldExistingQuantity <> 0 ) THEN BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          pdChangeQty := ldExistingQuantity - ABS(pdChangeQty)
+        ELSE
+          pdChangeQty := pdChangeQty + ldExistingQuantity;
+      END;
+
+
+      // possible that the decrease in quantity causes the last entry to be negated thus
+      // don't add a 0 one back in
+      IF( pdChangeQty = 0) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdChangeQty > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+
+      //
+      // Create the reservation
+      //
+      cuCreateResEntry.CreateReservEntryFor(
+        precWhseShipmentLine."Source Type",      // ForType (option)
+        1,                                       // ForSubType (integer)
+        precWhseShipmentLine."Source No.",       // ForID (code)
+        '',                                     // ForBatchName (code)
+        0,                                      // ForProdOrderLine (integer)
+        precWhseShipmentLine."Source Line No.",         // ForRefNo (integer)
+        precWhseShipmentLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+        pdChangeQty / precWhseShipmentLine."Qty. per Unit of Measure", // Quantity (decimal)
+        pdChangeQty,                  // QuantityBase (decimal)
+        psSerialNumber,               // ForSerialNo (Code)
+        psLotNumber                   // ForLotNo (Code)
+      );
+
+      cuCreateResEntry.CreateEntry(
+        precWhseShipmentLine."Item No.",              // ItemNo (code)
+        precWhseShipmentLine."Variant Code",     // VariantCode (code)
+        lcodLocationCode,                // LocationCode (code)
+        precWhseShipmentLine.Description,      // Description (text)
+        TODAY,              // ExpectedReceiptDate (Date)
+        TODAY,                 // ShipmentDate (Date)
+        0,                  // TransferredFromEntryNo (integer)
+        2                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+      );
+    END;
+
+    PROCEDURE modifyWhseRecForTransferIn@1000000020(precWhseReceiptLine@1000000005 : Record 7317;psSerialNumber@1000000004 : Text;psLotNumber@1000000003 : Text;pdChangeQty@1000000002 : Decimal;pdtExpirationDate@1000000001 : Date;pcodUOM@1000000000 : Code[10]);
+    VAR
+      ldExistingQuantity@1000000006 : Decimal;
+      ldQuantityToHandleBase@1000000007 : Decimal;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // modify reservation entries for warehouse receipt from transfer.
+      //</Summary>
+      //<Author>H.Zhao</Author>
+      //<Date>16/03/2015</Date>
+      //<Issue>TFS1655</Issue>
+      //<Version>IWX1.5</Version>
+      //////////////////////////////////////////////
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+      // For transfer in, reservation entries should be already created on warehouse shipment.
+      // After post warehouse shipment, NAV will clear out quantity to handle (base), so we need to
+      // set quantity to handle (base) on warehouse receipt.
+
+      recItem.GET(precWhseReceiptLine."Item No.");
+
+      ldQuantityToHandleBase := cuCommonBase.ConvertUnitOfMeasure(
+        recItem,
+        pdChangeQty,  // input (from quantity)
+        pcodUOM,      // from unit of measure
+        recItem."Base Unit of Measure" // to unit of measure
+         );
+
+      ldExistingQuantity := 0;
+      recReservationEntry.RESET;
+      recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Surplus);
+      recReservationEntry.SETRANGE("Lot No.",psLotNumber);
+      recReservationEntry.SETRANGE("Serial No.",psSerialNumber);
+      recReservationEntry.SETRANGE("Location Code",precWhseReceiptLine."Location Code");
+      recReservationEntry.SETRANGE("Source Type",precWhseReceiptLine."Source Type");
+      recReservationEntry.SETRANGE("Source ID",precWhseReceiptLine."Source No.");
+      recReservationEntry.SETRANGE("Source Prod. Order Line",precWhseReceiptLine."Source Line No.");
+
+      IF (NOT recReservationEntry.FINDFIRST) THEN
+        ERROR(tcNotShippedLotSerial, psLotNumber, psSerialNumber);
+      recReservationEntry.VALIDATE("Qty. to Handle (Base)", recReservationEntry."Qty. to Handle (Base)" + ldQuantityToHandleBase);
+      recReservationEntry.MODIFY(TRUE);
+    END;
+
+    PROCEDURE AddRemoveAssemblyTracking@1000000012(precAssemblyLine@1000000003 : Record 901;psSerialNumber@1000000002 : Text;psLotNumber@1000000001 : Text;pdChangeQty@1000000000 : Decimal;pcodUOM@1000000005 : Code[10]);
+    VAR
+      ldExistingQuantity@1000000004 : Decimal;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds/Removes Assembly Line item tracking entries (assembly order).
+      //</Summary>
+      //<Author>Howie.Zhao</Author>
+      //<Date>01/22/2016</Date>
+      //<Issue>TFS2182</Issue>
+      //<Version>IWX1.5</Version>
+      //////////////////////////////////////////////
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+      // ensure actually requires reservation entries
+      recItem.GET(precAssemblyLine."No.");
+      recItem.TESTFIELD("Item Tracking Code");
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      pdChangeQty := cuCommonBase.ConvertUnitOfMeasure(
+        recItem,
+        pdChangeQty,  // input (from quantity)
+        pcodUOM,      // from unit of measure
+        recItem."Base Unit of Measure" // to unit of measure  //<IW author="h.z" date="3/19/2019" issue="TFS4480" />
+         );
+
+      //
+      // get the existing reservation entries and sum up the quantities
+      // delete the entries once totaled
+      //
+      ldExistingQuantity := 0;
+      recReservationEntry.RESET;
+      recReservationEntry.SETRANGE("Reservation Status",recReservationEntry."Reservation Status"::Surplus);
+      recReservationEntry.SETRANGE("Lot No.", psLotNumber);
+      recReservationEntry.SETRANGE("Serial No.", psSerialNumber);
+      recReservationEntry.SETRANGE("Location Code", precAssemblyLine."Location Code");
+      recReservationEntry.SETRANGE("Source Type",DATABASE::"Assembly Line");
+      recReservationEntry.SETRANGE("Source ID", precAssemblyLine."Document No.");
+      recReservationEntry.SETRANGE("Source Ref. No.", precAssemblyLine."Line No.");
+
+      IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ldExistingQuantity := ldExistingQuantity + ABS(recReservationEntry."Qty. to Handle (Base)");
+        UNTIL(recReservationEntry.NEXT=0);
+
+        recReservationEntry.DELETEALL;
+      END
+      ELSE BEGIN
+        IF ( pdChangeQty < 0 ) THEN BEGIN
+          EXIT;
+        END;
+      END;
+
+      // determine the new total
+      IF( ldExistingQuantity <> 0 ) THEN BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          pdChangeQty := ldExistingQuantity - ABS(pdChangeQty)
+        ELSE
+          pdChangeQty := pdChangeQty + ldExistingQuantity;
+      END;
+
+
+      // possible that the decrease in quantity causes the last entry to be negated thus
+      // don't add a 0 one back in
+      IF( pdChangeQty = 0) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdChangeQty > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+      //
+      // Create the reservation
+      //
+
+
+      cuCreateResEntry.CreateReservEntryFor(
+        DATABASE::"Assembly Line",         // ForType (option)
+        1,                              // ForSubType (integer)
+        precAssemblyLine."Document No.",   // ForID (code)
+        '',                             // ForBatchName (code)
+        0,                              // ForProdOrderLine (integer)
+        precAssemblyLine."Line No.",       // ForRefNo (integer)
+        precAssemblyLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+        pdChangeQty / precAssemblyLine."Qty. per Unit of Measure",  // Quantity (decimal)
+        pdChangeQty,                  // QuantityBase (decimal)
+        psSerialNumber,               // ForSerialNo (Code)
+        psLotNumber                   // ForLotNo (Code)
+      );
+
+
+      cuCreateResEntry.CreateEntry(
+        precAssemblyLine."No.",              // ItemNo (code)
+        precAssemblyLine."Variant Code",     // VariantCode (code)
+        precAssemblyLine."Location Code",    // LocationCode (code)
+        precAssemblyLine.Description,      // Description (text)
+        TODAY,              // ExpectedReceiptDate (Date)
+        TODAY,              // ShipmentDate (Date)
+        0,                  // TransferredFromEntryNo (integer)
+        2                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+      );
+    END;
+
+    PROCEDURE AddRemoveProductionTracking@1000000026(precProdOrderLine@1000000002 : Record 5406;psSerialNumber@1000000001 : Text;psLotNumber@1000000005 : Text;pdChangeQty@1000000006 : Decimal;pdtExpirationDate@1000000003 : Date;pdTotalQtyOnSourceLine@1000000007 : Decimal;pcodUOM@1000000008 : Code[10]);
+    VAR
+      ldExistingQuantity@1000000000 : Decimal;
+      ldExistingQtyToHandle@1000000004 : Decimal;
+      ldTotalQtyToHandlbeBase@1000000009 : Decimal;
+      lrecItem@1000000010 : Record 27;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Adds production item tracking entries.
+      //</Summary>
+      //<Author>R.Trudeau</Author>
+      //<Date>02/17/16</Date>
+      //<Issue>TFS2257</Issue>
+      //<Version>IWX1.5</Version>
+      //////////////////////////////////////////////
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      IF (pdChangeQty > 0) THEN BEGIN
+        lrecItem.GET( precProdOrderLine."Item No." );
+        ldTotalQtyToHandlbeBase := cuCommonBase.ConvertUnitOfMeasure(
+          lrecItem,
+          pdTotalQtyOnSourceLine,  // input (from quantity)
+          pcodUOM,      // from unit of measure
+          lrecItem."Base Unit of Measure" // to unit of measure
+           );
+
+        ldExistingQtyToHandle := 0;
+        recReservationEntry.RESET;
+        recReservationEntry.SETRANGE("Reservation Status", recReservationEntry."Reservation Status"::Surplus);
+        recReservationEntry.SETRANGE("Location Code", precProdOrderLine."Location Code");
+        recReservationEntry.SETRANGE("Source Type", DATABASE::"Prod. Order Line");
+        recReservationEntry.SETRANGE("Source ID", precProdOrderLine."Prod. Order No.");
+        recReservationEntry.SETRANGE("Source Prod. Order Line", precProdOrderLine."Line No.");
+        IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+          REPEAT
+            ldExistingQtyToHandle := ldExistingQtyToHandle + ABS(recReservationEntry."Qty. to Handle (Base)");
+          UNTIL(recReservationEntry.NEXT=0);
+        END;
+
+        // IF pre-filled in item tracking lines, return
+        IF (ldExistingQtyToHandle >= ldTotalQtyToHandlbeBase) THEN
+          EXIT;
+      END;
+
+      //
+      // get the existing reservation entries and sum up the quantities
+      // delete the entries once totaled
+      //
+      ldExistingQuantity := 0;
+      recReservationEntry.RESET;
+      recReservationEntry.SETRANGE("Reservation Status", recReservationEntry."Reservation Status"::Surplus);
+      recReservationEntry.SETRANGE("Lot No.", psLotNumber);
+      recReservationEntry.SETRANGE("Serial No.", psSerialNumber);
+      recReservationEntry.SETRANGE("Location Code", precProdOrderLine."Location Code");
+      recReservationEntry.SETRANGE("Source Type", DATABASE::"Prod. Order Line");
+      recReservationEntry.SETRANGE("Source ID", precProdOrderLine."Prod. Order No.");
+      recReservationEntry.SETRANGE("Source Prod. Order Line", precProdOrderLine."Line No.");
+
+      IF( recReservationEntry.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ldExistingQuantity := ldExistingQuantity + ABS(recReservationEntry."Qty. to Handle (Base)");
+        UNTIL(recReservationEntry.NEXT=0);
+
+        recReservationEntry.DELETEALL;
+      END ELSE BEGIN
+        IF ( pdChangeQty < 0 ) THEN BEGIN
+          EXIT;
+        END;
+      END;
+
+      // determine the new total
+      IF( ldExistingQuantity <> 0 ) THEN BEGIN
+        IF( pdChangeQty < 0 ) THEN BEGIN
+          pdChangeQty := ldExistingQuantity - ABS(pdChangeQty)
+        END ELSE BEGIN
+          //IF
+          pdChangeQty := pdChangeQty + ldExistingQuantity;
+        END;
+      END;
+
+      // possible that the decrease in quantity causes the last entry to be negated thus
+      // don't add a 0 one back in
+      IF( pdChangeQty = 0) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdChangeQty > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+      //
+      // Create the reservation
+      //
+      cuCreateResEntry.CreateReservEntryFor(
+        DATABASE::"Prod. Order Line",               // ForType (option)
+        3,                                          // ForSubType (integer)
+        precProdOrderLine."Prod. Order No.",        // ForID (code)
+        '',                                         // ForBatchName (code)
+        precProdOrderLine."Line No.",               // ForProdOrderLine (integer)
+        0,                                          // ForRefNo (integer)
+        precProdOrderLine."Qty. per Unit of Measure", // ForQtyPerUOM (integer)
+        pdChangeQty / precProdOrderLine."Qty. per Unit of Measure", // Quantity (decimal)
+        pdChangeQty,                                 // QuantityBase (decimal)
+        psSerialNumber,                           // ForSerialNo (Code)
+        psLotNumber                               // ForLotNo (Code)
+      );
+
+      IF( pdtExpirationDate <> 0D ) THEN BEGIN
+        cuCreateResEntry.SetDates(0D,pdtExpirationDate);
+      END;
+
+      cuCreateResEntry.CreateEntry(
+        precProdOrderLine."Item No.",         // ItemNo (code)
+        precProdOrderLine."Variant Code",     // VariantCode (code)
+        precProdOrderLine."Location Code",    // LocationCode (code)
+        precProdOrderLine.Description,        // Description (text)
+        TODAY,              // ExpectedReceiptDate (Date)
+        0D,                 // ShipmentDate (Date)
+        0,                  // TransferredFromEntryNo (integer)
+        2                   // Status (0==Reservation,1==Tracking,2==Surplus,3==Prospect)
+      );
+    END;
+
+    PROCEDURE AddRemoveWhseItemJournalTrack@1000000013(precWhseJnlLine@1000000002 : Record 7311;psSerialNumber@1000000001 : Text;psLotNumber@1000000005 : Text;pdChangeQty@1000000006 : Decimal;pdtExpirationDate@1000000009 : Date);
+    VAR
+      lrecWhseItemTrackingLine@1000000008 : Record 6550;
+      lcuCommonBase@1000000007 : Codeunit 23044519;
+      ldExistingQuantity@1000000000 : Decimal;
+      liNextEntryNo@1000000003 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Description: Creates warehouse item journal tracking entries.
+      //  Called From:
+      //  Side Effect: Deletes existing entry and will remake/combine them
+      //</FUNC>
+
+      psSerialNumber := UPPERCASE(psSerialNumber);
+      psLotNumber := UPPERCASE(psLotNumber);
+
+
+      // ensure tracking info supplied
+      IF( (psSerialNumber = '') AND (psLotNumber = '') ) THEN
+        EXIT;
+
+      // make sure quantity specified
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      pdChangeQty := pdChangeQty * precWhseJnlLine."Qty. per Unit of Measure";
+
+      // ensure actually requires item tracking
+      IF NOT lcuCommonBase.isWhseTracked(precWhseJnlLine."Item No.") THEN
+        EXIT;
+
+      //
+      // get the existing entries and sum up the quantities
+      // delete the entries once totaled
+      //
+      ldExistingQuantity := 0;
+      lrecWhseItemTrackingLine.RESET;
+      lrecWhseItemTrackingLine.SETRANGE("Location Code",precWhseJnlLine."Location Code");
+      lrecWhseItemTrackingLine.SETRANGE("Item No.",precWhseJnlLine."Item No.");
+      lrecWhseItemTrackingLine.SETRANGE("Variant Code",precWhseJnlLine."Variant Code");
+      lrecWhseItemTrackingLine.SETRANGE("Lot No.",psLotNumber);
+      lrecWhseItemTrackingLine.SETRANGE("Serial No.",psSerialNumber);
+      lrecWhseItemTrackingLine.SETRANGE("Source Type",DATABASE::"Warehouse Journal Line");
+      lrecWhseItemTrackingLine.SETRANGE("Source ID",precWhseJnlLine."Journal Template Name");
+      lrecWhseItemTrackingLine.SETRANGE("Source Batch Name",precWhseJnlLine."Journal Batch Name");
+      lrecWhseItemTrackingLine.SETRANGE("Source Ref. No.",precWhseJnlLine."Line No.");
+      IF( lrecWhseItemTrackingLine.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ldExistingQuantity := ldExistingQuantity + ABS(lrecWhseItemTrackingLine."Quantity (Base)");
+        UNTIL(lrecWhseItemTrackingLine.NEXT=0);
+
+        lrecWhseItemTrackingLine.DELETEALL;
+      END;
+
+      // determine the new total
+      IF( ldExistingQuantity <> 0 ) THEN BEGIN
+        IF( pdChangeQty < 0 ) THEN
+          pdChangeQty := ldExistingQuantity - ABS(pdChangeQty)
+        ELSE
+          pdChangeQty := pdChangeQty + ldExistingQuantity;
+      END;
+
+      // possible that the decrease in quantity causes the last entry to be negated thus
+      // don't and a 0 one back in
+      IF( pdChangeQty = 0 ) THEN
+        EXIT;
+
+      // limit serialized parts to 1
+      IF( (pdChangeQty > 1) AND (psSerialNumber <> '')) THEN
+        ERROR(tc002, psSerialNumber);
+
+      //
+      // Create the entry
+      //
+      liNextEntryNo := 1;
+      lrecWhseItemTrackingLine.RESET;
+      IF lrecWhseItemTrackingLine.FINDLAST THEN
+        liNextEntryNo := lrecWhseItemTrackingLine."Entry No." + 1;
+
+      lrecWhseItemTrackingLine.RESET;
+      lrecWhseItemTrackingLine.INIT;
+      lrecWhseItemTrackingLine."Entry No." := liNextEntryNo;
+      lrecWhseItemTrackingLine.VALIDATE("Location Code",precWhseJnlLine."Location Code");
+      lrecWhseItemTrackingLine.VALIDATE("Source Type",DATABASE::"Warehouse Journal Line");
+      lrecWhseItemTrackingLine.VALIDATE("Source ID",precWhseJnlLine."Journal Batch Name");
+      lrecWhseItemTrackingLine.VALIDATE("Source Batch Name",precWhseJnlLine."Journal Template Name");
+      lrecWhseItemTrackingLine.VALIDATE("Source Ref. No.",precWhseJnlLine."Line No.");
+      lrecWhseItemTrackingLine.VALIDATE("Item No.",precWhseJnlLine."Item No.");
+      lrecWhseItemTrackingLine.VALIDATE("Variant Code",precWhseJnlLine."Variant Code");
+      lrecWhseItemTrackingLine.VALIDATE("Lot No.",psLotNumber);
+      lrecWhseItemTrackingLine.VALIDATE("Serial No.",psSerialNumber);
+      lrecWhseItemTrackingLine.VALIDATE("Expiration Date",pdtExpirationDate);
+      lrecWhseItemTrackingLine.VALIDATE("Quantity (Base)",ABS(pdChangeQty));
+      lrecWhseItemTrackingLine.VALIDATE("Qty. to Handle (Base)",ABS(pdChangeQty));
+      lrecWhseItemTrackingLine."Buffer Status2" := 0;
+      lrecWhseItemTrackingLine.INSERT(TRUE);
+    END;
+
+    PROCEDURE RemoveReservedEntries@1000000017(pcodLocationCode@1000000000 : Code[10];piSourceType@1000000001 : Integer;pcodSourceID@1000000002 : Code[20];piSourceLineNo@1000000003 : Integer;pcodItemNumber@1000000011 : Text;psSerialNumber@1000000007 : Text;psLotNumber@1000000005 : Text);
+    VAR
+      lrecReservationEntry@1000000004 : Record 337;
+      lrecRelatedReservationEntry@1000000006 : Record 337;
+    BEGIN
+      //<FUNC>
+      //  Description: Find the reserved reservation entries and update
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+
+      lrecReservationEntry.SETFILTER("Reservation Status", '%1|%2', lrecReservationEntry."Reservation Status"::Reservation, lrecReservationEntry."Reservation Status"::Tracking);
+      lrecReservationEntry.SETRANGE("Item No.", pcodItemNumber);
+      lrecReservationEntry.SETRANGE("Location Code", pcodLocationCode);
+      lrecReservationEntry.SETRANGE("Source Type", piSourceType);
+      lrecReservationEntry.SETRANGE("Source ID", pcodSourceID);
+      lrecReservationEntry.SETFILTER("Serial No.", '%1|%2', psSerialNumber, '');
+      lrecReservationEntry.SETFILTER("Lot No.", '%1|%2', psLotNumber, '');
+      IF (piSourceType = DATABASE::"Prod. Order Line") THEN
+        lrecReservationEntry.SETRANGE("Source Prod. Order Line", piSourceLineNo)
+      ELSE
+        lrecReservationEntry.SETRANGE("Source Ref. No.", piSourceLineNo);
+
+      IF (lrecReservationEntry.FINDSET(TRUE)) THEN BEGIN
+        REPEAT
+          lrecRelatedReservationEntry.SETRANGE("Entry No.", lrecReservationEntry."Entry No.");
+          lrecRelatedReservationEntry.SETRANGE(Positive, NOT lrecReservationEntry.Positive);
+          lrecRelatedReservationEntry.DELETEALL(TRUE);
+        UNTIL (lrecReservationEntry.NEXT = 0);
+        lrecReservationEntry.DELETEALL;
+      END;
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+    }
+    END.
+  }
+}
+

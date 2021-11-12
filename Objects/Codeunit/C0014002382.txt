@@ -1,0 +1,978 @@
+OBJECT Codeunit 14002382 E.D.I. Create Purchase Doc.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/07/17;
+    Time=12:00:00 PM;
+    Version List=SE0.60.14;
+  }
+  PROPERTIES
+  {
+    TableNo=14002358;
+    OnRun=BEGIN
+            IF ("Navision Document" <> 'I_PURDOC')
+            THEN
+              ERROR(Text001,"Navision Document");
+
+            EDITemplate.GET("EDI Template Code");
+            SalesSetup.GET;
+            EDIRecDocHdr2.GET("Internal Doc. No.");
+            EDIRecDocHdr2."Document Processed" := FALSE;
+            IF EDIRecDocHdr2."Company Name" <> COMPANYNAME THEN
+              ERROR(
+                Text002,
+                EDIRecDocHdr2."Internal Doc. No.",EDIRecDocHdr2."Company Name",COMPANYNAME);
+
+            IF "Purch. Doc. Created" THEN BEGIN
+              CASE TRUE OF
+                EDIRecDocHdr2."Purchase Invoice Created":
+                  DocumentType := DocumentType::Invoice;
+                EDIRecDocHdr2."Purchase Order Created":
+                  DocumentType := DocumentType::Order;
+                EDIRecDocHdr2."Purch. Return Order Created":
+                  DocumentType := DocumentType::"Return Order";
+                EDIRecDocHdr2."Purchase Cr. Memo Created":
+                  DocumentType := DocumentType::"Credit Memo";
+                EDIRecDocHdr2."Purchase Quote Created":
+                  DocumentType := DocumentType::Quote;
+                ELSE
+                  DocumentType := DocumentType::Document;
+              END;
+              ConfirmMessage := STRSUBSTNO(Text003,DocumentType);
+              IF GUIALLOWED THEN BEGIN
+                IF NOT CONFIRM(
+                  ConfirmMessage +
+                  Text004)
+                THEN
+                  ERROR(Text005)
+                ELSE
+                  ClearStatusFields;
+              END ELSE
+                ERROR(Text005);
+            END;
+
+            EDITradePartner.GET(EDIRecDocHdr2."Trade Partner No.");
+
+            EDIDocument.GET(
+              EDIRecDocHdr2."Trade Partner No.",EDIRecDocHdr2."Navision Document",
+              EDIRecDocHdr2."EDI Document No.",EDIRecDocHdr2."EDI Version",EDIDocument.Type::Import);
+
+            EDISetup.GET;
+
+            EvaluateGenCrossRef := FALSE;
+            MapGenCrossRef := FALSE;
+
+            IF (EDISetup."Enable General Cross Ref.") THEN BEGIN
+              IF (EDITradePartner."Disable General Cross Ref.") THEN
+                EvaluateGenCrossRef := FALSE
+              ELSE BEGIN
+                MapGenCrossRef := TRUE;
+                IF (EDISetup."Eval. XRef at Doc. Import") THEN BEGIN
+                  IF EDIRecDocHdr."Gen. XRef Processed On Import" = FALSE THEN
+                    EvaluateGenCrossRef := TRUE;
+                END ELSE
+                  EvaluateGenCrossRef := TRUE;
+                IF EvaluateGenCrossRef THEN BEGIN
+                  CLEAR(EvaluateCrossReference);
+                  EvaluateCrossReference.AssignNAVCrossReference(EDIRecDocHdr2);
+                END;
+              END;
+            END ELSE
+              EvaluateGenCrossRef := FALSE;
+
+            IF EvaluateGenCrossRef THEN BEGIN
+              EDIRecDocHdr2.CALCFIELDS("General Cross Reference Error");
+              IF (EDIRecDocHdr2."General Cross Reference Error") THEN
+                ERROR(Text017);
+            END;
+
+            IF GUIALLOWED THEN BEGIN
+              ProgressWindow.OPEN(
+                Text006 +
+                Text007 +
+                Text008 +
+                Text009 +
+                Text010 +
+                Text011 +
+                Text012 +
+                Text013);
+              ProgressWindow.UPDATE(1,"Trade Partner No.");
+              ProgressWindow.UPDATE(3,"Internal Doc. No.");
+            END;
+
+            PurchaseHeader.RESET;
+            PurchaseHeader.SETRANGE("EDI Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            IF PurchaseHeader.FIND('-') THEN
+              REPEAT
+                PurchCommentLine.RESET;
+                PurchCommentLine.SETRANGE("Document Type",PurchaseHeader."Document Type");
+                PurchCommentLine.SETRANGE("No.",PurchaseHeader."No.");
+                PurchCommentLine.DELETEALL;
+              UNTIL PurchaseHeader.NEXT = 0;
+
+            CLEAR(PurchaseHeader);
+            CLEAR(PurchaseLine);
+
+            BuyfromVendor := '';
+            EDIBuyfromVendor := '';
+
+            IF EDITradePartner."Vendor No." <> '' THEN BEGIN
+              BuyfromVendor := EDITradePartner."Vendor No.";
+              PurchaseHeader."EDI Buy-from Code" := EDITradePartner."Vendor No.";
+            END ELSE BEGIN
+              EDIRecDocField.RESET;
+              EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+              EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+              EDIRecDocField.SETRANGE("NAV Table No.",DATABASE::"Purchase Header");
+              EDIRecDocField.SETRANGE("Nav Field No.",PurchaseHeader.FIELDNO("Buy-from Vendor No."));
+              IF EDIRecDocField.FIND('-') THEN BEGIN
+                EDIBuyfromVendor := COPYSTR(EDIRecDocField."Field Text Value",1,20);
+                IF EDIBuyfromVendor <> '' THEN BEGIN
+                  EDIVendCrossRef.RESET;
+                  EDIVendCrossRef.SETRANGE("EDI Buy-from Code",EDIBuyfromVendor);
+                  IF EDIVendCrossRef.FIND('-') THEN BEGIN
+                    BuyfromVendor := EDIVendCrossRef."Navision Buy-from Code";
+                    PurchaseHeader."EDI Buy-from Code" := EDIVendCrossRef."EDI Buy-from Code";
+                  END;
+                END;
+              END;
+            END;
+
+            IF NOT Vendor.GET(BuyfromVendor) THEN
+              ERROR(Text018,EDIBuyfromVendor,EDITradePartner."No.");
+            EDIRecDocHdr2."Vendor No." := Vendor."No.";
+            IF GUIALLOWED THEN
+              ProgressWindow.UPDATE(4,Vendor."No.");
+
+            // Locking to prevent Deadlocking
+            EDIRecDocHdr.LOCKTABLE;
+            EDIRecDocField.LOCKTABLE;
+            NoSeriesLine.LOCKTABLE;
+            PurchaseLine.LOCKTABLE;
+            PurchaseHeader.LOCKTABLE;
+
+            CASE EDIRecDocHdr2."EDI Document No." OF
+              '812','CREADV':
+                PurchaseHeader."Document Type" := PurchaseHeader."Document Type"::"Credit Memo";
+              '850','875','ORDERS','ORDERREQUEST':
+                PurchaseHeader."Document Type" := PurchaseHeader."Document Type"::Order;
+              '810','880','INVOIC':
+                PurchaseHeader."Document Type" := PurchaseHeader."Document Type"::Invoice;
+              '180','RETANN':
+                PurchaseHeader."Document Type" := PurchaseHeader."Document Type"::"Return Order";
+              '840','REQOTE':
+                PurchaseHeader."Document Type" := PurchaseHeader."Document Type"::Quote;
+             END;
+            IF EDIDocument."Document Type" <> EDIDocument."Document Type"::" " THEN
+              CASE EDIDocument."Document Type" OF
+                EDIDocument."Document Type"::Quote:
+                  PurchaseHeader."Document Type" := PurchaseHeader."Document Type"::Quote;
+                EDIDocument."Document Type"::Order:
+                  PurchaseHeader."Document Type" := PurchaseHeader."Document Type"::Order;
+                EDIDocument."Document Type"::Invoice:
+                  PurchaseHeader."Document Type" := PurchaseHeader."Document Type"::Invoice;
+                EDIDocument."Document Type"::"Cr. Memo":
+                  PurchaseHeader."Document Type" := PurchaseHeader."Document Type"::"Credit Memo";
+                EDIDocument."Document Type"::"Return Order":
+                  PurchaseHeader."Document Type" := PurchaseHeader."Document Type"::"Return Order";
+              END;
+
+            PurchaseHeader."No." := '';
+            PurchaseHeader.INSERT(TRUE);
+            PurchaseHeader.VALIDATE("Buy-from Vendor No.",BuyfromVendor);
+            PurchaseHeader."EDI Internal Doc. No." := EDIRecDocHdr2."Internal Doc. No.";
+            PurchaseHeader.VALIDATE("EDI Trade Partner",EDIRecDocHdr2."Trade Partner No.");
+            PurchaseHeader."EDI Order" := TRUE;
+            PurchaseHeader.MODIFY(TRUE);
+
+            MapPurchaseHdrFields;
+            PurchaseHeader.MODIFY(TRUE);
+
+            IF GUIALLOWED THEN
+              ProgressWindow.UPDATE(5,PurchaseHeader."Location Code");
+
+            LastItemNo := '';
+            LastVendItemNo := '';
+            LastItemCrossRefNo := '';
+            LastUnitCost := 0;
+            LastEDIUnitCost := 0;
+            LastQty := 0;
+            LastUOM := '';
+            GLAccountNo := '';
+
+            EDIRecDocField.RESET;
+            EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            EDIRecDocField.SETRANGE("NAV Table No.",DATABASE::"Purchase Line");
+            IF EDIRecDocField.FIND('-') THEN
+              REPEAT
+                IF (EDIRecDocField."Nav Field No." = PurchaseLine.FIELDNO("No.")) AND
+                   (EDIRecDocField."Line Type" = EDIRecDocField."Line Type"::" ")
+                THEN BEGIN
+                    LastItemNo := EDIRecDocField."Field Text Value";
+                    LastItemCrossRefNo := '';
+                    GLAccountNo := '';
+                END;
+                IF (EDIRecDocField."Nav Field No." = PurchaseLine.FIELDNO("No.")) AND
+                   (EDIRecDocField."Line Type" <> EDIRecDocField."Line Type"::" ")
+                THEN BEGIN
+                    GLAccountNo := EDIRecDocField."NAV Cross Ref. Value-1";
+                    LastItemCrossRefNo := '';
+                    LastItemNo := '';
+                END;
+                IF EDIRecDocField."Nav Field No." = PurchaseLine.FIELDNO("Vendor Item No.") THEN
+                  LastVendItemNo := EDIRecDocField."Field Text Value";
+                IF EDIRecDocField."Nav Field No." = PurchaseLine.FIELDNO("Cross-Reference No.") THEN BEGIN
+                  LastItemCrossRefNo := EDIRecDocField."Field Text Value";
+                  LastItemNo := '';
+                  GLAccountNo := '';
+                END;
+                IF EDIRecDocField."Nav Field No." = PurchaseLine.FIELDNO(Quantity) THEN BEGIN
+                  IF EDIRecDocField."Field Integer Value" <> 0 THEN BEGIN
+                    LastQty := EDIRecDocField."Field Integer Value";
+                    IF EDIRecDocField."Reverse Sign" THEN
+                      LastQty := LastQty * -1;
+                  END;
+                  IF EDIRecDocField."Field Dec. Value" <> 0 THEN BEGIN
+                    LastQty := EDIRecDocField."Field Dec. Value";
+                    IF EDIRecDocField."Reverse Sign" THEN
+                      LastQty := LastQty * -1;
+                  END;
+                END;
+                IF EDIRecDocField."Nav Field No." = PurchaseLine.FIELDNO("EDI Unit Cost") THEN
+                  LastEDIUnitCost := EDIRecDocField."Field Dec. Value";
+                IF EDIRecDocField."Nav Field No." = PurchaseLine.FIELDNO("Unit of Measure Code") THEN
+                  LastUOM := EDIRecDocField."Field Text Value";
+                IF EDIRecDocField.Trigger THEN
+                  IF (EDIRecDocField."NAV Table No." <> DATABASE::"Purch. Comment Line") AND
+                     (EDIRecDocField."NAV Table No." <> 10043)
+                  THEN
+                    CreatePurchaseLine;
+              UNTIL EDIRecDocField.NEXT = 0;
+
+            PurchaseHeader."EDI PO Generated" := TRUE;
+            PurchaseHeader."EDI PO Gen. Date" := TODAY;
+            PurchaseHeader.MODIFY;
+
+            InsertSAC;
+
+            EDIRecDocField2.RESET;
+            EDIRecDocField2.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+            EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            EDIRecDocField2.SETRANGE("NAV Table No.",DATABASE::"Purch. Comment Line");
+            EDIRecDocField2.SETRANGE("Nav Field No.",PurchCommentLine.FIELDNO(Comment));
+            EDIRecDocField2.SETRANGE("Segment Group",0);
+            IF EDIRecDocField2.FIND('-') THEN
+              EDIMapComments.MapPurchCommentLine(
+                EDIRecDocHdr2,PurchaseHeader,PurchaseLine,TRUE,EDIRecDocField2,TRUE);
+
+            COMMIT;
+
+            EDIRecDocHdr2."Data Error" := FALSE;
+            EDIRecDocHdr2."Purch. Doc. Created" := TRUE;
+            EDIRecDocHdr2."Purch. Doc. Created Date" := TODAY;
+            EDIRecDocHdr2."Purch. Doc. Created Time" := TIME;
+            EDIRecDocHdr2."Vendor Name" := PurchaseHeader."Buy-from Vendor Name";
+            EDIRecDocHdr2."Document Processed" := TRUE;
+            CASE "EDI Document No." OF
+              '850','875','ORDERS','ORDERREQUEST':
+                BEGIN
+                  EDIRecDocHdr2."Purchase Order Created" := TRUE;
+                  EDIRecDocHdr2."Purch. Order Created Date" := TODAY;
+                  EDIRecDocHdr2."Purch. Order Created Time" := TIME;
+                  EDIRecDocHdr2."Vendor Order No." := PurchaseHeader."Vendor Order No.";
+                END;
+              '810','880','INVOIC','INVOICEDETAILREQUEST':
+                BEGIN
+                  EDIRecDocHdr2."Purchase Invoice Created" := TRUE;
+                  EDIRecDocHdr2."Purch. Invoice Created Date" := TODAY;
+                  EDIRecDocHdr2."Purch. Invoice Created Time" := TIME;
+                  EDIRecDocHdr2."Vendor Invoice No." := PurchaseHeader."Vendor Invoice No.";
+                  EDIRecDocHdr2."Vendor Shipment No." := PurchaseHeader."Vendor Shipment No.";
+                END;
+              '812','CREADV':
+                BEGIN
+                  EDIRecDocHdr2."Purchase Cr. Memo Created" := TRUE;
+                  EDIRecDocHdr2."Purch. Cr. Memo Created Date" := TODAY;
+                  EDIRecDocHdr2."Purch. Cr. Memo Created Time" := TIME;
+                  EDIRecDocHdr2."Vendor Invoice No." := PurchaseHeader."Vendor Invoice No.";
+                END;
+              '180','RETANN':
+                BEGIN
+                  EDIRecDocHdr2."Purch. Return Order Created" := TRUE;
+                  EDIRecDocHdr2."Purch. Return Ord Created Date" := TODAY;
+                  EDIRecDocHdr2."Purch. Return Ord Created Time" := TIME;
+                  EDIRecDocHdr2."Vendor Order No." := PurchaseHeader."Vendor Order No.";
+                END;
+              '840','REQOTE':
+                BEGIN
+                  EDIRecDocHdr2."Purchase Quote Created" := TRUE;
+                  EDIRecDocHdr2."Purch. Quote Created Date" := TODAY;
+                  EDIRecDocHdr2."Purch. Quote Created Time" := TIME;
+                  EDIRecDocHdr2."Vendor Order No." := PurchaseHeader."Vendor Order No.";
+                END;
+            END;
+            IF EDIDocument."Document Type" <> EDIDocument."Document Type"::" " THEN
+              CASE EDIDocument."Document Type" OF
+                EDIDocument."Document Type"::Order:
+                  BEGIN
+                    EDIRecDocHdr2."Purchase Order Created" := TRUE;
+                    EDIRecDocHdr2."Purch. Order Created Date" := TODAY;
+                    EDIRecDocHdr2."Purch. Order Created Time" := TIME;
+                    EDIRecDocHdr2."Vendor Order No." := PurchaseHeader."Vendor Order No.";
+                  END;
+                EDIDocument."Document Type"::Invoice:
+                  BEGIN
+                    EDIRecDocHdr2."Purchase Invoice Created" := TRUE;
+                    EDIRecDocHdr2."Purch. Invoice Created Date" := TODAY;
+                    EDIRecDocHdr2."Purch. Invoice Created Time" := TIME;
+                    EDIRecDocHdr2."Vendor Invoice No." := PurchaseHeader."Vendor Invoice No.";
+                    EDIRecDocHdr2."Vendor Shipment No." := PurchaseHeader."Vendor Shipment No.";
+                  END;
+                EDIDocument."Document Type"::"Cr. Memo":
+                  BEGIN
+                    EDIRecDocHdr2."Purchase Cr. Memo Created" := TRUE;
+                    EDIRecDocHdr2."Purch. Cr. Memo Created Date" := TODAY;
+                    EDIRecDocHdr2."Purch. Cr. Memo Created Time" := TIME;
+                    EDIRecDocHdr2."Vendor Invoice No." := PurchaseHeader."Vendor Invoice No.";
+                  END;
+                EDIDocument."Document Type"::"Return Order":
+                  BEGIN
+                    EDIRecDocHdr2."Purch. Return Order Created" := TRUE;
+                    EDIRecDocHdr2."Purch. Return Ord Created Date" := TODAY;
+                    EDIRecDocHdr2."Purch. Return Ord Created Time" := TIME;
+                    EDIRecDocHdr2."Vendor Order No." := PurchaseHeader."Vendor Order No.";
+                  END;
+                EDIDocument."Document Type"::Quote:
+                  BEGIN
+                    EDIRecDocHdr2."Purchase Quote Created" := TRUE;
+                    EDIRecDocHdr2."Purch. Quote Created Date" := TODAY;
+                    EDIRecDocHdr2."Purch. Quote Created Time" := TIME;
+                    EDIRecDocHdr2."Vendor Order No." := PurchaseHeader."Vendor Order No.";
+                  END;
+              END;
+            EDIRecDocHdr2."Document Type" := EDIDocument."Document Type";
+            EDIRecDocHdr2.MODIFY;
+
+            IF EDITemplate."Auto. Release Purch. Document" THEN BEGIN
+              PurchaseHeader.RESET;
+              PurchaseHeader.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+              PurchaseHeader.SETRANGE("EDI Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+              IF PurchaseHeader.FIND('-') THEN
+                REPEAT
+                  ReleasePurchaseDocument.RUN(PurchaseHeader);
+                UNTIL PurchaseHeader.NEXT = 0;
+            END;
+
+            IF EDITemplate."Auto. Release Purch. Document" THEN BEGIN
+              PurchaseHeader.RESET;
+              PurchaseHeader.SETCURRENTKEY("EDI Order","EDI Trade Partner","EDI Internal Doc. No.");
+              PurchaseHeader.SETRANGE("EDI Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+              IF PurchaseHeader.FIND('-') THEN
+                REPEAT
+                  ReleasePurchaseDocument.RUN(PurchaseHeader);
+                UNTIL PurchaseHeader.NEXT = 0;
+            END;
+
+            COMMIT;
+
+            IF GUIALLOWED THEN
+              ProgressWindow.CLOSE;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EDIVendCrossRef@1240030098 : Record 14002366;
+      PurchaseHeader@1240030089 : Record 38;
+      PurchaseLine@1240030097 : Record 39;
+      Vendor@1240030099 : Record 23;
+      Item@1240020005 : Record 27;
+      PurchCommentLine@1240020006 : Record 43;
+      EDITemplate@1240020028 : Record 14002350;
+      EDITradePartner@1240020027 : Record 14002360;
+      EDIRecDocHdr@1240020026 : Record 14002358;
+      EDIRecDocHdr2@1240020025 : Record 14002358;
+      EDIRecDocField@1240020024 : Record 14002359;
+      EDIRecDocField2@1240020023 : Record 14002359;
+      ItemUnitOfMeasure@1240020021 : Record 5404;
+      NoSeriesLine@1240020020 : Record 309;
+      SalesSetup@1240020019 : Record 311;
+      TradePartnerUnitofMeasure@1240020017 : Record 14002365;
+      TradePartnerItem@1240020016 : Record 14002364;
+      EDIDocument@1240020013 : Record 14002353;
+      EDISetup@1240020012 : Record 14002367;
+      EvaluateCrossReference@1240020011 : Codeunit 14000380;
+      ReleasePurchaseDocument@1240020009 : Codeunit 415;
+      EDIMapComments@1240020014 : Codeunit 14002397;
+      BuyfromVendor@1240030001 : Code[20];
+      EDIBuyfromVendor@1240030090 : Code[20];
+      LineNo@1240030094 : Integer;
+      GLAccountNo@1240020010 : Code[10];
+      ProgressWindow@1240030021 : Dialog;
+      i@1240030022 : Integer;
+      LastItemNo@1240030032 : Code[20];
+      LastItemCrossRefNo@1240030034 : Code[20];
+      LastVendItemNo@1240020001 : Code[20];
+      LastUOM@1240030035 : Text[10];
+      LastQty@1240030037 : Decimal;
+      LastUnitCost@1240030038 : Decimal;
+      LastEDIUnitCost@1240030039 : Decimal;
+      MultiplierQty@1240030041 : Decimal;
+      NavBaseQty@1240030042 : Decimal;
+      OrderBaseQty@1240030043 : Decimal;
+      Text001@1001 : TextConst 'ENU=EDI Navision Document %1 does not match this function.';
+      Text002@1002 : TextConst 'ENU=The receive document %1 is for company %2. You are currently in company %3.';
+      Text003@1003 : TextConst 'ENU=Purchase %1 has already been created.\';
+      Text004@1004 : TextConst 'ENU=Do you wish to re-create it?';
+      Text005@1005 : TextConst 'ENU=Purchase Document not created.';
+      Text006@1006 : TextConst 'ENU=Creating Purchase Document......\';
+      Text007@1007 : TextConst 'ENU=Trading Partner      #1##################\';
+      Text008@1008 : TextConst 'ENU=Purchase Order No.   #2##################\';
+      Text009@1009 : TextConst 'ENU=Internal Doc No.     #3########\';
+      Text010@1010 : TextConst 'ENU=Vendor No.           #4##################\';
+      Text011@1011 : TextConst 'ENU=Ship-to Location     #5##################\';
+      Text012@1012 : TextConst 'ENU=Item No.             #6##################\';
+      Text013@1013 : TextConst 'ENU=Creating Lines       @7@@@@@@@@@@@@@@@@@@';
+      Text014@1020 : TextConst 'ENU=Vendor Item Number No. %1 could not be found for Buy-from Vendor %2.';
+      Text015@1021 : TextConst 'ENU=Navision Unit of Measure %1 can not be found for item %2.';
+      Text016@1022 : TextConst 'ENU=Order Unit of Measure %1 can not be found for item %2.';
+      Text017@1000000000 : TextConst 'ENU=EDI Cross references are not setup. \Check Receive Document for details.';
+      SACFound@1240030091 : Boolean;
+      EvaluateGenCrossRef@1240020000 : Boolean;
+      InterimTextField@1240020002 : Code[80];
+      Text018@1240020003 : TextConst 'ENU=EDI Buy from Vendor %1 not found for Trade Partner %2';
+      ConfirmMessage@1240020007 : Text[80];
+      DocumentType@1240020008 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order,Document';
+      MapGenCrossRef@1240020004 : Boolean;
+
+    PROCEDURE CreatePurchaseLine@1240030005();
+    VAR
+      ItemNo@1240020001 : Code[20];
+      DiscountUnitCost@1240020000 : Decimal;
+    BEGIN
+      ItemNo := '';
+
+      PurchaseLine.RESET;
+      PurchaseLine.SETRANGE(PurchaseLine."Document Type",PurchaseHeader."Document Type");
+      PurchaseLine.SETRANGE(PurchaseLine."Document No.",PurchaseHeader."No.");
+      IF PurchaseLine.FIND('+') THEN
+        LineNo := PurchaseLine."Line No." + 10000
+      ELSE
+        LineNo := 10000;
+      CLEAR(PurchaseLine);
+      PurchaseLine.VALIDATE("Document Type",PurchaseHeader."Document Type");
+      PurchaseLine.VALIDATE("Document No.",PurchaseHeader."No.");
+      PurchaseLine.VALIDATE("Line No.",LineNo);
+      IF GLAccountNo <> '' THEN BEGIN
+        MultiplierQty := 1;
+        PurchaseLine.Type := PurchaseLine.Type::"G/L Account";
+        PurchaseLine.VALIDATE("No.",GLAccountNo);
+        IF LastQty = 0 THEN
+          PurchaseLine.VALIDATE(Quantity,1)
+        ELSE
+          PurchaseLine.VALIDATE(Quantity,LastQty);
+        IF LastEDIUnitCost <> 0 THEN
+          PurchaseLine.VALIDATE(PurchaseLine."EDI Unit Cost",LastEDIUnitCost);
+      END ELSE BEGIN
+        PurchaseLine.Type := PurchaseLine.Type::Item;
+        IF (LastVendItemNo <> '') AND
+           ((LastItemNo = '') AND
+            (LastItemCrossRefNo = ''))
+        THEN BEGIN
+          Item.RESET;
+          Item.SETCURRENTKEY("Vendor Item No.","Vendor No.");
+          Item.SETRANGE("Vendor Item No.",LastVendItemNo);
+          Item.SETRANGE("Vendor No.",PurchaseHeader."Buy-from Vendor No.");
+          IF NOT Item.FIND('-') THEN BEGIN
+            TradePartnerItem.RESET;
+            TradePartnerItem.SETCURRENTKEY("Trade Partner No.","Partner Item No.");
+            TradePartnerItem.SETRANGE("Trade Partner No.",EDIRecDocHdr2."Trade Partner No.");
+            TradePartnerItem.SETRANGE("Partner Item No.",LastVendItemNo);
+            IF NOT TradePartnerItem.FIND('-') THEN
+              ERROR(
+                Text014,
+                LastVendItemNo,EDIRecDocHdr2."Vendor No.");
+            PurchaseLine.VALIDATE("No.",TradePartnerItem."Navision Item No.");
+          END ELSE
+            PurchaseLine.VALIDATE("No.",Item."No.");
+        END ELSE BEGIN
+          IF LastItemCrossRefNo <> '' THEN
+            PurchaseLine.VALIDATE("Cross-Reference No.",LastItemCrossRefNo)
+          ELSE
+            PurchaseLine.VALIDATE(PurchaseLine."No.",LastItemNo);
+        END;
+        PurchaseLine."Vendor Item No." := LastVendItemNo;
+
+        MultiplierQty := 1;
+        IF LastUOM <> '' THEN BEGIN
+          TradePartnerUnitofMeasure.RESET;
+          TradePartnerUnitofMeasure.SETCURRENTKEY("Trade Partner No.","EDI Unit of Measure");
+          TradePartnerUnitofMeasure.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+          TradePartnerUnitofMeasure.SETRANGE("EDI Unit of Measure",LastUOM);
+          TradePartnerUnitofMeasure.SETRANGE("Navision Item No.",PurchaseLine."No.");
+          IF NOT TradePartnerUnitofMeasure.FIND('-') THEN
+            TradePartnerUnitofMeasure.SETRANGE("Navision Item No.",'');
+          IF TradePartnerUnitofMeasure.FIND('-') THEN BEGIN
+            IF NOT ItemUnitOfMeasure.GET(
+                     PurchaseLine."No.",TradePartnerUnitofMeasure."Navision Unit of Measure")
+            THEN
+              ERROR(
+                Text015,
+                TradePartnerUnitofMeasure."Navision Unit of Measure",
+                PurchaseLine."No.")
+            ELSE
+              NavBaseQty := ItemUnitOfMeasure."Qty. per Unit of Measure";
+            IF NOT ItemUnitOfMeasure.GET(PurchaseLine."No.",TradePartnerUnitofMeasure."Order Unit of Measure") THEN
+              ERROR(
+                Text016,
+                TradePartnerUnitofMeasure."Order Unit of Measure",
+                PurchaseLine."No.")
+            ELSE
+              OrderBaseQty := ItemUnitOfMeasure."Qty. per Unit of Measure";
+            MultiplierQty := OrderBaseQty / NavBaseQty;
+            LastQty := LastQty / MultiplierQty;
+            PurchaseLine.VALIDATE(
+              "Unit of Measure Code",TradePartnerUnitofMeasure."Order Unit of Measure");
+          END ELSE BEGIN
+            MultiplierQty := 1;
+            PurchaseLine.VALIDATE("Unit of Measure Code",LastUOM);
+          END;
+        END;
+        PurchaseLine.VALIDATE(Quantity,LastQty);
+      END;
+
+      EDIRecDocField2.RESET;
+      EDIRecDocField2.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+      EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField2.SETRANGE("Segment Group",EDIRecDocField."Segment Group");
+      IF EDIRecDocField2.FIND('-') THEN BEGIN
+        PurchaseLine.SetRunFromEDI(TRUE);
+        REPEAT
+          MapPurchaseLineFields;
+        UNTIL EDIRecDocField2.NEXT = 0;
+        PurchaseLine.SetRunFromEDI(FALSE);
+      END;
+      IF LastEDIUnitCost <> 0 THEN BEGIN
+        PurchaseLine.VALIDATE(PurchaseLine."EDI Unit Cost",LastEDIUnitCost);
+        CASE TRUE OF
+          PurchaseLine."Line Discount %" = 0:
+            BEGIN
+              CASE TRUE OF
+                PurchaseLine."Direct Unit Cost" <> PurchaseLine."EDI Unit Cost":
+                  PurchaseLine."EDI Cost Discrepancy" := TRUE;
+                PurchaseLine."Direct Unit Cost" = PurchaseLine."EDI Unit Cost":
+                  PurchaseLine."EDI Cost Discrepancy" := FALSE
+              END;
+            END;
+          ELSE BEGIN
+            DiscountUnitCost :=
+              PurchaseLine."Direct Unit Cost" -
+                (PurchaseLine."Direct Unit Cost" * (PurchaseLine."Line Discount %" / 100));
+            DiscountUnitCost := ROUND(DiscountUnitCost,0.01);
+            IF DiscountUnitCost <> PurchaseLine."EDI Unit Cost" THEN
+              PurchaseLine."EDI Cost Discrepancy" := TRUE;
+          END;
+        END;
+      END;
+      PurchaseLine."EDI Segment Group" := EDIRecDocField."Segment Group";
+      PurchaseLine."Buy-from Vendor No." := PurchaseHeader."Buy-from Vendor No.";
+      PurchaseLine.INSERT(TRUE);
+
+      LastItemNo := '';
+      LastItemCrossRefNo := '';
+      LastVendItemNo := '';
+      LastQty := 0;
+      LastUnitCost := 0;
+      LastEDIUnitCost := 0;
+      LastUOM := '';
+
+      EDIRecDocField2.RESET;
+      EDIRecDocField2.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField2.SETRANGE("NAV Table No.",10043);
+      EDIRecDocField2.SETRANGE("Nav Field No.",PurchCommentLine.FIELDNO(Comment));
+      EDIRecDocField2.SETRANGE("Segment Group",EDIRecDocField."Segment Group");
+      IF EDIRecDocField2.FIND('-') THEN
+        EDIMapComments.MapPurchCommentLine(
+          EDIRecDocHdr2,PurchaseHeader,PurchaseLine,TRUE,EDIRecDocField2,FALSE);
+    END;
+
+    PROCEDURE InsertSAC@1000000004();
+    VAR
+      EDIRecDocFld@1000000001 : Record 14002359;
+      SACAmount@1000000006 : Decimal;
+      LineNo@1000000005 : Integer;
+      CurrentLineNo@1000000004 : Integer;
+      Multiplier@1000000008 : Integer;
+      SACFound@1240030002 : Boolean;
+      NewSegment@1240030001 : Boolean;
+      AccountNo@1240030000 : Code[20];
+      IsAscending@1240020000 : Boolean;
+    BEGIN
+      SACFound := FALSE;
+      NewSegment := FALSE;
+      Multiplier := 0;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+      EDIRecDocField.SETRANGE("Segment Group",0);
+      EDIRecDocField.SETRANGE(Segment,'SAC');
+      EDIRecDocField.SETRANGE(Element,'01');
+      IF EDIRecDocField.FIND('-') THEN
+        REPEAT
+         IF (EDIRecDocField."Field Text Value" = 'A') OR
+            (EDIRecDocField."Field Text Value" = 'C') THEN
+              SACFound := TRUE;
+        UNTIL (EDIRecDocField.NEXT = 0) OR (SACFound = TRUE);
+
+      IF SACFound THEN BEGIN
+        EDIRecDocField.RESET;
+        EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+        EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+        EDIRecDocField.SETRANGE("Segment Group",0);
+        EDIRecDocField.SETRANGE(Segment,'SAC');
+        EDIRecDocField.SETRANGE("New Segment",TRUE);
+        IF EDIRecDocField.FIND('-') THEN
+          REPEAT
+            SACFound := FALSE;
+            NewSegment := FALSE;
+            Multiplier := 0;
+            SACAmount := 0;
+            CurrentLineNo := EDIRecDocField."Line No.";
+            EDIRecDocFld.RESET;
+            EDIRecDocFld.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            EDIRecDocFld.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+            EDIRecDocFld.SETRANGE("Segment Group",0);
+            IsAscending := EDIRecDocFld.ASCENDING;
+            IF EDIRecDocFld.FIND('-') THEN
+              REPEAT
+                IF (EDIRecDocFld."Line No." > CurrentLineNo) AND
+                  (EDIRecDocFld."New Segment" = FALSE) THEN
+                    IF (EDIRecDocFld.Segment = 'SAC') AND (EDIRecDocFld.Element = '01') THEN
+                      CASE EDIRecDocFld."Field Text Value" OF
+                        'A':
+                          Multiplier := -1;
+                        'C':
+                          Multiplier := 1;
+                      END;
+                IF (EDIRecDocFld.Segment = 'SAC') AND (EDIRecDocFld.Element = '05') THEN
+                  SACAmount := EDIRecDocFld."Field Dec. Value";
+                  IF SACAmount > 0 THEN
+                    SACFound := TRUE;
+                IF (EDIRecDocFld."Line No." > CurrentLineNo) AND
+                  (EDIRecDocFld."New Segment") THEN
+                    NewSegment := TRUE;
+              UNTIL (EDIRecDocFld.NEXT = 0) OR (NewSegment = TRUE);
+            IF SACFound THEN BEGIN
+              SACFound := FALSE;
+              NewSegment := FALSE;
+              EDIRecDocFld.RESET;
+            EDIRecDocFld.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            EDIRecDocFld.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+            EDIRecDocFld.SETRANGE("Segment Group",0);
+            IsAscending := EDIRecDocFld.ASCENDING;
+            IF EDIRecDocFld.FIND('-') THEN
+              REPEAT
+                IF (EDIRecDocFld."Line No." > CurrentLineNo) AND
+                   (EDIRecDocFld."New Segment" = FALSE) THEN
+                     IF (EDIRecDocFld.Segment = 'SAC') AND (EDIRecDocFld.Element = '02') THEN
+                       IF (EDIRecDocFld."NAV Cross Ref. Value-1" <> '') THEN BEGIN
+                         SACFound := TRUE;
+                         AccountNo := EDIRecDocFld."NAV Cross Ref. Value-1";
+                       END;
+                IF (EDIRecDocFld."Line No." > CurrentLineNo) AND
+                   (EDIRecDocFld."New Segment") THEN
+                     NewSegment := TRUE;
+              UNTIL (EDIRecDocFld.NEXT = 0) OR (NewSegment = TRUE);
+            END;
+          IF SACFound THEN BEGIN
+            SACAmount := Multiplier * SACAmount;
+            PurchaseLine.RESET;
+            PurchaseLine.SETRANGE("Document Type",PurchaseHeader."Document Type");
+            PurchaseLine.SETRANGE("Document No.",PurchaseHeader."No.");
+            IF PurchaseLine.FIND('+') THEN
+              LineNo := PurchaseLine."Line No." + 10000
+            ELSE
+              LineNo := 10000;
+            PurchaseLine.INIT;
+            PurchaseLine."Document Type" := PurchaseHeader."Document Type";
+            PurchaseLine."Document No.":= PurchaseHeader."No.";
+            PurchaseLine.VALIDATE(Type,PurchaseLine.Type::"G/L Account");
+            PurchaseLine.VALIDATE("No.",AccountNo);
+            PurchaseLine."Line No." := LineNo;
+            PurchaseLine.VALIDATE(Quantity,1);
+            PurchaseLine.VALIDATE("Tax Area Code",PurchaseHeader."Tax Area Code");
+            PurchaseLine.VALIDATE("Direct Unit Cost",SACAmount);
+            PurchaseLine.VALIDATE("Location Code",PurchaseHeader."Location Code");
+            PurchaseLine.INSERT;
+          END;
+        UNTIL EDIRecDocField.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE MapPurchaseHdrFields@1240030000();
+    BEGIN
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField.SETRANGE(EDIRecDocField."NAV Table No.",DATABASE::"Purchase Header");
+      IF EDIRecDocField.FIND('-') THEN
+      REPEAT
+        CASE EDIRecDocField."Nav Field No." OF
+          PurchaseHeader.FIELDNO("Your Reference"):
+            PurchaseHeader."Your Reference" :=
+              LoadTextFields(PurchaseHeader."Your Reference",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Vendor Authorization No."):
+            PurchaseHeader."Vendor Authorization No." :=
+              LoadTextFields(PurchaseHeader."Vendor Authorization No.",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Vendor Cr. Memo No."):
+            PurchaseHeader."Vendor Cr. Memo No." :=
+              LoadTextFields(PurchaseHeader."Vendor Cr. Memo No.",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Vendor Invoice No."):
+            PurchaseHeader."Vendor Invoice No." :=
+              LoadTextFields(PurchaseHeader."Vendor Invoice No.",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Vendor Order No."):
+            PurchaseHeader."Vendor Order No." :=
+              LoadTextFields(PurchaseHeader."Vendor Order No.",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Vendor Shipment No."):
+            PurchaseHeader."Vendor Shipment No." :=
+              LoadTextFields(PurchaseHeader."Vendor Shipment No.",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Ship-to Name"):
+            PurchaseHeader."Ship-to Name" :=
+              LoadTextFields(PurchaseHeader."Ship-to Name",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Ship-to Address"):
+            PurchaseHeader."Ship-to Address" :=
+              LoadTextFields(PurchaseHeader."Ship-to Address",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Ship-to Address 2"):
+            PurchaseHeader."Ship-to Address 2" :=
+              LoadTextFields(PurchaseHeader."Ship-to Address 2",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Ship-to City"):
+            PurchaseHeader."Ship-to City" :=
+              LoadTextFields(PurchaseHeader."Ship-to City",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Ship-to County"):
+            PurchaseHeader."Ship-to County" :=
+              LoadTextFields(PurchaseHeader."Ship-to County",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Ship-to Post Code"):
+            PurchaseHeader."Ship-to Post Code" :=
+              LoadTextFields(PurchaseHeader."Ship-to Post Code",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Ship-to Contact"):
+            PurchaseHeader."Ship-to Contact" :=
+              LoadTextFields(PurchaseHeader."Ship-to Contact",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Ship-to Country/Region Code"):
+            IF EDIRecDocField."General EDI Cross Reference" = FALSE THEN
+              PurchaseHeader."Ship-to Country/Region Code" :=
+                LoadTextFields(PurchaseHeader."Ship-to Country/Region Code",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Pay-to Name"):
+            PurchaseHeader."Pay-to Name" :=
+              LoadTextFields(PurchaseHeader."Pay-to Name",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Pay-to Address"):
+            PurchaseHeader."Pay-to Address" :=
+              LoadTextFields(PurchaseHeader."Pay-to Address",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Pay-to Address 2"):
+            PurchaseHeader."Pay-to Address 2" :=
+              LoadTextFields(PurchaseHeader."Pay-to Address 2",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Pay-to City"):
+            PurchaseHeader."Pay-to City" :=
+              LoadTextFields(PurchaseHeader."Pay-to City",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Pay-to County"):
+            PurchaseHeader."Pay-to County" :=
+              LoadTextFields(PurchaseHeader."Pay-to County",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Pay-to Post Code"):
+            PurchaseHeader."Pay-to Post Code" :=
+              LoadTextFields(PurchaseHeader."Pay-to Post Code",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Pay-to Contact"):
+            PurchaseHeader."Pay-to Contact" :=
+              LoadTextFields(PurchaseHeader."Pay-to Contact",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Pay-to Country/Region Code"):
+           IF EDIRecDocField."General EDI Cross Reference" = FALSE THEN
+             PurchaseHeader."Pay-to Country/Region Code" :=
+               LoadTextFields(PurchaseHeader."Pay-to Country/Region Code",EDIRecDocField);
+          PurchaseHeader.FIELDNO("E-Ship Agent Code"):
+            IF EDIRecDocField."General EDI Cross Reference" = FALSE THEN
+              PurchaseHeader."E-Ship Agent Code" :=
+                LoadTextFields(PurchaseHeader."E-Ship Agent Code",EDIRecDocField);
+          PurchaseHeader.FIELDNO("E-Ship Agent Service"):
+            IF EDIRecDocField."General EDI Cross Reference" = FALSE THEN
+              PurchaseHeader."E-Ship Agent Service" :=
+                LoadTextFields(PurchaseHeader."E-Ship Agent Service",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Payment Terms Code"):
+            IF EDIRecDocField."General EDI Cross Reference" = FALSE THEN
+              PurchaseHeader."Payment Terms Code" :=
+                LoadTextFields(PurchaseHeader."Payment Terms Code",EDIRecDocField);
+          PurchaseHeader.FIELDNO("Document Date"):
+            IF EDIRecDocField."Field Date Value" <> 0D THEN
+              PurchaseHeader.VALIDATE("Document Date",EDIRecDocField."Field Date Value");
+          PurchaseHeader.FIELDNO("Posting Date"):
+            IF EDIRecDocField."Field Date Value" <> 0D THEN
+              PurchaseHeader.VALIDATE("Posting Date",EDIRecDocField."Field Date Value");
+          PurchaseHeader.FIELDNO("Posting Description"):
+            PurchaseHeader."Posting Description" :=
+              LoadTextFields(PurchaseHeader."Posting Description",EDIRecDocField);
+
+            //
+            // Add Custom Purchase Header fields here
+            //
+
+        END;
+      UNTIL EDIRecDocField.NEXT = 0;
+
+
+      IF MapGenCrossRef THEN
+        MapGeneralEDICrossRef(TRUE);
+    END;
+
+    PROCEDURE MapPurchaseLineFields@1240030001();
+    BEGIN
+      CASE EDIRecDocField2."NAV Table No." OF
+        DATABASE::"Purchase Line":
+          CASE EDIRecDocField2."Nav Field No." OF
+            PurchaseLine.FIELDNO("Direct Unit Cost"):
+              PurchaseLine.VALIDATE("Direct Unit Cost",(EDIRecDocField2."Field Dec. Value" * MultiplierQty));
+            PurchaseLine.FIELDNO("Line Discount Amount"):
+              PurchaseLine.VALIDATE("Line Discount Amount",(EDIRecDocField2."Field Dec. Value"));
+            PurchaseLine.FIELDNO("Line Discount %"):
+              PurchaseLine.VALIDATE("Line Discount %",(EDIRecDocField2."Field Dec. Value"));
+
+            //
+            // Add Custom Purchase Line fields here
+            //
+
+          END;
+      END;
+
+      IF MapGenCrossRef THEN
+        MapGeneralEDICrossRef(FALSE);
+    END;
+
+    PROCEDURE LoadTextFields@1240030006(DestinationField@1240030000 : Text[80];LocEDIRecDocField@1240030001 : Record 14002359) ReturnTextField : Text[80];
+    VAR
+      SourceField@1240030002 : Text[80];
+    BEGIN
+      ReturnTextField := '';
+      SourceField := LocEDIRecDocField."Field Text Value";
+      IF (NOT LocEDIRecDocField."Append to Field Contents") AND
+         (NOT LocEDIRecDocField."Insert into Field Contents") THEN BEGIN
+        IF LocEDIRecDocField."Copy String Position" = 0 THEN
+          ReturnTextField := SourceField
+        ELSE
+          ReturnTextField :=
+            COPYSTR(SourceField,LocEDIRecDocField."Copy String Position",LocEDIRecDocField."Copy String Length");
+        EXIT(ReturnTextField);
+      END;
+
+      IF LocEDIRecDocField."Append to Field Contents" THEN BEGIN
+        IF LocEDIRecDocField."Copy String Position" <> 0 THEN
+          ReturnTextField :=
+            DestinationField +
+            COPYSTR(SourceField,LocEDIRecDocField."Copy String Position",LocEDIRecDocField."Copy String Length")
+        ELSE
+          ReturnTextField :=
+            DestinationField + SourceField;
+      END;
+
+      IF LocEDIRecDocField."Insert into Field Contents" THEN BEGIN
+        IF LocEDIRecDocField."Copy String Length" <> 0 THEN BEGIN
+          ReturnTextField := DestinationField;
+          InterimTextField := COPYSTR(SourceField,LocEDIRecDocField."Copy String Position",LocEDIRecDocField."Copy String Length");
+          ReturnTextField := INSSTR(ReturnTextField,InterimTextField,LocEDIRecDocField."Insert Position");
+        END ELSE
+          ReturnTextField := INSSTR(ReturnTextField,SourceField,LocEDIRecDocField."Insert Position");
+      END;
+
+      EXIT(ReturnTextField);
+    END;
+
+    PROCEDURE MapGeneralEDICrossRef@1240030004(Header@1240020000 : Boolean);
+    VAR
+      EDIRecDocFld@1240020001 : Record 14002359;
+      ShipPaymentType@1240030000 : 'Prepaid,Third Party,Freight Collect,Consignee';
+    BEGIN
+      IF Header THEN BEGIN
+        EDIRecDocFld.RESET;
+        EDIRecDocFld.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+        EDIRecDocFld.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+        EDIRecDocFld.SETRANGE(EDIRecDocFld."NAV Table No.",38);
+        EDIRecDocFld.SETRANGE(EDIRecDocFld."General EDI Cross Reference",TRUE);
+        IF EDIRecDocFld.FIND('-') THEN
+          REPEAT
+            CASE EDIRecDocFld."Nav Field No." OF
+              PurchaseHeader.FIELDNO("E-Ship Agent Code"):
+                PurchaseHeader.VALIDATE("E-Ship Agent Code",EDIRecDocFld."NAV Cross Ref. Value-1");
+              PurchaseHeader.FIELDNO("E-Ship Agent Service"):
+                PurchaseHeader.VALIDATE("E-Ship Agent Service",EDIRecDocFld."NAV Cross Ref. Value-2");
+              PurchaseHeader.FIELDNO("Payment Terms Code"):
+                PurchaseHeader.VALIDATE("Payment Terms Code",EDIRecDocFld."NAV Cross Ref. Value-1");
+              PurchaseHeader.FIELDNO("Shipment Method Code"):
+                PurchaseHeader.VALIDATE("Shipment Method Code",EDIRecDocFld."NAV Cross Ref. Value-1");
+              PurchaseHeader.FIELDNO("Shipping Payment Type"):
+                BEGIN
+                  EVALUATE(ShipPaymentType,EDIRecDocFld."NAV Cross Ref. Value-1");
+                  PurchaseHeader.VALIDATE("Shipping Payment Type",ShipPaymentType);
+                END;
+              PurchaseHeader.FIELDNO("Location Code"):
+                PurchaseHeader.VALIDATE("Location Code",EDIRecDocFld."NAV Cross Ref. Value-1");
+              PurchaseHeader.FIELDNO("Buy-from Country/Region Code"):
+                PurchaseHeader.VALIDATE("Buy-from Country/Region Code",
+                  EDIRecDocFld."NAV Cross Ref. Value-1");
+              PurchaseHeader.FIELDNO("Pay-to Country/Region Code"):
+                PurchaseHeader.VALIDATE("Pay-to Country/Region Code",
+                  EDIRecDocFld."NAV Cross Ref. Value-1");
+              PurchaseHeader.FIELDNO("Ship-to Country/Region Code"):
+                PurchaseHeader.VALIDATE("Ship-to Country/Region Code",
+                  EDIRecDocFld."NAV Cross Ref. Value-1");
+            END;
+          UNTIL EDIRecDocFld.NEXT = 0;
+      END ELSE BEGIN
+        EDIRecDocFld.RESET;
+        EDIRecDocFld.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+        EDIRecDocFld.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+        EDIRecDocFld.SETRANGE(EDIRecDocFld."NAV Table No.",DATABASE::"Purchase Line");
+        EDIRecDocFld.SETRANGE(EDIRecDocFld."General EDI Cross Reference",TRUE);
+        EDIRecDocFld.SETRANGE("Segment Group",EDIRecDocField."Segment Group");
+        IF EDIRecDocFld.FIND('-') THEN BEGIN
+          PurchaseLine.SetRunFromEDI(TRUE);
+          REPEAT
+            CASE EDIRecDocFld."Nav Field No." OF
+              PurchaseLine.FIELDNO("Return Reason Code"):
+                PurchaseLine.VALIDATE("Return Reason Code",EDIRecDocFld."NAV Cross Ref. Value-1");
+            END;
+          UNTIL EDIRecDocFld.NEXT = 0;
+          PurchaseLine.SetRunFromEDI(FALSE);
+        END;
+      END;
+    END;
+
+    PROCEDURE ClearStatusFields@1240020001();
+    BEGIN
+      EDIRecDocHdr2."Purchase Order Created" := FALSE;
+      EDIRecDocHdr2."Purch. Order Created Date" := 0D;
+      EDIRecDocHdr2."Purch. Order Created Time" := 0T;
+
+      EDIRecDocHdr2."Purchase Invoice Created" := FALSE;
+      EDIRecDocHdr2."Purch. Invoice Created Date" := 0D;
+      EDIRecDocHdr2."Purch. Invoice Created Time" := 0T;
+
+      EDIRecDocHdr2."Purchase Invoice Created" := FALSE;
+      EDIRecDocHdr2."Purch. Invoice Created Date" := 0D;
+      EDIRecDocHdr2."Purch. Invoice Created Time" := 0T;
+
+      EDIRecDocHdr2."Purch. Return Order Created" := FALSE;
+      EDIRecDocHdr2."Purch. Return Ord Created Date" := 0D;
+      EDIRecDocHdr2."Purch. Return Ord Created Time" := 0T;
+
+      EDIRecDocHdr2."Purchase Quote Created" := FALSE;
+      EDIRecDocHdr2."Purch. Quote Created Date" := 0D;
+      EDIRecDocHdr2."Purch. Quote Created Time" := 0T;
+
+      EDIRecDocHdr2."Vendor Invoice No." := '';
+      EDIRecDocHdr2."Vendor Shipment No." := '';
+      EDIRecDocHdr2."Vendor Order No." := '';
+      EDIRecDocHdr2.MODIFY;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

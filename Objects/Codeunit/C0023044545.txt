@@ -1,0 +1,470 @@
+OBJECT Codeunit 23044545 WHI Event Manager
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/07/20;
+    Time=11:50:28 AM;
+    Version List=WHI2.4.7684.0;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      optSourceDocument@1000000004 : ' ,Purchase Order,Sales Order,Inbound Transfer,Outbound Transfer,Prod. Order,Put-away,Pick,Movement,Invt. Put-away,Invt. Pick,Receipt,Shipment,Reclass';
+      cuCommonFuncs@1000000003 : Codeunit 23044501;
+      cuCommonBase@1000000002 : Codeunit 23044519;
+      cuSessionHelper@1000000001 : Codeunit 23044527;
+      trecEventParams@1000000000 : TEMPORARY Record 23044511;
+
+    [EventSubscriber(Table,39,OnAfterValidateEvent,"Location Code")]
+    LOCAL PROCEDURE PuchaseLineOnAfterLocationCodeValidate@1000000005(VAR Rec@1000000000 : Record 39;VAR xRec@1000000001 : Record 39;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      IF (xRec."Location Code" <> Rec."Location Code") AND
+        (Rec.Quantity <> 0) THEN
+          zeroPurchLineQtyToReceive(Rec);
+
+      IF( cuCommonFuncs.isWHILocation(Rec."Location Code") AND
+        (NOT cuCommonBase.isInvtPutLocation(Rec."Location Code")) AND
+        (Rec.Type = Rec.Type::Item) ) THEN BEGIN
+          Rec.VALIDATE(Rec."Qty. to Receive",0);
+      END;
+    END;
+
+    [EventSubscriber(Table,39,OnAfterValidateEvent,"No.")]
+    LOCAL PROCEDURE PurchaseLineOnAfterNoValidate@1000000008(VAR Rec@1000000000 : Record 39;VAR xRec@1000000001 : Record 39;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      zeroPurchLineQtyToReceive(Rec);
+    END;
+
+    [EventSubscriber(Table,39,OnAfterValidateEvent,Quantity)]
+    LOCAL PROCEDURE PurchaseLineOnAfterQuantityValidate@1000000009(VAR Rec@1000000000 : Record 39;VAR xRec@1000000001 : Record 39;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      zeroPurchLineQtyToReceive(Rec);
+    END;
+
+    [EventSubscriber(Table,5773,OnAfterInsertEvent)]
+    LOCAL PROCEDURE RegWhseActivityLineOnInsert@1000000027(VAR Rec@1000000000 : Record 5773;RunTrigger@1000000001 : Boolean);
+    VAR
+      lrecConfig@1000000004 : Record 23044504;
+      lrecWhseShipmentLine@1000000003 : Record 7321;
+    BEGIN
+      //<IW author="R.Trudeau" date="05/13/19" issue="TFS4556">
+      //  If the source is for a warehouse shipment and the Update Shipment on Pick option isn't enabled
+      //  then decrement the shipment amount.
+      //</IW>
+
+      IF Rec.ISTEMPORARY OR (Rec."Whse. Document Type" <> Rec."Whse. Document Type"::Shipment) OR (Rec."Action Type" <> Rec."Action Type"::Place)THEN
+        EXIT;
+
+      IF IsUpdateShipmentOnPick(Rec."Location Code") THEN
+        EXIT;
+
+      IF NOT lrecWhseShipmentLine.GET(Rec."Whse. Document No.",Rec."Whse. Document Line No.") THEN
+        EXIT;
+
+      cuSessionHelper.updateCachedValue(STRSUBSTNO('%1_%2',lrecWhseShipmentLine."No.",lrecWhseShipmentLine."Line No."),'1');
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"Location Code")]
+    LOCAL PROCEDURE SalesLineOnAfterLocationCodeValidate@1000000019(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    VAR
+      lrecSalesHeader@1000000004 : Record 36;
+      lrecLocation@1000000003 : Record 14;
+      ltrecEventParam@1000000005 : TEMPORARY Record 23044511;
+    BEGIN
+      //<FUNC author="J.Karpiak" date="12/05/17" issue="TFS7681">
+      //  Description: set Qty. to Ship to 0 when the Location Code is validated
+      //  Side Effect: None
+      //</FUNC>
+      IF( cuCommonFuncs.isWHILocation(Rec."Location Code") AND
+        (NOT cuCommonBase.isInvtPickLocation(Rec."Location Code")) AND
+        (Rec.Type=Rec.Type::Item) ) THEN BEGIN
+        IF( lrecSalesHeader.GET(Rec."Document Type",Rec."Document No.") ) THEN BEGIN
+          //IF( NOT lrecSalesHeader."WMDM POS" ) THEN
+            Rec.VALIDATE(Rec."Qty. to Ship",0);
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,Quantity)]
+    LOCAL PROCEDURE SalesLineOnAfterQuantityValidate@1000000002(VAR Rec@1000000000 : Record 37;VAR xRec@1000000003 : Record 37;CurrFieldNo@1000000004 : Integer);
+    VAR
+      lrecSalesHeader@1000000002 : Record 36;
+    BEGIN
+      //<FUNC author="J.Karpiak' date='12/05/17' issue="TFS7681">
+      //  Description: zero sales line quantity to ship when the quantity is validated
+      //  Side Effect: None
+      //</FUNC>
+      IF (xRec.Quantity <> Rec.Quantity) OR
+         (xRec."Quantity (Base)" <> Rec."Quantity (Base)") THEN BEGIN
+           zeroSalesLineQtyToShip(Rec);
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"Drop Shipment")]
+    LOCAL PROCEDURE SalesLineOnAfterDropShipValidate@1000000003(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      IF (xRec."Drop Shipment" <> Rec."Drop Shipment") AND (Rec.Quantity <> 0) THEN BEGIN
+        IF NOT Rec."Drop Shipment" THEN BEGIN
+          zeroSalesLineQtyToShip(Rec);
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,37,OnAfterValidateEvent,"No.")]
+    LOCAL PROCEDURE SalesLineOnAfterNoValidate@1000000004(VAR Rec@1000000000 : Record 37;VAR xRec@1000000001 : Record 37;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      IF (Rec.Type <> Rec.Type::" ") AND (Rec.Quantity <> 0) THEN BEGIN
+        zeroSalesLineQtyToShip(Rec);
+      END;
+    END;
+
+    [EventSubscriber(Table,5741,OnAfterValidateEvent,"Quantity Received")]
+    LOCAL PROCEDURE TransferLineOnAfterQtyReceivedValidate@1000000042(VAR Rec@1000000000 : Record 5741;VAR xRec@1000000001 : Record 5741;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      checkTransferLineWHILocationCodes(Rec);
+    END;
+
+    [EventSubscriber(Table,5741,OnAfterValidateEvent,Quantity)]
+    LOCAL PROCEDURE TransferLineOnAfterQuantityValidate@1000000044(VAR Rec@1000000000 : Record 5741;VAR xRec@1000000001 : Record 5741;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      initTransferLineQuantityToReceive(Rec);
+      updateWithWhseShipReceive(Rec);
+    END;
+
+    [EventSubscriber(Table,5741,OnAfterValidateEvent,"Quantity Shipped")]
+    LOCAL PROCEDURE TransferLineOnAfterQtyShippedValidate@1000000045(VAR Rec@1000000000 : Record 5741;VAR xRec@1000000001 : Record 5741;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      checkTransferLineWHILocationCodes(Rec);
+    END;
+
+    [EventSubscriber(Table,5741,OnAfterValidateEvent,"Transfer-from Code")]
+    LOCAL PROCEDURE TransferLineOnAfterTransFromCodeValidate@1000000050(VAR Rec@1000000000 : Record 5741;VAR xRec@1000000001 : Record 5741;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      updateWithWhseShipReceive(Rec);
+      checkTransferLineWHILocationCodes(Rec);
+    END;
+
+    [EventSubscriber(Table,5741,OnAfterValidateEvent,"Transfer-to Code")]
+    LOCAL PROCEDURE TransferLineOnAfterTransToCodeValidate@1000000051(VAR Rec@1000000000 : Record 5741;VAR xRec@1000000001 : Record 5741;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      updateWithWhseShipReceive(Rec);
+      checkTransferLineWHILocationCodes(Rec);
+    END;
+
+    [EventSubscriber(Table,5741,OnAfterModifyEvent)]
+    LOCAL PROCEDURE TransferLineOnAfterModify@1000000034(VAR Rec@1000000000 : Record 5741;VAR xRec@1000000001 : Record 5741;RunTrigger@1000000002 : Boolean);
+    BEGIN
+      IF Rec."WMDM Transfer Origin" <> Rec."WMDM Transfer Origin"::" " THEN BEGIN
+        IF Rec."WMDM Transfer Origin" = Rec."WMDM Transfer Origin"::Outbound THEN BEGIN
+          Rec."Qty. to Ship" := 0;
+          Rec."Qty. to Ship (Base)" := 0;
+        END;
+
+        IF Rec."WMDM Transfer Origin" = Rec."WMDM Transfer Origin"::Inbound THEN BEGIN
+          IF Rec."In-Transit Code" <> '' THEN BEGIN
+            Rec."Qty. to Receive" := 0;
+            Rec."Qty. to Receive (Base)" := 0;
+          END;
+        END;
+        Rec."WMDM Transfer Origin" := Rec."WMDM Transfer Origin"::" ";
+        Rec.MODIFY;
+      END;
+    END;
+
+    [EventSubscriber(Table,5741,OnBeforeValidateEvent,"Quantity Shipped")]
+    LOCAL PROCEDURE TransferLineOnBeforeQtyShippedValidate@1000000030(VAR Rec@1000000000 : Record 5741;VAR xRec@1000000001 : Record 5741;CurrFieldNo@1000000002 : Integer);
+    VAR
+      lcuReserveTransLine@1000000003 : Codeunit 99000836;
+      lrecReceiveReservEntry@1000000004 : Record 337;
+      lrecToTransferLine@1000000006 : Record 5741;
+    BEGIN
+      lrecToTransferLine.SETRANGE("Document No.", Rec."Document No.");
+      lrecToTransferLine.SETRANGE("Transfer-from Code", Rec."In-Transit Code");
+      lrecToTransferLine.SETRANGE("In-Transit Code", '');
+      IF lrecToTransferLine.FINDLAST THEN BEGIN
+        IF cuCommonFuncs.isWHILocation(lrecToTransferLine."Transfer-to Code") THEN BEGIN
+          IF lcuReserveTransLine.FindReservEntry(lrecToTransferLine,lrecReceiveReservEntry,1) THEN BEGIN
+            REPEAT
+              lrecReceiveReservEntry."Qty. to Handle (Base)" := 0;
+              lrecReceiveReservEntry.MODIFY(FALSE);
+            UNTIL lrecReceiveReservEntry.NEXT() = 0;
+          END;
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,7317,OnAfterValidateEvent,"Qty. Outstanding")]
+    LOCAL PROCEDURE WhseRcptLineOnAfterQtyOutstandingValidate@1000000038(VAR Rec@1000000000 : Record 7317;VAR xRec@1000000001 : Record 7317;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      IF cuCommonFuncs.isWHILocation(Rec."Location Code") THEN
+        Rec.VALIDATE(Rec."Qty. to Receive",0)
+      ELSE
+        Rec.VALIDATE(Rec."Qty. to Receive",Rec."Qty. Outstanding");
+    END;
+
+    [EventSubscriber(Table,7321,OnAfterValidateEvent,"Qty. Outstanding")]
+    LOCAL PROCEDURE WhseShipLineOnAfterQtyOutstandingValidate@1000000040(VAR Rec@1000000000 : Record 7321;VAR xRec@1000000001 : Record 7321;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      IF cuCommonFuncs.isWHILocation(Rec."Location Code") THEN
+        Rec.VALIDATE(Rec."Qty. to Ship",0);
+    END;
+
+    [EventSubscriber(Table,7321,OnAfterValidateEvent,"Qty. to Ship")]
+    LOCAL PROCEDURE WhseShptLineOnAfterQtyToShipModify@1000000013(VAR Rec@1000000000 : Record 7321;VAR xRec@1000000001 : Record 7321;CurrFieldNo@1000000002 : Integer);
+    BEGIN
+      //<IW author="R.Trudeau" date="05/13/19" issue="TFS4556">
+      //  Will reset the quantity to ship if updating due to registering a pick
+      //  and the update shipment on pick option isn't set.
+      //</IW>
+
+      // do nothing if setting to zero
+      IF Rec."Qty. to Ship" = 0 THEN
+        EXIT;
+
+      IF cuSessionHelper.GetValueAsBool(STRSUBSTNO('%1_%2',Rec."No.",Rec."Line No.")) THEN BEGIN
+        // prevent the recursive loop that will happen if flag not cleared
+        cuSessionHelper.updateCachedValue(STRSUBSTNO('%1_%2',Rec."No.",Rec."Line No."),'0');
+        Rec.VALIDATE("Qty. to Ship",xRec."Qty. to Ship");
+        Rec.MODIFY(FALSE);
+      END;
+    END;
+
+    [EventSubscriber(Table,7321,OnBeforeModifyEvent)]
+    LOCAL PROCEDURE WhseShptLineOnBeforeModify@1000000054(VAR Rec@1000000000 : Record 7321;VAR xRec@1000000001 : Record 7321;RunTrigger@1000000002 : Boolean);
+    VAR
+      lrecWhseActivLine@1000000004 : Record 5767;
+    BEGIN
+      //<IW author="R.Trudeau" date="05/13/19" issue="TFS4556">
+      // Reset the "Qty. to Ship (Base)"
+      //</IW>
+
+      IF Rec.ISTEMPORARY THEN
+        EXIT;
+
+      // need to reset this as registering the pick will set it but not validate so can only be caught her
+      IF NOT IsUpdateShipmentOnPick(Rec."Location Code") THEN
+        Rec."Qty. to Ship (Base)" := ROUND(Rec."Qty. to Ship" * Rec."Qty. per Unit of Measure",0.00001);
+    END;
+
+    [EventSubscriber(Table,5767,OnAfterInsertEvent)]
+    LOCAL PROCEDURE WhseActivityLineOnAfterInsert@1000000001(VAR Rec@1000000000 : Record 5767;RunTrigger@1000000001 : Boolean);
+    BEGIN
+      IF (NOT Rec.ISTEMPORARY) AND (Rec."Activity Type" = Rec."Activity Type"::"Put-away") THEN BEGIN
+        IF cuCommonFuncs.isWHILocation(Rec."Location Code") THEN BEGIN
+          Rec.VALIDATE(Rec."Qty. to Handle",0);
+          Rec.VALIDATE(Rec."Qty. to Handle (Base)", 0);
+          Rec.VALIDATE(Rec.Cubage, 0);
+          Rec.VALIDATE(Rec.Weight, 0);
+          Rec.MODIFY;
+        END;
+      END;
+    END;
+
+    [EventSubscriber(Table,5767,OnAfterValidateEvent,"Qty. Handled")]
+    LOCAL PROCEDURE WhseActivityLineOnAfterQtyHandledValidate@1000000031(VAR Rec@1000000000 : Record 5767;VAR xRec@1000000001 : Record 5767;CurrFieldNo@1000000002 : Integer);
+    VAR
+      ltrecEventParam@1000000003 : TEMPORARY Record 23044511;
+    BEGIN
+      IF Rec.ISTEMPORARY THEN
+        EXIT;
+
+      IF (cuCommonFuncs.isWHILocation(Rec."Location Code")) THEN BEGIN
+        IF Rec."Qty. Handled" > xRec."Qty. Handled" THEN
+          Rec.VALIDATE("Qty. to Handle", 0);
+      END;
+    END;
+
+    [EventSubscriber(Table,7312,OnBeforeInsertEvent)]
+    LOCAL PROCEDURE WhseEntryOnBeforeInsert@1000000018(VAR Rec@1000000000 : Record 7312;RunTrigger@1000000001 : Boolean);
+    VAR
+      lrecWhseJnlLine@1000000002 : Record 7311;
+      ltrecEventParam@1000000003 : TEMPORARY Record 23044511;
+    BEGIN
+      IF( cuSessionHelper.GetValue('user_name') <> '' ) THEN BEGIN
+        Rec."User ID" := COPYSTR( cuSessionHelper.GetValue('user_name'), 1, MAXSTRLEN( Rec."User ID" ) );
+      END;
+    END;
+
+    [EventSubscriber(Table,5802,OnBeforeInsertEvent)]
+    LOCAL PROCEDURE ValueEntryOnBeforeInsert@1000000070(VAR Rec@1000000000 : Record 5802;RunTrigger@1000000001 : Boolean);
+    BEGIN
+      IF( cuSessionHelper.GetValue('user_name') <> '' ) THEN BEGIN
+        Rec."User ID" := COPYSTR( cuSessionHelper.GetValue('user_name'), 1, MAXSTRLEN( Rec."User ID") );
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,80,OnAfterPostSalesDoc)]
+    LOCAL PROCEDURE SalesPostOnAfterPost@1000000000(VAR SalesHeader@1000000000 : Record 36;VAR GenJnlPostLine@1000000001 : Codeunit 12;SalesShptHdrNo@1000000002 : Code[20];RetRcpHdrNo@1000000003 : Code[20];SalesInvHdrNo@1000000004 : Code[20];SalesCrMemoHdrNo@1000000005 : Code[20];CommitIsSuppressed@1000000006 : Boolean);
+    VAR
+      lrecSalesLine@1000000007 : Record 37;
+    BEGIN
+      IF SalesHeader."Document Type" <> SalesHeader."Document Type"::Order THEN
+        EXIT;
+
+      lrecSalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+      //<IW author="Howie Zhao" DATE2DMY=")7/17/2019" issue="TFSxxx" >
+      //lrecSalesLine.SETRANGE("Document No.", trecEventParams.getValue('document_no'));
+      lrecSalesLine.SETRANGE("Document No.", SalesHeader."No.");
+      //</IW>
+      IF lrecSalesLine.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          zeroSalesLineQtyToShip(lrecSalesLine);
+        UNTIL(lrecSalesLine.NEXT=0);
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,90,OnAfterPostPurchaseDoc)]
+    LOCAL PROCEDURE PuchasePostOnAfterPost@1000000043(VAR PurchaseHeader@1000000000 : Record 38;VAR GenJnlPostLine@1000000001 : Codeunit 12;PurchRcpHdrNo@1000000002 : Code[20];RetShptHdrNo@1000000003 : Code[20];PurchInvHdrNo@1000000004 : Code[20];PurchCrMemoHdrNo@1000000005 : Code[20]);
+    VAR
+      lrecPurchaseLine@1000000007 : Record 39;
+    BEGIN
+      lrecPurchaseLine.SETRANGE("Document No.", PurchaseHeader."No.");
+      lrecPurchaseLine.SETRANGE("Document Type", PurchaseHeader."Document Type");
+      IF lrecPurchaseLine.FINDSET(TRUE) THEN BEGIN
+        REPEAT
+          IF lrecPurchaseLine."Qty. to Receive" > 0 THEN BEGIN
+            lrecPurchaseLine.VALIDATE("Qty. to Receive",0);
+            lrecPurchaseLine.MODIFY(FALSE);
+          END;
+        UNTIL lrecPurchaseLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE zeroSalesLineQtyToShip@1000000006(VAR precSalesLine@1000000002 : Record 37);
+    BEGIN
+      //<FUNC author='J.Karpiak' date='12/05/17'>
+      //  Description: after certain fields are validated, set the Qty. to Ship to 0 on the sales line
+      //  Side Effect: None
+      //</FUNC>
+
+
+      IF (precSalesLine."Document Type" = precSalesLine."Document Type"::Order) AND (precSalesLine.Type = precSalesLine.Type::Item) THEN BEGIN
+        IF (cuCommonFuncs.isWHILocation(precSalesLine."Location Code") AND (NOT cuCommonBase.isInvtPickLocation(precSalesLine."Location Code"))) THEN BEGIN
+          precSalesLine.VALIDATE("Qty. to Ship", 0);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE initTransferLineQuantityToReceive@1000000046(VAR precTransferLine@1000000000 : Record 5741);
+    BEGIN
+      //<FUNC author='J.Karpiak' date='12/05/17'>
+      //  Description: if the transfer-to location on a transfer order it a WHI location,
+      //               set the Qty. to Receive to 0 after certain fields are validated
+      //  Side Effect: None
+      //</FUNC>
+
+      IF precTransferLine."In-Transit Code" = '' THEN
+        EXIT;
+
+      IF cuCommonFuncs.isWHILocation(precTransferLine."Transfer-to Code") AND
+        (NOT cuCommonBase.isInvtPutLocation(precTransferLine."Transfer-to Code")) THEN BEGIN
+        precTransferLine."Qty. to Receive" := 0;
+        precTransferLine."Qty. to Receive (Base)" := 0;
+      END ELSE BEGIN
+        precTransferLine."Qty. to Receive" := precTransferLine."Qty. in Transit";
+        precTransferLine."Qty. to Receive (Base)" := precTransferLine."Qty. in Transit (Base)";
+      END;
+    END;
+
+    LOCAL PROCEDURE updateWithWhseShipReceive@1000000052(VAR precTransferLine@1000000000 : Record 5741);
+    VAR
+      lrecLocation@1000000001 : Record 14;
+      updateQuantity@1000000002 : Decimal;
+    BEGIN
+      //<FUNC author='J.Karpiak' date='12/06/17'>
+      //  Description: when the quantity, transfer-from, or transfer-to locations are modified, set the Qty. to Ship and/or
+      //               Qty. to Receive to 0
+      //  Side Effect: None
+      //</FUNC>
+      IF cuCommonFuncs.isWHILocation(precTransferLine."Transfer-from Code") AND
+        (NOT cuCommonBase.isInvtPickLocation(precTransferLine."Transfer-from Code")) THEN
+        precTransferLine.VALIDATE("Qty. to Ship", 0);
+
+      IF precTransferLine."In-Transit Code" <> '' THEN BEGIN
+        IF cuCommonFuncs.isWHILocation(precTransferLine."Transfer-to Code") AND
+          (NOT cuCommonBase.isInvtPutLocation(precTransferLine."Transfer-to Code")) THEN
+          precTransferLine.VALIDATE("Qty. to Receive", 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE zeroPurchLineQtyToReceive@1000000007(VAR precPurchaseLine@1000000000 : Record 39);
+    BEGIN
+      //<FUNC author='J.Karpiak' date='12/07/17'>
+      //  Description: after certain fields are validated, set the Qty. to Receive to 0 on the purchase line
+      //  Side Effect: None
+      //</FUNC>
+      IF (precPurchaseLine."Document Type" = precPurchaseLine."Document Type"::Order) AND
+        (precPurchaseLine.Type = precPurchaseLine.Type::Item) THEN BEGIN
+        IF (cuCommonFuncs.isWHILocation(precPurchaseLine."Location Code") AND
+          (NOT cuCommonBase.isInvtPutLocation(precPurchaseLine."Location Code")) ) THEN BEGIN
+            precPurchaseLine."Qty. to Receive" := 0;
+            precPurchaseLine."Qty. to Receive (Base)" := 0;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE checkTransferLineWHILocationCodes@1000000010(VAR precTransferLine@1000000000 : Record 5741);
+    VAR
+      lrecEventParams@1000000001 : Record 23044511;
+    BEGIN
+      //<FUNC author='J.Karpiak' date='12/12/17'>
+      //  Description: enabled the Transfer Line options if the transfer-to or transfer-from locations are WHI locations
+      //  Side Effect: None
+      //</FUNC>
+
+      IF cuCommonFuncs.isWHILocation(precTransferLine."Transfer-from Code") AND
+        (NOT cuCommonBase.isInvtPickLocation(precTransferLine."Transfer-from Code")) THEN
+        precTransferLine.VALIDATE("WMDM Transfer Origin", precTransferLine."WMDM Transfer Origin"::Outbound);
+
+      IF cuCommonFuncs.isWHILocation(precTransferLine."Transfer-to Code") AND
+        (NOT cuCommonBase.isInvtPutLocation(precTransferLine."Transfer-to Code")) THEN
+        precTransferLine.VALIDATE("WMDM Transfer Origin", precTransferLine."WMDM Transfer Origin"::Inbound);
+    END;
+
+    LOCAL PROCEDURE IsUpdateShipmentOnPick@1000000097(pcodLocationCode@1000000000 : Code[10]) : Boolean;
+    VAR
+      lrecConfig@1000000001 : Record 23044504;
+    BEGIN
+      //<IW author="R.Trudeau" date="05/13/19" issue="TFS4556">
+      //  Wrapper for determining if the location is configured to update the shipment when picking.
+      //</IW>
+
+      IF NOT lrecConfig.GET(cuCommonFuncs.getFirstConfigByLocation(pcodLocationCode)) THEN
+        EXIT(TRUE);
+
+      EXIT(lrecConfig."Update Shipment on Pick");
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2017.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+
+      <IW>
+        <REVISION author="R.Trudeau" date="03/02/19" version="IW19.03" issue="TFS4456">
+          Removed "Qty. to Ship (Base)" validation call in zeroSalesLineQtyToShip.  Cleaned up function slightly.
+        </REVISION>
+        <REVISION author="R.Trudeau" date="05/13/19" version="IW19.05" issue="TFS4556">
+          Changes to handle partial registrations of picks updating shipments if the Update Shipment Pick option not enabled.
+        </REVISION>
+       <REVISION author="Howie Zhao" date="07/17/19" version="IW19.07" issue="TFSXXX">
+          Changed SalesPostOnAfterPost method, get no. from the header
+       </REVISION>
+       <REVISION author="R.Trudeau" date="01/06/20" version="20.01" issue="706">
+         Changes to support "Direct Transfer" configurations.
+       </REVISION>
+      </IW>
+    }
+    END.
+  }
+}
+

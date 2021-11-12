@@ -1,0 +1,959 @@
+OBJECT Codeunit 14002701 Create AFP Alerts
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.02;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            IF AFPAlertSetup.GET THEN;
+            IF NOT AFPAlertSetup."Create Alerts" THEN BEGIN
+              AlertLine.RESET;
+              AlertLine.SETCURRENTKEY("Alert Type", "Snooze Date");
+              AlertLine.DELETEALL(TRUE);
+              COMMIT;
+              EXIT;
+            END;
+
+            Location.RESET;
+            Location.SETRANGE("Enable Adv. Forecasting",TRUE);
+            IF Location.FINDSET THEN BEGIN
+              REPEAT
+                StockOutByFilter(Location.Code,'','');
+                COMMIT;
+              UNTIL Location.NEXT = 0;
+            END;
+
+            LatePO;
+            SurplusWithPO;
+            ForecastIsAdjusted;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AFPAlertSetup@1240030000 : Record 14002703;
+      AFPProdTemplate@1240030035 : Record 14002677;
+      AlertLine@1240030002 : Record 14002709;
+      AlertLine2@1240030034 : Record 14002709;
+      AlertLineTmp@1240030045 : TEMPORARY Record 14002709;
+      InvMgtSetup@1240030012 : Record 14000551;
+      Item@1240030027 : Record 27;
+      Location@1240030025 : Record 14;
+      ProcUnit@1240030005 : Record 14000555;
+      PurchLine@1240030032 : Record 39;
+      PurchHeader@1240020013 : Record 38;
+      Vendor@1240030028 : Record 23;
+      VendorBuyingCalendar@1240030029 : Record 14000563;
+      LocInvPeriod@1240030046 : Record 14000553;
+      SurplusInvValue@1240020002 : Record 14000584;
+      ItemUsage@1240020006 : Record 14000557;
+      CreateLocInvRollUp@1240030004 : Codeunit 14000574;
+      Forecast@1240030003 : Codeunit 14000567;
+      InventoryManagement@1240030007 : Codeunit 14000553;
+      UBP@1240030016 : Codeunit 14000564;
+      ProgWindow@1240030008 : Dialog;
+      i@1240030024 : Integer;
+      LogEntryNo@1240030011 : Integer;
+      LTHDate@1240030018 : Date;
+      MaxIncr@1240030030 : Integer;
+      MaximumSOQ@1240030020 : Decimal;
+      MinimumSOQ@1240030021 : Decimal;
+      NetExpInvArray@1240030022 : ARRAY [200] OF Decimal;
+      NetExpDateArray@1240030023 : ARRAY [200] OF Date;
+      OverrideLTHDate@1240030017 : Date;
+      RecCount@1240030010 : Integer;
+      ReplSourceTypeFilter@1240030006 : Text[60];
+      Text001@1240030009 : TextConst 'ENU=Create Stock Out Alerts';
+      Text002@1240030013 : TextConst 'ENU=Progress';
+      StockOut@1240030026 : Boolean;
+      StockOutFound@1240030031 : Boolean;
+      UseRollUp@1240030019 : Boolean;
+      Text003@1240030043 : TextConst 'ENU=Item';
+      Text004@1240030033 : TextConst 'ENU=Exp. Rec. Date %1 - Quantity %2';
+      Text005@1240030001 : TextConst 'ENU=Do you wish to create Alerts for all Locations?  This could take some time.';
+      Text006@1240030036 : TextConst 'ENU=Create Late P.O. Alerts';
+      UpdateCount@1240030037 : Integer;
+      LeadTimeDate@1240030038 : Date;
+      StockOutIncrements@1240030039 : Integer;
+      StockOutInsideLT@1240030040 : Boolean;
+      Text007@1240030041 : TextConst 'ENU=Do you wish to create Alerts for location %1.';
+      ProcUnitCount@1240030014 : Integer;
+      Progress@1240030042 : Integer;
+      Text008@1240030044 : TextConst 'ENU=Location';
+      FirstIncrDate@1240030048 : Date;
+      DateArray@1240030047 : ARRAY [200] OF Date;
+      Finished@1240030049 : Boolean;
+      PrevOverrideLTHDate@1240030050 : Date;
+      PrevLocCode@1240020000 : Code[10];
+      MaxDateToUse@1240020001 : Date;
+      Text009@1240020003 : TextConst 'ENU=On Order of %1 (Base) and Surplus of %2 (Base)';
+      Text010@1240020004 : TextConst 'ENU=Multiple PO Lines With On Order of %1 (Base) and Surplus of %2 (Base)';
+      Text011@1240020005 : TextConst 'ENU=Create Surplus with P.O. Alerts';
+      TotFC@1240020007 : Decimal;
+      TotCustFC@1240020008 : Decimal;
+      TotFCAdj@1240020009 : Decimal;
+      TotAutoFCAdj@1240020010 : Decimal;
+      Text012@1240020011 : TextConst 'ENU="Auto. FC Adj. = %1  (FC = %2  Cust FC = %3  FC Adjust = %4)"';
+      Text013@1240020012 : TextConst 'ENU=Create Auto FC Adj. Alerts';
+
+    PROCEDURE CreateAlertsYesNo@1240030004(CurrLocation@1240030000 : Code[10]);
+    BEGIN
+      IF CurrLocation <> '' THEN BEGIN
+        IF NOT CONFIRM(STRSUBSTNO(Text007,CurrLocation),FALSE) THEN
+          EXIT;
+        StockOutByFilter(CurrLocation,'','');
+        EXIT;
+      END ELSE
+        IF NOT CONFIRM(Text005,FALSE) THEN
+          EXIT;
+
+      Location.RESET;
+      IF CurrLocation <> '' THEN
+        Location.SETFILTER(Code,'%1',CurrLocation);
+      IF Location.FINDSET THEN
+        REPEAT
+          IF NOT Location."Enable Adv. Forecasting" THEN BEGIN
+            AlertLine.RESET;
+            AlertLine.SETCURRENTKEY("Location Code");
+            AlertLine.SETRANGE("Location Code",Location.Code);
+            AlertLine.DELETEALL;
+          END;
+        UNTIL Location.NEXT = 0;
+
+      Location.RESET;
+      StockOutByFilter(CurrLocation,'','');
+      LatePO;
+      SurplusWithPO;
+      ForecastIsAdjusted;
+    END;
+
+    PROCEDURE StockOutByFilter@1240030000(CurrLocation@1240030000 : Code[10];CurrItem@1240030001 : Code[50];CurrVariant@1240030002 : Code[10]);
+    VAR
+      Skip@1000 : Boolean;
+      AdvForcSetup@1001 : Record 14002651;
+    BEGIN
+      InvMgtSetup.GET;
+      AFPAlertSetup.GET;
+
+      IF NOT AFPAlertSetup."Enable Stock Out Alerts" THEN BEGIN
+        AlertLine.RESET;
+        AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Exp. Stock Out");
+        IF CurrLocation <> '' THEN
+          AlertLine.SETFILTER("Location Code",CurrLocation);
+        IF NOT AlertLine.ISEMPTY THEN
+          AlertLine.DELETEALL(TRUE);
+        EXIT;
+      END;
+
+      InventoryManagement.CreateLogEntry(CurrLocation,Text001,LogEntryNo);
+      COMMIT;
+
+      IF GUIALLOWED THEN BEGIN
+        ProgWindow.OPEN(
+          Text001 + '\' +
+          PADSTR(Text008,12) + '#2########\' +
+          PADSTR(Text002,12) + '@1@@@@@@@@@@@@@@@@@@@@@@@@@@@@');
+      END;
+
+      AlertLine.RESET;
+      AlertLine.SETCURRENTKEY("Alert Type",AlertLine."Snooze Date");
+      AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Exp. Stock Out");
+      AlertLine.SETFILTER("Snooze Date",'<=%1',WORKDATE);
+      IF CurrLocation <> '' THEN
+        AlertLine.SETFILTER("Location Code",CurrLocation);
+      AlertLine.DELETEALL(TRUE);
+      COMMIT;
+      AlertLine.RESET;
+
+      ProcUnit.RESET;
+      ProcUnit.SETCURRENTKEY("Location Code","Replenishment Source Type","Replenishment Source Code");
+      IF CurrLocation <> '' THEN
+        ProcUnit.SETRANGE("Location Code",CurrLocation);
+      IF CurrItem <> '' THEN
+        ProcUnit.SETRANGE("Item No.",CurrItem);
+      IF CurrVariant <> '' THEN
+        ProcUnit.SETRANGE("Variant Code",CurrVariant);
+      ReplSourceTypeFilter := '';
+
+      IF AFPAlertSetup."Enable Vendor Repl. Items" THEN
+        ReplSourceTypeFilter := FORMAT(ProcUnit."Replenishment Source Type"::Vendor) + '|';
+
+      IF AFPAlertSetup."Enable Production Repl. Items" THEN BEGIN
+        ReplSourceTypeFilter := ReplSourceTypeFilter + FORMAT(ProcUnit."Replenishment Source Type"::Production) + '|';
+      END;
+      IF AFPAlertSetup."Enable Assembly Repl. Items" THEN BEGIN
+        ReplSourceTypeFilter := ReplSourceTypeFilter + FORMAT(ProcUnit."Replenishment Source Type"::Assembly) + '|';
+        AdvForcSetup.GET;
+      END;
+      //ReplSourceTypeFilter := ReplSourceTypeFilter + FORMAT(ProcUnit."Replenishment Source Type"::Location) + '|';
+      ReplSourceTypeFilter := DELCHR(ReplSourceTypeFilter, '>', '|');
+      ProcUnit.SETFILTER(ProcUnit."Replenishment Source Type",ReplSourceTypeFilter);
+      ProcUnit.SETRANGE("Nonstock Unit",FALSE);
+
+      Progress := 0;
+
+      IF ProcUnit.FINDSET THEN BEGIN
+        IF GUIALLOWED THEN
+          ProcUnitCount := ProcUnit.COUNT;
+
+        REPEAT
+          Skip := FALSE;
+          IF ProcUnit."Replenishment Model" = ProcUnit."Replenishment Model"::"Min/Max" THEN BEGIN
+            IF (ProcUnit."Maximum Inventory" <> 0) OR
+              ((ProcUnit."Maximum Inventory" = 0) AND
+              (ProcUnit."Minimum Inventory" = 0) AND
+              (ProcUnit."Minimum Days Supply" = 0) AND
+              (ProcUnit."Maximum Days Supply" = 0)) THEN
+                Skip := TRUE;
+          END;
+
+          IF NOT Skip THEN BEGIN
+            IF (ProcUnit."Location Code" <> '') AND
+               (PrevLocCode <> ProcUnit."Location Code")
+            THEN BEGIN
+              Location.GET(ProcUnit."Location Code");
+              IF GUIALLOWED THEN
+                ProgWindow.UPDATE(2,Location.Code);
+              LocInvPeriod.RESET;
+              LocInvPeriod.SETRANGE("Location Code",Location.Code);
+              LocInvPeriod.SETRANGE("Period End Closed",TRUE);
+              LocInvPeriod.FIND('+');
+              CLEAR(DateArray);
+              i := 1;
+              DateArray[i] := WORKDATE;
+              FirstIncrDate := LocInvPeriod."Ending Date" + 1;
+              REPEAT
+                FirstIncrDate := FirstIncrDate + AFPAlertSetup."Increment Days";
+              UNTIL FirstIncrDate > WORKDATE;
+              i := i + 1;
+              DateArray[i] := FirstIncrDate;
+              REPEAT
+                i := i + 1;
+                DateArray[i] := DateArray[i - 1] + AFPAlertSetup."Increment Days";
+              UNTIL i = 200;
+              PrevLocCode := ProcUnit."Location Code";
+            END;
+
+            IF Location."Enable Adv. Forecasting" THEN BEGIN
+              IF GUIALLOWED THEN BEGIN
+                Progress := Progress + 1;
+                IF Progress < 100 THEN
+                  ProgWindow.UPDATE(1,ROUND(10000 * (Progress / ProcUnitCount),1))
+                ELSE
+                  ProgWindow.UPDATE(1,ROUND(10000 * (Progress / ProcUnitCount),1));
+              END;
+              IF ForecastFound(ProcUnit,LocInvPeriod."Starting Date",DateArray[1]) THEN BEGIN
+                IF Item."No." <> ProcUnit."Item No." THEN
+                  Item.GET(ProcUnit."Item No.");
+                CLEAR(NetExpInvArray);
+                CLEAR(NetExpDateArray);
+                i := 1;
+                CASE ProcUnit."Replenishment Source Type" OF
+                  ProcUnit."Replenishment Source Type"::Location,
+                  ProcUnit."Replenishment Source Type"::Vendor,
+                  ProcUnit."Replenishment Source Type"::Production,
+                  ProcUnit."Replenishment Source Type"::Assembly:
+                    BEGIN
+                      CASE ProcUnit."Replenishment Source Type" OF
+                        ProcUnit."Replenishment Source Type"::Location:
+                          BEGIN
+                            MaxDateToUse := CALCDATE(STRSUBSTNO('<+%1D>',ProcUnit."Minimum Days Supply"));
+                          END;
+                        ProcUnit."Replenishment Source Type"::Vendor:
+                          BEGIN
+                            LTHDate := UBP.GetLeadTimeHoriz(ProcUnit);
+                            LeadTimeDate :=
+                              CALCDATE(
+                                STRSUBSTNO('<+%1D>',UBP.CalcLeadTimeDays(ProcUnit)),WORKDATE);
+                            CASE AFPAlertSetup."Vendor Repl. Max Date to Use" OF
+                              AFPAlertSetup."Vendor Repl. Max Date to Use"::"Lead Time Horiz":
+                                MaxDateToUse := LTHDate;
+                              AFPAlertSetup."Vendor Repl. Max Date to Use"::"Lead Time":
+                                MaxDateToUse := LeadTimeDate;
+                            END;
+                          END;
+                        ProcUnit."Replenishment Source Type"::Production:
+                          BEGIN
+                            IF AFPProdTemplate.Name <> Location."AFP Prod. Template Name" THEN
+                              AFPProdTemplate.GET(Location."AFP Prod. Template Name");
+                            LTHDate :=
+                              (WORKDATE) +
+                              (AFPProdTemplate."Planning Increment (Days)" *
+                               AFPProdTemplate."Maximum Planning Increments" - 1);
+                            MaxDateToUse := LTHDate;
+                          END;
+                        ProcUnit."Replenishment Source Type"::Assembly:
+                          BEGIN
+                            LTHDate := (WORKDATE) +
+                              (AdvForcSetup."Assembly Increment Days" *
+                              AdvForcSetup."Assembly Max. Increments" - 1);
+                            MaxDateToUse := LTHDate;
+                          END;
+                      END;
+                      UBP.CheckMaxLTHDate(ProcUnit, LTHDate);
+                      StockOut := FALSE;
+                      UseRollUp := FALSE;
+                      IF InvMgtSetup."Roll Up Via Repl. Path" THEN BEGIN
+                        StockOutIncrements := 0;
+                        StockOutInsideLT := FALSE;
+                        REPEAT
+                          OverrideLTHDate := DateArray[i];
+                          CLEAR(CreateLocInvRollUp);
+                          CreateLocInvRollUp.CalcRollUp(ProcUnit,FALSE,0,OverrideLTHDate);
+                          CreateLocInvRollUp.GetMinMaxSOQ(MinimumSOQ,MaximumSOQ);
+                          CASE Location."Roll Up Order Quantity Rule" OF
+                            Location."Roll Up Order Quantity Rule"::MinSOQ:
+                              BEGIN
+                                NetExpInvArray[i] := MinimumSOQ;
+                              END;
+                            Location."Roll Up Order Quantity Rule"::MaxSOQ:
+                              BEGIN
+                                NetExpInvArray[i] := MaximumSOQ;
+                              END;
+                          END;
+                          IF NetExpInvArray[i] > 0 THEN BEGIN
+                            StockOut := TRUE;
+                            StockOutIncrements := StockOutIncrements + 1;
+                            IF OverrideLTHDate <= LeadTimeDate THEN
+                              StockOutInsideLT := TRUE;
+                          END;
+                          NetExpDateArray[i] := OverrideLTHDate;
+                          IF OverrideLTHDate > LTHDate THEN
+                            OverrideLTHDate := LTHDate;
+                          Finished := FALSE;
+                          IF (ProcUnit."Replenishment Source Type" = ProcUnit."Replenishment Source Type"::Vendor) AND
+                             (DateArray[i] < LeadTimeDate) AND
+                             (DateArray[i + 1] > LeadTimeDate)
+                          THEN BEGIN
+                            PrevOverrideLTHDate := OverrideLTHDate;
+                            OverrideLTHDate := LeadTimeDate;
+                            CLEAR(CreateLocInvRollUp);
+                            CreateLocInvRollUp.CalcRollUp(ProcUnit,FALSE,0,OverrideLTHDate);
+                            CreateLocInvRollUp.GetMinMaxSOQ(MinimumSOQ,MaximumSOQ);
+                            CASE Location."Roll Up Order Quantity Rule" OF
+                              Location."Roll Up Order Quantity Rule"::MinSOQ:
+                                IF MinimumSOQ = 0 THEN
+                                  Finished := TRUE;
+                              Location."Roll Up Order Quantity Rule"::MaxSOQ:
+                                IF MaximumSOQ = 0 THEN
+                                  Finished := TRUE;
+                            END;
+                            OverrideLTHDate := PrevOverrideLTHDate;
+                          END;
+                          i := i + 1;
+                          IF i = 200 THEN
+                            Finished := TRUE;
+                        UNTIL Finished OR (OverrideLTHDate >= MaxDateToUse);
+
+                        IF StockOut THEN BEGIN
+                          AlertLine.SETRANGE("Item No.",ProcUnit."Item No.");
+                          AlertLine.SETRANGE("Location Code",ProcUnit."Location Code");
+                          AlertLine.SETRANGE("Variant Code",ProcUnit."Variant Code");
+                          AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Exp. Stock Out");
+                          IF NOT AlertLine.FIND('-') THEN BEGIN
+                            AlertLine.INIT;
+                            AlertLine."Location Code" := ProcUnit."Location Code";
+                            AlertLine."Item No." := ProcUnit."Item No.";
+                            AlertLine."Variant Code" := ProcUnit."Variant Code";
+                            AlertLine."Alert Type" := AlertLine."Alert Type"::"Exp. Stock Out";
+                            AlertLine."Alert Date" := WORKDATE;
+                            GetRanking(AlertLine);
+                            AlertLine.INSERT;
+                          END;
+                          AlertLine."Replenishment Source Type" := ProcUnit."Replenishment Source Type";
+                          AlertLine."Replenishment Source Code" := ProcUnit."Replenishment Source Code";
+                          IF (AlertLine."Replenishment Source Type" = AlertLine."Replenishment Source Type"::Vendor) THEN
+                            AlertLine."Vendor Code" := ProcUnit."Replenishment Source Code";
+                          AlertLine."Unit of Measure Code" := Item."Base Unit of Measure";
+                          AlertLine."Purchaser Code" := ProcUnit."Purchaser Code";
+                          AlertLine.Comment := '';
+                          AlertLine."Expected Date" := 0D;
+                          StockOutFound := FALSE;
+                          MaxIncr := i - 1;
+                          i := 1;
+                          REPEAT
+                            IF NOT StockOutFound THEN BEGIN
+                              IF NetExpInvArray[i] > 0 THEN BEGIN
+                                StockOutFound := TRUE;
+                                IF AlertLine."Expected Date" = 0D THEN
+                                  AlertLine."Expected Date" := NetExpDateArray[i];
+                                UpdateAlertLine(
+                                  '(' + FORMAT(NetExpDateArray[i]) + '   ' + FORMAT(-NetExpInvArray[i]),AlertLine);
+                              END;
+                            END ELSE BEGIN
+                              IF NetExpInvArray[i] > 0 THEN BEGIN
+                                UpdateAlertLine('   ' + FORMAT(-NetExpInvArray[i]),AlertLine);
+                              END ELSE BEGIN
+                                UpdateAlertLine('   ' + FORMAT(NetExpDateArray[i]) + ')',AlertLine);
+                                StockOutFound := FALSE;
+                              END;
+                            END;
+                            i := i + 1;
+                          UNTIL i > MaxIncr;
+                          AlertLine."Inside Lead Time" := StockOutInsideLT;
+                          AlertLine."Stockout Increments" := StockOutIncrements;
+                          GetRanking(AlertLine);
+                          AlertLine.MODIFY;
+                          UpdateCount := UpdateCount + 1;
+                          IF UpdateCount MOD 500 = 0 THEN
+                            COMMIT;
+                        END;
+                      END ELSE BEGIN
+                        //
+                        ERROR('Alerts are currently supported only in Roll-Up.');
+                        //
+                        REPEAT
+                          OverrideLTHDate := OverrideLTHDate + AFPAlertSetup."Increment Days";
+                        UNTIL OverrideLTHDate > LTHDate + AFPAlertSetup."Increment Days";
+                      END;
+                    END;
+                END;
+              END;
+            END;
+          END;
+        UNTIL ProcUnit.NEXT = 0;
+      END;
+
+      IF GUIALLOWED THEN
+        ProgWindow.CLOSE;
+
+      InventoryManagement.CloseLogEntry(LogEntryNo,'');
+      COMMIT;
+    END;
+
+    PROCEDURE LatePO@1240030003();
+    BEGIN
+      InvMgtSetup.GET;
+      AFPAlertSetup.GET;
+      IF NOT AFPAlertSetup."Enable Late P.O." THEN BEGIN
+        AlertLine.RESET;
+        AlertLine.SETCURRENTKEY("Alert Type", "Snooze Date");
+        AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Late Purch. Order");
+        AlertLine.DELETEALL(TRUE);
+        COMMIT;
+        EXIT;
+      END;
+
+      IF GUIALLOWED THEN
+        ProgWindow.OPEN(
+          PADSTR(Text006,12) + '\' +
+          PADSTR(Text008,12) + '#1########\' +
+          PADSTR(Text003,12) + '#2##################');
+
+      InventoryManagement.CreateLogEntry('',Text006,LogEntryNo);
+
+      AlertLineTmp.RESET;
+      AlertLineTmp.DELETEALL;
+
+      AlertLine.RESET;
+      AlertLine.SETCURRENTKEY("Alert Type",AlertLine."Snooze Date");
+      AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Late Purch. Order");
+      IF AlertLine.FIND('-') THEN
+        REPEAT
+          IF AlertLine."Snooze Date" > WORKDATE THEN BEGIN
+            GetRanking(AlertLine);
+            AlertLineTmp.COPY(AlertLine);
+            AlertLineTmp.INSERT;
+          END;
+        UNTIL AlertLine.NEXT = 0;
+
+      AlertLine.RESET;
+      AlertLine.SETCURRENTKEY("Alert Type",AlertLine."Snooze Date");
+      AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Late Purch. Order");
+      AlertLine.DELETEALL;
+      COMMIT;
+
+      Location.RESET;
+      Location.SETRANGE("Enable Adv. Forecasting",TRUE);
+      IF Location.FIND('-') THEN
+        REPEAT
+          IF GUIALLOWED THEN
+            ProgWindow.UPDATE(1,Location.Code);
+          PurchLine.RESET;
+          PurchLine.SETRANGE("Document Type",PurchLine."Document Type"::Order);
+          PurchLine.SETRANGE("Location Code",Location.Code);
+          PurchLine.SETRANGE(Type,PurchLine.Type::Item);
+          PurchLine.SETFILTER("No.",'<>%1','');
+          PurchLine.SETFILTER("Outstanding Qty. (Base)",'>%1',0);
+          PurchLine.SETFILTER("Expected Receipt Date",'<%1',WORKDATE);
+          IF PurchLine.FIND('-') THEN
+            REPEAT
+              IF GUIALLOWED THEN
+                ProgWindow.UPDATE(2,PurchLine."No.");
+              AlertLine.SETRANGE("Item No.",PurchLine."No.");
+              AlertLine.SETRANGE("Location Code",PurchLine."Location Code");
+              AlertLine.SETRANGE("Variant Code",PurchLine."Variant Code");
+              AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Late Purch. Order");
+              AlertLine.SETRANGE("Source No.",PurchLine."Document No.");
+              IF InvMgtSetup."Enable AV Interface" THEN
+                AlertLine.SETRANGE("Line No.",PurchLine."Line No.");
+              IF NOT AlertLine.FIND('-') THEN BEGIN
+                AlertLineTmp.SETRANGE("Item No.",PurchLine."No.");
+                AlertLineTmp.SETRANGE("Location Code",PurchLine."Location Code");
+                AlertLineTmp.SETRANGE("Variant Code",PurchLine."Variant Code");
+                AlertLineTmp.SETRANGE("Alert Type",AlertLineTmp."Alert Type"::"Late Purch. Order");
+                AlertLineTmp.SETRANGE("Source No.",PurchLine."Document No.");
+                IF AlertLineTmp.FIND('-') THEN BEGIN
+                  IF AlertLineTmp."Snooze Date" > WORKDATE THEN BEGIN
+                    AlertLine.INIT;
+                    AlertLine.COPY(AlertLineTmp);
+                    AlertLine."Line No." := PurchLine."Line No.";
+                    GetRanking(AlertLine);
+                    AlertLine.INSERT;
+                  END
+                END ELSE BEGIN;
+                  AlertLine.INIT;
+                  AlertLine."Item No." := PurchLine."No.";
+                  AlertLine."Location Code" := PurchLine."Location Code";
+                  AlertLine."Variant Code" := PurchLine."Variant Code";
+                  AlertLine."Alert Type" := AlertLine."Alert Type"::"Late Purch. Order";
+                  AlertLine."Source No." := PurchLine."Document No.";
+                  AlertLine."Line No." := PurchLine."Line No.";
+                  GetRanking(AlertLine);
+                  AlertLine.INSERT;
+                END;
+              END;
+              IF ProcUnit.GET(PurchLine."Location Code",PurchLine."No.",PurchLine."Variant Code") THEN BEGIN
+              AlertLine."Replenishment Source Type" := ProcUnit."Replenishment Source Type";
+              AlertLine."Replenishment Source Code" := ProcUnit."Replenishment Source Code";
+              END;
+              AlertLine."Alert Date" := WORKDATE;
+              AlertLine."Quantity (Base)" := PurchLine."Outstanding Qty. (Base)";
+              AlertLine."Extended Cost (LCY)" := PurchLine."Outstanding Amount (LCY)";
+              AlertLine."Unit Cost (LCY)" := ROUND((PurchLine."Outstanding Amount (LCY)"/AlertLine."Quantity (Base)"), 0.00001, '=');
+              GetPurchHeader(PurchLine."Document Type", PurchLine."Document No.");
+              AlertLine."Purchaser Code" := PurchHeader."Purchaser Code";
+              IF AlertLine."Purchaser Code" = '' THEN BEGIN
+                AlertLine."Purchaser Code" := ProcUnit."Purchaser Code";
+              END;
+              AlertLine."Vendor Code" := PurchLine."Buy-from Vendor No.";
+              AlertLine."Expected Date" := PurchLine."Expected Receipt Date";
+              AlertLine.Comment :=
+                STRSUBSTNO(
+                  Text004,FORMAT(PurchLine."Expected Receipt Date"),
+                  FORMAT(AlertLine."Quantity (Base)"));
+              GetRanking(AlertLine);
+              AlertLine.MODIFY;
+            UNTIL PurchLine.NEXT = 0;
+        UNTIL Location.NEXT = 0;
+
+      InventoryManagement.CloseLogEntry(LogEntryNo,'');
+      COMMIT;
+
+      IF GUIALLOWED THEN
+        ProgWindow.CLOSE;
+    END;
+
+    PROCEDURE SurplusWithPO@1240020002();
+    VAR
+      LocLocation@1240020000 : Record 14;
+    BEGIN
+      AFPAlertSetup.GET;
+      IF NOT AFPAlertSetup."Enable Surp. With P.O." THEN BEGIN
+        AlertLine.RESET;
+        AlertLine.SETCURRENTKEY("Alert Type", "Snooze Date");
+        AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Surp. With Open PO");
+        AlertLine.DELETEALL(TRUE);
+        COMMIT;
+        EXIT;
+      END;
+
+      IF GUIALLOWED THEN
+        ProgWindow.OPEN(
+          PADSTR(Text011,12) + '\' +
+          PADSTR(Text008,12) + '#1########\' +
+          PADSTR(Text003,12) + '#2##################');
+
+      InventoryManagement.CreateLogEntry('',Text011,LogEntryNo);
+      COMMIT;
+
+      AlertLineTmp.RESET;
+      AlertLineTmp.DELETEALL;
+
+      AlertLine.RESET;
+      AlertLine.SETCURRENTKEY("Alert Type",AlertLine."Snooze Date");
+      AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Surp. With Open PO");
+      IF AlertLine.FIND('-') THEN
+        REPEAT
+          IF AlertLine."Snooze Date" > WORKDATE THEN BEGIN
+            GetRanking(AlertLine);
+            AlertLineTmp.COPY(AlertLine);
+            AlertLineTmp.INSERT;
+          END;
+        UNTIL AlertLine.NEXT = 0;
+
+      AlertLine.RESET;
+      AlertLine.SETCURRENTKEY("Alert Type", "Snooze Date");
+      AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Surp. With Open PO");
+      AlertLine.DELETEALL(TRUE);
+      COMMIT;
+
+      SurplusInvValue.RESET;
+
+      LocLocation.RESET;
+      LocLocation.SETRANGE("Enable Adv. Forecasting",TRUE);
+      IF LocLocation.FINDSET THEN
+        REPEAT
+          PurchLine.RESET;
+          PurchLine.SETRANGE("Document Type",PurchLine."Document Type"::Order);
+          PurchLine.SETRANGE(Type,PurchLine.Type::Item);
+          PurchLine.SETFILTER("Outstanding Qty. (Base)",'>%1',0);
+          PurchLine.SETRANGE("Drop Shipment",FALSE);
+          PurchLine.SETRANGE("Special Order",FALSE);
+          PurchLine.SETRANGE("Location Code",LocLocation.Code);
+          IF PurchLine.FINDSET THEN
+            REPEAT
+              IF SurplusInvValue.GET(PurchLine."No.",PurchLine."Location Code",PurchLine."Variant Code") THEN BEGIN
+                IF GUIALLOWED THEN BEGIN
+                  ProgWindow.UPDATE(1,PurchLine."Location Code");
+                  ProgWindow.UPDATE(2,PurchLine."No.");
+                END;
+                SurplusInvValue.CALCFIELDS("Outstanding Surplus Qty (Base)");
+                IF SurplusInvValue."Outstanding Surplus Qty (Base)" <> 0 THEN BEGIN
+                  IF NOT ProcUnit.GET(SurplusInvValue."Location Code",SurplusInvValue."Item No.",SurplusInvValue."Variant Code") THEN
+                    ProcUnit.INIT;
+                  AlertLine.SETRANGE("Item No.",PurchLine."No.");
+                  AlertLine.SETRANGE("Location Code",PurchLine."Location Code");
+                  AlertLine.SETRANGE("Variant Code",PurchLine."Variant Code");
+                  AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Surp. With Open PO");
+                  AlertLine.SETRANGE("Source No.",PurchLine."Document No.");
+                  AlertLine.SETRANGE("Line No.",PurchLine."Line No.");
+                  IF NOT AlertLine.FINDFIRST THEN BEGIN
+                    AlertLineTmp.SETRANGE("Item No.",PurchLine."No.");
+                    AlertLineTmp.SETRANGE("Location Code",PurchLine."Location Code");
+                    AlertLineTmp.SETRANGE("Variant Code",PurchLine."Variant Code");
+                    AlertLineTmp.SETRANGE("Alert Type",AlertLineTmp."Alert Type"::"Surp. With Open PO");
+                    AlertLineTmp.SETRANGE("Source No.",PurchLine."Document No.");
+                    IF AlertLineTmp.FINDFIRST THEN BEGIN
+                      IF AlertLineTmp."Snooze Date" > WORKDATE THEN BEGIN
+                        AlertLine.INIT;
+                        AlertLine.COPY(AlertLineTmp);
+                        AlertLine.Comment :=
+                          STRSUBSTNO(
+                            Text009,PurchLine."Outstanding Qty. (Base)",
+                            SurplusInvValue."Outstanding Surplus Qty (Base)");
+                        AlertLine."Expected Date" := PurchLine."Expected Receipt Date";
+                        AlertLine."Quantity (Base)" := PurchLine."Outstanding Qty. (Base)";
+                        AlertLine."Extended Cost (LCY)" := PurchLine."Outstanding Amount (LCY)";
+                        IF AlertLine."Quantity (Base)" > 0 THEN
+                          AlertLine."Unit Cost (LCY)" := ROUND((PurchLine."Outstanding Amount (LCY)"/AlertLine."Quantity (Base)"), 0.00001, '=');
+                        AlertLine."Line No." := PurchLine."Line No.";
+                        GetRanking(AlertLine);
+                        GetPurchHeader(PurchLine."Document Type", PurchLine."Document No.");
+                        AlertLine."Purchaser Code" := PurchHeader."Purchaser Code";
+                        IF AlertLine."Purchaser Code" = '' THEN BEGIN
+                          AlertLine."Purchaser Code" := ProcUnit."Purchaser Code";
+                        END;
+                        AlertLine.INSERT(TRUE);
+                      END
+                    END ELSE BEGIN
+                      AlertLine.INIT;
+                      AlertLine."Item No." := PurchLine."No.";
+                      AlertLine."Location Code" := PurchLine."Location Code";
+                      AlertLine."Variant Code" := PurchLine."Variant Code";
+                      AlertLine."Alert Type" := AlertLine."Alert Type"::"Surp. With Open PO";
+                      AlertLine."Source No." := PurchLine."Document No.";
+                      AlertLine.Comment :=
+                        STRSUBSTNO(
+                          Text009,PurchLine."Outstanding Qty. (Base)",
+                          SurplusInvValue."Outstanding Surplus Qty (Base)");
+                      AlertLine."Expected Date" := PurchLine."Expected Receipt Date";
+                      AlertLine."Quantity (Base)" := PurchLine."Outstanding Qty. (Base)";
+                      AlertLine."Extended Cost (LCY)" := PurchLine."Outstanding Amount (LCY)";
+                      IF AlertLine."Quantity (Base)" > 0 THEN
+                        AlertLine."Unit Cost (LCY)" := ROUND((PurchLine."Outstanding Amount (LCY)"/AlertLine."Quantity (Base)"), 0.00001, '=');
+                      AlertLine."Line No." := PurchLine."Line No.";
+                      GetRanking(AlertLine);
+                      GetPurchHeader(PurchLine."Document Type", PurchLine."Document No.");
+                      AlertLine."Purchaser Code" := PurchHeader."Purchaser Code";
+                      IF AlertLine."Purchaser Code" = '' THEN BEGIN
+                        AlertLine."Purchaser Code" := ProcUnit."Purchaser Code";
+                      END;
+                      AlertLine."Alert Date" := TODAY;
+                      AlertLine."Replenishment Source Type" := ProcUnit."Replenishment Source Type";
+                      AlertLine."Replenishment Source Code" := ProcUnit."Replenishment Source Code";
+                      AlertLine."Vendor Code" := PurchLine."Buy-from Vendor No.";
+                      AlertLine.INSERT(TRUE);
+                    END;
+                  END ELSE BEGIN
+                    AlertLine."Item No." := PurchLine."No.";
+                    AlertLine."Location Code" := PurchLine."Location Code";
+                    AlertLine."Variant Code" := PurchLine."Variant Code";
+                    AlertLine."Source No." := PurchLine."Document No.";
+                    AlertLine."Line No." := PurchLine."Line No.";
+                    AlertLine."Alert Type" := AlertLine."Alert Type"::"Surp. With Open PO";
+                    AlertLine."Quantity (Base)" := AlertLine."Quantity (Base)" + PurchLine."Outstanding Qty. (Base)";
+                    IF PurchLine."Expected Receipt Date" < AlertLine."Expected Date" THEN
+                      AlertLine."Expected Date" := PurchLine."Expected Receipt Date";
+                    AlertLine."Extended Cost (LCY)" := PurchLine."Outstanding Amount (LCY)";
+                    IF AlertLine."Quantity (Base)" > 0 THEN
+                      AlertLine."Unit Cost (LCY)" := ROUND((PurchLine."Outstanding Amount (LCY)"/AlertLine."Quantity (Base)"), 0.00001, '=');
+                    AlertLine."Multiple Order Lines" := TRUE;
+                    AlertLine.Comment :=
+                      STRSUBSTNO(
+                        Text010,PurchLine."Outstanding Qty. (Base)",
+                        SurplusInvValue."Outstanding Surplus Qty (Base)");
+                    AlertLine."Line No." := 0;
+                    GetRanking(AlertLine);
+                    GetPurchHeader(PurchLine."Document Type", PurchLine."Document No.");
+                    AlertLine."Alert Date" := TODAY;
+                    AlertLine.MODIFY(FALSE);
+                  END;
+                END;
+              END;
+            UNTIL PurchLine.NEXT = 0;
+          UNTIL LocLocation.NEXT = 0;
+
+      InventoryManagement.CloseLogEntry(LogEntryNo,'');
+      COMMIT;
+
+      IF GUIALLOWED THEN
+        ProgWindow.CLOSE;
+    END;
+
+    PROCEDURE ForecastIsAdjusted@1240020003();
+    VAR
+      HorizonDate@1240020000 : Date;
+    BEGIN
+      AFPAlertSetup.GET;
+      IF NOT AFPAlertSetup."Enable Auto. FC Adjust" THEN BEGIN
+        AlertLine.RESET;
+        AlertLine.SETCURRENTKEY("Alert Type", "Snooze Date");
+        AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Auto FC Adj.");
+        AlertLine.DELETEALL(TRUE);
+        COMMIT;
+        EXIT;
+      END;
+
+      IF AFPAlertSetup."Auto. FC Adj. Per. to Check" <= 0 THEN
+        AFPAlertSetup."Auto. FC Adj. Per. to Check" := 1;
+      IF GUIALLOWED THEN
+        ProgWindow.OPEN(
+          Text013 + '\' +
+          PADSTR(Text008,12) + '#1########\' +
+          PADSTR(Text003,12) + '#2###########################################');
+
+      InventoryManagement.CreateLogEntry('',Text013,LogEntryNo);
+      COMMIT;
+
+      AlertLineTmp.RESET;
+      AlertLineTmp.DELETEALL;
+
+      AlertLine.RESET;
+      AlertLine.SETCURRENTKEY("Alert Type",AlertLine."Snooze Date");
+      AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Auto FC Adj.");
+      IF AlertLine.FINDSET THEN
+        REPEAT
+          IF AlertLine."Snooze Date" > WORKDATE THEN BEGIN
+            GetRanking(AlertLine);
+            AlertLineTmp.COPY(AlertLine);
+            AlertLineTmp.INSERT;
+          END;
+        UNTIL AlertLine.NEXT = 0;
+
+      AlertLine.RESET;
+      AlertLine.SETCURRENTKEY("Alert Type",AlertLine."Snooze Date");
+      AlertLine.SETRANGE("Alert Type",AlertLine."Alert Type"::"Auto FC Adj.");
+      AlertLine.DELETEALL;
+      COMMIT;
+
+      Location.RESET;
+      Location.SETRANGE("Enable Adv. Forecasting",TRUE);
+      IF Location.FINDSET THEN BEGIN
+        IF GUIALLOWED THEN
+          ProgWindow.UPDATE(1,Location.Code);
+        REPEAT
+          ProcUnit.RESET;
+          ProcUnit.SETCURRENTKEY("Location Code", "Usage Location Filter String");
+          ProcUnit.SETRANGE("Location Code",Location.Code);
+          ProcUnit.SETRANGE("Nonstock Unit",FALSE);
+          IF ProcUnit.FINDSET THEN
+            REPEAT
+              IF GUIALLOWED THEN
+                ProgWindow.UPDATE(2,ProcUnit."Item No.");
+              CLEAR(Forecast);
+              Forecast.SetForecastOnlyReqPeriods;
+              Forecast.CalcForecast(ProcUnit, AFPAlertSetup."Auto. FC Adj. Per. to Check",'',FALSE,TRUE);
+              Forecast.CalcCustForecast(ProcUnit, AFPAlertSetup."Auto. FC Adj. Per. to Check");
+              HorizonDate := UBP.GetLeadTimeHoriz(ProcUnit);
+              Forecast.CalcAutoForcAdjustment(ProcUnit, HorizonDate);
+              i := 0;
+              TotAutoFCAdj := 0;
+              REPEAT
+                i := i + 1;
+                TotAutoFCAdj := TotAutoFCAdj + Forecast.GetAutoForcAdjustment(i);
+              UNTIL i = AFPAlertSetup."Auto. FC Adj. Per. to Check";
+              IF (TotAutoFCAdj > 0) THEN BEGIN
+                i := 0;
+                TotFC := 0;
+                TotCustFC := 0;
+                TotFCAdj := 0;
+                TotAutoFCAdj := 0;
+                REPEAT
+                  i := i + 1;
+                  TotFC := TotFC + Forecast.GetPeriodForecastUsage(i);
+                  TotCustFC := TotCustFC + Forecast.GetCustForecastUsage(i);
+                  TotFCAdj := TotFCAdj + Forecast.GetForecastAdj(i);
+                  TotAutoFCAdj := TotAutoFCAdj + Forecast.GetAutoForcAdjustment(i);
+                UNTIL i = AFPAlertSetup."Auto. FC Adj. Per. to Check";
+                IF ((TotFC + TotCustFC + TotFCAdj) <> 0) AND
+                    (TotAutoFCAdj <> 0)
+                THEN BEGIN
+                  IF AlertLineTmp.GET(
+                    ProcUnit."Item No.",ProcUnit."Location Code",ProcUnit."Variant Code",
+                    AlertLine."Alert Type"::"Auto FC Adj.",'',0)
+                  THEN
+                    AlertLine.COPY(AlertLineTmp)
+                  ELSE BEGIN
+                    AlertLine."Item No." := ProcUnit."Item No.";
+                    AlertLine."Location Code" := ProcUnit."Location Code";
+                    AlertLine."Variant Code" := ProcUnit."Variant Code";
+                    AlertLine."Alert Type" := AlertLine."Alert Type"::"Auto FC Adj.";
+                    AlertLine."Source No." := '';
+                    AlertLine."Line No." := 0;
+                    AlertLine."Alert Date" := TODAY;
+                    AlertLine."Action Taken" := AlertLine."Action Taken"::None;
+                    AlertLine."Snooze Days" := 0;
+                    AlertLine."Snooze Date" := 0D;
+                  END;
+                  ProcUnit.CALCFIELDS("Qty. on Purchase Order");
+                  AlertLine."Quantity (Base)" := ProcUnit."Qty. on Purchase Order";
+                  AlertLine."Multiple Order Lines" := FALSE;
+                  IF (ProcUnit."Replenishment Source Type" = ProcUnit."Replenishment Source Type"::Vendor) AND
+                     (ProcUnit."Replenishment Source Code" <> '')
+                  THEN BEGIN
+                    AlertLine."Vendor Code" := ProcUnit."Replenishment Source Code";
+                  END ELSE BEGIN
+                    AlertLine."Vendor Code" := '';
+                  END;
+                  AlertLine."Purchaser Code" := ProcUnit."Purchaser Code";
+                  AlertLine."Replenishment Source Type" := ProcUnit."Replenishment Source Type";
+                  AlertLine."Replenishment Source Code" := ProcUnit."Replenishment Source Code";
+                  GetRanking(AlertLine);
+                  AlertLine.Comment := STRSUBSTNO(Text012,TotAutoFCAdj,TotFC,TotCustFC,TotFCAdj);
+                  AlertLine."Expected Date" := HorizonDate;
+                  AlertLine.INSERT;
+                END;
+              END;
+            UNTIL ProcUnit.NEXT = 0;
+        UNTIL Location.NEXT = 0;
+      END;
+
+      IF GUIALLOWED THEN
+        ProgWindow.CLOSE;
+
+      InventoryManagement.CloseLogEntry(LogEntryNo,'');
+      COMMIT;
+    END;
+
+    PROCEDURE UpdateAlertLine@1240030002(CurrString@1240030001 : Text[100];VAR CurrAlertLine@1240030000 : Record 14002709);
+    BEGIN
+      IF (STRLEN(CurrString) + STRLEN(CurrAlertLine.Comment)) > 250 THEN
+        EXIT;
+
+      CurrAlertLine.Comment := CurrAlertLine.Comment + CurrString;
+    END;
+
+    PROCEDURE ForecastFound@1240030005(CurrProcUnit@1240030003 : Record 14000555;CurrClosedPerStartDate@1240030007 : Date;CurrStartingDate@1240030004 : Date) Resp : Boolean;
+    VAR
+      LocForecastAdj@1240030001 : Record 14002707;
+      LocForecastEntry@1240030000 : Record 14002603;
+      LocItemUsage@1240030002 : Record 14000557;
+      LocProdOrderComponent@1240030006 : Record 5407;
+      UsageLocationFilter@1240030005 : Text[250];
+      LocAssyFCCompLine@1000 : Record 14002666;
+    BEGIN
+      LocItemUsage.RESET;
+      LocItemUsage.SETCURRENTKEY(
+        "Location Code","Item No.","Variant Code","Starting Date","Ending Date");
+      LocItemUsage.SETRANGE("Location Code",CurrProcUnit."Location Code");
+      LocItemUsage.SETRANGE("Item No.",CurrProcUnit."Item No.");
+      LocItemUsage.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+      LocItemUsage.SETRANGE("Starting Date",CurrClosedPerStartDate);
+      LocItemUsage.SETFILTER("Source No.",'=%1','');
+      IF LocItemUsage.FINDFIRST THEN
+        IF LocItemUsage.Status = LocItemUsage.Status::Reoccuring THEN
+          EXIT(TRUE);
+
+      UsageLocationFilter :=
+        UBP.GetUsageLocationFilter(
+          CurrProcUnit."Location Code",CurrProcUnit."Item No.",CurrProcUnit."Variant Code",FALSE);
+
+      LocForecastEntry.RESET;
+      LocForecastEntry.SETCURRENTKEY("Location Code","Item No.","Variant Code","Starting Date",Released);
+      IF InvMgtSetup."Roll Up Via Repl. Path" THEN
+        LocForecastEntry.SETFILTER("Location Code",UsageLocationFilter)
+      ELSE
+        LocForecastEntry.SETFILTER("Location Code",CurrProcUnit."Location Code");
+      LocForecastEntry.SETRANGE("Item No.",CurrProcUnit."Item No.");
+      LocForecastEntry.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+      LocForecastEntry.SETRANGE(Released,TRUE);
+      LocForecastEntry.SETFILTER("Starting Date",'%1..',CurrStartingDate);
+      IF NOT LocForecastEntry.ISEMPTY() THEN
+        EXIT(TRUE);
+
+      LocForecastAdj.RESET;
+      LocForecastAdj.SETCURRENTKEY(
+        "Item No.","Variant Code","Location Code","Starting Date");
+      LocForecastAdj.SETRANGE("Item No.",CurrProcUnit."Item No.");
+      IF CurrProcUnit."Summarize Variant Detail" THEN
+        LocForecastAdj.SETRANGE("Variant Code")
+      ELSE
+        LocForecastAdj.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+        LocForecastAdj.SETFILTER("Location Code",CurrProcUnit."Location Code");
+      LocForecastAdj.SETFILTER("Starting Date",'%1..',CurrStartingDate);
+      IF LocForecastAdj.FINDSET THEN BEGIN
+          LocForecastAdj.CALCSUMS(Quantity);
+          IF LocForecastAdj.Quantity > 0 THEN
+            EXIT(TRUE);
+        END;
+
+      LocProdOrderComponent.RESET;
+      LocProdOrderComponent.SETCURRENTKEY(
+        "Item No.","Variant Code","Location Code",Status,"Due Date");
+      LocProdOrderComponent.SETRANGE("Item No.",CurrProcUnit."Item No.");
+      LocProdOrderComponent.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+      IF InvMgtSetup."Roll Up Via Repl. Path" THEN
+        LocProdOrderComponent.SETFILTER("Location Code",UsageLocationFilter)
+      ELSE
+        LocProdOrderComponent.SETRANGE("Location Code",CurrProcUnit."Location Code");
+      LocProdOrderComponent.SETFILTER(Status,'<>%1',LocProdOrderComponent.Status::Finished);
+      IF NOT LocProdOrderComponent.ISEMPTY THEN
+        EXIT(TRUE);
+
+      LocAssyFCCompLine.SETCURRENTKEY("Comp. Item No.","Comp. Variant Code","Comp. Location Code","Required Date");
+      LocAssyFCCompLine.SETRANGE("Comp. Item No.", CurrProcUnit."Item No.");
+      IF InvMgtSetup."Roll Up Via Repl. Path" THEN
+        LocAssyFCCompLine.SETFILTER("Comp. Location Code", UsageLocationFilter)
+      ELSE
+        LocAssyFCCompLine.SETFILTER("Comp. Location Code", CurrProcUnit."Location Code");
+      LocAssyFCCompLine.SETRANGE("Comp. Variant Code", CurrProcUnit."Variant Code");
+      IF NOT LocAssyFCCompLine.ISEMPTY THEN BEGIN
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE GetRanking@1240020001(VAR CurrAlertLine@1240020000 : Record 14002709);
+    BEGIN
+      AlertLine."Item Class" := ProcUnit."Item Class Description";
+      AlertLine."Item Ranking" := ProcUnit."Ranking Code";
+      AlertLine."Periods With Sales" := ProcUnit."Periods With Sales";
+    END;
+
+    PROCEDURE GetPurchHeader@1240020004(DocType@1240020000 : Option;DocNo@1240020001 : Code[20]);
+    BEGIN
+      IF (PurchHeader."Document Type" <> DocType) OR (PurchHeader."No." <> DocNo) AND (DocNo <> '') THEN
+        PurchHeader.GET(DocType, DocNo);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

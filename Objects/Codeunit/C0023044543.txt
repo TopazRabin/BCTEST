@@ -1,0 +1,558 @@
+OBJECT Codeunit 23044543 WHI Blob Compatibility
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/14/20;
+    Time=[ 2:07:18 PM];
+    Version List=WHI2.4.7684.0;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      tcBinModeNotSupported@1000000001 : TextConst 'ENU=This bin contents mode is not supported in NAV 2009.;ESM=Este modo de contenido de la papelera no es compatible con NAV 2009.;FRC=Ce mode de contenu de la cellule ne soit pas pris en charge dans NAV 2009.;ENC=This bin contents mode is not supported in NAV 2009.';
+      tcMinBuildImageResize@1000000000 : TextConst 'ENU=1.5.1506.1617';
+      cuWHICommon@1000000002 : Codeunit 23044501;
+      tcPictureNotChanged@1000000004 : TextConst 'ENU=Did not change item picture for %1 because no picture was received.;ESM=No cambi¢ cuadro del art¡culo de %1 porque no se ha recibido.;FRC=N''a pas chang‚ l''image de l''article %1 car aucune image n''a ‚t‚ re‡ue.;ENC=Did not change item picture for %1 because no picture was received.';
+      tcPictureChanged@1000000003 : TextConst 'ENU=%1 Item Picture Changed.;ESM=Imagen %1 Elemento modificado.;FRC=%1 Photo de l''article modifi‚.;ENC=%1 Item Picture Changed.';
+      tcAddedAttachment@100000000 : TextConst 'ENU=Added the selected file.;ESM=Se agreg¢ el archivo seleccionado.;FRC=Ajout du fichier s‚lectionn‚.;ENC=Added the selected file.';
+
+    PROCEDURE getItemPicture@1000000009(VAR ptrecEventParams@1000000000 : TEMPORARY Record 23044511;VAR pbsOutput@1000000020 : BigText);
+    VAR
+      lrecItem@1000000005 : Record 27;
+      lrecTenantMedia@1000000025 : Record 2000000184;
+      lrecTenantMediaSet@1000000024 : Record 2000000183;
+      ltrecTempBlob@1000000027 : TEMPORARY Record 99008535;
+      lcodItemNumber@1000000007 : Text;
+      ldImageWidth@1000000011 : Decimal;
+      ldImageHeight@1000000010 : Decimal;
+    BEGIN
+      // Retrieve item picture
+      // based on input item number
+
+      lcodItemNumber := ptrecEventParams.getValue('item_number');
+      ldImageWidth := ptrecEventParams.getValueAsInt('screen_width');
+      ldImageHeight := ptrecEventParams.getValueAsInt('screen_height');
+
+      pbsOutput.ADDTEXT('<PICTURE value="');
+      lrecItem.GET(lcodItemNumber);
+
+      lrecTenantMediaSet.SETRANGE(ID, lrecItem.Picture.MEDIAID);
+      IF (lrecTenantMediaSet.FINDFIRST) THEN BEGIN
+        lrecTenantMedia.GET(lrecTenantMediaSet."Media ID".MEDIAID);
+        lrecTenantMedia.CALCFIELDS(lrecTenantMedia.Content);
+        IF (lrecTenantMedia.Content.HASVALUE) THEN BEGIN
+          ltrecTempBlob.Blob := lrecTenantMedia.Content;
+          ltrecTempBlob.INSERT;
+          pbsOutput.ADDTEXT( cuWHICommon.GetTextFromImage(ltrecTempBlob,ldImageWidth,ldImageHeight));
+        END;
+      END;
+
+      pbsOutput.ADDTEXT('" />');
+    END;
+
+    PROCEDURE doBlobImport@1000000108(VAR prrefRecordRef@1000000009 : RecordRef;VAR pfrFieldRef@1000000000 : FieldRef;VAR ptxtValue@1000000001 : Text[1024]);
+    VAR
+      lrecRecLink@1000000004 : Record 2000000068;
+      ltrecTempBlob@1000000011 : TEMPORARY Record 99008535;
+      ltcErrNoBlob@1000000006 : TextConst 'ENU=Importing BLOBs into table %1 is not supported;ENC=Importing BLOBs into table %1 is not supported';
+      lrecItem@1000000008 : Record 27;
+      ldnMemStream@100000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      ldnBytes@100000002 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      ldnConvert@100000001 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      losPicture@100000000 : OutStream;
+      ltcPictureNotChanged@100000004 : TextConst 'ENU=Did not change item picture for %1 because no picture was received.;ESM=No cambi¢ cuadro del art¡culo de %1 porque no se ha recibido.;FRC=N''a pas chang‚ l''image de l''article %1 car aucune image n''a ‚t‚ re‡ue.;ENC=Did not change item picture for %1 because no picture was received.';
+    BEGIN
+      //  insert data to blob field
+
+      CASE prrefRecordRef.NUMBER OF
+        DATABASE::"Record Link":
+        BEGIN
+          prrefRecordRef.SETTABLE(lrecRecLink);
+          cuWHICommon.WriteTextToBlob(ptxtValue,TRUE,ltrecTempBlob);
+          ltrecTempBlob.CALCFIELDS(Blob);
+          lrecRecLink.Note := ltrecTempBlob.Blob;
+          lrecRecLink.MODIFY;
+        END;//record link
+        DATABASE::Item:
+        BEGIN
+          prrefRecordRef.SETTABLE(lrecItem);
+          AddPicture(lrecItem,ptxtValue);
+        END;
+
+        // add additional tables here as required
+       ELSE
+         ERROR(ltcErrNoBlob, prrefRecordRef.NUMBER );
+      END;//case
+    END;
+
+    PROCEDURE addItemPicture@1000000023(VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      lrecItem@1000000008 : Record 27;
+      ldnOutput@1000000004 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.StringBuilder";
+      lcodItemNumber@1000000003 : Text;
+    BEGIN
+      // This function will add an item picture.
+      // based on the supplied blob.
+
+      lcodItemNumber := COPYSTR( ptrecEventParams.getItemNo(), 1, MAXSTRLEN( lcodItemNumber) );
+
+      ldnOutput := ldnOutput.StringBuilder();
+      ldnOutput.Append(ptrecEventParams.getLargeValue('blob'));
+
+      lrecItem.GET( lcodItemNumber );
+
+      AddPicture(lrecItem,ldnOutput.ToString());
+
+
+      cuWHICommon.generateSuccessReturnWithMsg(
+        1,
+        STRSUBSTNO( tcPictureChanged, lrecItem."No." ),
+        pbsOutput);
+    END;
+
+    PROCEDURE AddAttachment@1000000059(VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000000 : BigText);
+    VAR
+      lrecTempBlob@1000000002 : TEMPORARY Record 99008535;
+      ltxtImageFileName@1000000003 : Text;
+      lrefRecordRef@1000000004 : RecordRef;
+      lcuLinkManagement@1000000005 : Codeunit 23044529;
+      lcodItemNo@1000000006 : Text;
+      lrecItem@1000000007 : Record 27;
+      ltxtSBEncoded@1000000008 : Text;
+    BEGIN
+      //<FUNC  author="Howie Zhao" date+"05/01/2019" issue="TFS454#" >
+      //  Description: This function will add an attachment to documents/items
+      //  Called From: "executeEvent"
+      //  Side Effect: None
+      //</FUNC>
+
+      ltxtImageFileName := ptrecEventParams.getValue('image_file_name');
+
+      ltxtSBEncoded := ptrecEventParams.getLargeValue('blob');
+
+      lrecTempBlob.INIT();
+      lrecTempBlob."Primary Key" := 1;
+      lrecTempBlob.FromBase64String(ltxtSBEncoded);
+      lrecTempBlob.INSERT();
+
+      lcodItemNo := ptrecEventParams.getItemNo();
+      IF ((lcodItemNo <> '') AND lrecItem.GET(lcodItemNo)) THEN BEGIN
+          lrefRecordRef.GETTABLE(lrecItem);
+      END ELSE BEGIN
+          lcuLinkManagement.GetRecordRef(ptrecEventParams, lrefRecordRef);
+      END;
+
+      AddAttachmentByRec(lrecTempBlob, ltxtImageFileName, lrefRecordRef);
+
+      cuWHICommon.generateSuccessReturnWithMsg(1, STRSUBSTNO(tcAddedAttachment), pbsOutput);
+    END;
+
+    PROCEDURE AddPicture@1000000019(VAR precItem@1000000000 : Record 27;psImageValue@1000000001 : Text);
+    VAR
+      ldnMemStream@1000000005 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      ldnBytes@1000000004 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      ldnConvert@1000000003 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      losPicture@1000000002 : OutStream;
+      ltcPictureNotChanged@1000000006 : TextConst 'ENU=Did not change item picture for %1 because no picture was received.;ESM=No cambi¢ cuadro del art¡culo de %1 porque no se ha recibido.;FRC=N''a pas chang‚ l''image de l''article %1 car aucune image n''a ‚t‚ re‡ue.;ENC=Did not change item picture for %1 because no picture was received.';
+    BEGIN
+      ldnBytes := ldnConvert.FromBase64String( psImageValue );
+      ldnMemStream := ldnMemStream.MemoryStream( ldnBytes );
+
+      IF (NOT ISNULLGUID(precItem.Picture.MEDIAID)) THEN BEGIN
+          CLEAR(precItem.Picture);
+          precItem.MODIFY();
+      END;
+      precItem.Picture.IMPORTSTREAM(ldnMemStream, 'Item picture');
+
+      precItem.MODIFY();
+
+      IF ( ldnBytes.Length <= 0 ) THEN BEGIN
+        ERROR(ltcPictureNotChanged, precItem."No.");
+      END;
+    END;
+
+    PROCEDURE AddAttachmentByRec@1000000021(VAR precTempBlob@1000000002 : TEMPORARY Record 99008535;ptxtImageFileName@1000000003 : Text;VAR prefRecordRef@1000000004 : RecordRef);
+    VAR
+      lrecDocumentAttachment@1000000000 : Integer;
+      lisDocStream@1000000001 : InStream;
+      lfrefFieldRef@1000000005 : FieldRef;
+      lcodRecNo@1000000006 : Code[20];
+      lopDocType@1000000008 : 'Quote,Order,Invoice,Credit Memo,Blanket Order,Return Order';
+      liLineNo@1000000007 : Integer;
+      lcuFileManagement@1000000009 : Codeunit 419;
+    BEGIN
+      //<FUNC  author="Howie Zhao" date+"05/01/2019" issue="TFS454#" >
+      //  Description: This function will add an attachment to documents/items
+      //  Called From: "executeEvent"
+      //  Side Effect: None
+      //</FUNC>
+
+      // Most code copied from the table "Document Attachment" SaveAttachment method, we can't call the method directly
+      // becuase the method can't be used in the extension.
+      {
+      IF (ptxtImageFileName = '') THEN
+          ERROR(tcEmptyFileNameErr);
+
+      IF NOT precTempBlob.Blob.HASVALUE THEN
+          ERROR(tcNoContentErr);
+
+      lrecDocumentAttachment.VALIDATE("File Extension", lcuFileManagement.GetExtension(ptxtImageFileName));
+      lrecDocumentAttachment.VALIDATE("File Name", COPYSTR(lcuFileManagement.GetFileNameWithoutExtension(ptxtImageFileName), 1, MAXSTRLEN(lrecDocumentAttachment."File Name")));
+
+      precTempBlob.Blob.CREATEINSTREAM(lisDocStream);
+      lrecDocumentAttachment."Document Reference ID".IMPORTSTREAM(lisDocStream, '', ptxtImageFileName);
+      IF NOT lrecDocumentAttachment."Document Reference ID".HASVALUE THEN
+          ERROR(tcNoDocumentAttachedErr);
+
+      IF (NOT prefRecordRef.ISEMPTY) THEN BEGIN
+          lrecDocumentAttachment.VALIDATE("Table ID", prefRecordRef.NUMBER);
+          CASE prefRecordRef.NUMBER OF
+              DATABASE::Customer,
+              DATABASE::Vendor,
+              DATABASE::Item,
+              DATABASE::Employee,
+              DATABASE::"Fixed Asset",
+              DATABASE::Resource,
+              DATABASE::Job:
+                  BEGIN
+                      lfrefFieldRef := prefRecordRef.FIELD(1);
+                      lcodRecNo := lfrefFieldRef.VALUE;
+                      lrecDocumentAttachment.VALIDATE("No.", lcodRecNo);
+                  END;
+          END;
+
+          CASE prefRecordRef.NUMBER OF
+              DATABASE::"Sales Header",
+              DATABASE::"Purchase Header",
+              DATABASE::"Sales Line",
+              DATABASE::"Purchase Line":
+                  BEGIN
+                      lfrefFieldRef := prefRecordRef.FIELD(1);
+                      lopDocType := lfrefFieldRef.VALUE;
+                      lrecDocumentAttachment.VALIDATE("Document Type", lopDocType);
+
+                      lfrefFieldRef := prefRecordRef.FIELD(3);
+                      lcodRecNo := lfrefFieldRef.VALUE;
+                      lrecDocumentAttachment.VALIDATE("No.", lcodRecNo);
+                  END;
+          END;
+
+          CASE prefRecordRef.NUMBER OF
+              DATABASE::"Sales Line",
+              DATABASE::"Purchase Line":
+                  BEGIN
+                      lfrefFieldRef := prefRecordRef.FIELD(4);
+                      liLineNo := lfrefFieldRef.VALUE;
+                      lrecDocumentAttachment.VALIDATE("Line No.", liLineNo);
+                  END;
+          END;
+
+          CASE prefRecordRef.NUMBER OF
+              DATABASE::"Sales Invoice Header",
+              DATABASE::"Sales Cr.Memo Header",
+              DATABASE::"Purch. Inv. Header",
+              DATABASE::"Purch. Cr. Memo Hdr.":
+                  BEGIN
+                      lfrefFieldRef := prefRecordRef.FIELD(3);
+                      lcodRecNo := lfrefFieldRef.VALUE;
+                      lrecDocumentAttachment.VALIDATE("No.", lcodRecNo);
+                  END;
+          END;
+
+          CASE prefRecordRef.NUMBER OF
+              DATABASE::"Sales Invoice Line",
+              DATABASE::"Sales Cr.Memo Line",
+              DATABASE::"Purch. Inv. Line",
+              DATABASE::"Purch. Cr. Memo Line":
+                  BEGIN
+                      lfrefFieldRef := prefRecordRef.FIELD(3);
+                      lcodRecNo := lfrefFieldRef.VALUE;
+                      lrecDocumentAttachment.VALIDATE("No.", lcodRecNo);
+
+                      lfrefFieldRef := prefRecordRef.FIELD(4);
+                      liLineNo := lfrefFieldRef.VALUE;
+                      lrecDocumentAttachment.VALIDATE("Line No.", liLineNo);
+                  END;
+          END;
+
+          lrecDocumentAttachment.INSERT(TRUE);
+      END ELSE BEGIN
+          ERROR(tcNoDocumentFoundErr);
+      END;
+      }
+    END;
+
+    PROCEDURE InstallUpdateData@1000000030();
+    VAR
+      lrecWHISetup@1000000000 : Record 23044502;
+      ltcConfirmUpdate@1000000001 : TextConst 'ENU=The installed version (%1) matches the expected version (%2).\Do you wish to still continue?;ESM=La versi¢n instalada (%1) coincide con la versi¢n esperada (%2). \ ¨Desea continuar?;FRC=La version install‚e (%1) correspond … la version attendue (%2). \ Voulez-vous continuer?;ENC=The installed version (%1) matches the expected version (%2).\Do you wish to still continue?';
+      ltcDone@1000000002 : TextConst 'ENU=Done!;ESM=­Hecho!;FRC=Termin‚!;ENC=Done!';
+    BEGIN
+      lrecWHISetup.GET;
+
+      IF NOT lrecWHISetup.IsUpdateRequired THEN BEGIN
+        IF NOT CONFIRM(STRSUBSTNO(ltcConfirmUpdate,lrecWHISetup."Installed Version",lrecWHISetup.GetExpectedVersion())) THEN
+            EXIT;
+      END;
+
+      ImportRapidStart(lrecWHISetup.GetExpectedVersion());
+      ImportIcons(lrecWHISetup.GetExpectedVersion());
+      ImportApplications(lrecWHISetup.GetExpectedVersion());
+      ImportDeviceExecutables(lrecWHISetup.GetExpectedVersion());
+
+      lrecWHISetup.GET;
+      lrecWHISetup."Installed Version" := lrecWHISetup.GetExpectedVersion();
+      lrecWHISetup.MODIFY;
+
+      MESSAGE(ltcDone);
+    END;
+
+    LOCAL PROCEDURE ImportRapidStart@1000000011(pcodVersion@1000000007 : Code[20]);
+    VAR
+      lrecColumn@1000000006 : Record 23044512;
+      lrecMenu@1000000008 : Record 23044510;
+      lrecTranslationKey@1000000009 : Record 23044518;
+      lrecEvent@1000000010 : Record 23044534;
+      lrecScanBehavior@1000000011 : Record 23044521;
+      lcuFileMgmt@1000000005 : Codeunit 419;
+      lsFolderName@1000000004 : Text;
+      lsFileName@1000000003 : Text;
+      lsServerFileName@1000000002 : Text;
+      lcuRapidStart@1000000001 : Codeunit 8620;
+      ldlgProgress@1000000000 : Dialog;
+      ltcConfirmRapidStart@1000000012 : TextConst 'ENU=Do you want to import the rapidstart data?;ESM=¨Desea importar los datos de inicio r pido?;FRC=Voulez-vous importer les donn‚es de d‚marrage rapide?;ENC=Do you want to import the rapidstart data?';
+      ltcSelectFolder@1000000013 : TextConst 'ENU=Select RapidStart Folder;ESM=Seleccione la carpeta RapidStart;FRC=S‚lectionnez le dossier RapidStart;ENC=Select RapidStart Folder';
+      ltcProgress@1000000014 : TextConst 'ENU=Applying RapidStart configuration data.  This will take a several minutes...;ESM=Aplicaci¢n de datos de configuraci¢n RapidStart. Esto llevar  unos minutos ...;FRC=Application des donn‚es de configuration RapidStart. Cela prendra quelques minutes ...;ENC=Applying RapidStart configuration data.  This will take a several minutes...';
+    BEGIN
+      IF NOT CONFIRM(ltcConfirmRapidStart) THEN
+        EXIT;
+
+      IF NOT lcuFileMgmt.SelectFolderDialog(ltcSelectFolder,lsFolderName) THEN EXIT;
+
+      lsFileName := lsFolderName + '\whi_setup.rapidstart';
+
+      IF ( ISSERVICETIER ) THEN BEGIN
+        lsServerFileName := lcuFileMgmt.UploadFileSilent( lsFileName );
+      END ELSE BEGIN
+        lsServerFileName := lsFileName;
+      END;
+
+
+      ldlgProgress.OPEN(ltcProgress);
+
+      lcuRapidStart.ImportAndApplyRapidStartPackage(lsServerFileName);
+
+      lrecColumn.SETRANGE("Deployment Tag",'WHI');
+      lrecColumn.MODIFYALL("Deployment Version",pcodVersion);
+
+      lrecMenu.SETRANGE("Deployment Tag",'WHI');
+      lrecMenu.MODIFYALL("Deployment Version",pcodVersion);
+
+      lrecEvent.SETRANGE("Deployment Tag",'WHI');
+      lrecEvent.MODIFYALL("Deployment Version",pcodVersion);
+
+      lrecScanBehavior.SETRANGE("Deployment Tag",'WHI');
+      lrecScanBehavior.MODIFYALL("Deployment Version",pcodVersion);
+
+      lsFileName := lsFolderName + '\whi_translations.rapidstart';
+
+      IF ( ISSERVICETIER ) THEN BEGIN
+        lsServerFileName := lcuFileMgmt.UploadFileSilent( lsFileName );
+      END ELSE BEGIN
+        lsServerFileName := lsFileName;
+      END;
+
+      lcuRapidStart.ImportAndApplyRapidStartPackage(lsServerFileName);
+
+      lrecTranslationKey.SETRANGE("Deployment Tag",'WHI');
+      lrecTranslationKey.MODIFYALL("Deployment Version",pcodVersion);
+
+      ldlgProgress.CLOSE();
+    END;
+
+    LOCAL PROCEDURE ImportIcons@1000000001(pcodVersion@1000000005 : Code[20]);
+    VAR
+      lrecIcon@1000000002 : Record 23044520;
+      lcuFileMgmt@1000000000 : Codeunit 419;
+      losOutStream@1000000003 : OutStream;
+      lsFolderName@1000000001 : Text;
+      lsFileName@1000000004 : Text;
+      lsServerFileName@1000000006 : Text;
+      ldlgProgress@1000000007 : Dialog;
+      ltcConfirmIcons@1000000008 : TextConst 'ENU=Do you want to import the icons?;ESM=¨Quieres importar los ¡conos?;FRC=Voulez-vous importer les ic“nes?;ENC=Do you want to import the icons?';
+      ltcSelectFolder@1000000009 : TextConst 'ENU=Select Icons Folder;ESM=Seleccionar carpeta de iconos;FRC=S‚lectionner le dossier d''ic“nes;ENC=Select Icons Folder';
+      ltcProgress@1000000010 : TextConst 'ENU=Importing Icons...;ESM=Importando iconos ...;FRC=Importation d''ic“nes ...;ENC=Importing Icons...';
+    BEGIN
+      IF NOT CONFIRM(ltcConfirmIcons) THEN
+        EXIT;
+
+      IF NOT lcuFileMgmt.SelectFolderDialog(ltcSelectFolder,lsFolderName) THEN EXIT;
+
+      ldlgProgress.OPEN(ltcProgress);
+
+      lrecIcon.SETRANGE("Deployment Tag",'WHI');
+      IF lrecIcon.FIND('-') THEN BEGIN
+        REPEAT
+          lrecIcon.CALCFIELDS(Image);
+          lrecIcon.Image.CREATEOUTSTREAM(losOutStream);
+          lsFileName := lsFolderName + '\' + LOWERCASE(lrecIcon.Code) + '.png';
+
+          IF ( ISSERVICETIER ) THEN BEGIN
+            lsServerFileName := lcuFileMgmt.UploadFileSilent( lsFileName );
+          END ELSE BEGIN
+            lsServerFileName := lsFileName;
+          END;
+
+          IF FILE.EXISTS(lsServerFileName) THEN BEGIN
+            lrecIcon.Image.IMPORT(lsServerFileName);
+          END;
+
+          lrecIcon."Deployment Version" := pcodVersion;
+          lrecIcon.MODIFY();
+        UNTIL(lrecIcon.NEXT=0)
+      END;
+
+      ldlgProgress.CLOSE();
+    END;
+
+    LOCAL PROCEDURE ImportApplications@1000000015(pcodVersion@1000000008 : Code[20]);
+    VAR
+      lrecApplication@1000000007 : Record 23044527;
+      lcuFileMgmt@1000000006 : Codeunit 419;
+      losOutStream@1000000005 : OutStream;
+      lsFolderName@1000000004 : Text;
+      lsFileName@1000000003 : Text;
+      lsServerFileName@1000000002 : Text;
+      ldlgProgress@1000000000 : Dialog;
+      ltcConfirmApps@1000000001 : TextConst 'ENU=Do you want to import the application xml definitions?;ESM=¨Desea importar las definiciones xml de la aplicaci¢n?;FRC=Voulez-vous importer les d‚finitions xml de l''application?;ENC=Do you want to import the application xml definitions?';
+      ltcSelectFolder@1000000009 : TextConst 'ENU=Select Applications Folder;ESM=Seleccionar carpeta de aplicaciones;FRC=S‚lectionnez le dossier Applications;ENC=Select Applications Folder';
+      ltcProgress@1000000010 : TextConst 'ENU=Importing Applications...;ESM=Importar aplicaciones ...;FRC=Importation d''applications ...;ENC=Importing Applications...';
+    BEGIN
+      IF NOT CONFIRM(ltcConfirmApps) THEN
+        EXIT;
+
+      IF NOT lcuFileMgmt.SelectFolderDialog(ltcSelectFolder,lsFolderName) THEN EXIT;
+
+      ldlgProgress.OPEN(ltcProgress);
+
+      lrecApplication.SETRANGE("Deployment Tag",'WHI');
+      IF lrecApplication.FIND('-') THEN BEGIN
+        REPEAT
+          lrecApplication.CALCFIELDS("Application Blob");
+          lrecApplication."Application Blob".CREATEOUTSTREAM(losOutStream);
+          lsFileName := lsFolderName + '\' + LOWERCASE(lrecApplication.Code) + '.xml';
+
+          IF ( ISSERVICETIER ) THEN BEGIN
+            lsServerFileName := lcuFileMgmt.UploadFileSilent( lsFileName );
+          END ELSE BEGIN
+            lsServerFileName := lsFileName;
+          END;
+
+          IF FILE.EXISTS(lsServerFileName) THEN BEGIN
+            lrecApplication."Application Blob".IMPORT(lsServerFileName);
+          END;
+
+          lrecApplication."Deployment Version" := pcodVersion;
+          lrecApplication.MODIFY();
+        UNTIL(lrecApplication.NEXT=0)
+      END;
+
+      ldlgProgress.CLOSE();
+    END;
+
+    LOCAL PROCEDURE ImportDeviceExecutables@1000000018(pcodVersion@1000000012 : Code[20]);
+    VAR
+      lrecWHISetup@1000000000 : Record 23044502;
+      lcuFileMgmt@1000000005 : Codeunit 419;
+      ldnFile@1000000008 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      ldnBytes@1000000007 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      ldnConvert@1000000006 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+      ldnStreamWriter@1000000009 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamWriter";
+      ldnTextEncoder@1000000010 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      losOutStream@1000000004 : OutStream;
+      lsFolderName@1000000003 : Text;
+      lsFileName@1000000002 : Text;
+      lsServerFileName@1000000001 : Text;
+      ldlgProgress@1000000011 : Dialog;
+      ltcConfirmExecutables@1000000013 : TextConst 'ENU=Do you want to import the device executables?;ESM=¨Quieres importar los ejecutables del dispositivo?;FRC=Voulez-vous importer les ex‚cutables de l''appareil?;ENC=Do you want to import the device executables?';
+      ltcSelectFolder@1000000014 : TextConst 'ENU=Select Executable Folder;ESM=Seleccionar carpeta ejecutable;FRC=S‚lectionner un dossier ex‚cutable;ENC=Select Executable Folder';
+      ltcProgress@1000000015 : TextConst 'ENU=Importing Executables...;ESM=Importar ejecutables ...;FRC=Importation d''ex‚cutables ...;ENC=Importing Executables...';
+    BEGIN
+      IF NOT CONFIRM(ltcConfirmExecutables) THEN
+        EXIT;
+
+      IF NOT lcuFileMgmt.SelectFolderDialog(ltcSelectFolder,lsFolderName) THEN EXIT;
+
+      ldlgProgress.OPEN(ltcProgress);
+
+      lrecWHISetup.GET;
+
+
+      lsFileName := lsFolderName + '\com.insightworks.warehouseinsight.apk';
+
+      IF ( ISSERVICETIER ) THEN BEGIN
+        lsServerFileName := lcuFileMgmt.UploadFileSilent( lsFileName );
+      END ELSE BEGIN
+        lsServerFileName := lsFileName;
+      END;
+
+      IF FILE.EXISTS(lsServerFileName) THEN BEGIN
+        lrecWHISetup.CALCFIELDS("Android APK");
+        lrecWHISetup."Android APK".CREATEOUTSTREAM(losOutStream);
+        ldnStreamWriter := ldnStreamWriter.StreamWriter(losOutStream, ldnTextEncoder.UTF8);
+        ldnBytes := ldnFile.ReadAllBytes(lsServerFileName);
+        ldnStreamWriter.Write(ldnConvert.ToBase64String(ldnBytes));
+        ldnStreamWriter.Flush();
+
+        lrecWHISetup."Android Device Version" := pcodVersion;
+        lrecWHISetup.MODIFY();
+      END;
+
+
+      lsFileName := lsFolderName + '\WHI_Scanner_Install.CAB';
+
+      IF ( ISSERVICETIER ) THEN BEGIN
+        lsServerFileName := lcuFileMgmt.UploadFileSilent( lsFileName );
+      END ELSE BEGIN
+        lsServerFileName := lsFileName;
+      END;
+
+      IF FILE.EXISTS(lsServerFileName) THEN BEGIN
+        lrecWHISetup.GET();
+        lrecWHISetup.CALCFIELDS("Windows CAB");
+        lrecWHISetup."Windows CAB".CREATEOUTSTREAM(losOutStream);
+        ldnStreamWriter := ldnStreamWriter.StreamWriter(losOutStream, ldnTextEncoder.UTF8);
+        ldnBytes := ldnFile.ReadAllBytes(lsServerFileName);
+        ldnStreamWriter.Write(ldnConvert.ToBase64String(ldnBytes));
+        ldnStreamWriter.Flush();
+
+        lrecWHISetup."Windows Device Version" := pcodVersion;
+        lrecWHISetup.MODIFY();
+      END;
+
+      ldlgProgress.CLOSE();
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+      <IW>
+       <REVISION author="Howie Zhao" date="2/14/17" version="IW17.02" issue="">
+         Moved in getItemPicture doBlobImport addItemPicture methods
+       </REVISION>
+      </IW>
+    }
+    END.
+  }
+}
+

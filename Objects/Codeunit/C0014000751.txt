@@ -1,0 +1,205 @@
+OBJECT Codeunit 14000751 Shipping Bill Reconciliation
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/28/17;
+    Time=12:00:00 PM;
+    Version List=SE0.52.07;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1001 : TextConst 'ENU=There is nothing to post.';
+      Text002@1002 : TextConst 'ENU=Would you like to post verified shipping bills?';
+      Text003@1003 : TextConst 'ENU=Lines exist that has not been verified, Continue posting?';
+
+    PROCEDURE SuggestShippingBillLines@1(VAR CurrentShipBillReconHeader@1000000000 : Record 14000751);
+    VAR
+      PostedPackage@1000000001 : Record 14000704;
+      BillOfLading@1000000002 : Record 14000822;
+      ShipBillReconLine@1000000003 : Record 14000752;
+      LineNo@1000000004 : Integer;
+    BEGIN
+      ShipBillReconLine.RESET;
+      ShipBillReconLine.SETRANGE("Shipping Bill No.",CurrentShipBillReconHeader."Shipping Bill No.");
+      IF ShipBillReconLine.FIND('+') THEN
+        LineNo := ShipBillReconLine."Line No."
+      ELSE
+        LineNo := 0;
+
+      PostedPackage.RESET;
+      PostedPackage.SETCURRENTKEY("Shipping Agent Code","Pickup Date","Shipping Bill Verified");
+      PostedPackage.SETRANGE("Shipping Bill Verified",FALSE);
+      IF CurrentShipBillReconHeader."Shipping Agent Code" <> '' THEN
+        PostedPackage.SETRANGE("Shipping Agent Code",CurrentShipBillReconHeader."Shipping Agent Code");
+      IF CurrentShipBillReconHeader.GETFILTER("Date Filter") <> '' THEN
+        PostedPackage.SETFILTER("Pickup Date",CurrentShipBillReconHeader.GETFILTER("Date Filter"));
+      IF CurrentShipBillReconHeader."Shipping Agent Service" <> '' THEN
+        PostedPackage.SETRANGE(
+          "Shipping Agent Service",CurrentShipBillReconHeader."Shipping Agent Service");
+      IF CurrentShipBillReconHeader."Shipping Agent Account No." <> '' THEN
+        PostedPackage.SETRANGE(
+          "Shipping Agent Account No.",CurrentShipBillReconHeader."Shipping Agent Account No.");
+      PostedPackage.SETRANGE("Exclude From Manifest",FALSE);
+      IF PostedPackage.FIND('-') THEN
+        REPEAT
+          ShipBillReconLine.RESET;
+          ShipBillReconLine.SETCURRENTKEY(Type,"No.");
+          ShipBillReconLine.SETRANGE(Type,ShipBillReconLine.Type::Package);
+          ShipBillReconLine.SETRANGE("No.",PostedPackage."No.");
+          IF NOT ShipBillReconLine.FIND('-') THEN BEGIN
+            LineNo := LineNo + 10000;
+            ShipBillReconLine.INIT;
+            ShipBillReconLine."Shipping Bill No." := CurrentShipBillReconHeader."Shipping Bill No.";
+            ShipBillReconLine."Line No." := LineNo;
+            ShipBillReconLine.Type := ShipBillReconLine.Type::Package;
+            ShipBillReconLine.VALIDATE("No.",PostedPackage."No.");
+            ShipBillReconLine.INSERT;
+          END;
+        UNTIL PostedPackage.NEXT = 0;
+
+      BillOfLading.RESET;
+      BillOfLading.SETCURRENTKEY("Shipping Agent Code","Pickup Date","Shipping Bill Verified");
+      IF CurrentShipBillReconHeader."Shipping Agent Code" <> '' THEN
+        BillOfLading.SETRANGE("Shipping Agent Code",CurrentShipBillReconHeader."Shipping Agent Code");
+      IF CurrentShipBillReconHeader."Shipping Agent Service" <> '' THEN
+        BillOfLading.SETRANGE("Shipping Agent Service",CurrentShipBillReconHeader."Shipping Agent Service");
+      IF CurrentShipBillReconHeader."Shipping Agent Account No." <> '' THEN
+        BillOfLading.SETRANGE(
+          "Shipping Agent Account No.",CurrentShipBillReconHeader."Shipping Agent Account No.");
+      IF CurrentShipBillReconHeader.GETFILTER("Date Filter") <> '' THEN
+        BillOfLading.SETFILTER("Pickup Date",CurrentShipBillReconHeader.GETFILTER("Date Filter"));
+      BillOfLading.SETRANGE(Released,TRUE);
+      BillOfLading.SETRANGE("Shipping Bill Verified",FALSE);
+      IF BillOfLading.FIND('-') THEN
+        REPEAT
+          ShipBillReconLine.RESET;
+          ShipBillReconLine.SETCURRENTKEY(Type,"No.");
+          ShipBillReconLine.SETRANGE(Type,ShipBillReconLine.Type::"Bill of Lading");
+          ShipBillReconLine.SETRANGE("No.",BillOfLading."No.");
+          IF NOT ShipBillReconLine.FIND('-') THEN BEGIN
+            ShipBillReconLine.INIT;
+            LineNo := LineNo + 10000;
+            ShipBillReconLine."Shipping Bill No." := CurrentShipBillReconHeader."Shipping Bill No.";
+            ShipBillReconLine."Line No." := LineNo;
+            ShipBillReconLine.Type := ShipBillReconLine.Type::"Bill of Lading";
+            ShipBillReconLine.VALIDATE("No.",BillOfLading."No.");
+            ShipBillReconLine.INSERT;
+          END;
+        UNTIL BillOfLading.NEXT = 0;
+    END;
+
+    PROCEDURE PostShippingBillRecon@3(VAR CurrentShipBillReconHeader@1000000000 : Record 14000751);
+    VAR
+      PostedPackage@1000000001 : Record 14000704;
+      BillOfLading@1000000002 : Record 14000822;
+      ShipBillReconLine@1000000003 : Record 14000752;
+      PostedShipBillReconHeader@1000000004 : Record 14000753;
+      PostedShipBillReconLine@1000000005 : Record 14000754;
+    BEGIN
+      PostedShipBillReconHeader.TRANSFERFIELDS(CurrentShipBillReconHeader);
+      PostedShipBillReconHeader.INSERT;
+      PostedShipBillReconHeader.COPYLINKS(CurrentShipBillReconHeader);
+      CurrentShipBillReconHeader.DELETELINKS;
+
+      ShipBillReconLine.RESET;
+      ShipBillReconLine.SETRANGE("Shipping Bill No.",CurrentShipBillReconHeader."Shipping Bill No.");
+      ShipBillReconLine.SETRANGE(Verified,TRUE);
+      IF ShipBillReconLine.FIND('-') THEN BEGIN
+        REPEAT
+          CASE ShipBillReconLine.Type OF
+            ShipBillReconLine.Type::Package:
+              BEGIN
+                PostedPackage.GET(ShipBillReconLine."No.");
+
+                PostedPackage."Shipping Bill Verified" := TRUE;
+                PostedPackage."Shipping Bill Verified Date" := ShipBillReconLine."Verified Date";
+                IF ShipBillReconLine."Weight Invoiced" <> 0 THEN
+                  PostedPackage."Shipping Bill Weight" := ShipBillReconLine."Weight Invoiced";
+                IF ShipBillReconLine."Volume Invoiced" <> 0 THEN
+                  PostedPackage."Shipping Bill Volume" := ShipBillReconLine."Volume Invoiced";
+                IF ShipBillReconLine."Amount Invoiced" <> 0 THEN
+                  PostedPackage."Shipping Bill Amount" :=
+                    PostedPackage."Shipping Bill Amount" + ShipBillReconLine."Amount Invoiced";
+                IF ShipBillReconLine."COD Amount Invoiced" <> 0 THEN
+                  PostedPackage."Shipping Bill COD Amount" := ShipBillReconLine."COD Amount Invoiced";
+                IF ShipBillReconLine."Delivery Date" <> 0D THEN
+                  PostedPackage."Shipping Bill Delivery Date" := ShipBillReconLine."Delivery Date";
+                PostedPackage.MODIFY;
+              END;
+            ShipBillReconLine.Type::"Bill of Lading":
+              BEGIN
+                BillOfLading.GET(ShipBillReconLine."No.");
+                BillOfLading.TESTFIELD("Shipping Bill Verified",FALSE);
+
+                BillOfLading."Shipping Bill Verified" := TRUE;
+                IF ShipBillReconLine."Verified Date" <> 0D THEN
+                  BillOfLading."Shipping Bill Verified Date" := ShipBillReconLine."Verified Date";
+                IF ShipBillReconLine."Weight Invoiced" <> 0 THEN
+                  BillOfLading."Shipping Bill Weight" := ShipBillReconLine."Weight Invoiced";
+                IF ShipBillReconLine."Volume Invoiced" <> 0 THEN
+                  BillOfLading."Shipping Bill Volume" := ShipBillReconLine."Volume Invoiced";
+                IF ShipBillReconLine."Amount Invoiced" <> 0 THEN
+                BillOfLading."Shipping Bill Amount" :=
+                  BillOfLading."Shipping Bill Amount" + ShipBillReconLine."Amount Invoiced";
+                IF ShipBillReconLine."COD Amount Invoiced" <> 0 THEN
+                  BillOfLading."Shipping Bill COD Amount" := ShipBillReconLine."COD Amount Invoiced";
+                IF ShipBillReconLine."Delivery Date" <> 0D THEN
+                  BillOfLading."Shipping Bill Delivery Date" := ShipBillReconLine."Delivery Date";
+                BillOfLading.MODIFY;
+              END;
+          END;
+          PostedShipBillReconLine.TRANSFERFIELDS(ShipBillReconLine);
+          PostedShipBillReconLine.INSERT;
+
+          PostedShipBillReconLine.COPYLINKS(ShipBillReconLine);
+          ShipBillReconLine.DELETELINKS;
+
+          ShipBillReconLine.DELETE;
+        UNTIL ShipBillReconLine.NEXT = 0;
+
+        CurrentShipBillReconHeader.DELETE;
+        ShipBillReconLine.SETRANGE(Verified,FALSE);
+        ShipBillReconLine.DELETEALL;
+      END ELSE
+        ERROR(Text001);
+    END;
+
+    PROCEDURE CheckPost@4(VAR CurrentShipBillReconHeader@1000000000 : Record 14000751;Print@1000000001 : Boolean);
+    VAR
+      PostedShipBillReconHeader@1000000002 : Record 14000753;
+      ShippingBillReconLine@1240030000 : Record 14000752;
+    BEGIN
+      IF CONFIRM(Text002,TRUE) THEN BEGIN
+        ShippingBillReconLine.RESET;
+        ShippingBillReconLine.SETRANGE(
+          "Shipping Bill No.",CurrentShipBillReconHeader."Shipping Bill No.");
+        ShippingBillReconLine.SETRANGE(Verified,FALSE);
+        IF ShippingBillReconLine.FIND('-') THEN
+          IF NOT CONFIRM(Text003,FALSE) THEN
+            EXIT;
+
+        PostShippingBillRecon(CurrentShipBillReconHeader);
+
+        COMMIT;
+
+        IF Print THEN BEGIN
+          PostedShipBillReconHeader.RESET;
+          PostedShipBillReconHeader.SETRANGE(
+            "Shipping Bill No.",CurrentShipBillReconHeader."Shipping Bill No.");
+          REPORT.RUNMODAL(REPORT::"Shipping Bill Recon. Post",TRUE,TRUE,PostedShipBillReconHeader);
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

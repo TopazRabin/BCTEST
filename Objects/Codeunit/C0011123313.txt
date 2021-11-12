@@ -1,0 +1,1239 @@
+OBJECT Codeunit 11123313 SC - Customer Functions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/05/21;
+    Time=[ 4:21:10 AM];
+    Modified=Yes;
+    Version List=SCW19.2.0;
+  }
+  PROPERTIES
+  {
+    TableNo=11123302;
+    OnRun=VAR
+            RequestBuff@11123304 : TEMPORARY Record 11123303;
+            ResponseBuff@11123303 : TEMPORARY Record 11123303;
+            Params@11123302 : TEMPORARY Record 11123310;
+            Context@11123305 : Codeunit 11123305;
+          BEGIN
+            Context.GetRequestBuff(RequestBuff);
+            Context.GetResponseBuff(ResponseBuff);
+            Context.GetParams(Params);
+
+            CASE Code OF
+              UPPERCASE('GetCustomers') : GetCustomers(RequestBuff,ResponseBuff);
+              UPPERCASE('SaveCustomer') : SaveCustomer(RequestBuff,ResponseBuff);
+              UPPERCASE('GetCustomerByContact') : GetCustomerByContact(RequestBuff,ResponseBuff);
+              UPPERCASE('GetShippingAddresses') : GetShippingAddresses(RequestBuff,ResponseBuff);
+              UPPERCASE('CreateShippingAddress') : CreateShippingAddress(RequestBuff,ResponseBuff);
+              UPPERCASE('GetSalespersons') : GetSalesPersons(RequestBuff,ResponseBuff);
+              UPPERCASE('GetContacts') : GetContacts(RequestBuff,ResponseBuff);
+              UPPERCASE('SaveContact') : SaveContact(RequestBuff,ResponseBuff);
+              UPPERCASE('GetShippingOrigin') : GetShippingOrigin(RequestBuff,ResponseBuff);
+              UPPERCASE('GetShippingMethods') : GetShippingMethods(RequestBuff,ResponseBuff);
+              UPPERCASE('GetCustomerStatistics') : GetCustomerStatistics(RequestBuff,ResponseBuff);
+              UPPERCASE('GetCustomerStatisticsFields') : GetCustomerStatisticsFields(RequestBuff,ResponseBuff);
+            END;
+
+            Context.SetParams(Params);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text11123303@11123303 : TextConst 'ENU=%1 %2 does not exist.';
+      Text11123305@11123305 : TextConst 'ENU=CountryId must be specified.';
+      Text11123307@11123307 : TextConst 'ENU=The contact %1 is not assigned to any company.';
+      Text11123308@11123302 : TextConst 'ENU=Blocked by Pfs Customer Status.';
+
+    PROCEDURE GetCustomers@11123348(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      Customer@11123326 : Record 18;
+      Params@11123311 : TEMPORARY Record 11123310;
+      TempIdList@11123307 : TEMPORARY Record 11123330;
+      CountNodeBuff@11123310 : TEMPORARY Record 11123303;
+      Validation@11123304 : Codeunit 11123310;
+      EventMgt@11123306 : Codeunit 11123331;
+      CustomerNo@11123313 : Code[20];
+      Position@11123329 : Integer;
+      Counter@11123328 : Integer;
+      CountOfRecords@11123327 : Integer;
+      RecordAvailable@11123325 : Boolean;
+      IdListExists@11123323 : Boolean;
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::Customer);
+
+      Validation.ValidatePageParameters(Params.PageIndex,Params.PageSize);
+
+      ApplyCustomerFilters(Customer,Params);
+      ApplyCustomerSorting(Customer,Params);
+
+      EventMgt.OnBeforeGetCustomers(OutXMLBuff,Customer,Params);
+
+      Params.GetIdList(TempIdList);
+      IdListExists := TempIdList.FINDSET;
+
+      IF IdListExists THEN BEGIN
+        REPEAT
+          CustomerNo := TempIdList.Value;
+          IF CustomerNo <> '' THEN BEGIN
+            Customer.SETRANGE("No.",CustomerNo);
+            IF Customer.FINDFIRST THEN
+              IF Params.ValidOnly THEN BEGIN
+                IF TestCustomer(Customer,FALSE) THEN
+                  Customer.MARK(TRUE);
+              END ELSE
+                Customer.MARK(TRUE);
+          END;
+        UNTIL TempIdList.NEXT = 0;
+        Customer.SETRANGE("No.");
+        Customer.MARKEDONLY(TRUE);
+      END ELSE BEGIN
+        IF Params.ValidOnly THEN BEGIN
+          IF Params.SortAscending THEN
+            RecordAvailable := Customer.FINDSET
+          ELSE
+            RecordAvailable := Customer.FIND('-');
+          IF RecordAvailable THEN BEGIN
+            REPEAT
+              IF TestCustomer(Customer,FALSE) THEN
+                Customer.MARK(TRUE);
+            UNTIL Customer.NEXT = 0;
+            Customer.MARKEDONLY(TRUE);
+          END;
+        END;
+      END;
+
+      IF Params.SalesPersonId <> '' THEN
+        ApplyFilterToCustBySalesperson(Customer,Params.SalesPersonId);
+
+      IF Params.IndexRecords <> 0 THEN
+        CountOfRecords := Params.IndexRecords
+      ELSE
+      CountOfRecords := Customer.COUNT;
+
+      OutXMLBuff.AddElement(CountNodeBuff,'TotalCount',FORMAT(CountOfRecords));
+
+      IF (Params.PageIndex <> 0) AND (Params.PageSize <> 0) THEN
+        Position := Params.PageIndex * Params.PageSize;
+
+      IF (CountOfRecords > 0) AND (CountOfRecords >= Position) THEN BEGIN
+        IF Params.SortAscending THEN
+          RecordAvailable := Customer.FINDSET
+        ELSE
+          RecordAvailable := Customer.FIND('-');
+
+        IF Position > 0 THEN
+          RecordAvailable := Customer.NEXT(Position) <> 0;
+
+        Params.IsValid := Params.ValidOnly;
+
+        WHILE RecordAvailable AND ((Params.PageSize = 0) OR (Counter < Params.PageSize)) DO BEGIN
+          IF NOT Params.ValidOnly THEN
+            Params.IsValid := TestCustomer(Customer,FALSE);
+
+          BuildCustomerXML(OutXMLBuff,Customer,Params);
+
+          Counter := Counter + 1;
+          RecordAvailable := Customer.NEXT <> 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE SaveCustomer@11123351(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      Webshop@11123304 : Record 11123313;
+      Params@11123305 : TEMPORARY Record 11123310;
+      Customer@11123306 : Record 18;
+      TemplateCustomer@11123307 : Record 18;
+      Contact@11123308 : Record 5050;
+      Country@11123309 : Record 9;
+      CustomerTemplate@11123310 : Record 5105;
+      BaseNodeBuff@11123315 : TEMPORARY Record 11123303;
+      ChildNodesBuff@11123314 : TEMPORARY Record 11123303;
+      RecRef@11123311 : RecordRef;
+      OrderBasketFunc@11123323 : Codeunit 11123320;
+      CommonFunc@11123312 : Codeunit 11123309;
+      EventMgt@11123324 : Codeunit 11123331;
+      ChangeMgt@11123313 : Codeunit 11123324;
+      CustomerNo@11123316 : Code[20];
+      CountryCode@11123317 : Code[10];
+      CreateNew@11123319 : Boolean;
+      ChildNodesExists@11123328 : Boolean;
+      IsGuest@11123318 : Boolean;
+      UpdateContFromCust@11123322 : Codeunit 5056;
+      TextVar@11123326 : Text[1024];
+    BEGIN
+      InXMLBuff.SelectSingleNode('Customer',BaseNodeBuff);
+      ChildNodesExists := BaseNodeBuff.ChildNodes(ChildNodesBuff);
+
+      IF NOT ChildNodesExists THEN
+        EXIT;
+
+      Params.InitParams(InXMLBuff,DATABASE::Customer);
+
+      CreateNew := TRUE;
+
+      TextVar := BaseNodeBuff.CutFieldValueByName('Id');
+      IF TextVar <> '' THEN BEGIN
+        CustomerNo := TextVar;
+        CreateNew := NOT Customer.GET(CustomerNo);
+      END;
+
+      IF CreateNew THEN BEGIN
+        TextVar := BaseNodeBuff.ReadFieldValueByName('CountryId');
+        CountryCode := TextVar;
+        IF CountryCode = '' THEN
+          ERROR(Text11123305);
+
+        Country.GET(CountryCode);
+        TestCountry(Country,TRUE);
+
+        CustomerTemplate.GET(Country."Customer Template Code");
+        TestCustomerTemplate(CustomerTemplate,TRUE);
+
+        SaveContactFieldValues(BaseNodeBuff,Contact,CustomerTemplate.Code,CustomerTemplate."Currency Code");
+
+        TextVar := BaseNodeBuff.CutFieldValueByName('IsGuest');
+        IF TextVar <> '' THEN
+          EVALUATE(IsGuest,TextVar);
+
+        ChangeMgt.SetGuestCustomer(IsGuest);
+        Contact.CreateCustomer(Country."Customer Template Code");
+        ChangeMgt.SetGuestCustomer(FALSE);
+
+        CustomerNo := GetCustomerByCompanyContact(Contact."No.");
+        Customer.GET(CustomerNo);
+
+        Webshop.GET(Params.WebsiteId);
+        OrderBasketFunc.TestWebshop(Webshop,TRUE);
+        IF TemplateCustomer.GET(Webshop."Template Customer No.") THEN BEGIN
+          Customer.VALIDATE("Location Code", TemplateCustomer."Location Code");
+          Customer."Tax Area Code" := TemplateCustomer."Tax Area Code";
+          Customer."Tax Liable" := TemplateCustomer."Tax Liable";
+          Customer."Prices Including VAT" := TemplateCustomer."Prices Including VAT";
+        END;
+        TextVar := BaseNodeBuff.CutFieldValueByName('SanaCustomerId');
+        IF TextVar <> '' THEN
+          Customer."Sana Customer No." := TextVar;
+        Customer."Webshop Guest" := IsGuest;
+      END;
+
+      SetCustomerFieldValues(Customer,BaseNodeBuff,CreateNew);
+
+      Customer.MODIFY(TRUE);
+
+      Params.IsValid := TestCustomer(Customer,FALSE);
+      RecRef.GETTABLE(Customer);
+      CommonFunc.AutoSaveFields(RecRef,BaseNodeBuff);
+
+      RecRef.SETTABLE(Customer);
+      RecRef.CLOSE;
+      UpdateContFromCust.OnModify(Customer);
+
+      IF (Customer."Prices Including VAT") AND
+         (Customer."Country/Region Code" IN ['US','CA'])
+      THEN BEGIN
+        Customer."Prices Including VAT" := FALSE;
+        Customer.MODIFY;
+      END;
+
+      CopyCustomerDimensions(TemplateCustomer."No.", Customer."No.");
+
+      EventMgt.OnSaveCustomer(Customer,Params);
+
+      BuildCustomerXML(OutXMLBuff,Customer,Params);
+    END;
+
+    LOCAL PROCEDURE SetCustomerFieldValues@11123350(VAR Customer@11123302 : Record 18;VAR InXMLBuff@11123303 : Record 11123303;InsertMode@11123304 : Boolean);
+    VAR
+      SettingsFunctions@11123305 : Codeunit 11123311;
+      isBlocked@11123308 : Boolean;
+      PricesInclVAT@11123309 : Boolean;
+      IsB2cCustomer@11123310 : Boolean;
+      TextVar@11123306 : Text[1024];
+    BEGIN
+      TextVar := InXMLBuff.CutFieldValueByName('Name');
+      IF TextVar <> '' THEN
+        Customer.VALIDATE(Name,TextVar);
+
+      TextVar := InXMLBuff.CutFieldValueByName('Address');
+      IF TextVar <> ''THEN
+        Customer.Address := TextVar;
+
+      IF InsertMode THEN BEGIN
+      TextVar := InXMLBuff.CutFieldValueByName('Address2');
+      IF TextVar <> '' THEN
+        Customer."Address 2" := TextVar;
+      END ELSE
+        Customer."Address 2" := InXMLBuff.CutFieldValueByName('Address2');
+
+      TextVar := InXMLBuff.CutFieldValueByName('ZipCode');
+      IF TextVar <> '' THEN
+        Customer."Post Code" := TextVar;
+
+      TextVar := InXMLBuff.CutFieldValueByName('City');
+      IF TextVar <> '' THEN
+        Customer.City := TextVar;
+
+      IF InsertMode THEN BEGIN
+      TextVar := InXMLBuff.CutFieldValueByName('State');
+      IF TextVar <> '' THEN
+        Customer.County := TextVar;
+      END ELSE
+        Customer.County := InXMLBuff.CutFieldValueByName('State');
+
+      TextVar := InXMLBuff.CutFieldValueByName('CountryId');
+      IF TextVar <> '' THEN
+        Customer."Country/Region Code" := TextVar;
+
+      TextVar := InXMLBuff.CutFieldValueByName('Email');
+      IF TextVar <> '' THEN
+        Customer."E-Mail" := TextVar;
+
+      IF InsertMode THEN BEGIN
+      TextVar := InXMLBuff.CutFieldValueByName('FaxNo');
+      IF TextVar <> '' THEN
+        Customer."Fax No." := TextVar;
+      END ELSE
+        Customer."Fax No." := InXMLBuff.CutFieldValueByName('FaxNo');
+
+      IF InsertMode THEN BEGIN
+      TextVar := InXMLBuff.CutFieldValueByName('PhoneNo');
+      IF TextVar <> '' THEN
+        Customer."Phone No." := TextVar;
+      END ELSE
+        Customer."Phone No." := InXMLBuff.CutFieldValueByName('PhoneNo');
+
+      TextVar := InXMLBuff.CutFieldValueByName('SalesPersonId');
+      IF TextVar <> '' THEN
+        Customer."Salesperson Code" := TextVar;
+
+      TextVar := InXMLBuff.CutFieldValueByName('B2cCustomer');
+      IF TextVar <> '' THEN BEGIN
+        EVALUATE(IsB2cCustomer,TextVar);
+        Customer."B2C Customer" := IsB2cCustomer;
+      END;
+
+      TextVar := InXMLBuff.CutFieldValueByName('Blocked');
+      IF TextVar <> '' THEN BEGIN
+        EVALUATE(isBlocked,TextVar);
+        IF isBlocked THEN
+          Customer.Blocked := Customer.Blocked::All
+      END;
+
+      TextVar := InXMLBuff.CutFieldValueByName('BillToCustomerId');
+      IF TextVar <> '' THEN
+        Customer."Bill-to Customer No." := TextVar;
+
+      TextVar := InXMLBuff.CutFieldValueByName('LanguagePreference');
+      IF TextVar <> '' THEN
+        Customer."Language Code" := SettingsFunctions.GetLanguageCode(TextVar);
+
+      TextVar := InXMLBuff.CutFieldValueByName('PricesInclTax');
+      IF TextVar <> '' THEN BEGIN
+        EVALUATE(PricesInclVAT, TextVar);
+        IF InsertMode THEN
+          IF Customer."Country/Region Code" IN ['US','CA'] THEN
+            PricesInclVAT := FALSE;
+          Customer."Prices Including VAT" := PricesInclVAT;
+        END;
+    END;
+
+    PROCEDURE GetShippingAddresses@11123303(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      Customer@11123304 : Record 18;
+      Params@11123312 : TEMPORARY Record 11123310;
+      CustomerHelper@11123306 : Codeunit 11123314;
+      RecMgt@11123308 : Codeunit 11123326;
+      CustomerDivision@1000000000 : Record 50007;
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::Customer);
+
+      RecMgt.GetCustomer(Params.CustomerId,Customer,TRUE);
+      //UTK
+      {CustomerDivision.RESET;
+      IF (CustomerDivision.GET(Params.CustomerId,Params.Division)) AND (CustomerDivision."Location Code" <> '')THEN BEGIN
+          CustomerHelper.GetShippingAddressesTPZ(OutXMLBuff,Customer,CustomerDivision."Location Code");
+       END ELSE//UTK}
+         CustomerHelper.GetShippingAddresses(OutXMLBuff,Customer);
+    END;
+
+    PROCEDURE CreateShippingAddress@11123310(VAR InXmlBuff@11123302 : Record 11123303;VAR OutXmlBuff@11123303 : Record 11123303);
+    VAR
+      ChildNodesBuff@11123310 : TEMPORARY Record 11123303;
+      BaseNodeBuff@11123311 : TEMPORARY Record 11123303;
+      ShippingAddress@11123304 : Record 222;
+      CommonFunc@11123306 : Codeunit 11123309;
+      RecRef@11123305 : RecordRef;
+      Id@11123313 : Code[10];
+      TextVar@11123309 : Text[1024];
+      ChildNodesExists@11123308 : Boolean;
+      Guid@11123312 : GUID;
+    BEGIN
+      InXmlBuff.SelectSingleNode('ShippingAddress',BaseNodeBuff);
+      ChildNodesExists := BaseNodeBuff.ChildNodes(ChildNodesBuff);
+
+      IF ChildNodesExists THEN BEGIN
+        ShippingAddress.INIT;
+
+        TextVar := BaseNodeBuff.CutFieldValueByName('CustomerId');
+        IF TextVar <> '' THEN
+          ShippingAddress."Customer No." := TextVar;
+
+        TextVar := BaseNodeBuff.CutFieldValueByName('Id');
+        IF TextVar <> '' THEN
+          ShippingAddress.Code := TextVar
+        ELSE BEGIN
+          Guid := CREATEGUID;
+          Id := COPYSTR(Guid,27,10);
+          WHILE ShippingAddress.GET(ShippingAddress."Customer No.",Id) DO BEGIN
+            Guid := CREATEGUID;
+            Id := COPYSTR(Guid,27,10);
+          END;
+          ShippingAddress.Code := Id;
+        END;
+
+        TextVar := BaseNodeBuff.CutFieldValueByName('Name');
+        IF TextVar <> '' THEN
+          ShippingAddress.Name := TextVar;
+
+        TextVar := BaseNodeBuff.CutFieldValueByName('Address');
+        IF TextVar <> '' THEN
+          ShippingAddress.Address := TextVar;
+
+        TextVar := BaseNodeBuff.CutFieldValueByName('Address2');
+        IF TextVar <> '' THEN
+          ShippingAddress."Address 2" := TextVar;
+
+        TextVar := BaseNodeBuff.CutFieldValueByName('ZipCode');
+        IF TextVar <> '' THEN
+          ShippingAddress."Post Code" := TextVar;
+
+        TextVar := BaseNodeBuff.CutFieldValueByName('City');
+        IF TextVar <> '' THEN
+          ShippingAddress.City := TextVar;
+
+        TextVar := BaseNodeBuff.CutFieldValueByName('CountryId');
+        IF TextVar <> '' THEN
+          ShippingAddress."Country/Region Code" := TextVar;
+
+        TextVar := BaseNodeBuff.CutFieldValueByName('PhoneNo');
+        IF TextVar <> '' THEN
+          ShippingAddress."Phone No." := TextVar;
+
+        TextVar := BaseNodeBuff.CutFieldValueByName('State');
+        IF TextVar <> '' THEN
+          ShippingAddress.County := TextVar;
+
+        IF ShippingAddress.INSERT THEN BEGIN
+          RecRef.GETTABLE(ShippingAddress);
+          CommonFunc.AutoSaveFields(RecRef,BaseNodeBuff);
+        END;
+      END;
+    END;
+
+    PROCEDURE GetSalesPersons@11123306(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXmlBuff@11123303 : Record 11123303);
+    VAR
+      Salesperson@11123304 : Record 50027;
+      Params@11123324 : TEMPORARY Record 11123310;
+      TempIdList@11123305 : TEMPORARY Record 11123330;
+      CountNodeBuff@11123308 : TEMPORARY Record 11123303;
+      Validation@11123307 : Codeunit 11123310;
+      EventMgt@11123315 : Codeunit 11123331;
+      SalesPersonNo@11123318 : Code[20];
+      Position@11123314 : Integer;
+      Counter@11123313 : Integer;
+      CountOfRecords@11123312 : Integer;
+      RecordAvailable@11123310 : Boolean;
+      IdListExists@11123317 : Boolean;
+    BEGIN
+      //<TPZ2027>
+      Params.InitParams(InXMLBuff,DATABASE::"Mfr. Rep.");
+      //</TPZ2027>
+      Validation.ValidatePageParameters(Params.PageIndex,Params.PageSize);
+
+      ApplySalespersonFilters(Salesperson,Params);
+      ApplySalesPersonSorting(Salesperson,Params);
+
+      EventMgt.OnBeforeGetSalespersons(OutXmlBuff,Salesperson,Params);
+
+      Params.GetIdList(TempIdList);
+      IdListExists := TempIdList.FINDSET;
+
+      IF IdListExists THEN BEGIN
+        REPEAT
+          SalesPersonNo := TempIdList.Value;
+          IF SalesPersonNo <> '' THEN BEGIN
+            Salesperson.SETRANGE(Code,SalesPersonNo);
+            IF Salesperson.FINDFIRST THEN
+              Salesperson.MARK(TRUE);
+          END;
+        UNTIL TempIdList.NEXT = 0;
+        Salesperson.SETRANGE(Code);
+        Salesperson.MARKEDONLY(TRUE);
+      END;
+
+      IF (Params.PageIndex <> 0) AND (Params.PageSize <> 0) THEN
+        Position := Params.PageIndex * Params.PageSize;
+
+      IF Params.IndexRecords <> 0 THEN
+        CountOfRecords := Params.IndexRecords
+      ELSE
+      CountOfRecords := Salesperson.COUNT;
+
+      OutXmlBuff.AddElement(CountNodeBuff,'TotalCount',FORMAT(CountOfRecords));
+
+      IF (CountOfRecords > 0) AND (CountOfRecords >= Position) THEN BEGIN
+        IF Params.SortAscending THEN
+          RecordAvailable := Salesperson.FINDSET
+        ELSE
+          RecordAvailable := Salesperson.FIND('-');
+
+        IF Position > 0 THEN
+          RecordAvailable := Salesperson.NEXT(Position) <> 0;
+
+        WHILE RecordAvailable AND ((Params.PageSize = 0) OR (Counter < Params.PageSize)) DO BEGIN
+          BuildSalespersonXML(OutXmlBuff,Salesperson,Params);
+
+          Counter := Counter + 1;
+          RecordAvailable := Salesperson.NEXT <> 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE GetContacts@11123353(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      Contact@11123304 : Record 5050;
+      Params@11123305 : TEMPORARY Record 11123310;
+      TempIdList@11123307 : TEMPORARY Record 11123330;
+      CountNodeBuff@11123310 : TEMPORARY Record 11123303;
+      Validation@11123306 : Codeunit 11123310;
+      EventMgt@11123316 : Codeunit 11123331;
+      ContactNo@11123309 : Code[20];
+      Position@11123315 : Integer;
+      Counter@11123314 : Integer;
+      CountOfRecords@11123313 : Integer;
+      RecordAvailable@11123312 : Boolean;
+      IdListExists@11123317 : Boolean;
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::Customer);
+
+      Validation.ValidatePageParameters(Params.PageIndex,Params.PageSize);
+
+      ApplyContactFilters(Contact,Params);
+      ApplyContactSorting(Contact,Params);
+
+      EventMgt.OnBeforeGetContacts(OutXMLBuff,Contact,Params);
+
+      Params.GetIdList(TempIdList);
+      IdListExists := TempIdList.FINDSET;
+
+      IF IdListExists THEN BEGIN
+        REPEAT
+          ContactNo := TempIdList.Value;
+          IF ContactNo <> '' THEN BEGIN
+            Contact.SETRANGE("No.",ContactNo);
+            IF Contact.FINDFIRST THEN
+              Contact.MARK(TRUE);
+          END;
+        UNTIL TempIdList.NEXT = 0;
+        Contact.SETRANGE("No.");
+        Contact.MARKEDONLY(TRUE);
+      END;
+
+      IF (Params.PageIndex <> 0) AND (Params.PageSize <> 0) THEN
+        Position := Params.PageIndex * Params.PageSize;
+
+      IF Params.IndexRecords <> 0 THEN
+        CountOfRecords := Params.IndexRecords
+      ELSE
+      CountOfRecords := Contact.COUNT;
+
+      OutXMLBuff.AddElement(CountNodeBuff,'TotalCount',FORMAT(CountOfRecords));
+
+      IF (CountOfRecords > 0) AND (CountOfRecords >= Position) THEN BEGIN
+        IF Params.SortAscending THEN
+          RecordAvailable := Contact.FINDSET
+        ELSE
+          RecordAvailable := Contact.FIND('-');
+
+        IF Position > 0 THEN
+          RecordAvailable := Contact.NEXT(Position) <> 0;
+
+        WHILE RecordAvailable AND ((Params.PageSize = 0) OR (Counter < Params.PageSize)) DO BEGIN
+          BuildContactXML(OutXMLBuff,Contact,Params);
+
+          Counter := Counter + 1;
+          RecordAvailable := Contact.NEXT <> 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE GetCustomerByContact@11123352(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      ContactRec@11123304 : Record 5050;
+      Customer@11123305 : Record 18;
+      ContBusRel@11123306 : Record 5054;
+      Params@11123312 : TEMPORARY Record 11123310;
+      ContactCompanyNo@11123310 : Code[20];
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::Customer);
+
+      IF (Params.ContactId = '') OR (NOT ContactRec.GET(Params.ContactId)) THEN
+        EXIT;
+
+      Customer.RESET;
+      Customer.SETCURRENTKEY("Primary Contact No.");
+      Customer.SETRANGE("Primary Contact No.",Params.ContactId);
+      IF Customer.FINDFIRST THEN BEGIN
+        IF Params.ValidOnly THEN BEGIN
+          IF TestCustomer(Customer,FALSE) THEN
+            BuildCustomerXML(OutXMLBuff,Customer,Params);
+        END ELSE
+          BuildCustomerXML(OutXMLBuff,Customer,Params);
+      END ELSE BEGIN
+        IF ContactRec.Type = ContactRec.Type::Person THEN BEGIN
+          ContactCompanyNo := ContactRec."Company No.";
+          IF NOT ContactRec.GET(ContactCompanyNo) THEN
+            ERROR(Text11123307,Params.ContactId);
+        END;
+        ContBusRel.SETCURRENTKEY("Link to Table","Contact No.");
+        ContBusRel.SETRANGE("Link to Table",ContBusRel."Link to Table"::Customer);
+        ContBusRel.SETRANGE("Contact No.",ContactRec."No.");
+        IF ContBusRel.FINDFIRST THEN BEGIN
+          Customer.GET(ContBusRel."No.");
+          IF Params.ValidOnly THEN BEGIN
+            IF TestCustomer(Customer,FALSE) THEN
+              BuildCustomerXML(OutXMLBuff,Customer,Params);
+          END ELSE
+            BuildCustomerXML(OutXMLBuff,Customer,Params);
+        END;
+      END;
+    END;
+
+    PROCEDURE SaveContact@11123355(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      Contact@11123304 : Record 5050;
+      Params@11123309 : TEMPORARY Record 11123310;
+      BaseNodeBuff@11123311 : TEMPORARY Record 11123303;
+      ChildNodesBuff@11123313 : TEMPORARY Record 11123303;
+      CommonFunc@11123307 : Codeunit 11123309;
+      EventMgt@11123310 : Codeunit 11123331;
+      RecRef@11123305 : RecordRef;
+      ChildNodesExists@11123312 : Boolean;
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::Contact);
+
+      InXMLBuff.SelectSingleNode('Contact',BaseNodeBuff);
+      ChildNodesExists := BaseNodeBuff.ChildNodes(ChildNodesBuff);
+
+      IF ChildNodesExists THEN BEGIN
+        SaveContactFieldValues(BaseNodeBuff,Contact,'','');
+
+        RecRef.GETTABLE(Contact);
+        CommonFunc.AutoSaveFields(RecRef,BaseNodeBuff);
+        RecRef.SETTABLE(Contact);
+        RecRef.CLOSE;
+
+        EventMgt.OnSaveContact(Contact,Params);
+
+        BuildContactXML(OutXMLBuff,Contact,Params);
+      END;
+    END;
+
+    PROCEDURE SaveContactFieldValues@11123354(VAR BaseNodeBuff@11123302 : Record 11123303;VAR Contact@11123303 : Record 5050;CustomerTemplateCode@11123305 : Code[10];CurrencyCode@11123306 : Code[10]);
+    VAR
+      Country@11123304 : Record 9;
+      CustomerTemplate@11123307 : Record 5105;
+      TextVar@11123309 : Text[1024];
+    BEGIN
+      Contact.INIT;
+
+      TextVar := BaseNodeBuff.CutFieldValueByName('Name');
+      IF TextVar <> '' THEN
+        Contact.VALIDATE(Name,TextVar);
+
+      TextVar := BaseNodeBuff.CutFieldValueByName('Address');
+      IF TextVar <> '' THEN
+        Contact.Address := TextVar;
+
+      TextVar := BaseNodeBuff.CutFieldValueByName('Address2');
+      IF TextVar <> '' THEN
+        Contact."Address 2" := TextVar;
+
+      TextVar := BaseNodeBuff.CutFieldValueByName('City');
+      IF TextVar <> '' THEN
+        Contact.City := TextVar;
+
+      TextVar := BaseNodeBuff.CutFieldValueByName('ZipCode');
+      IF TextVar <> '' THEN
+        Contact."Post Code" := TextVar;
+
+      TextVar := BaseNodeBuff.CutFieldValueByName('CountryId');
+      IF TextVar <> '' THEN
+        Contact."Country/Region Code"  := TextVar;
+
+      TextVar := BaseNodeBuff.CutFieldValueByName('State');
+      IF TextVar <> '' THEN
+        Contact.County := TextVar;
+
+      TextVar := BaseNodeBuff.CutFieldValueByName('PhoneNo');
+      IF TextVar <> '' THEN
+        Contact."Phone No." := TextVar;
+
+      TextVar := BaseNodeBuff.CutFieldValueByName('FaxNo');
+      IF TextVar <> '' THEN
+        Contact."Fax No." := TextVar;
+
+      TextVar := BaseNodeBuff.CutFieldValueByName('Email');
+      IF TextVar <> '' THEN
+        Contact."E-Mail" := TextVar;
+
+      TextVar := BaseNodeBuff.CutFieldValueByName('TaxNo');
+      IF TextVar <> '' THEN
+        Contact."VAT Registration No." := TextVar;
+
+      TextVar := BaseNodeBuff.CutFieldValueByName('SalesPersonId');
+      IF TextVar <> '' THEN
+        Contact."Salesperson Code" := TextVar;
+
+      IF CustomerTemplateCode = '' THEN
+        IF Country.GET(Contact."Country/Region Code") THEN
+          IF Country."Customer Template Code" <> '' THEN BEGIN
+            CustomerTemplate.GET(Country."Customer Template Code");
+            CustomerTemplateCode := CustomerTemplate.Code;
+            CurrencyCode := CustomerTemplate."Currency Code";
+          END;
+
+      Contact."Customer Template Code" := CustomerTemplateCode;
+      Contact."Currency Code" := CurrencyCode;
+
+      Contact.Type := Contact.Type::Company;
+      Contact.INSERT(TRUE);
+    END;
+
+    PROCEDURE GetShippingMethods@11123358(VAR InXMLBuff@11123304 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      ShippingAgent@11123308 : Record 291;
+      ShippingAgentService@11123307 : Record 5790;
+      Params@11123310 : TEMPORARY Record 11123310;
+      ShippingMethodNodeBuff@11123302 : TEMPORARY Record 11123303;
+      EventMgt@11123311 : Codeunit 11123331;
+    BEGIN
+      Params.InitParams(InXMLBuff,0);
+
+      EventMgt.OnBeforeGetShippingMethods(OutXMLBuff,ShippingAgentService,Params);
+
+      IF ShippingAgentService.FINDSET THEN
+        REPEAT
+          IF ShippingAgent.GET(ShippingAgentService."Shipping Agent Code") THEN BEGIN
+            OutXMLBuff.AddElement(ShippingMethodNodeBuff,'ShippingMethod','');
+            ShippingMethodNodeBuff.AddFieldElement(
+              'Id',STRSUBSTNO('%1__%2',ShippingAgentService.Code,ShippingAgent.Code));
+            ShippingMethodNodeBuff.AddFieldElement(
+              'Description',STRSUBSTNO('%1 - %2',ShippingAgentService.Description,ShippingAgent.Name));
+
+            EventMgt.OnGetShippingMethod(OutXMLBuff,ShippingAgent,Params);
+          END;
+        UNTIL ShippingAgentService.NEXT = 0;
+    END;
+
+    PROCEDURE GetShippingOrigin@11123357(VAR InXmlBuff@11123303 : Record 11123303;VAR OutXmlBuff@11123302 : Record 11123303);
+    VAR
+      Customer@11123305 : Record 18;
+      Location@11123306 : Record 14;
+      ResultNodeBuff@11123304 : TEMPORARY Record 11123303;
+      OrderFunc@11123309 : Codeunit 11123319;
+      TextVar@11123308 : Text[1024];
+    BEGIN
+      TextVar := InXmlBuff.SelectSingleNodeText('//CustomerId');
+
+      IF TextVar <> '' THEN
+        IF Customer.GET(TextVar) THEN
+          IF Location.GET(Customer."Location Code") THEN BEGIN
+            OutXmlBuff.AddElement(ResultNodeBuff,'ShippingOrigin','');
+            ResultNodeBuff.AddFieldElement('Id',Location.Code);
+            ResultNodeBuff.AddFieldElement('Name',Location.Name);
+            ResultNodeBuff.AddFieldElement('Address',Location.Address);
+            ResultNodeBuff.AddFieldElement('Address2',Location."Address 2");
+            ResultNodeBuff.AddFieldElement('ZipCode',Location."Post Code");
+            ResultNodeBuff.AddFieldElement('City',Location.City);
+            ResultNodeBuff.AddFieldElement('CountryId',Location."Country/Region Code");
+            ResultNodeBuff.AddFieldElement('ContactName',Location.Contact);
+            ResultNodeBuff.AddFieldElement('State',Location.County);
+            ResultNodeBuff.AddFieldElement('CountryName',OrderFunc.GetCountryName(Location."Country/Region Code"));
+          END;
+    END;
+
+    PROCEDURE GetCustomerStatistics@11123302(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      Customer@11123326 : Record 18;
+      Params@11123311 : TEMPORARY Record 11123310;
+      TempIdList@11123307 : TEMPORARY Record 11123330;
+      CountNodeBuff@11123310 : TEMPORARY Record 11123303;
+      Validation@11123304 : Codeunit 11123310;
+      EventMgt@11123306 : Codeunit 11123331;
+      CustomerNo@11123313 : Code[20];
+      Position@11123329 : Integer;
+      Counter@11123328 : Integer;
+      CountOfRecords@11123327 : Integer;
+      RecordAvailable@11123325 : Boolean;
+      IdListExists@11123323 : Boolean;
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::Customer);
+
+      Validation.ValidatePageParameters(Params.PageIndex,Params.PageSize);
+
+      ApplyCustomerFilters(Customer,Params);
+      ApplyCustomerSorting(Customer,Params);
+
+      EventMgt.OnBeforeGetCustomers(OutXMLBuff,Customer,Params);
+
+      Params.GetIdList(TempIdList);
+      IdListExists := TempIdList.FINDSET;
+
+      IF IdListExists THEN BEGIN
+        REPEAT
+          CustomerNo := TempIdList.Value;
+          IF CustomerNo <> '' THEN BEGIN
+            Customer.SETRANGE("No.",CustomerNo);
+            IF Customer.FINDFIRST THEN
+              IF Params.ValidOnly THEN BEGIN
+                IF TestCustomer(Customer,FALSE) THEN
+                  Customer.MARK(TRUE);
+              END ELSE
+                Customer.MARK(TRUE);
+          END;
+        UNTIL TempIdList.NEXT = 0;
+        Customer.SETRANGE("No.");
+        Customer.MARKEDONLY(TRUE);
+      END;
+
+      CountOfRecords := Customer.COUNT;
+      OutXMLBuff.AddElement(CountNodeBuff,'TotalCount',FORMAT(CountOfRecords));
+
+      IF (Params.PageIndex <> 0) AND (Params.PageSize <> 0) THEN
+        Position := Params.PageIndex * Params.PageSize;
+
+      IF (CountOfRecords > 0) AND (CountOfRecords >= Position) THEN BEGIN
+        IF Params.SortAscending THEN
+          RecordAvailable := Customer.FINDSET
+        ELSE
+          RecordAvailable := Customer.FIND('-');
+
+        IF Position > 0 THEN
+          RecordAvailable := Customer.NEXT(Position) <> 0;
+
+        WHILE RecordAvailable AND ((Params.PageSize = 0) OR (Counter < Params.PageSize)) DO BEGIN
+          Params.AccountId := Customer."No.";
+          BuildCustomerStatisticsXML(OutXMLBuff,Customer,Params);
+          Counter := Counter + 1;
+          RecordAvailable := Customer.NEXT <> 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE GetCustomerStatisticsFields@11123309(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      Params@11123304 : TEMPORARY Record 11123310;
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::Customer);
+      BuildCustStatisticsFieldsXML(OutXMLBuff,Params);
+    END;
+
+    PROCEDURE ApplyCustomerFilters@11123342(VAR Customer@11123302 : Record 18;VAR Params@11123303 : Record 11123310);
+    VAR
+      TempFilterList@11123304 : TEMPORARY Record 11123330;
+      FilterHelper@11123305 : Codeunit 11123321;
+    BEGIN
+      FilterHelper.SetCustomerWebshopFilter(Customer,Params);
+
+      Params.GetFilterList(TempFilterList);
+      IF NOT TempFilterList.ISEMPTY THEN
+        FilterHelper.SetCustomerFilter(Customer,TempFilterList,Params);
+    END;
+
+    PROCEDURE ApplySalespersonFilters@11123344(VAR Salesperson@11123302 : Record 50027;VAR Params@11123303 : Record 11123310);
+    VAR
+      TempFilterList@11123305 : TEMPORARY Record 11123330;
+      FilterHelper@11123304 : Codeunit 11123321;
+    BEGIN
+      //<TPZ2027> - change in Function Parameters
+      FilterHelper.SetSalesPersonWebshopFilter(Salesperson,Params);
+
+      Params.GetFilterList(TempFilterList);
+      IF NOT TempFilterList.ISEMPTY THEN
+        FilterHelper.SetSalesPersonFilter(Salesperson,TempFilterList,Params);
+    END;
+
+    PROCEDURE ApplyContactFilters@11123359(VAR Contact@11123302 : Record 5050;VAR Params@11123305 : Record 11123310);
+    VAR
+      TempFilterList@11123304 : TEMPORARY Record 11123330;
+      FilterHelper@11123303 : Codeunit 11123321;
+    BEGIN
+      FilterHelper.SetContactWebshopFilter(Contact,Params);
+
+      Params.GetFilterList(TempFilterList);
+      IF NOT TempFilterList.ISEMPTY THEN
+        FilterHelper.SetContactFilter(Contact,TempFilterList,Params);
+    END;
+
+    PROCEDURE ApplyCustomerSorting@11123311(VAR Customer@11123302 : Record 18;VAR Params@11123305 : Record 11123310);
+    BEGIN
+      IF Params.SortField = '' THEN
+        EXIT;
+
+      CASE Params.SortField OF
+        'No.' : Customer.SETCURRENTKEY("No.");
+        'Name' : Customer.SETCURRENTKEY(Name);
+        'City' : Customer.SETCURRENTKEY(City);
+      END;
+
+      IF NOT Params.SortAscending THEN
+        Customer.ASCENDING(Params.SortAscending);
+    END;
+
+    PROCEDURE ApplySalesPersonSorting@11123312(VAR SalesPerson@11123302 : Record 50027;VAR Params@11123305 : Record 11123310);
+    BEGIN
+      //<TPZ2027> - change in Function Parameters
+      IF Params.SortField = '' THEN
+        EXIT;
+
+      CASE Params.SortField OF
+        'Code' : SalesPerson.SETCURRENTKEY(Code);
+        'Name' : SalesPerson.SETCURRENTKEY(Name);
+      END;
+
+      IF NOT Params.SortAscending THEN
+        SalesPerson.ASCENDING(Params.SortAscending);
+    END;
+
+    PROCEDURE ApplyContactSorting@11123313(VAR Contact@11123302 : Record 5050;VAR Params@11123305 : Record 11123310);
+    BEGIN
+      IF Params.SortField = '' THEN
+        EXIT;
+
+      CASE Params.SortField OF
+        'No.' : Contact.SETCURRENTKEY("No.");
+        'Name' : Contact.SETCURRENTKEY("Search Name");
+      END;
+
+      IF NOT Params.SortAscending THEN
+        Contact.ASCENDING(Params.SortAscending);
+    END;
+
+    PROCEDURE CopyShipAddressFromCustomer@11123316(VAR ShippingAddress@11123302 : Record 222;VAR Customer@11123303 : Record 18);
+    BEGIN
+      ShippingAddress.INIT;
+      ShippingAddress."Customer No." := Customer."No.";
+      ShippingAddress.Code := 'DEFAULT';
+      ShippingAddress.Name := Customer.Name;
+      ShippingAddress.Address :=Customer.Address;//utk
+      ShippingAddress."Address 2" := Customer."Address 2";
+      ShippingAddress."Post Code" := Customer."Post Code";
+      ShippingAddress.City := Customer.City;
+      ShippingAddress."Country/Region Code" := Customer."Country/Region Code";
+      ShippingAddress.Contact := Customer.Contact;
+      ShippingAddress.County := Customer.County;
+    END;
+
+    LOCAL PROCEDURE CopyCustomerDimensions@11123326(FromCustomerNo@11123302 : Code[20];ToCustomerNo@11123303 : Code[20]);
+    VAR
+      FromDefaultDim@11123304 : Record 352;
+      ToDefaultDim@11123305 : Record 352;
+    BEGIN
+      WITH FromDefaultDim DO BEGIN
+        RESET;
+        SETRANGE("Table ID",DATABASE::"Customer Template");
+        SETRANGE("No.",FromCustomerNo);
+        IF FINDSET THEN
+          REPEAT
+            ToDefaultDim.INIT;
+            ToDefaultDim := FromDefaultDim;
+            ToDefaultDim."No." := ToCustomerNo;
+            ToDefaultDim.INSERT(TRUE);
+          UNTIL NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE GetCustomerByCompanyContact@11123327(ContactNo@11123302 : Code[20]) : Code[20];
+    VAR
+      ContBusRel@11123303 : Record 5054;
+    BEGIN
+      ContBusRel.SETCURRENTKEY("Link to Table","Contact No.");
+      ContBusRel.SETRANGE("Link to Table",ContBusRel."Link to Table"::Customer);
+      ContBusRel.SETRANGE("Contact No.",ContactNo);
+      IF ContBusRel.FINDFIRST THEN
+        EXIT(ContBusRel."No.");
+    END;
+
+    PROCEDURE ApplyFilterToCustBySalesperson@11123328(VAR Customer@11123302 : Record 18;SalespersonCode@11123303 : Code[10]);
+    VAR
+      CustDivision@1000000000 : Record 50007;
+    BEGIN
+      //<TPZ2027>
+      CustDivision.SETRANGE("Mfr. Rep. Code",SalespersonCode);
+      IF CustDivision.FINDSET THEN
+        REPEAT
+          Customer.GET(CustDivision."Customer No.");
+          IF NOT Customer.MARK
+            THEN Customer.MARK(TRUE);
+        UNTIL CustDivision.NEXT = 0;
+
+      Customer.MARKEDONLY(TRUE);
+
+      //Customer.SETRANGE("Salesperson Code",SalespersonCode);
+      Customer.SETRANGE(Blocked,Customer.Blocked::" ");
+      //</TPZ2027>
+    END;
+
+    PROCEDURE ApplyFilterToContBySalesperson@11123329(VAR Contact@11123302 : Record 5050;SalespersonCode@11123303 : Code[10]);
+    BEGIN
+      Contact.RESET;
+      Contact.SETCURRENTKEY("Salesperson Code");
+      Contact.SETRANGE("Salesperson Code",SalespersonCode);
+    END;
+
+    PROCEDURE TestCustomer@11123317(Customer@11123302 : Record 18;ShowError@11123306 : Boolean) : Boolean;
+    VAR
+      RecRef@11123303 : RecordRef;
+      Validation@11123304 : Codeunit 11123310;
+      TestSucceed@11123307 : Boolean;
+      ErrorText@11123305 : Text[250];
+    BEGIN
+      RecRef.GETTABLE(Customer);
+      TestSucceed := Validation.RunValidationTests(RecRef,ErrorText);
+      IF NOT TestSucceed AND ShowError THEN
+        ERROR(ErrorText);
+      EXIT(TestSucceed);
+    END;
+
+    PROCEDURE TestContact@11123330(Contact@11123302 : Record 5050;ShowError@11123307 : Boolean) : Boolean;
+    VAR
+      RecRef@11123303 : RecordRef;
+      Validation@11123304 : Codeunit 11123310;
+      TestSucceed@11123306 : Boolean;
+      ErrorText@11123305 : Text[250];
+    BEGIN
+      RecRef.GETTABLE(Contact);
+      TestSucceed := Validation.RunValidationTests(RecRef,ErrorText);
+      IF NOT TestSucceed AND ShowError THEN
+        ERROR(ErrorText);
+      EXIT(TestSucceed);
+    END;
+
+    PROCEDURE TestCustomerTemplate@11123331(CustomerTemplate@11123302 : Record 5105;ShowError@11123307 : Boolean) : Boolean;
+    VAR
+      RecRef@11123303 : RecordRef;
+      Validation@11123304 : Codeunit 11123310;
+      TestSucceed@11123306 : Boolean;
+      ErrorText@11123305 : Text[250];
+    BEGIN
+      RecRef.GETTABLE(CustomerTemplate);
+      TestSucceed := Validation.RunValidationTests(RecRef,ErrorText);
+      IF NOT TestSucceed AND ShowError THEN
+        ERROR(ErrorText);
+      EXIT(TestSucceed);
+    END;
+
+    PROCEDURE TestCountry@11123333(Country@11123302 : Record 9;ShowError@11123307 : Boolean) : Boolean;
+    VAR
+      RecRef@11123303 : RecordRef;
+      Validation@11123304 : Codeunit 11123310;
+      TestSucceed@11123306 : Boolean;
+      ErrorText@11123305 : Text[250];
+    BEGIN
+      RecRef.GETTABLE(Country);
+      TestSucceed := Validation.RunValidationTests(RecRef,ErrorText);
+      IF NOT TestSucceed AND ShowError THEN
+        ERROR(ErrorText);
+      EXIT(TestSucceed);
+    END;
+
+    PROCEDURE TestAddonCustomerStatus@11123332(RecRef@11123302 : RecordRef;VAR ErrorText@11123303 : Text[250]) : Boolean;
+    VAR
+      Customer@11123304 : Record 18;
+      TestSucceed@11123306 : Boolean;
+    BEGIN
+      TestSucceed := TRUE;
+
+      IF NOT TestSucceed THEN
+        ErrorText := Text11123308;
+
+      EXIT(TestSucceed);
+    END;
+
+    PROCEDURE IsAccountCustomer@11123315(AccountType@11123302 : Text[50]) : Boolean;
+    BEGIN
+      IF AccountType = 'Customer' THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE TestAccountType@11123336(VAR Params@11123302 : Record 11123310);
+    BEGIN
+      IF (Params.AccountType <> 'Customer') AND (Params.AccountType <> 'Contact') THEN
+        ERROR(Text11123303,Params.AccountType);
+    END;
+
+    PROCEDURE CheckAccountCode@11123337(VAR Params@11123302 : Record 11123310) : Boolean;
+    BEGIN
+      IF (Params.AccountId <> '0') AND (Params.AccountId <> '') THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE GetRelatedCustByContNo@11123321(ContactNo@11123302 : Code[20];VAR Customer@11123303 : Record 18) : Boolean;
+    VAR
+      Contact@11123304 : Record 5050;
+      ContBusRel@11123305 : Record 5054;
+      RecMgt@11123307 : Codeunit 11123326;
+      ContactCompanyCode@11123306 : Code[20];
+    BEGIN
+      IF RecMgt.GetContact(ContactNo,Contact,FALSE) THEN BEGIN
+        IF Contact.Type = Contact.Type::Person THEN BEGIN
+          Customer.SETRANGE("Primary Contact No.",ContactNo);
+          IF Customer.FINDFIRST THEN
+            EXIT(TRUE)
+          ELSE
+            ContactCompanyCode := Contact."Company No."
+        END ELSE
+          ContactCompanyCode := Contact."No.";
+
+        IF ContactCompanyCode <> '' THEN BEGIN
+          ContBusRel.SETRANGE("Contact No.",ContactCompanyCode);
+          ContBusRel.SETRANGE("Link to Table",ContBusRel."Link to Table"::Customer);
+          IF ContBusRel.FINDFIRST THEN BEGIN
+            IF RecMgt.GetCustomer(ContBusRel."No.",Customer,FALSE) THEN
+              EXIT(TRUE);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE GetPricesIncludingVAT@11123338(VAR Customer@11123302 : Record 18) : Boolean;
+    VAR
+      BillToCustomer@11123303 : Record 18;
+      RecMgt@11123304 : Codeunit 11123326;
+    BEGIN
+      IF Customer."Bill-to Customer No." <> '' THEN BEGIN
+        RecMgt.GetCustomer(Customer."Bill-to Customer No.",BillToCustomer,TRUE);
+        EXIT(BillToCustomer."Prices Including VAT");
+      END;
+      EXIT(Customer."Prices Including VAT");
+    END;
+
+    PROCEDURE GetCustomerCurrency@11123339(VAR Customer@11123302 : Record 18) : Code[10];
+    VAR
+      BillToCustomer@11123303 : Record 18;
+      RecMgt@11123304 : Codeunit 11123326;
+    BEGIN
+      IF Customer."Bill-to Customer No." <> '' THEN BEGIN
+        RecMgt.GetCustomer(Customer."Bill-to Customer No.",BillToCustomer,TRUE);
+        EXIT(BillToCustomer."Currency Code");
+      END;
+      EXIT(Customer."Currency Code");
+    END;
+
+    PROCEDURE BuildCustomerXML@11123305(VAR OutXMLBuff@11123304 : Record 11123303;VAR Customer@11123303 : Record 18;VAR Params@11123302 : Record 11123310);
+    VAR
+      ResultNodeBuff@11123305 : TEMPORARY Record 11123303;
+      CustomerHelper@11123306 : Codeunit 11123314;
+      EventMgt@11123307 : Codeunit 11123331;
+    BEGIN
+      OutXMLBuff.AddElement(ResultNodeBuff,'Customer','');
+      CustomerHelper.GetCustomerXML(ResultNodeBuff,Customer,Params);
+
+      EventMgt.OnAfterGetCustomer(ResultNodeBuff,Customer,Params);
+    END;
+
+    PROCEDURE BuildSalespersonXML@11123307(VAR OutXMLBuff@11123304 : Record 11123303;VAR Salesperson@11123303 : Record 50027;VAR Params@11123302 : Record 11123310);
+    VAR
+      ResultNodeBuff@11123305 : TEMPORARY Record 11123303;
+      CustomerHelper@11123306 : Codeunit 11123314;
+      EventMgt@11123307 : Codeunit 11123331;
+    BEGIN
+      //<TPZ2027> - change in function parameters
+      OutXMLBuff.AddElement(ResultNodeBuff,'SalesPerson','');
+      CustomerHelper.GetSalespersonXML(ResultNodeBuff,Salesperson,Params);
+
+      EventMgt.OnAfterGetSalesperson(ResultNodeBuff,Salesperson,Params);
+    END;
+
+    PROCEDURE BuildContactXML@11123308(VAR OutXMLBuff@11123304 : Record 11123303;VAR Contact@11123303 : Record 5050;VAR Params@11123302 : Record 11123310);
+    VAR
+      ResultNodeBuff@11123305 : TEMPORARY Record 11123303;
+      CustomerHelper@11123306 : Codeunit 11123314;
+      EventMgt@11123307 : Codeunit 11123331;
+    BEGIN
+      OutXMLBuff.AddElement(ResultNodeBuff,'Contact','');
+      CustomerHelper.GetContactXML(ResultNodeBuff,Contact,Params);
+
+      EventMgt.OnAfterGetContact(ResultNodeBuff,Contact,Params);
+    END;
+
+    PROCEDURE BuildCustomerStatisticsXML@11123304(VAR OutXMLBuff@11123304 : Record 11123303;VAR Customer@11123303 : Record 18;VAR Params@11123302 : Record 11123310);
+    VAR
+      ResultNodeBuff@11123305 : TEMPORARY Record 11123303;
+      CustomerHelper@11123306 : Codeunit 11123314;
+    BEGIN
+      OutXMLBuff.AddElement(ResultNodeBuff,'Customer','');
+      CustomerHelper.GetCustomerStatisticsXML(ResultNodeBuff,Customer,Params);
+    END;
+
+    PROCEDURE BuildCustStatisticsFieldsXML@11123314(VAR OutXMLBuff@11123304 : Record 11123303;VAR Params@11123302 : Record 11123310);
+    VAR
+      CustomerHelper@11123305 : Codeunit 11123314;
+    BEGIN
+      CustomerHelper.GetCustStatisticsFieldsXML(OutXMLBuff,Params);
+    END;
+
+    PROCEDURE ApplySanaGuestNos@11123324(VAR Customer@11123303 : Record 18);
+    VAR
+      NoSeriesMgt@11123304 : Codeunit 396;
+      GuestNos@11123302 : Code[10];
+    BEGIN
+      GuestNos := GetGuestCustomerNos;
+      IF GuestNos <> '' THEN
+        NoSeriesMgt.InitSeries(GuestNos,'',0D,Customer."No.",Customer."No. Series");
+    END;
+
+    PROCEDURE GetGuestCustomerNos@11123318() : Code[10];
+    VAR
+      Webshop@11123304 : Record 11123313;
+      Context@11123305 : Codeunit 11123305;
+      RecMgt@11123303 : Codeunit 11123326;
+    BEGIN
+      RecMgt.GetWebshop(Context.GetCurrentWebsiteID,Webshop,FALSE);
+      EXIT(Webshop."Guest Nos.");
+    END;
+
+    PROCEDURE CopyShipAddressFromLocation@1000000000(VAR ShippingAddress@11123302 : Record 222;VAR Customer@11123303 : Record 18;VAR LocCode@1000000000 : Code[20]);
+    VAR
+      Location@1000000001 : Record 14;
+    BEGIN
+      //UTK
+      IF Location.GET(LocCode) THEN BEGIN
+      ShippingAddress.INIT;
+      ShippingAddress."Customer No." := Customer."No.";
+      ShippingAddress.Code := 'DEFAULT';
+      ShippingAddress.Name := Customer.Name;
+      ShippingAddress.Address := Location.Address;
+      ShippingAddress."Address 2" := Location."Address 2";
+      ShippingAddress."Post Code" := Location."Post Code";
+      ShippingAddress.City := Location.City;
+      ShippingAddress."Country/Region Code" := Location."Country/Region Code";
+      ShippingAddress.Contact := Location.Contact;
+      ShippingAddress.County := Location.County;
+      END
+    END;
+
+    BEGIN
+    {
+      2017-10-13 TPZ2027 EBAGIM
+        Swaping Salesperon with MfrRep table
+    }
+    END.
+  }
+}
+

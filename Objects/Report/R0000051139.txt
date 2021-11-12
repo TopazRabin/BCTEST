@@ -1,0 +1,158 @@
+OBJECT Report 51139 Calculate Monthly Demand
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/22/21;
+    Time=[ 4:56:29 AM];
+    Modified=Yes;
+    Version List=TPZ000.00.00,001;
+  }
+  PROPERTIES
+  {
+    ProcessingOnly=Yes;
+  }
+  DATASET
+  {
+    { 1000000000;;DataItem;                  ;
+               DataItemTable=Table27;
+               OnPreDataItem=BEGIN
+
+                               Item.SETFILTER("Shortcut Dimension 5 Code",DivisionCodeFilter); //utk
+                             END;
+
+               OnAfterGetRecord=BEGIN
+
+                                  MonthDemand:=0;
+                                  MonthDemandForecast := 0;
+                                  MonthDemand3MonHis := 0;
+                                  MonthDemand12MonHis := 0;
+                                END;
+
+               ReqFilterFields=No.,Item Category Code }
+
+    { 1000000001;1;DataItem;                 ;
+               DataItemTable=Table14;
+               DataItemTableView=WHERE(Code=FILTER(25|30|80));
+               OnAfterGetRecord=BEGIN
+                                  ProcUnit.RESET;
+                                  //ProcUnit.SETRANGE("Location Code",Code);
+                                  //ProcUnit.SETRANGE("Item No.",Item."No.");
+                                  //IF ProcUnit.FINDFIRST THEN  BEGIN
+                                  IF ProcUnit.GET(Code,Item."No.",'') THEN BEGIN
+                                    ForecastView.SetProcUnitandSourceNo(ProcUnit,'');
+                                    IF Item."ABC Code" IN ['DIS','NS'] THEN
+                                      MonthDemandForecast := MonthDemandForecast + ForecastView.TotForcast1
+                                    ELSE
+                                      MonthDemandForecast := MonthDemandForecast + ForecastView.TotForcast;
+                                  END;
+                                   //MESSAGE(FORMAT(MonthDemandForecast));
+                                END;
+
+               OnPostDataItem=BEGIN
+
+                                Location1.RESET;
+                                //>>001 TPZ2904
+                                //Comment Out older code starting tag
+                                //Location1.SETFILTER(Code,'1|25|30|76');
+                                //Comment Out older code End tag
+                                Location1.SETFILTER(Code,'25|30|80');
+                                //>>001 TPZ2904
+                                IF Location1.FINDSET THEN BEGIN
+                                  REPEAT
+                                      ValueEntry.RESET;
+                                      ValueEntry.SETCURRENTKEY("Item No.","Posting Date","Item Ledger Entry Type","Entry Type","Variance Type","Item Charge No.","Location Code","Variant Code");
+                                      ValueEntry.SETRANGE("Location Code",Location1.Code);
+                                      ValueEntry.SETRANGE("Posting Date",CALCDATE('-CM-3M',WORKDATE),WORKDATE);
+                                      ValueEntry.SETRANGE("Item Ledger Entry Type",ValueEntry."Item Ledger Entry Type"::Sale);
+                                      ValueEntry.SETRANGE("Item No.",Item."No.");
+                                      ValueEntry.CALCSUMS("Item Ledger Entry Quantity");
+                                      MonthDemand3MonHis := MonthDemand3MonHis + (ValueEntry."Item Ledger Entry Quantity"*-1);
+                                  UNTIL Location1.NEXT = 0;
+                                END;
+
+                                //MESSAGE(FORMAT(MonthDemand3MonHis));
+
+                                IF (MonthDemandForecast > MonthDemand3MonHis) AND (MonthDemandForecast > 0) THEN
+                                  MonthDemand := MonthDemandForecast/3
+                                ELSE IF (MonthDemand3MonHis > MonthDemandForecast) AND (MonthDemand3MonHis > 0) THEN
+                                  MonthDemand := MonthDemand3MonHis/3
+                                ELSE BEGIN
+                                  Location1.RESET;
+                                  //>>001 TPZ2904
+                                  //Comment Out older code starting tag
+                                  //Location1.SETFILTER(Code,'1|25|30|76');
+                                  //Comment Out older code End tag
+                                  Location1.SETFILTER(Code,'25|30|80');
+                                  //>>001 TPZ2904
+                                  IF Location1.FINDSET THEN BEGIN
+                                    REPEAT
+                                        ValueEntry.RESET;
+                                        ValueEntry.SETCURRENTKEY("Item No.","Posting Date","Item Ledger Entry Type","Entry Type","Variance Type","Item Charge No.","Location Code","Variant Code");
+                                        ValueEntry.SETRANGE("Location Code",Location1.Code);
+                                        ValueEntry.SETRANGE("Posting Date",CALCDATE('-CM-12M',WORKDATE),WORKDATE);
+                                        ValueEntry.SETRANGE("Item Ledger Entry Type",ValueEntry."Item Ledger Entry Type"::Sale);
+                                        ValueEntry.SETRANGE("Item No.",Item."No.");
+                                        ValueEntry.CALCSUMS("Item Ledger Entry Quantity");
+                                        MonthDemand12MonHis := MonthDemand12MonHis + (ValueEntry."Item Ledger Entry Quantity"*-1);
+                                    UNTIL Location1.NEXT = 0;
+                                  END;
+
+                                  IF (MonthDemand12MonHis > 0) THEN
+                                    MonthDemand := MonthDemand12MonHis/12
+                                  ELSE
+                                    MonthDemand := 1;
+                                END;
+
+                                Item."Monthly Demand" := MonthDemand;
+                                Item.MODIFY;
+                              END;
+                               }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      ProcUnit@1000000000 : Record 14000555;
+      ForecastView@1000000001 : Page 14002661;
+      MonthDemand@1000000002 : Decimal;
+      ValueEntry@1000000003 : Record 5802;
+      Location1@1000000004 : Record 14;
+      ItemUsage@1000000005 : Record 14000557;
+      DivisionCodeFilter@1000000006 : Text;
+      MonthDemandForecast@1000000007 : Decimal;
+      MonthDemand3MonHis@1000000008 : Decimal;
+      MonthDemand12MonHis@1000000009 : Decimal;
+
+    PROCEDURE InitializeRequest@1000000000(DivisionCode@1000000000 : Text);
+    BEGIN
+      DivisionCodeFilter:=DivisionCode;
+    END;
+
+    BEGIN
+    {
+      2019-06-21 TPZ2590 UCHOUHAN
+        Created new report to calculate Monthly Demand.
+      2019-11-26 TPZ2718 UCHOUHAN
+        Monthly Demand blank for negative values.
+
+      001 TPZ2904 UTK 07202020 - Code added for Location 80.
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

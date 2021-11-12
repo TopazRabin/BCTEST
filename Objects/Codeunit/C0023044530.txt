@@ -1,0 +1,301 @@
+OBJECT Codeunit 23044530 WHI Compatibility 2013
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/11/21;
+    Time=[ 9:16:21 AM];
+    Modified=Yes;
+    Version List=WHI2.4.7684.0;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      cuCommonFuncs@1000000000 : Codeunit 23044501;
+      cuTranslationMgmt@1000000002 : Codeunit 23044526;
+
+    PROCEDURE BinContentsQuery@1000000002(pcodLocation@1000000004 : Code[10];pcodBin@1000000002 : Code[20];VAR pbsOutput@1000000001 : BigText);
+    VAR
+      lqBinByLot@1000000000 : Query 23044501;
+      lrecItem@1000000003 : Record 27;
+      ldConvertedValue@1000000005 : Decimal;
+    BEGIN
+      //Construct the table
+      pbsOutput.ADDTEXT('<ROWS>');
+
+      //new query here
+
+      lqBinByLot.SETRANGE(Bin_Code, pcodBin);
+      lqBinByLot.SETRANGE(Location_Code, pcodLocation );
+
+      //Filter out "Zero Entries"
+      lqBinByLot.SETFILTER(Sum_Quantity, '<>%1',0); //'>=0.01|<=-0.01' PKS
+      lqBinByLot.SETFILTER(Lot_No,'*');
+
+      lqBinByLot.OPEN;
+
+      WHILE lqBinByLot.READ DO BEGIN
+        // cannot trust the 'quantity' column
+        lrecItem.GET( lqBinByLot.Item_No );
+        ldConvertedValue := cuCommonFuncs.ConvertUnitOfMeasure(
+                                                              lrecItem,
+                                                              lqBinByLot.Sum_Quantity_Base,
+                                                              lrecItem."Base Unit of Measure",
+                                                              lqBinByLot.Unit_of_Measure_Code);
+        IF (ldConvertedValue <> 0 ) THEN BEGIN
+          //loop through query
+          pbsOutput.ADDTEXT('<R><FIELDS>');
+          cuCommonFuncs.initVariantColumnIndex();
+          cuCommonFuncs.addDSField(pbsOutput,lqBinByLot.Item_No);
+          cuCommonFuncs.addDSField(pbsOutput,lrecItem.Description + lrecItem."Description 2");
+
+
+          cuCommonFuncs.addDSField(pbsOutput,ldConvertedValue);
+          cuCommonFuncs.addDSField(pbsOutput, lqBinByLot.Unit_of_Measure_Code);
+          cuCommonFuncs.addDSField(pbsOutput,lqBinByLot.Variant_Code);
+          cuCommonFuncs.addDSField(pbsOutput,lqBinByLot.Lot_No);
+          pbsOutput.ADDTEXT('</FIELDS></R>');
+        END;
+      END;
+
+      pbsOutput.ADDTEXT('</ROWS>');
+    END;
+
+    PROCEDURE FindUserName@1000000000(ptxtUserName@1000000001 : Text[100]) : Text[100];
+    VAR
+      lrecUser@1000000000 : Record 2000000120;
+      ltxtUserName@1000000002 : Text[100];
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Return user name from user table on NAV 2013
+      //</Summary>
+      //<Author>H.Zhao</Author>
+      //<Date>13/02/2015</Date>
+      //<Issue>TFS1635</Issue>
+      //<Version>DMS1.5</Version>
+      //////////////////////////////////////////////
+
+      lrecUser.RESET();
+      lrecUser.SETFILTER("User Name", '%1', '*'+ptxtUserName ); //<IW author="h.z" date="03/17/16" issue="TFS2436" />
+      IF ( lrecUser.FINDFIRST() ) THEN BEGIN
+        ltxtUserName := COPYSTR( lrecUser."Full Name", 1, MAXSTRLEN(ltxtUserName) );
+      END;
+
+      EXIT(ltxtUserName);
+    END;
+
+    PROCEDURE PromptAndUploadFile@1000000004(ptxtFilterString@1000000002 : Text[50]) ptxtServerFile : Text;
+    VAR
+      lcuFileMgmt@1000000000 : Codeunit 419;
+      ltxtFileName@1000000001 : Text[1024];
+    BEGIN
+      //
+      // Prompts the user for a file, and puts it on the server
+      // Returns blank if the user cancelled or the file is not available.
+      // Returns the service tier server path if it was successfull.
+      //
+      ptxtServerFile := '';
+
+      ltxtFileName := lcuFileMgmt.OpenFileDialog(cuTranslationMgmt.getTranslatedString('MSG_IMPORT_FROM', ''), '', ptxtFilterString );
+      IF ( ISSERVICETIER ) THEN BEGIN
+        ptxtServerFile := lcuFileMgmt.UploadFileSilent( ltxtFileName );
+      END ELSE BEGIN
+        ptxtServerFile := ltxtFileName;
+      END;
+    END;
+
+    PROCEDURE PromptAndDownloadFile@1000000003(ptxtFilterString@1000000002 : Text[50];ptxtServerFile@1000000003 : Text[250];VAR ptxtClientName@1000000004 : Text[250]);
+    VAR
+      lcuFileMgmt@1000000000 : Codeunit 419;
+    BEGIN
+      //
+      // Prompts the user for a client file, and then downloads it.
+      //
+      DOWNLOAD(
+        ptxtServerFile, // FromFile,
+        cuTranslationMgmt.getTranslatedString('MSG_EXPORT_TO', ''), // DialogTitle,
+        '', // ToFolder,
+        ptxtFilterString, // ToFilter,
+        ptxtClientName );  // ToFile);
+    END;
+
+    PROCEDURE PromptAndImportIntoBlob@1000000013(ptxtFilterString@1000000002 : Text[50];VAR posBlob@1000000003 : OutStream) pbWorked : Boolean;
+    VAR
+      ltxtServerFile@1000000004 : Text;
+    BEGIN
+      //
+      // Prompts the user for a file, loads it onto the server, then imports it
+      // into the specified stream.
+      pbWorked := FALSE;
+      ltxtServerFile := PromptAndUploadFile( ptxtFilterString );
+      IF ( ltxtServerFile <> '' ) THEN BEGIN
+        pbWorked := ImportServerFileIntoBlob( ltxtServerFile, posBlob );
+      END;
+    END;
+
+    PROCEDURE ImportServerFileIntoBlob@1000000016(ptxtServerFileName@1000000002 : Text;VAR posBlob@1000000003 : OutStream) pbWorked : Boolean;
+    VAR
+      ldnStreamWriter@1000000005 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamWriter";
+      ldnTextEncoder@1000000001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      ldnFile@1000000000 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+      lcodExtensionName@1000000004 : Code[10];
+      liFileNameLen@1000000006 : Integer;
+      ldnBytes@1000000007 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Array";
+      ldnConvert@1000000009 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Convert";
+    BEGIN
+      //
+      // Imports the specified server file path into the specified stream, with UTF 8 encoding.
+      pbWorked := FALSE;
+
+      liFileNameLen := STRLEN(ptxtServerFileName);
+      lcodExtensionName := COPYSTR(ptxtServerFileName, liFileNameLen - 4 + 1, 4);
+      ldnStreamWriter := ldnStreamWriter.StreamWriter(posBlob, ldnTextEncoder.UTF8);
+      IF (LOWERCASE(lcodExtensionName) <> '.cab') THEN BEGIN
+        ldnStreamWriter.Write( ldnFile.ReadAllText( ptxtServerFileName ) );
+      END ELSE BEGIN
+        // we insert bytes for .cab files, same with picture
+        ldnBytes := ldnFile.ReadAllBytes(ptxtServerFileName);
+        ldnStreamWriter.Write(ldnConvert.ToBase64String(ldnBytes));
+      END;
+
+      ldnStreamWriter.Flush();
+      pbWorked := TRUE;
+    END;
+
+    PROCEDURE PromptExportBlobToFile@1000000001(ptxtFilterString@1000000002 : Text[50];ptxtFileExtension@1000000008 : Text[10];VAR pisBlob@1000000003 : InStream) pbWorked : Boolean;
+    VAR
+      lcuFileMgmt@1000000000 : Codeunit 419;
+      ltxtFileName@1000000001 : Text[250];
+      ltxtServerFileName@1000000004 : Text[250];
+      ldnStreamReader@1000000007 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.StreamReader";
+      ldnTextEncoder@1000000006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.Encoding";
+      ldnFile@1000000005 : DotNet "'mscorlib, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.File";
+    BEGIN
+      //
+      // Prompts user for where to save the file.
+      // Then exports the stream into that location.
+      //
+      pbWorked := FALSE;
+
+      ltxtFileName := lcuFileMgmt.SaveFileDialog(cuTranslationMgmt.getTranslatedString('MSG_EXPORT_TO', ''), '', ptxtFilterString );
+      IF ltxtFileName<>'' THEN BEGIN
+        ldnStreamReader := ldnStreamReader.StreamReader(pisBlob, ldnTextEncoder.UTF8);
+
+        IF ( ISSERVICETIER ) THEN BEGIN
+          ltxtServerFileName := lcuFileMgmt.ServerTempFileName( ptxtFileExtension );
+        END ELSE BEGIN
+          ltxtServerFileName := ltxtFileName;
+        END;
+
+        // write to the server side first.
+        ldnFile.WriteAllText( ltxtServerFileName, ldnStreamReader.ReadToEnd() );
+
+        IF ( ISSERVICETIER ) THEN BEGIN
+          lcuFileMgmt.DownloadToFile( ltxtServerFileName, ltxtFileName );
+        END ELSE BEGIN
+          // nothing to do in this scenario, ltxtServerFileName is ltxtFileName
+          // so the file was already written with WriteAllText
+        END;
+        pbWorked := TRUE;
+
+      END;
+    END;
+
+    PROCEDURE PrintUsingRecord@1240060000(piReportID@1240060000 : Integer;pbShowRequest@1240060001 : Boolean;pbUseSystem@1240060002 : Boolean;pvarRecordRef@1240060003 : Variant) rbDidSomething : Boolean;
+    BEGIN
+      //
+      // For NAV 2013+, nothing is needed here.
+      // This methods exists for compatibility purposes.
+      // 2009R2 and lower will need this for printing.
+    END;
+
+    PROCEDURE BinContentsQueryWithBinAndLot@1000000005(pcodLocation@1000000004 : Code[10];VAR pcodZoneCode@1000000009 : Code[10];VAR pcodBin@1000000002 : Code[20];pcodItem@1000000001 : Text;pcodVariantCode@1000000005 : Text;VAR pcodUOM@1000000006 : Code[10];psLotNo@1000000007 : Text;VAR pdQuantity@1000000008 : Decimal);
+    VAR
+      lqBinByLot@1000000000 : Query 23044501;
+      lrecItem@1000000003 : Record 27;
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Return Bin content based on passed in lot, uom, and bin
+      //</Summary>
+      //<Author>H.Zhao</Author>
+      //<Date>17/08/2015</Date>
+      //<Issue>TFS1945</Issue>
+      //<Version>DMS1.5</Version>
+      //////////////////////////////////////////////
+
+      psLotNo := UPPERCASE(psLotNo);
+
+      //new query here
+      pdQuantity := 0;
+
+      IF (pcodZoneCode <> '') THEN BEGIN
+        lqBinByLot.SETRANGE(Zone_Code, pcodZoneCode);
+      END;
+
+      IF (pcodBin <> '') THEN BEGIN
+        lqBinByLot.SETRANGE(Bin_Code, pcodBin);
+      END;
+
+      lqBinByLot.SETRANGE(Location_Code, pcodLocation );
+
+      IF (pcodVariantCode <> '') THEN BEGIN
+        lqBinByLot.SETRANGE(Variant_Code, pcodVariantCode );
+      END;
+
+      IF (psLotNo <> '') THEN BEGIN
+        lqBinByLot.SETRANGE(Lot_No, psLotNo);
+      END ELSE BEGIN
+        lqBinByLot.SETFILTER(Lot_No, '*');
+      END;
+
+      lqBinByLot.SETRANGE(Item_No, pcodItem);
+
+      IF (pcodUOM <> '') THEN BEGIN
+        lqBinByLot.SETRANGE(Unit_of_Measure_Code, pcodUOM);
+      END;
+
+      //Filter out "Zero Entries"
+      lqBinByLot.SETFILTER(Sum_Quantity, '<>%1',0);
+
+      IF (lqBinByLot.OPEN) THEN BEGIN
+        WHILE lqBinByLot.READ DO BEGIN
+          IF (pcodBin <> '') THEN BEGIN
+            pcodBin := lqBinByLot.Bin_Code;
+          END;
+
+          IF (pcodUOM <> '') THEN BEGIN
+            pcodUOM := lqBinByLot.Unit_of_Measure_Code;
+          END;
+
+          IF (pcodZoneCode <> '') THEN BEGIN
+            pcodZoneCode := lqBinByLot.Zone_Code;
+          END;
+
+          pdQuantity += lqBinByLot.Sum_Quantity;
+        END;
+      END;
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+
+      This codeunit is only intended for NAV 2013 and newer installs.
+      If you are compiling this codeunit in NAV 2009 and earlier, this will fail, and this is not a problem.
+      Instead, make sure the WHI Compatibility 2009 codeunit works.
+    }
+    END.
+  }
+}
+

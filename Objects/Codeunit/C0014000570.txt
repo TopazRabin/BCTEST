@@ -1,0 +1,722 @@
+OBJECT Codeunit 14000570 External Forecast
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/22/21;
+    Time=[ 3:37:47 PM];
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            CalcProcUnits;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      APIKey@1240020001 : Text;
+      EndpointURI@1240020000 : Text;
+      AdvForSetup@1240020005 : Record 14002651;
+      InvMgtSetup@1240020004 : Record 14000551;
+      ProcUnitTemp@1240020013 : TEMPORARY Record 14000555;
+      SetupAvailable@1240020002 : Boolean;
+      PeriodLengthOption@1240020006 : Option;
+      ForecastingPeriodsNotFound@1240020007 : TextConst 'ENU=Forecasting periods could not be identified from %1.  Check the calculate periods are based on day, week, month, quarter, or yearly format.';
+      PeriodLengthNotFound@1240020008 : TextConst 'ENU=Period Length could not be identified from %1.  Check the calculate periods are based on day, week, month, quarter, or yearly format.';
+      PeriodsWithHistory@1240020009 : Integer;
+      txtAPInotSetup@1240020003 : TextConst 'ENU=API Key or URI Key are missing.';
+      LocInvPer@1240020011 : Record 14000553;
+      AdvForcPeriods@1240020012 : TextConst 'ENU=Calculate or Forecast periods must be supplied in Advanced Forecasting Setup!';
+      LocInvPer2@1240020024 : Record 14000553;
+      TempForecastAdj@1240020014 : TEMPORARY Record 14002707;
+      ForecastAdj@1240020016 : Record 14002707;
+      TempForcastAdjEntryNo@1240020015 : Integer;
+      EntryNo@1240020017 : Integer;
+      MissingFormulaDetail@1240020025 : TextConst 'ENU=No formula detail records found.  Internal forecast detail will be saved after external formula''s are enabled.  External formulas cannot be calculated until detail is saved.';
+      NoActiveExternalFormula@1240020026 : TextConst 'ENU=No released external formula found.';
+      Text000@1240020018 : TextConst 'ENU=External Forecasting %1-%2';
+      Text001@1240020019 : TextConst 'ENU=%1 procurement units for location %2';
+      ExtForecastPUCCount@1240020020 : Integer;
+      ExternalForecastSelectedCount@1240020021 : Integer;
+      ProcUnitFilter@1240020022 : Record 14000555;
+      LocInvPerFilter@1240020023 : Record 14000553;
+      Text003@1240020027 : TextConst 'ENU=** External Forecasting **';
+      Text004@1240020010 : TextConst 'ENU=External Forecast Calculated for %1 procurement units';
+
+    PROCEDURE MultiplePeriodEnd@1();
+    VAR
+      lclText000@1000000012 : TextConst 'ENU=Inventory Period not found with ending date less than %1.';
+      lclText001@1000000011 : TextConst 'ENU=Do you wish to process external forecasts through %1 for the selected locations?';
+      lclText002@1240020001 : TextConst 'ENU=External Forecasting could not run without selected and enabled locations.';
+      Location@1240020002 : Record 14;
+      InvPeriod@1240020000 : Record 14000552;
+    BEGIN
+      InvPeriod.RESET;
+      InvPeriod.SETCURRENTKEY("Ending Date");
+      InvPeriod.SETFILTER("Ending Date",'<=%1',WORKDATE);
+      IF NOT InvPeriod.FIND('+') THEN
+        ERROR(lclText000,WORKDATE);
+
+      IF NOT CONFIRM(lclText001,FALSE,InvPeriod."Ending Date") THEN
+        EXIT;
+
+      Location.SETRANGE("Select Period End Processing",USERID);
+      Location.SETRANGE("Enable Adv. Forecasting",TRUE);
+      IF Location.FINDSET THEN BEGIN
+        REPEAT
+          LocInvPerFilter.SETFILTER("Location Code", Location.Code);
+          CalcProcUnits;
+        UNTIL Location.NEXT = 0;
+      END ELSE BEGIN
+        IF GUIALLOWED THEN
+            ERROR(lclText002);
+      END;
+    END;
+
+    LOCAL PROCEDURE CalcProcUnits@1240020052();
+    VAR
+      ProcUnit@1240020000 : Record 14000555;
+      Formula@1240020001 : Record 14002652;
+      UBP@1240020002 : Codeunit 14000564;
+      FormulaDetail@1240020003 : Record 14002655;
+      Skip@1240020004 : Boolean;
+      UBPLogEntryNo@1240020006 : Integer;
+      InvMgt@1240020007 : Codeunit 14000553;
+      ForecastStartingDate@1240020008 : Date;
+      ForecastByProcUnit@1240020009 : Boolean;
+      DPTimeSeriesForecastBuffer@1240020010 : Record 14000571;
+      Location@1240020011 : Record 14;
+      IsOK@1240020005 : Boolean;
+    BEGIN
+      // turned on but no formula's active
+      Formula.SETRANGE(External, TRUE);
+      Formula.SETRANGE(Released, TRUE);
+      IF Formula.ISEMPTY THEN BEGIN
+        IF GUIALLOWED THEN
+          ERROR(NoActiveExternalFormula);
+        EXIT;
+      END;
+
+      // formula detail currently saved - if not then we cannot process
+      IsOK := FALSE;
+      Formula.SETRANGE(External, FALSE);
+      Formula.SETRANGE(Released, TRUE);
+      IF Formula.FINDSET THEN BEGIN
+        REPEAT
+          FormulaDetail.SETRANGE("Formula Code", Formula.Code);
+          FormulaDetail.SETRANGE(Version, 3);
+          IF NOT FormulaDetail.ISEMPTY THEN
+            IsOK := TRUE;
+        UNTIL (Formula.NEXT = 0) OR IsOK;
+      END;
+
+      IF NOT IsOK THEN BEGIN
+        InvMgt.CreateLogEntry('', MissingFormulaDetail, UBPLogEntryNo);
+        InvMgt.CloseLogEntry(UBPLogEntryNo, '');
+        EXIT;
+      END;
+
+
+      ForecastByProcUnit := FALSE;
+      ProcUnitTemp.RESET;
+      ProcUnitTemp.DELETEALL;
+
+      Formula.RESET;
+      Formula.SETRANGE(External, TRUE);
+      Formula.SETRANGE(Released, TRUE);
+      IF Formula.FINDSET THEN BEGIN
+        REPEAT
+          ExtForecastPUCCount := 0;
+          ProcUnit.RESET;
+          ProcUnit.SETCURRENTKEY("Location Code","Usage Location Filter String");
+
+          LocInvPer.RESET;
+          LocInvPer.SETCURRENTKEY("Location Code","Period End Closed");
+          GetPreSetFilters(ProcUnit,LocInvPer);  // should always be location filtered
+
+          IF (ProcUnit.GETFILTER("Item No.") <> '') THEN
+            ForecastByProcUnit := TRUE;
+
+          ForecastStartingDate := 0D;
+
+          LocInvPer.SETFILTER("Ending Date", '<=%1', WORKDATE);
+          LocInvPer.SETRANGE("Period End Closed", TRUE);
+          IF LocInvPer.FINDLAST THEN BEGIN
+            REPEAT
+              IF NOT ForecastByProcUnit THEN
+                InvMgt.CreateLogEntry(LocInvPer."Location Code",STRSUBSTNO(Text000,LocInvPer."Starting Date",LocInvPer."Ending Date"),UBPLogEntryNo);
+
+              IF (Location.Code <> LocInvPer."Location Code") THEN BEGIN
+                Location.GET(LocInvPer."Location Code");
+
+                IF NOT ForecastByProcUnit THEN BEGIN
+                  DPTimeSeriesForecastBuffer.SETRANGE("Location Code", Location.Code);
+                  DPTimeSeriesForecastBuffer.DELETEALL(TRUE);
+                END;
+
+                ForecastStartingDate := CALCDATE( '<+1D>', LocInvPer."Ending Date");
+                LocInvPer2.SETRANGE("Location Code", Location.Code);
+                LocInvPer2.SETFILTER("Ending Date", '<=%1', WORKDATE);
+                IF LocInvPer2.FINDLAST THEN;
+              END;
+
+              ProcUnit.SETRANGE("Location Code",LocInvPer."Location Code");
+              IF ProcUnit.FINDSET THEN BEGIN
+                REPEAT
+
+                  IF ForecastByProcUnit THEN BEGIN
+                    DPTimeSeriesForecastBuffer.SETRANGE("Location Code", ProcUnit."Location Code");
+                    DPTimeSeriesForecastBuffer.SETRANGE("Item No.", ProcUnit."Item No.");
+                    DPTimeSeriesForecastBuffer.SETRANGE("Variant Code", ProcUnit."Variant Code");
+                    DPTimeSeriesForecastBuffer.DELETEALL(TRUE);
+                  END;
+
+                  Skip := FALSE;
+
+                  IF NOT Location."Enable Adv. Forecasting" THEN
+                    Skip := TRUE;
+
+                  IF NOT Skip THEN BEGIN
+                    CalculateForecast(ProcUnit, Formula, '', FALSE, LocInvPer."Ending Date", ForecastStartingDate);
+
+                    // check temp buffer if not here then remove frozen forecast adjusts that match for these pucs
+                    // remove adjustments for each external formula no longer assigned
+                    IF NOT ProcUnitTemp.GET(ProcUnit."Location Code", ProcUnit."Item No.", ProcUnit."Variant Code") THEN BEGIN
+
+                      // Only if this is the last closed period do we change the forecast adjustments or detail
+                      IF (LocInvPer."Starting Date" = LocInvPer2."Starting Date") THEN BEGIN
+                        // leave formula for selection
+                        //IF FormulaDetail.GET(ProcUnit."Location Code", ProcUnit."Item No.", ProcUnit."Variant Code", 3, Formula.Code, 0) THEN
+                        //  FormulaDetail.DELETE;
+
+                        ForecastAdj.SETRANGE("Location Code", ProcUnit."Location Code");
+                        ForecastAdj.SETRANGE("Item No.", ProcUnit."Item No.");
+                        ForecastAdj.SETRANGE("Variant Code", ProcUnit."Variant Code");
+                        ForecastAdj.SETRANGE("Formula Code", Formula.Code);
+                        ForecastAdj.DELETEALL(TRUE);
+
+                        // remove only if previously selected
+                        IF FormulaDetail.GET(ProcUnit."Location Code", ProcUnit."Item No.", ProcUnit."Variant Code", 4, Formula.Code, 0) THEN BEGIN
+                          FormulaDetail.DELETE(TRUE);
+                          // mark puc for reforecast from period end
+                          // select a new forumla
+                          // reset item usage record
+                        END;
+                      END;
+                    END;
+                  END;
+                UNTIL ProcUnit.NEXT = 0;
+              END;
+              IF NOT ForecastByProcUnit THEN
+                InvMgt.CloseLogEntry(UBPLogEntryNo, FORMAT(STRSUBSTNO(Text004, ExtForecastPUCCount)));
+            UNTIL LocInvPer.NEXT = 0;
+          END;
+        UNTIL Formula.NEXT = 0;
+        UpdateForecast;
+      END;
+    END;
+
+    PROCEDURE CalculateForecast@1240020012(VAR CurrProcUnit@1240020000 : Record 14000555;VAR CurrFormula@1240020004 : Record 14002652;CurrSourceFilter@1240020002 : Text[250];SingleLocation@1240020003 : Boolean;UsageEndingDate@1240020005 : Date;ForecastStartingDate@1240020006 : Date);
+    VAR
+      TimeSeriesManagement@1240020001 : Codeunit 2000;
+    BEGIN
+      InitializeSetup(CurrFormula);
+      TimeSeriesManagement.Initialize(EndpointURI, APIKey, 0);
+      PrepareForecast(TimeSeriesManagement, CurrProcUnit, CurrFormula, '', FALSE, UsageEndingDate,ForecastStartingDate);
+    END;
+
+    LOCAL PROCEDURE PrepareForecast@1240020001(VAR TimeSeriesManagement@1240020006 : Codeunit 2000;VAR CurrProcUnit@1240020004 : Record 14000555;VAR CurrFormula@1240020003 : Record 14002652;CurrSourceFilter@1240020001 : Text[250];SingleLocation@1240020000 : Boolean;UsageEndingDate@1240020009 : Date;ForecastStartingDate@1240020011 : Date);
+    VAR
+      TempTimeSeriesforecast@1240020005 : TEMPORARY Record 2001;
+      TempTimeSeriesBuffer@1240020007 : TEMPORARY Record 2000;
+      ItemUsage@1240020008 : Record 14000557;
+      FormulaDetail@1240020002 : Record 14002655;
+      Days@1240020010 : Integer;
+    BEGIN
+      TempTimeSeriesBuffer.RESET;
+      TempTimeSeriesBuffer.DELETEALL;
+
+      IF FormulaDetail.GET(CurrProcUnit."Location Code",CurrProcUnit."Item No.",CurrProcUnit."Variant Code", 3,CurrFormula.Code, 0) THEN
+        FormulaDetail.DELETE(TRUE);
+
+      FindUsageForForecast(TimeSeriesManagement, CurrProcUnit, CurrFormula, TempTimeSeriesBuffer, UsageEndingDate, CurrSourceFilter, SingleLocation);
+
+      // Publisher for data retreival and manipulation
+      OnBeforeFindTimeSeriesForecast(TimeSeriesManagement, TempTimeSeriesBuffer, CurrProcUnit, CurrFormula, UsageEndingDate, ForecastStartingDate, CurrSourceFilter, SingleLocation);
+
+      // Demand Planning limit
+      IF PeriodsWithHistory < ROUND(InvMgtSetup."No. of Periods in a Year" * (AdvForSetup."Pct Year Per. Req. for Formula"),1.0) THEN
+        EXIT;
+
+      // Hard coded maximum limit of 24 periods in Time Series
+      IF PeriodsWithHistory > 24 THEN
+        TimeSeriesManagement.SetMaximumHistoricalPeriods(PeriodsWithHistory);
+
+      // Hard coded minimum limit of 5 periods in Time Series changed if passes dp test above
+      IF PeriodsWithHistory < 5 THEN
+        TimeSeriesManagement.SetMinimumHistoricalPeriods(PeriodsWithHistory);
+
+      TimeSeriesManagement.SetPreparedData(TempTimeSeriesBuffer, PeriodLengthOption, ForecastStartingDate, CurrFormula."Formula Periods");
+
+      // periods to forecast, confidence, //all models
+      TimeSeriesManagement.Forecast(AdvForSetup."Periods to Calculate", 80, 0);
+
+      TempTimeSeriesforecast.RESET;
+      TempTimeSeriesforecast.DELETEALL;
+      TimeSeriesManagement.GetForecast(TempTimeSeriesforecast);
+
+      OnAfterFindTimeSeriesForecast(TempTimeSeriesforecast, TempTimeSeriesBuffer, CurrProcUnit, CurrFormula, UsageEndingDate, ForecastStartingDate, CurrSourceFilter, SingleLocation);
+
+      TempTimeSeriesforecast.SETFILTER(Value, '>%1', 0);
+      IF TempTimeSeriesforecast.FINDFIRST THEN BEGIN
+        ExtForecastPUCCount := ExtForecastPUCCount + 1;
+        SaveFormulaDetail(CurrProcUnit, CurrFormula.Code, TempTimeSeriesforecast, 3);
+        SelectBestFormulaFromBuffer(CurrProcUnit, TempTimeSeriesforecast, CurrFormula);
+      END;
+    END;
+
+    LOCAL PROCEDURE InitializeSetup@1240020003(VAR CurrFormula@1240020000 : Record 14002652);
+    BEGIN
+      IF NOT SetupAvailable THEN BEGIN
+        GetAPISetup(CurrFormula);
+        GetSetup;
+        IF AdvForSetup."Periods to Calculate" = 0 THEN
+          AdvForSetup."Periods to Calculate" := AdvForSetup."Periods to Forecast";
+
+        IF (AdvForSetup."Periods to Calculate" = 0) THEN BEGIN
+          ERROR(AdvForcPeriods);
+        END;
+
+        GetPeriodLength;
+      END;
+    END;
+
+    LOCAL PROCEDURE FindUsageForForecast@1240020004(VAR TimeSeriesManagement@1240020007 : Codeunit 2000;VAR CurrProcUnit@1240020002 : Record 14000555;VAR CurrFormula@1000000000 : Record 14002652;VAR CurrTempTimeSeriesBuffer@1240020010 : TEMPORARY Record 2000;UsageEndDate@1240020004 : Date;CurrSourceFilter@1240020003 : Text[250];SingleLocation@1240020005 : Boolean);
+    VAR
+      UnusualUsageAdj@1240020001 : Record 14002658;
+      Periods@1240020006 : Integer;
+      DateOption@1240020009 : Record 2000000007;
+      UsageValue@1240020011 : Decimal;
+    BEGIN
+      Periods := CurrFormula."Formula Periods";
+      PeriodsWithHistory := 0;
+      UnusualUsageAdj.SETCURRENTKEY("Location Code","Item No.","Variant Code","Starting Date","Ending Date");
+      UnusualUsageAdj.ASCENDING(FALSE);
+      UnusualUsageAdj.SETRANGE("Location Code", CurrProcUnit."Location Code");
+      UnusualUsageAdj.SETRANGE("Item No.",CurrProcUnit."Item No.");
+      UnusualUsageAdj.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+      UnusualUsageAdj.SETFILTER("Ending Date",'<=%1', UsageEndDate);
+      UnusualUsageAdj.SETFILTER("Source No.",'=%1', CurrSourceFilter);
+      IF UnusualUsageAdj.FIND('-') THEN BEGIN
+        REPEAT
+          IF (NOT AdvForSetup."Auto Adj. Unusual Usage") OR
+             (CurrFormula."Exclude Zero Usage Periods") OR
+             ((NOT AdvForSetup."Auto. Adj. Sea. Usage") AND
+              (CurrFormula."Seasonal Formula"))
+          THEN BEGIN
+            IF SingleLocation THEN
+              UsageValue := UnusualUsageAdj."Single Loc. Per. End Adj. Usg."
+            ELSE
+              UsageValue := UnusualUsageAdj."Period End Adjusted Usage"
+          END ELSE BEGIN
+            IF SingleLocation THEN
+              UsageValue := UnusualUsageAdj."Single Loc. Usage"
+            ELSE
+              UsageValue := UnusualUsageAdj.Usage;
+          END;
+
+          IF UsageValue > 0 THEN
+            PeriodsWithHistory := PeriodsWithHistory + 1;
+
+          CurrTempTimeSeriesBuffer.INIT;
+          CurrTempTimeSeriesBuffer."Group ID" := UnusualUsageAdj."Item No.";
+          CurrTempTimeSeriesBuffer."Period No." := Periods;
+          CurrTempTimeSeriesBuffer."Period Start Date" := UnusualUsageAdj."Starting Date";
+          CurrTempTimeSeriesBuffer.Value := UsageValue;
+          CurrTempTimeSeriesBuffer.INSERT;
+
+          Periods := Periods - 1;
+
+        UNTIL (UnusualUsageAdj.NEXT = 0) OR
+              (Periods = 0);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetItemLedgerUsage@1240020000(VAR TimeSeriesManagement@1240020000 : Codeunit 2000;VAR CurrProcUnit@1240020002 : Record 14000555);
+    VAR
+      ItemLedgerEntry@1240020001 : Record 32;
+      DateOption@1240020003 : Record 2000000007;
+    BEGIN
+      ItemLedgerEntry.SETRANGE("Entry Type", ItemLedgerEntry."Entry Type"::Sale);
+      ItemLedgerEntry.SETFILTER("Item No.", CurrProcUnit."Item No.");
+      TimeSeriesManagement.PrepareData(
+       ItemLedgerEntry,
+       ItemLedgerEntry.FIELDNO("Item No."),
+       ItemLedgerEntry.FIELDNO("Posting Date"),
+       ItemLedgerEntry.FIELDNO(Quantity),
+       DateOption."Period Type"::Month,
+       WORKDATE,
+       24);
+    END;
+
+    LOCAL PROCEDURE GetSetup@1240030037();
+    VAR
+      ProcUnit@1240030001 : Record 14000555;
+    BEGIN
+      IF NOT SetupAvailable THEN BEGIN
+        AdvForSetup.GET;
+        InvMgtSetup.GET;
+        SetupAvailable := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetPeriodLength@1240020019();
+    VAR
+      DateOption@1240020000 : Record 2000000007;
+      PeriodLength@1240020001 : Code[1];
+    BEGIN
+      IF FORMAT(InvMgtSetup."Calculation Period Length") <> '' THEN BEGIN
+        PeriodLength := SearchForPeriodOccurence(FORMAT(InvMgtSetup."Calculation Period Length"));
+      END ELSE BEGIN
+        IF FORMAT(InvMgtSetup."Forecast Period Length") <> '' THEN
+          PeriodLength := SearchForPeriodOccurence(FORMAT(InvMgtSetup."Forecast Period Length"));
+      END;
+
+      CASE PeriodLength OF
+        'Y': PeriodLengthOption := DateOption."Period Type"::Year;
+        'Q': PeriodLengthOption := DateOption."Period Type"::Quarter;
+        'M': PeriodLengthOption := DateOption."Period Type"::Month;
+        'W': PeriodLengthOption := DateOption."Period Type"::Week;
+        'D': PeriodLengthOption := DateOption."Period Type"::Date;
+        ELSE
+          ERROR(PeriodLengthNotFound, PeriodLength);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetAPISetup@1240020024(VAR CurrFormula@1240020000 : Record 14002652);
+    BEGIN
+      APIKey := CurrFormula."API Key ID";
+      EndpointURI := CurrFormula."API URI";
+
+      IF (APIKey = '') OR (EndpointURI = '') THEN
+        ERROR(txtAPInotSetup);
+    END;
+
+    LOCAL PROCEDURE MakeAdjustment@1240020100(VAR CurrProcUnit@1240020005 : Record 14000555;VAR CurrItemUsage@1240020002 : Record 14000557;CurrFormulaCode@1240020000 : Code[10]);
+    VAR
+      DPTimeSeriesForecastBuffer@1240020001 : Record 14000571;
+      Days@1240020003 : Integer;
+    BEGIN
+      DPTimeSeriesForecastBuffer.SETRANGE("Location Code", CurrProcUnit."Location Code");
+      DPTimeSeriesForecastBuffer.SETRANGE("Item No.", CurrProcUnit."Item No.");
+      DPTimeSeriesForecastBuffer.SETRANGE("Variant Code", CurrProcUnit."Variant Code");
+      DPTimeSeriesForecastBuffer.SETRANGE("Formula Code", CurrFormulaCode);
+      IF DPTimeSeriesForecastBuffer.FINDSET THEN BEGIN
+
+        ForecastAdj.SETCURRENTKEY("Item No.","Variant Code","Location Code","Starting Date","Promotion Code","Forecast Summary Code");
+
+        // remove existing forecast adjustments
+        ForecastAdj.SETRANGE("Location Code", CurrProcUnit."Location Code");
+        ForecastAdj.SETRANGE("Item No.", CurrProcUnit."Item No.");
+        ForecastAdj.SETRANGE("Variant Code", CurrProcUnit."Variant Code");
+        //ForecastAdj.SETRANGE("Frozen Forecast", TRUE);
+        ForecastAdj.SETRANGE("Formula Code", DPTimeSeriesForecastBuffer."Formula Code");
+        IF NOT ForecastAdj.ISEMPTY THEN
+          ForecastAdj.DELETEALL(TRUE);
+
+        IF CurrItemUsage.GET(CurrItemUsage."Entry No.") THEN BEGIN
+          CurrItemUsage."Forecast Usage" := DPTimeSeriesForecastBuffer.Value;
+          IF (CurrItemUsage."Forecast Usage" > 0) THEN BEGIN
+            Days := (CurrItemUsage."Ending Date" - CurrItemUsage."Starting Date") + 1;
+            IF (Days > 0) THEN BEGIN
+              CurrItemUsage."Forecast Usage Per Day" := CurrItemUsage."Forecast Usage"/Days;
+            END;
+          END;
+          CurrItemUsage.MODIFY(FALSE);
+        END;
+
+        REPEAT
+          ForecastAdj.INIT;
+          EntryNo := EntryNo + 1;
+          ForecastAdj."Entry No." := EntryNo;
+          ForecastAdj."Location Code" := CurrProcUnit."Location Code";
+          ForecastAdj."Item No." := CurrProcUnit."Item No.";
+          ForecastAdj."Variant Code" := CurrProcUnit."Variant Code";
+          ForecastAdj."Starting Date" := DPTimeSeriesForecastBuffer."Starting Date";
+          ForecastAdj.Quantity := DPTimeSeriesForecastBuffer.Value;
+          ForecastAdj."Frozen Forecast" := TRUE;
+          ForecastAdj."Adjustment Note" := DPTimeSeriesForecastBuffer."Formula Code";
+          ForecastAdj."Formula Code" := DPTimeSeriesForecastBuffer."Formula Code";
+          ForecastAdj.INSERT(TRUE);
+        UNTIL DPTimeSeriesForecastBuffer.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE SearchForPeriodOccurence@1240020005(inText@1240020000 : Text) FoundText : Text;
+    VAR
+      i@1240020001 : Integer;
+      DateFormulaIsAcceptable@1240020002 : Integer;
+      teststring@1240020003 : Text[1];
+    BEGIN
+      FoundText := '';
+
+      // If the first character in the string //date formula is not an integer
+      // this cycle cannot be used for forecasting periods
+      teststring := COPYSTR(inText, 1, 1);
+      IF NOT EVALUATE(DateFormulaIsAcceptable, teststring) THEN
+        EXIT;
+
+      FOR i := 2 TO STRLEN(inText) DO BEGIN
+        IF inText[i] IN ['Y','Q','M','W','D'] THEN BEGIN
+          FoundText := COPYSTR(inText, i, 1);
+        END;
+      END;
+
+      IF FoundText = '' THEN
+        ERROR(ForecastingPeriodsNotFound, inText);
+
+      EXIT(FoundText);
+    END;
+
+    PROCEDURE SaveFormulaDetail@1240020008(VAR CurrProcUnit@1240020003 : Record 14000555;CurrFormulaCode@1240020001 : Code[20];VAR CurrTempTimeSeriesforecast@1240020006 : TEMPORARY Record 2001;Version@1240020004 : Integer);
+    VAR
+      FormulaDetail@1240020000 : Record 14002655;
+    BEGIN
+      IF NOT FormulaDetail.GET(CurrProcUnit."Location Code",CurrProcUnit."Item No.",CurrProcUnit."Variant Code",Version,CurrFormulaCode, 0) THEN BEGIN
+        FormulaDetail.INIT;
+        FormulaDetail."Formula Code" := CurrFormulaCode;
+        FormulaDetail."Location Code" := CurrProcUnit."Location Code";
+        FormulaDetail."Item No." := CurrProcUnit."Item No.";
+        FormulaDetail."Variant Code" := CurrProcUnit."Variant Code";
+        FormulaDetail.Version := Version;
+
+        FormulaDetail."Mean Error %" := CurrTempTimeSeriesforecast."Delta %";
+        FormulaDetail."Median Error %" := CurrTempTimeSeriesforecast."Delta %";
+        FormulaDetail."Error Units No Trend" := CurrTempTimeSeriesforecast.Delta;
+
+        FormulaDetail.INSERT(TRUE);
+      END ELSE BEGIN
+        FormulaDetail."Mean Error %" := CurrTempTimeSeriesforecast."Delta %";
+        FormulaDetail."Median Error %" := CurrTempTimeSeriesforecast."Delta %";
+        FormulaDetail."Error Units No Trend" := CurrTempTimeSeriesforecast.Delta;
+        FormulaDetail.MODIFY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteFormulaDetail@1240020018(VAR CurrProcUnit@1240020001 : Record 14000555);
+    VAR
+      FormulaDetail@1240020000 : Record 14002655;
+    BEGIN
+      FormulaDetail.SETRANGE("Location Code", CurrProcUnit."Location Code");
+      FormulaDetail.SETRANGE("Item No.", CurrProcUnit."Item No.");
+      FormulaDetail.SETRANGE("Variant Code", CurrProcUnit."Variant Code");
+      FormulaDetail.SETRANGE(Version, 4);
+      IF FormulaDetail.FINDFIRST THEN BEGIN
+        FormulaDetail.DELETE(FALSE);
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertTempPUCBuffer@1240020046(VAR CurrProcUnit@1240020000 : Record 14000555);
+    BEGIN
+      IF NOT ProcUnitTemp.GET(CurrProcUnit."Location Code", CurrProcUnit."Item No.", CurrProcUnit."Variant Code") THEN BEGIN
+        ProcUnitTemp.INIT;
+        ProcUnitTemp."Location Code" := CurrProcUnit."Location Code";
+        ProcUnitTemp."Item No." := CurrProcUnit."Item No.";
+        ProcUnitTemp."Variant Code" := CurrProcUnit."Variant Code";
+        ProcUnitTemp.SetTemp;
+        ProcUnitTemp.INSERT(FALSE);
+      END;
+    END;
+
+    LOCAL PROCEDURE SelectBestFormulaFromBuffer@1240020033(VAR CurrProcUnit@1240020000 : Record 14000555;VAR CurrTempTimeSeriesforecast@1240020003 : TEMPORARY Record 2001;VAR CurrFormula@1240020002 : Record 14002652);
+    VAR
+      FormulaDetail@1240020001 : Record 14002655;
+    BEGIN
+      FormulaDetail.SETCURRENTKEY("Median Error %");
+      FormulaDetail.SETASCENDING("Median Error %", TRUE);
+
+      FormulaDetail.SETRANGE("Location Code", CurrProcUnit."Location Code");
+      FormulaDetail.SETRANGE("Item No.", CurrProcUnit."Item No.");
+      FormulaDetail.SETRANGE("Variant Code", CurrProcUnit."Variant Code");
+      FormulaDetail.SETRANGE(Version, 3);
+      IF FormulaDetail.FINDFIRST THEN BEGIN
+        // New Best Fit Formula
+        IF (FormulaDetail."Formula Code" = CurrFormula.Code) THEN BEGIN
+          // delete existing selected formula (verison 4) if not the same
+          DeleteFormulaDetail(CurrProcUnit);
+          SaveFormulaDetail(CurrProcUnit, CurrFormula.Code, CurrTempTimeSeriesforecast, 4);
+          // most recent closed period - store for adjustments
+          IF (LocInvPer."Starting Date" = LocInvPer2."Starting Date") THEN BEGIN
+            IF CurrTempTimeSeriesforecast.FINDSET THEN BEGIN
+              REPEAT
+                StoreTimeSeriesForecast(CurrProcUnit, CurrTempTimeSeriesforecast, CurrFormula);
+              UNTIL CurrTempTimeSeriesforecast.NEXT = 0;
+            END;
+            InsertTempPUCBuffer(CurrProcUnit);
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE SelectBestInternalFormulaFromBuffer@1240020009(VAR CurrProcUnit@1240020000 : Record 14000555;VAR CurrTempTimeSeriesforecast@1240020003 : TEMPORARY Record 2001;VAR CurrFormula@1240020002 : Record 14002652);
+    VAR
+      FormulaDetail@1240020001 : Record 14002655;
+      FormulaDetail2@1240020004 : Record 14002655;
+    BEGIN
+      FormulaDetail.SETCURRENTKEY("Median Error %");
+      FormulaDetail.SETASCENDING("Median Error %", TRUE);
+
+      FormulaDetail.SETRANGE("Location Code", CurrProcUnit."Location Code");
+      FormulaDetail.SETRANGE("Item No.", CurrProcUnit."Item No.");
+      FormulaDetail.SETRANGE("Variant Code", CurrProcUnit."Variant Code");
+      FormulaDetail.SETRANGE(Version, 3);
+      IF FormulaDetail.FINDFIRST THEN BEGIN
+        FormulaDetail2.SETRANGE("Location Code", CurrProcUnit."Location Code");
+        FormulaDetail2.SETRANGE("Item No.", CurrProcUnit."Item No.");
+        FormulaDetail2.SETRANGE("Variant Code", CurrProcUnit."Variant Code");
+        FormulaDetail2.SETRANGE(Version, 4);
+        IF NOT FormulaDetail2.FINDFIRST THEN BEGIN
+          FormulaDetail2.INIT;
+          FormulaDetail2 := FormulaDetail;
+          FormulaDetail2.Version := 4;
+          FormulaDetail2.INSERT(TRUE);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE StoreTimeSeriesForecast@1240020002(VAR CurrProcUnit@1240020003 : Record 14000555;VAR TempTimeSeriesforecast@1240020002 : TEMPORARY Record 2001;VAR CurrFormula@1240020000 : Record 14002652);
+    VAR
+      DPTimeSeriesForecastBuffer@1240020001 : Record 14000571;
+      Forecast@1240020004 : Codeunit 14000567;
+    BEGIN
+      DPTimeSeriesForecastBuffer.SETRANGE("Group ID", TempTimeSeriesforecast."Group ID");
+      DPTimeSeriesForecastBuffer.SETRANGE("Period No.", TempTimeSeriesforecast."Period No.");
+      DPTimeSeriesForecastBuffer.DELETEALL(TRUE);
+
+      DPTimeSeriesForecastBuffer.INIT;
+      DPTimeSeriesForecastBuffer."Group ID" := TempTimeSeriesforecast."Group ID";
+      DPTimeSeriesForecastBuffer."Period No." := TempTimeSeriesforecast."Period No.";
+      DPTimeSeriesForecastBuffer."Period Start Date" := TempTimeSeriesforecast."Period Start Date";
+      DPTimeSeriesForecastBuffer.Value := TempTimeSeriesforecast.Value;
+      Forecast.RoundValueForForecast(CurrProcUnit,  DPTimeSeriesForecastBuffer.Value);
+      DPTimeSeriesForecastBuffer.Delta := TempTimeSeriesforecast.Delta;
+      DPTimeSeriesForecastBuffer."Delta %" := TempTimeSeriesforecast."Delta %";
+      DPTimeSeriesForecastBuffer."Location Code" := CurrProcUnit."Location Code";
+      DPTimeSeriesForecastBuffer."Item No." := CurrProcUnit."Item No.";
+      DPTimeSeriesForecastBuffer."Variant Code" := CurrProcUnit."Variant Code";
+      DPTimeSeriesForecastBuffer."Starting Date" := TempTimeSeriesforecast."Period Start Date";
+      //DPTimeSeriesForecastBuffer."Ending Date" :=
+      DPTimeSeriesForecastBuffer."User ID" := USERID;
+      DPTimeSeriesForecastBuffer.Creation := CURRENTDATETIME;
+      DPTimeSeriesForecastBuffer."Formula Code" := CurrFormula.Code;
+      DPTimeSeriesForecastBuffer.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE UpdateForecast@1240020098();
+    VAR
+      FormulaDetail@1240020000 : Record 14002655;
+      ItemUsage@1240020001 : Record 14000557;
+      Days@1240020002 : Integer;
+      Location@1240020003 : Record 14;
+    BEGIN
+      // reset all current formula forecasts
+      IF ProcUnitTemp.FINDSET THEN BEGIN
+
+        ForecastAdj.RESET;
+        IF ForecastAdj.FINDLAST THEN
+          EntryNo := ForecastAdj."Entry No."
+        ELSE
+          EntryNo := 0;
+
+        LocInvPer.RESET;
+        LocInvPer2.RESET;
+
+        GetPreSetFilters(ProcUnitTemp, LocInvPer);  // just for the period end dates if reforecast
+
+        REPEAT
+          // only pucs that have already been selected
+          FormulaDetail.SETRANGE("Location Code", ProcUnitTemp."Location Code");
+          FormulaDetail.SETRANGE("Item No.", ProcUnitTemp."Item No.");
+          FormulaDetail.SETRANGE("Variant Code", ProcUnitTemp."Variant Code");
+          FormulaDetail.SETRANGE(Version, 4);
+          IF FormulaDetail.FINDFIRST THEN BEGIN
+
+            ExternalForecastSelectedCount += 1;
+
+            // udpate item usage period
+            IF (Location.Code <> ProcUnitTemp."Location Code") THEN BEGIN
+              Location.GET(ProcUnitTemp."Location Code");
+              LocInvPer.SETCURRENTKEY("Location Code","Period End Closed");
+              LocInvPer.SETRANGE("Location Code", Location.Code);
+              LocInvPer.SETRANGE("Period End Closed",TRUE);
+              IF LocInvPer.FINDLAST THEN;
+
+              LocInvPer2.SETRANGE("Location Code", ProcUnitTemp."Location Code");  // last available closed period
+              LocInvPer2.SETFILTER("Ending Date", '<=%1', WORKDATE);
+              IF LocInvPer2.FINDLAST THEN;
+            END;
+
+            ItemUsage.RESET;
+            ItemUsage.SETCURRENTKEY("Location Code","Item No.","Variant Code","Starting Date","Ending Date");
+            ItemUsage.SETRANGE("Location Code", ProcUnitTemp."Location Code");
+            ItemUsage.SETRANGE("Item No.", ProcUnitTemp."Item No.");
+            ItemUsage.SETRANGE("Variant Code", ProcUnitTemp."Variant Code");
+            ItemUsage.SETRANGE("Starting Date", LocInvPer."Starting Date");
+            ItemUsage.SETFILTER("Source No.",'=%1','');
+            IF ItemUsage.FINDFIRST THEN BEGIN
+              ItemUsage."Re-For. Formula" := FormulaDetail."Formula Code";
+              ItemUsage."Re-For. Median Error %" := FormulaDetail."Median Error %";
+              ItemUsage."Forecast Horizon Period" := 0;
+              ItemUsage."Re-For. Non Seasonal Trend %" := 0;
+              ItemUsage."Re-For. Usage" := FormulaDetail."Error Units No Trend";
+              IF (ItemUsage."Re-For. Usage" > 0) THEN BEGIN
+                Days := (ItemUsage."Ending Date" - ItemUsage."Starting Date") + 1;
+                IF (Days > 0) THEN BEGIN
+                  ItemUsage."Re-For. Usage Per Day" := ItemUsage."Re-For. Usage"/Days;
+                END;
+              END;
+              ItemUsage."Re-For. Seasonal Trend %" := 0;
+              ItemUsage.MODIFY(TRUE);
+            END;
+
+            // if its the last available period to close then make adjustments
+            IF (LocInvPer."Starting Date" = LocInvPer2."Starting Date") THEN BEGIN
+              MakeAdjustment(ProcUnitTemp, ItemUsage, FormulaDetail."Formula Code");
+            END;
+          END;
+        UNTIL ProcUnitTemp.NEXT = 0;
+      END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforeFindTimeSeriesForecast@1240020015(VAR CurrTimeSeriesManagement@1240020000 : Codeunit 2000;VAR CurrTempTimeSeriesBuffer@1240020001 : TEMPORARY Record 2000;CurrProcUnit@1240020011 : Record 14000555;CurrFormula@1240020010 : Record 14002652;CurrUsageEndingDate@1240020002 : Date;CurrForecastPerStartingDate@1240020008 : Date;CurrSourceFilter@1240020007 : Text[250];CurrSingleLocation@1240020006 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterFindTimeSeriesForecast@1240020010(VAR CurrTempTimeSeriesforecast@1240020000 : TEMPORARY Record 2001;CurrTempTimeSeriesBuffer@1240020001 : TEMPORARY Record 2000;CurrProcUnit@1240020011 : Record 14000555;CurrFormula@1240020010 : Record 14002652;CurrUsageEndingDate@1240020002 : Date;CurrForecastPerStartingDate@1240020008 : Date;CurrSourceFilter@1240020007 : Text[250];CurrSingleLocation@1240020006 : Boolean);
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE GetPreSetFilters@1240020032(VAR CurrProcUnit@1240020000 : Record 14000555;VAR CurrLocInvPer@1240020001 : Record 14000553);
+    BEGIN
+      CurrProcUnit.COPYFILTERS(ProcUnitFilter);
+      LocInvPer.COPYFILTERS(LocInvPerFilter);
+    END;
+
+    PROCEDURE SetPreSetFilters@1240020034(VAR inProcUnit@1240020000 : Record 14000555;VAR inLocInvPer@1240020001 : Record 14000553);
+    BEGIN
+      ProcUnitFilter.COPYFILTERS(inProcUnit);
+      LocInvPerFilter.COPYFILTERS(inLocInvPer);
+    END;
+
+    BEGIN
+    {
+      // collaborative is not supported yet
+    }
+    END.
+  }
+}
+

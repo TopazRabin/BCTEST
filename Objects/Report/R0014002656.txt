@@ -1,0 +1,4272 @@
+OBJECT Report 14002656 Usage Adjust
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Usage Adjust;
+    OnPreReport=VAR
+                  ForecastInvPeriod@1240020000 : Record 14000552;
+                BEGIN
+                  CompanyInfo.GET;
+                  AdvForSetup.GET;
+
+                  IF (HistBegin_StartingDate = 0D) OR (HistEndingDate = 0D) THEN
+                      ERROR(Text006);
+
+
+
+                  HistEnd_StartingDate := 0D;
+                  ForecastInvPeriod.SETRANGE(Type,ForecastInvPeriod.Type::" ");
+                  ForecastInvPeriod.SETFILTER("Starting Date",'%1..', HistBegin_StartingDate);
+                  ForecastInvPeriod.SETRANGE("Ending Date", HistEndingDate);
+                  ForecastInvPeriod.FINDFIRST;
+                  HistEnd_StartingDate := ForecastInvPeriod."Starting Date";
+                  IF (HistBegin_StartingDate = 0D) OR
+                     (HistEnd_StartingDate = 0D) THEN
+                    ERROR(Text006);
+
+                  ForecastInvPeriod.RESET;
+                  ForecastInvPeriod.SETRANGE(Type,ForecastInvPeriod.Type::" ");
+                  ForecastInvPeriod.SETRANGE("Ending Date", HistEndingDate);
+                  IF ForecastInvPeriod.ISEMPTY THEN
+                    ERROR(Text017, HistEndingDate);
+
+                  ValidateHistEndingDate;
+                  ValidateHistStartingDate;
+                  ValidateAdjStartingDate;
+                  IF (PctMin < 0) THEN
+                    ERROR(Text012);
+                  IF (PctMax < 1) THEN
+                    ERROR(Text013);
+                  IF (PctMax < PctMin) THEN
+                    ERROR(Text014);
+
+                  IF UpdateRecords THEN BEGIN
+                    IF NOT UsageReason.GET(UsageReason.Type::"Usage Adjustment", UsageAdjustReasonCode) THEN
+                      ERROR(Text016);
+                  END;
+
+                  IF (AdjBegin_StartingDate = 0D) THEN
+                    ERROR(Text007);
+
+                  IF PeriodsToAdjust <= 0 THEN
+                    ERROR(Text008);
+
+                  DispWindow.OPEN(
+                    PADSTR(Text004,10) + ' #1########\' +
+                    PADSTR(Text005,10) + ' #2##################');
+
+                  ItemUsageAdj.LOCKTABLE;
+                  IF ItemUsageAdj.FINDLAST THEN;
+
+                  LoadUsgAdjDateArray;
+                END;
+
+    OnPostReport=BEGIN
+                   DispWindow.CLOSE;
+                   COMMIT;
+
+                   ReforecastAllItems;
+                 END;
+
+  }
+  DATASET
+  {
+    { 8129;    ;DataItem;                    ;
+               DataItemTable=Table27;
+               DataItemTableView=WHERE(Procurement Unit Exists=CONST(Yes));
+               PrintOnlyIfDetail=Yes;
+               OnPreDataItem=VAR
+                               ProcUnit@1240020001 : Record 14000555;
+                               Location@1240020000 : Record 14;
+                             BEGIN
+                               Location.SETRANGE("Enable Adv. Forecasting", TRUE);
+                               Location.SETFILTER(Code, Item.GETFILTER("Location Filter"));
+                               IF Location.FINDSET THEN BEGIN
+                                 REPEAT
+                                   LocationInvPeriod.SETCURRENTKEY("Location Code","Starting Date","Ending Date");
+                                   LocationInvPeriod.SETRANGE("Location Code", Location.Code);
+                                   LocationInvPeriod.SETRANGE("Starting Date", HistBegin_StartingDate, HistEnd_StartingDate);
+                                   LocationInvPeriod.SETRANGE("Period End Closed", TRUE);
+                                   IF LocationInvPeriod.ISEMPTY THEN
+                                     ERROR(Text011, Location.Code, HistBegin_StartingDate, HistEnd_StartingDate);
+
+                                   IF UpdateRecords THEN BEGIN
+                                   ProcUnit.RESET;
+                                   ProcUnit.COPYFILTERS("Procurement Unit");
+                                   ProcUnit.SETRANGE("Location Code", Location.Code);
+                                   ProcUnit.SETRANGE("Change Reforecast Required", TRUE);
+                                   IF NOT ProcUnit.ISEMPTY THEN
+                                     ERROR(Text015, Location.Code);
+
+                                   ProcUnit.RESET;
+                                   ProcUnit.COPYFILTERS("Procurement Unit");
+                                   ProcUnit.SETRANGE("Location Code", Location.Code);
+                                   ProcUnit.SETRANGE("Reforecast Item", TRUE);
+                                   IF NOT ProcUnit.ISEMPTY THEN
+                                     ERROR(Text015, Location.Code);
+                                   END;
+                                 UNTIL Location.NEXT = 0;
+                               END;
+                             END;
+
+               ReqFilterFields=No.,Item Category Code,Location Filter }
+
+    { 1240030000;1;Column;USERID             ;
+               SourceExpr=USERID }
+
+    { 1240030002;1;Column;CurrReport_PAGENO  ;
+               SourceExpr=CurrReport.PAGENO }
+
+    { 1240030006;1;Column;CompanyInfo_Name   ;
+               SourceExpr=CompanyInfo.Name }
+
+    { 1240030003;1;Column;FORMAT_TODAY_0_4_  ;
+               SourceExpr=FORMAT(TODAY,0,4) }
+
+    { 1240030004;1;Column;TIME               ;
+               SourceExpr=TIME }
+
+    { 1240030005;1;Column;Text003            ;
+               SourceExpr=Text003 }
+
+    { 1240030001;1;Column;CurrReport_PAGENOCaption;
+               SourceExpr=CurrReport_PAGENOCaptionLbl }
+
+    { 1240030012;1;Column;Procurement_Unit__Item_No__Caption;
+               SourceExpr="Procurement Unit".FIELDCAPTION("Item No.") }
+
+    { 1240030010;1;Column;Procurement_Unit__Location_Code_Caption;
+               SourceExpr="Procurement Unit".FIELDCAPTION("Location Code") }
+
+    { 3330;1   ;Column  ;Item_No_            ;
+               SourceExpr="No." }
+
+    { 1240020004;1;Column;HistUsgBeginDate   ;
+               SourceExpr=HistBegin_StartingDate }
+
+    { 1240020005;1;Column;HistUsgEndDate     ;
+               SourceExpr=HistEndingDate }
+
+    { 1240020008;1;Column;PercentageMax      ;
+               SourceExpr=PctMax }
+
+    { 1240020009;1;Column;PercentageMin      ;
+               SourceExpr=PctMin }
+
+    { 1240020010;1;Column;PercentageMinCaption;
+               SourceExpr=PercentageMinCaption }
+
+    { 1240020011;1;Column;PercentageMaxCaption;
+               SourceExpr=PercentageMaxCaption }
+
+    { 1240020012;1;Column;UsageCaption       ;
+               SourceExpr=UsageCaption }
+
+    { 1240020003;1;Column;IncludeZeroPeriodsInAvg;
+               SourceExpr=IncludeZeroPeriodsInAvg }
+
+    { 4564;1   ;DataItem;                    ;
+               DataItemTable=Table14000555;
+               OnAfterGetRecord=VAR
+                                  i@1240020001 : Integer;
+                                  ItemUsage@1240020002 : Record 14000557;
+                                  VarPct@1240020003 : Decimal;
+                                  UsgVar@1240020004 : Decimal;
+                                  UsgAdj@1240020005 : Decimal;
+                                  UBP@1240020006 : Codeunit 14000564;
+                                  Skip@1240020000 : Boolean;
+                                BEGIN
+                                  DispWindow.UPDATE(1,"Procurement Unit"."Location Code");
+                                  DispWindow.UPDATE(2,"Procurement Unit"."Item No.");
+
+                                  CLEAR(UsgArray);
+                                  CLEAR(UsgAdjArray);
+                                  CLEAR(NewUsgArray);
+
+                                  Skip := TRUE;
+
+                                  AvgUsage := CalcUsage("Procurement Unit");
+                                  AvgUsage := ROUND(AvgUsage, 1.0);
+                                  IF (AvgUsage > 0) THEN BEGIN
+                                    ItemUsage.SETRANGE("Location Code", "Procurement Unit"."Location Code");
+                                    ItemUsage.SETRANGE("Item No.", "Procurement Unit"."Item No.");
+                                    ItemUsage.SETRANGE("Variant Code", "Procurement Unit"."Variant Code");
+                                    ItemUsage.SETRANGE("Source No.", '');
+                                    ItemUsage.SETFILTER("Starting Date", '%1..', AdjBegin_StartingDate);
+                                    IF ItemUsage.FINDSET THEN BEGIN
+                                      i := 0;
+                                      AdjMax := AvgUsage * (PctMax / 100);
+                                      AdjMax := ROUND(AdjMax, 1.0);
+
+                                      AdjMin := AvgUsage * (PctMin / 100);
+                                      AdjMin := ROUND(AdjMin, 1.0);
+                                      REPEAT
+                                        i := i + 1;
+                                        VarPct := 0;
+                                        UsgAdj := 0;
+                                        UsgVar := 0;
+
+                                        UsgArray[i] := ItemUsage."Net Period End Usage";
+
+                                        IF ItemUsage."Net Period End Usage" > AdjMax THEN BEGIN
+                                          UsgAdj := AdjMax - ItemUsage."Net Period End Usage";
+                                        END;
+
+                                        IF ItemUsage."Net Period End Usage" < AdjMin THEN BEGIN
+                                          UsgAdj := AdjMin - ItemUsage."Net Period End Usage";
+                                        END;
+
+                                        IF UsgAdj <> 0 THEN BEGIN
+                                           Skip := FALSE;
+                                          // after collaborative rolled up usage
+                                          IF (ItemUsage."Net Period End Usage" > 0) THEN
+                                            VarPct := (ABS(UsgAdj)/ItemUsage."Net Period End Usage")*100
+                                          ELSE
+                                            VarPct := 100;
+
+                                          VarPct := ROUND(VarPct, 1.0);
+
+                                          UsgAdjArray[i] := UsgAdj;
+                                          NewUsgArray[i] := UsgArray[i] + UsgAdjArray[i];
+
+                                          IF UpdateRecords THEN BEGIN
+                                            MakeAdjustment("Procurement Unit", ItemUsage."Starting Date", ItemUsage."Ending Date", UsgAdj);
+                                            "Change Reforecast Required" := TRUE;
+                                            IF SpokesExist("Procurement Unit") OR ("Replenishment Source Type" = "Replenishment Source Type"::Location) THEN
+                                              "Reforecast Item" := TRUE;
+                                            MODIFY(TRUE);
+                                          END;
+                                        END;
+                                      UNTIL (ItemUsage.NEXT = 0) OR (i >= PeriodsToAdjust);
+                                    END;
+
+                                    // zero usage adjustments in any period
+                                    IF Skip THEN
+                                      CurrReport.SKIP;
+
+                                  END ELSE
+                                    // zero average usage
+                                    CurrReport.SKIP;
+                                END;
+
+               ReqFilterFields=Replenishment Source Type,Replenishment Source Code,Nonstock Unit,Variant Code,Replenishment Model,Usage Formula Status;
+               DataItemLink=Item No.=FIELD(No.),
+                            Location Code=FIELD(Location Filter) }
+
+    { 1240030009;2;Column;Procurement_Unit__Location_Code_;
+               SourceExpr="Location Code" }
+
+    { 1240030011;2;Column;Procurement_Unit__Item_No__;
+               SourceExpr="Item No." }
+
+    { 1240020000;2;Column;ProcurementUnit_VariantCode;
+               SourceExpr="Variant Code" }
+
+    { 1240020001;2;Column;AvergeUsage        ;
+               SourceExpr=AvgUsage }
+
+    { 1240030018;2;Column;ForcArray_1_       ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgArray[1] }
+
+    { 1240030093;2;Column;ForcArray_2_       ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgArray[2] }
+
+    { 1240030094;2;Column;ForcArray_3_       ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgArray[3] }
+
+    { 1240030095;2;Column;ForcArray_4_       ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgArray[4] }
+
+    { 1240030096;2;Column;ForcArray_5_       ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgArray[5] }
+
+    { 1240030097;2;Column;ForcArray_6_       ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgArray[6] }
+
+    { 1240030098;2;Column;ForcArray_7_       ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgArray[7] }
+
+    { 1240030099;2;Column;ForcArray_8_       ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgArray[8] }
+
+    { 1240030100;2;Column;ForcArray_9_       ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgArray[9] }
+
+    { 1240030101;2;Column;ForcArray_10_      ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgArray[10] }
+
+    { 1240030102;2;Column;ForcArray_11_      ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgArray[11] }
+
+    { 1240030103;2;Column;ForcArray_12_      ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgArray[12] }
+
+    { 1240030104;2;Column;NewAdjArray_1_     ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgAdjArray[1] }
+
+    { 1240030007;2;Column;NewAdjArray_2_     ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgAdjArray[2] }
+
+    { 1240030008;2;Column;NewAdjArray_3_     ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgAdjArray[3] }
+
+    { 1240030013;2;Column;NewAdjArray_4_     ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgAdjArray[4] }
+
+    { 1240030014;2;Column;NewAdjArray_5_     ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgAdjArray[5] }
+
+    { 1240030015;2;Column;NewAdjArray_6_     ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgAdjArray[6] }
+
+    { 1240030016;2;Column;NewAdjArray_7_     ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgAdjArray[7] }
+
+    { 1240030017;2;Column;NewAdjArray_8_     ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgAdjArray[8] }
+
+    { 1240030019;2;Column;NewAdjArray_9_     ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgAdjArray[9] }
+
+    { 1240030020;2;Column;NewAdjArray_10_    ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgAdjArray[10] }
+
+    { 1240030021;2;Column;NewAdjArray_11_    ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgAdjArray[11] }
+
+    { 1240030022;2;Column;NewAdjArray_12_    ;
+               DecimalPlaces=0:5;
+               SourceExpr=UsgAdjArray[12] }
+
+    { 1240030023;2;Column;ForcTotalArray_1_  ;
+               DecimalPlaces=0:5;
+               SourceExpr=NewUsgArray[1] }
+
+    { 1240030024;2;Column;ForcTotalArray_2_  ;
+               DecimalPlaces=0:5;
+               SourceExpr=NewUsgArray[2] }
+
+    { 1240030025;2;Column;ForcTotalArray_3_  ;
+               DecimalPlaces=0:5;
+               SourceExpr=NewUsgArray[3] }
+
+    { 1240030026;2;Column;ForcTotalArray_4_  ;
+               DecimalPlaces=0:5;
+               SourceExpr=NewUsgArray[4] }
+
+    { 1240030027;2;Column;ForcTotalArray_5_  ;
+               DecimalPlaces=0:5;
+               SourceExpr=NewUsgArray[5] }
+
+    { 1240030028;2;Column;ForcTotalArray_6_  ;
+               DecimalPlaces=0:5;
+               SourceExpr=NewUsgArray[6] }
+
+    { 1240030029;2;Column;ForcTotalArray_7_  ;
+               DecimalPlaces=0:5;
+               SourceExpr=NewUsgArray[7] }
+
+    { 1240030030;2;Column;ForcTotalArray_8_  ;
+               DecimalPlaces=0:5;
+               SourceExpr=NewUsgArray[8] }
+
+    { 1240030031;2;Column;ForcTotalArray_9_  ;
+               DecimalPlaces=0:5;
+               SourceExpr=NewUsgArray[9] }
+
+    { 1240030032;2;Column;ForcTotalArray_10_ ;
+               DecimalPlaces=0:5;
+               SourceExpr=NewUsgArray[10] }
+
+    { 1240030033;2;Column;ForcTotalArray_11_ ;
+               DecimalPlaces=0:5;
+               SourceExpr=NewUsgArray[11] }
+
+    { 1240030034;2;Column;ForcTotalArray_12_ ;
+               DecimalPlaces=0:5;
+               SourceExpr=NewUsgArray[12] }
+
+    { 1240030046;2;Column;ForcStartingDateArray_1_;
+               SourceExpr=UsgStartingDateArray[1] }
+
+    { 1240030048;2;Column;ForcStartingDateArray_2_;
+               SourceExpr=UsgStartingDateArray[2] }
+
+    { 1240030049;2;Column;ForcStartingDateArray_3_;
+               SourceExpr=UsgStartingDateArray[3] }
+
+    { 1240030050;2;Column;ForcStartingDateArray_4_;
+               SourceExpr=UsgStartingDateArray[4] }
+
+    { 1240030051;2;Column;ForcStartingDateArray_5_;
+               SourceExpr=UsgStartingDateArray[5] }
+
+    { 1240030052;2;Column;ForcStartingDateArray_6_;
+               SourceExpr=UsgStartingDateArray[6] }
+
+    { 1240030053;2;Column;ForcStartingDateArray_7_;
+               SourceExpr=UsgStartingDateArray[7] }
+
+    { 1240030054;2;Column;ForcStartingDateArray_8_;
+               SourceExpr=UsgStartingDateArray[8] }
+
+    { 1240030055;2;Column;ForcStartingDateArray_9_;
+               SourceExpr=UsgStartingDateArray[9] }
+
+    { 1240030056;2;Column;ForcStartingDateArray_10_;
+               SourceExpr=UsgStartingDateArray[10] }
+
+    { 1240030057;2;Column;ForcStartingDateArray_11_;
+               SourceExpr=UsgStartingDateArray[11] }
+
+    { 1240030058;2;Column;ForcStartingDateArray_12_;
+               SourceExpr=UsgStartingDateArray[12] }
+
+    { 1240030035;2;Column;ForecastCaption    ;
+               SourceExpr=ForecastCaptionLbl }
+
+    { 1240030036;2;Column;AdjustmentCaption  ;
+               SourceExpr=AdjustmentCaptionLbl }
+
+    { 1240030037;2;Column;Adj__ForecastCaption;
+               SourceExpr=Adj__ForecastCaptionLbl }
+
+    { 6521;2   ;Column  ;Procurement_Unit_Variant_Code;
+               SourceExpr="Variant Code" }
+
+    { 1240020002;2;Column;AvgUsgCaption      ;
+               SourceExpr=AvgUsgCaption }
+
+    { 1240020006;2;Column;MaxUsage           ;
+               SourceExpr=AdjMax }
+
+    { 1240020007;2;Column;MinUsage           ;
+               SourceExpr=AdjMin }
+
+    { 1240020013;2;Column;UsageFormulaStatus ;
+               SourceExpr="Usage Formula Status" }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      SaveValues=Yes;
+      OnOpenPage=BEGIN
+                   UpdateRecords := FALSE;
+
+                   AdvForSetup.GET;
+
+                   IF PctMax = 0 THEN
+                     PctMax := AdvForSetup."Max. Unusual Adj. %";
+
+                   IF PctMin = 0 THEN
+                     PctMin := AdvForSetup."Min. Unusual Adj. %";
+                 END;
+
+    }
+    CONTROLS
+    {
+      { 1900000001;0;Container;
+                  ContainerType=ContentArea }
+
+      { 1240030000;1;Field  ;
+                  Name=UpdateRecords;
+                  CaptionML=ENU=Update Records?;
+                  SourceExpr=UpdateRecords }
+
+      { 1240020007;1;Field  ;
+                  Name=ReforecastNow;
+                  CaptionML=ENU=Reforecast during this report?;
+                  SourceExpr=ReforecastNow }
+
+      { 1240020000;1;Group  ;
+                  Name=Periods to Average;
+                  CaptionML=ENU=Usage Periods to Average;
+                  GroupType=Group }
+
+      { 1240030004;2;Field  ;
+                  Name=HistStartingDate;
+                  CaptionML=ENU=Usage Starting Date;
+                  SourceExpr=HistBegin_StartingDate;
+                  TableRelation="Forecast Inventory Period"."Starting Date";
+                  OnValidate=BEGIN
+                               ValidateHistStartingDate;
+                             END;
+
+                  OnLookup=VAR
+                             ForecastInvPeriod@1240020001 : Record 14000552;
+                           BEGIN
+                             IF LookUpForecastInvPeriod(ForecastInvPeriod) THEN
+                               HistBegin_StartingDate := ForecastInvPeriod."Starting Date"
+                             ELSE
+                               HistBegin_StartingDate := 0D;
+
+                             ValidateHistStartingDate;
+                           END;
+                            }
+
+      { 1240030006;2;Field  ;
+                  Name=HistEndingDate;
+                  CaptionML=ENU=Usage Ending Date;
+                  SourceExpr=HistEndingDate;
+                  Visible=TRUE;
+                  OnValidate=BEGIN
+                               ValidateHistEndingDate;
+                             END;
+
+                  OnLookup=VAR
+                             ForecastInvPeriod@1240020001 : Record 14000552;
+                           BEGIN
+                             IF LookUpForecastInvPeriod(ForecastInvPeriod) THEN BEGIN
+                               HistEndingDate := ForecastInvPeriod."Ending Date";
+                               ValidateHistEndingDate;
+                             END ELSE BEGIN
+                               HistEndingDate := 0D;
+                             END;
+                           END;
+                            }
+
+      { 1240020005;2;Field  ;
+                  CaptionML=ENU=Minimum Percentage of Average Usage;
+                  SourceExpr=PctMin }
+
+      { 1240020002;2;Field  ;
+                  CaptionML=ENU=Maximum Percentage of Average Usage;
+                  SourceExpr=PctMax }
+
+      { 1240020006;2;Field  ;
+                  Name=IncludeZeroPeriodsInAvg;
+                  CaptionML=ENU=Include periods with zero uage in Average;
+                  SourceExpr=IncludeZeroPeriodsInAvg }
+
+      { 1240020001;1;Group  ;
+                  Name=Adjustment Periods;
+                  GroupType=Group }
+
+      { 1240020003;2;Field  ;
+                  Name=AdjStartingDate;
+                  CaptionML=ENU=Adjustment Starting Date;
+                  SourceExpr=AdjBegin_StartingDate;
+                  TableRelation="Forecast Inventory Period"."Starting Date";
+                  OnLookup=VAR
+                             ForecastInvPeriod@1240020001 : Record 14000552;
+                           BEGIN
+                             IF LookUpForecastInvPeriod(ForecastInvPeriod) THEN
+                               AdjBegin_StartingDate := ForecastInvPeriod."Starting Date"
+                             ELSE
+                               AdjBegin_StartingDate := 0D;
+                           END;
+                            }
+
+      { 1240020004;2;Field  ;
+                  Name=PeriodsToAdjust;
+                  CaptionML=ENU=Periods to Adjust;
+                  SourceExpr=PeriodsToAdjust }
+
+      { 1240020008;2;Field  ;
+                  Name=UsageReasonCode;
+                  CaptionML=ENU=Reason Code;
+                  SourceExpr=UsageAdjustReasonCode;
+                  OnValidate=BEGIN
+                               ValidateUsageReason();
+                             END;
+
+                  OnLookup=VAR
+                             UsageReasonPage@1240020000 : Page 14000565;
+                             UsageReason@1240020001 : Record 14000559;
+                           BEGIN
+                             UsageReason.RESET;
+                             UsageReasonPage.LOOKUPMODE(TRUE);
+                             UsageReasonPage.SETTABLEVIEW(UsageReason);
+                             UsageReasonPage.SETRECORD(UsageReason);
+                             IF UsageReasonPage.RUNMODAL = ACTION::LookupOK THEN BEGIN
+                               UsageReasonPage.GETRECORD(UsageReason);
+                               UsageAdjustReasonCode := UsageReason.Code;
+                               ValidateUsageReason();
+                             END;
+                           END;
+                            }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      AdvForSetup@1240030012 : Record 14002651;
+      CompanyInfo@1240030022 : Record 79;
+      LocationInvPeriod@1240030009 : Record 14000553;
+      ItemUsageAdj@1240020019 : Record 14000558;
+      DispWindow@1240030023 : Dialog;
+      Adjust@1240030019 : Boolean;
+      UpdateRecords@1240030002 : Boolean;
+      Text001@1240030008 : TextConst 'ENU=Locaiton %1 does not contain a closed period and the usage cannot be used.  Location %1 Starting Date %2';
+      Text002@1240030010 : TextConst 'ENU=Starting Date %1 must be before Ending Date %2.';
+      UsgArray@1240030013 : ARRAY [52] OF Decimal;
+      UsgAdjArray@1240030014 : ARRAY [52] OF Decimal;
+      NewUsgArray@1240030017 : ARRAY [52] OF Decimal;
+      Text003@1240030020 : TextConst 'ENU=Usage Adjust Report';
+      Text004@1240030024 : TextConst 'ENU=Location';
+      Text005@1240030025 : TextConst 'ENU=Item';
+      Text006@1240030026 : TextConst 'ENU=History Starting Date and Ending Date must not be blank.';
+      Text007@1240020004 : TextConst 'ENU=Adjust Period Starting Date and Ending Date must not be blank.';
+      Text008@1240020006 : TextConst 'ENU=Ending Date %1 must be after the Starting Date %2';
+      Text009@1240020012 : TextConst 'ENU=Periods to adjust must be 1 or more!';
+      Text010@1240020013 : TextConst 'ENU=Starting Date %1 must be before the Ending Date %2';
+      Text011@1240020014 : TextConst 'ENU=No Closed Periods for Location %1 in range %2 - %3''';
+      Text012@1240020026 : TextConst 'ENU=Minimum Percentage must be at least zero!';
+      Text013@1240020027 : TextConst 'ENU=Maximum Percentage must be more than zero!';
+      Text014@1240020028 : TextConst 'ENU=Maximum Percentage must be more than the minimum!';
+      Text015@1240020032 : TextConst 'ENU=Location %1 has items to reforecast.  Ensure all reforecasts are completed before updating records!';
+      Text016@1240020036 : TextConst 'ENU="A usage adjustment reason must be supplied when updating records!  "';
+      Text017@1240020037 : TextConst 'ENU=History ending date must match a forecasting period ending date!';
+      CurrReport_PAGENOCaptionLbl@8565 : TextConst 'ENU=Page';
+      ForecastCaptionLbl@4493 : TextConst 'ENU=Usage';
+      AdjustmentCaptionLbl@6080 : TextConst 'ENU=Adjustment';
+      Adj__ForecastCaptionLbl@3349 : TextConst 'ENU=Adj. Usage';
+      HistBegin_StartingDate@1240020000 : Date;
+      HistEnd_StartingDate@1240020011 : Date;
+      HistEndingDate@1240020001 : Date;
+      AdjBegin_StartingDate@1240020003 : Date;
+      AdjEndingDate@1240020002 : Date;
+      UsgStartingDateArray@1240020005 : ARRAY [52] OF Date;
+      PeriodsToAdjust@1240020007 : Integer;
+      TextUsagReasonCode@1240020008 : TextConst 'ENU=USGADJRPT';
+      AdjustmentCounter@1240020010 : Integer;
+      AvgUsage@1240020020 : Decimal;
+      TextUsagReasonCodeDesc@1240020033 : TextConst 'ENU=Avg. Usg. Per. %1 to %2';
+      AvgUsgCaption@1240020021 : TextConst 'ENU="Avg  "';
+      AdjMax@1240020023 : Decimal;
+      AdjMin@1240020022 : Decimal;
+      PctMax@1240020024 : Decimal;
+      PctMin@1240020025 : Decimal;
+      PercentageMinCaption@1240020029 : TextConst 'ENU=Percentage Min:';
+      PercentageMaxCaption@1240020031 : TextConst 'ENU=Percentage Max:';
+      UsageCaption@1240020030 : TextConst 'ENU=Usage Dates for Average:';
+      IncludeZeroPeriodsInAvg@1240020034 : Boolean;
+      ReforecastNow@1240020035 : Boolean;
+      UsageAdjustReasonCode@1240020015 : Code[10];
+      UsageReason@1240020038 : Record 14000559;
+
+    LOCAL PROCEDURE CalcUsage@1240020000(VAR CurrProcUnit@1240020000 : Record 14000555) AvgUsg : Decimal;
+    VAR
+      ItemUsage@1240020001 : Record 14000557;
+      i@1240020002 : Integer;
+      PeriodsWithUsg@1240020004 : Decimal;
+    BEGIN
+      AvgUsg := 0;
+
+      ItemUsage.SETRANGE("Location Code", CurrProcUnit."Location Code");
+      ItemUsage.SETRANGE("Item No.",CurrProcUnit."Item No.");
+      ItemUsage.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+      ItemUsage.SETFILTER("Source No.",'%1','');
+      ItemUsage.SETFILTER("Starting Date",'%1..%2', HistBegin_StartingDate, HistEnd_StartingDate);
+      IF ItemUsage.FINDSET THEN BEGIN
+        i := 0;
+        REPEAT
+          i := i + 1;
+          IF (ItemUsage."Net Period End Usage" > 0) THEN BEGIN
+            AvgUsg := AvgUsg + ItemUsage."Net Period End Usage";
+            PeriodsWithUsg := PeriodsWithUsg + 1;
+          END ELSE
+            IF IncludeZeroPeriodsInAvg THEN
+              PeriodsWithUsg := PeriodsWithUsg + 1;
+        UNTIL ItemUsage.NEXT = 0;
+
+        IF (PeriodsWithUsg > 0) THEN BEGIN
+          AvgUsg := (AvgUsg/PeriodsWithUsg);
+        END;
+      END;
+    END;
+
+    PROCEDURE MakeAdjustment@1240020002(VAR CurrProcUnit@1240020001 : Record 14000555;CurrStartingDate@1240020004 : Date;CurrEndingDate@1240020006 : Date;CurrAdjQty@1240020000 : Decimal);
+    VAR
+      i@1240020003 : Integer;
+      AdjQty@1240020005 : Decimal;
+    BEGIN
+      //DeleteExistingAdjustment(CurrProcUnit, ItemUsageAdj."Starting Date", ItemUsageAdj."Ending Date");
+
+      ItemUsageAdj.RESET;
+      ItemUsageAdj.INIT;
+      ItemUsageAdj."Location Code" := CurrProcUnit."Location Code";
+      ItemUsageAdj."Item No." := CurrProcUnit."Item No.";
+      ItemUsageAdj."Variant Code" := CurrProcUnit."Variant Code";
+      ItemUsageAdj."Starting Date" := CurrStartingDate;
+      ItemUsageAdj."Ending Date" := CurrEndingDate;
+      ItemUsageAdj."Line No." := GetNextLineNo(CurrProcUnit, ItemUsageAdj."Starting Date", ItemUsageAdj."Ending Date");
+      ItemUsageAdj."Adjustment Quantity" := CurrAdjQty;
+
+
+      ItemUsageAdj.Reason := UsageReason.Code;
+      ItemUsageAdj."Adjusted By" := USERID;
+      ItemUsageAdj."Adjusted Date" := TODAY;
+      ItemUsageAdj."Original Location Code" :=  CurrProcUnit."Location Code";;
+      ItemUsageAdj."Original Item No." := CurrProcUnit."Item No.";
+      ItemUsageAdj."Original Variant Code" := CurrProcUnit."Variant Code";
+      ItemUsageAdj.INSERT(TRUE);
+
+      AdjustmentCounter := AdjustmentCounter + 1;
+    END;
+
+    PROCEDURE LoadUsgAdjDateArray@1240020003();
+    VAR
+      ForecastInvPeriod@1240020002 : Record 14000552;
+      i@1240020001 : Integer;
+    BEGIN
+      ForecastInvPeriod.RESET;
+      ForecastInvPeriod.SETRANGE(Type, ForecastInvPeriod.Type::" ");
+      ForecastInvPeriod.SETFILTER("Starting Date",'%1..', AdjBegin_StartingDate);
+      IF ForecastInvPeriod.FINDSET THEN BEGIN
+        i := 0;
+        CLEAR(UsgStartingDateArray);
+        REPEAT
+          i := i + 1;
+          UsgStartingDateArray[i] := ForecastInvPeriod."Starting Date";
+        UNTIL (ForecastInvPeriod.NEXT = 0) OR
+              (i >= PeriodsToAdjust);
+      END;
+    END;
+
+    PROCEDURE GetNextLineNo@1240020006(VAR CurrProcUnit@1240020001 : Record 14000555;StartingDate@1240020002 : Date;EndingDate@1240020003 : Date) LineNo : Integer;
+    VAR
+      ItemUsageAdj2@1240020000 : Record 14000558;
+    BEGIN
+      LineNo := 0;
+      ItemUsageAdj2.RESET;
+      ItemUsageAdj2.SETRANGE("Item No.", CurrProcUnit."Item No.");
+      ItemUsageAdj2.SETRANGE("Location Code", CurrProcUnit."Location Code");
+      ItemUsageAdj2.SETRANGE("Variant Code", CurrProcUnit."Variant Code");
+      ItemUsageAdj2.SETRANGE("Starting Date", StartingDate);
+      ItemUsageAdj2.SETRANGE("Ending Date", EndingDate);
+      IF ItemUsageAdj2.FINDLAST THEN
+        LineNo := ItemUsageAdj2."Line No.";
+      LineNo := LineNo + 10000;
+      EXIT(LineNo);
+    END;
+
+    PROCEDURE DeleteExistingAdjustment@1240020001(VAR CurrProcUnit@1240020001 : Record 14000555;StartingDate@1240020002 : Date;EndingDate@1240020003 : Date);
+    VAR
+      ItemUsageAdj2@1240020000 : Record 14000558;
+    BEGIN
+      ItemUsageAdj2.RESET;
+      ItemUsageAdj2.SETRANGE("Item No.", CurrProcUnit."Item No.");
+      ItemUsageAdj2.SETRANGE("Location Code", CurrProcUnit."Location Code");
+      ItemUsageAdj2.SETRANGE("Variant Code", CurrProcUnit."Variant Code");
+      ItemUsageAdj2.SETRANGE("Starting Date", StartingDate);
+      ItemUsageAdj2.SETRANGE("Ending Date", EndingDate);
+      IF NOT ItemUsageAdj2.ISEMPTY THEN
+        ItemUsageAdj2.DELETEALL;
+    END;
+
+    PROCEDURE LookUpForecastInvPeriod@1240020004(VAR CurrForInvPeriod@1240020002 : Record 14000552) : Boolean;
+    VAR
+      ForInvPeriodLookup@1240020000 : Page 14000553;
+    BEGIN
+      CurrForInvPeriod.RESET;
+      CLEAR(ForInvPeriodLookup);
+      ForInvPeriodLookup.LOOKUPMODE(TRUE);
+      CurrForInvPeriod.SETRANGE(Type, CurrForInvPeriod.Type::" ");
+      ForInvPeriodLookup.SETTABLEVIEW(CurrForInvPeriod);
+      ForInvPeriodLookup.SETRECORD(CurrForInvPeriod);
+      IF ForInvPeriodLookup.RUNMODAL = ACTION::LookupOK THEN BEGIN
+        ForInvPeriodLookup.GETRECORD(CurrForInvPeriod);
+        EXIT(TRUE);
+      END ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE ValidateHistStartingDate@1240020010();
+    BEGIN
+      IF (HistBegin_StartingDate >= HistEndingDate) AND
+        (HistEndingDate > 0D) THEN
+        ERROR(Text010, HistBegin_StartingDate, HistEndingDate);
+    END;
+
+    PROCEDURE ValidateHistEndingDate@1240020011();
+    VAR
+      ForecastInvPeriod@1240020000 : Record 14000552;
+    BEGIN
+      IF (HistEndingDate <= HistBegin_StartingDate) THEN
+        ERROR(Text008, HistEndingDate, HistBegin_StartingDate);
+
+      ForecastInvPeriod.RESET;
+      ForecastInvPeriod.SETRANGE(Type,ForecastInvPeriod.Type::" ");
+      ForecastInvPeriod.SETRANGE("Ending Date", HistEndingDate);
+      IF ForecastInvPeriod.ISEMPTY THEN
+        ERROR(Text017, HistEndingDate);
+    END;
+
+    PROCEDURE ValidateAdjStartingDate@1240020016();
+    BEGIN
+    END;
+
+    PROCEDURE ReforecastAllItems@1240020007();
+    VAR
+      ProcUnit@1240020000 : Record 14000555;
+      Reforecast@1240020001 : Codeunit 14000571;
+    BEGIN
+      IF NOT ReforecastNow THEN
+        EXIT;
+
+      ProcUnit.SETRANGE("Change Reforecast Required", TRUE);
+      IF ProcUnit.FINDSET THEN BEGIN
+        REPEAT
+          CLEAR(Reforecast);
+          Reforecast.Update(ProcUnit);
+        UNTIL ProcUnit.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ValidateUsageReason@1240020012();
+    BEGIN
+      IF UsageAdjustReasonCode <> '' THEN
+        UsageReason.GET(UsageReason.Type::"Usage Adjustment", UsageAdjustReasonCode);
+    END;
+
+    PROCEDURE SpokesExist@1240020201(VAR CurrProcUnit@1240020000 : Record 14000555) HubLoc : Boolean;
+    VAR
+      LocProcUnit@1240020001 : Record 14000555;
+    BEGIN
+      HubLoc := FALSE;
+      LocProcUnit.SETFILTER("Location Code", '<>%1', CurrProcUnit."Location Code");
+      LocProcUnit.SETRANGE("Item No.", CurrProcUnit."Item No.");
+      LocProcUnit.SETRANGE("Variant Code", CurrProcUnit."Variant Code");
+      LocProcUnit.SETRANGE("Replenishment Source Type", LocProcUnit."Replenishment Source Type"::Location);
+      LocProcUnit.SETRANGE("Replenishment Source Code", CurrProcUnit."Location Code");
+      IF NOT LocProcUnit.ISEMPTY THEN
+        HubLoc := TRUE;
+      EXIT(HubLoc);
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+    <?xml version="1.0" encoding="utf-8"?>
+<Report xmlns="http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition" xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner">
+  <AutoRefresh>0</AutoRefresh>
+  <DataSources>
+    <DataSource Name="DataSource">
+      <ConnectionProperties>
+        <DataProvider>SQL</DataProvider>
+        <ConnectString />
+      </ConnectionProperties>
+      <rd:SecurityType>None</rd:SecurityType>
+    </DataSource>
+  </DataSources>
+  <DataSets>
+    <DataSet Name="DataSet_Result">
+      <Query>
+        <DataSourceName>DataSource</DataSourceName>
+        <CommandText />
+      </Query>
+      <Fields>
+        <Field Name="USERID">
+          <DataField>USERID</DataField>
+        </Field>
+        <Field Name="CurrReport_PAGENO">
+          <DataField>CurrReport_PAGENO</DataField>
+        </Field>
+        <Field Name="CompanyInfo_Name">
+          <DataField>CompanyInfo_Name</DataField>
+        </Field>
+        <Field Name="FORMAT_TODAY_0_4_">
+          <DataField>FORMAT_TODAY_0_4_</DataField>
+        </Field>
+        <Field Name="TIME">
+          <DataField>TIME</DataField>
+        </Field>
+        <Field Name="Text003">
+          <DataField>Text003</DataField>
+        </Field>
+        <Field Name="CurrReport_PAGENOCaption">
+          <DataField>CurrReport_PAGENOCaption</DataField>
+        </Field>
+        <Field Name="Procurement_Unit__Item_No__Caption">
+          <DataField>Procurement_Unit__Item_No__Caption</DataField>
+        </Field>
+        <Field Name="Procurement_Unit__Location_Code_Caption">
+          <DataField>Procurement_Unit__Location_Code_Caption</DataField>
+        </Field>
+        <Field Name="Item_No_">
+          <DataField>Item_No_</DataField>
+        </Field>
+        <Field Name="HistUsgBeginDate">
+          <DataField>HistUsgBeginDate</DataField>
+        </Field>
+        <Field Name="HistUsgEndDate">
+          <DataField>HistUsgEndDate</DataField>
+        </Field>
+        <Field Name="PercentageMax">
+          <DataField>PercentageMax</DataField>
+        </Field>
+        <Field Name="PercentageMaxFormat">
+          <DataField>PercentageMaxFormat</DataField>
+        </Field>
+        <Field Name="PercentageMin">
+          <DataField>PercentageMin</DataField>
+        </Field>
+        <Field Name="PercentageMinFormat">
+          <DataField>PercentageMinFormat</DataField>
+        </Field>
+        <Field Name="PercentageMinCaption">
+          <DataField>PercentageMinCaption</DataField>
+        </Field>
+        <Field Name="PercentageMaxCaption">
+          <DataField>PercentageMaxCaption</DataField>
+        </Field>
+        <Field Name="UsageCaption">
+          <DataField>UsageCaption</DataField>
+        </Field>
+        <Field Name="IncludeZeroPeriodsInAvg">
+          <DataField>IncludeZeroPeriodsInAvg</DataField>
+        </Field>
+        <Field Name="Procurement_Unit__Location_Code_">
+          <DataField>Procurement_Unit__Location_Code_</DataField>
+        </Field>
+        <Field Name="Procurement_Unit__Item_No__">
+          <DataField>Procurement_Unit__Item_No__</DataField>
+        </Field>
+        <Field Name="ProcurementUnit_VariantCode">
+          <DataField>ProcurementUnit_VariantCode</DataField>
+        </Field>
+        <Field Name="AvergeUsage">
+          <DataField>AvergeUsage</DataField>
+        </Field>
+        <Field Name="AvergeUsageFormat">
+          <DataField>AvergeUsageFormat</DataField>
+        </Field>
+        <Field Name="ForcArray_1_">
+          <DataField>ForcArray_1_</DataField>
+        </Field>
+        <Field Name="ForcArray_1_Format">
+          <DataField>ForcArray_1_Format</DataField>
+        </Field>
+        <Field Name="ForcArray_2_">
+          <DataField>ForcArray_2_</DataField>
+        </Field>
+        <Field Name="ForcArray_2_Format">
+          <DataField>ForcArray_2_Format</DataField>
+        </Field>
+        <Field Name="ForcArray_3_">
+          <DataField>ForcArray_3_</DataField>
+        </Field>
+        <Field Name="ForcArray_3_Format">
+          <DataField>ForcArray_3_Format</DataField>
+        </Field>
+        <Field Name="ForcArray_4_">
+          <DataField>ForcArray_4_</DataField>
+        </Field>
+        <Field Name="ForcArray_4_Format">
+          <DataField>ForcArray_4_Format</DataField>
+        </Field>
+        <Field Name="ForcArray_5_">
+          <DataField>ForcArray_5_</DataField>
+        </Field>
+        <Field Name="ForcArray_5_Format">
+          <DataField>ForcArray_5_Format</DataField>
+        </Field>
+        <Field Name="ForcArray_6_">
+          <DataField>ForcArray_6_</DataField>
+        </Field>
+        <Field Name="ForcArray_6_Format">
+          <DataField>ForcArray_6_Format</DataField>
+        </Field>
+        <Field Name="ForcArray_7_">
+          <DataField>ForcArray_7_</DataField>
+        </Field>
+        <Field Name="ForcArray_7_Format">
+          <DataField>ForcArray_7_Format</DataField>
+        </Field>
+        <Field Name="ForcArray_8_">
+          <DataField>ForcArray_8_</DataField>
+        </Field>
+        <Field Name="ForcArray_8_Format">
+          <DataField>ForcArray_8_Format</DataField>
+        </Field>
+        <Field Name="ForcArray_9_">
+          <DataField>ForcArray_9_</DataField>
+        </Field>
+        <Field Name="ForcArray_9_Format">
+          <DataField>ForcArray_9_Format</DataField>
+        </Field>
+        <Field Name="ForcArray_10_">
+          <DataField>ForcArray_10_</DataField>
+        </Field>
+        <Field Name="ForcArray_10_Format">
+          <DataField>ForcArray_10_Format</DataField>
+        </Field>
+        <Field Name="ForcArray_11_">
+          <DataField>ForcArray_11_</DataField>
+        </Field>
+        <Field Name="ForcArray_11_Format">
+          <DataField>ForcArray_11_Format</DataField>
+        </Field>
+        <Field Name="ForcArray_12_">
+          <DataField>ForcArray_12_</DataField>
+        </Field>
+        <Field Name="ForcArray_12_Format">
+          <DataField>ForcArray_12_Format</DataField>
+        </Field>
+        <Field Name="NewAdjArray_1_">
+          <DataField>NewAdjArray_1_</DataField>
+        </Field>
+        <Field Name="NewAdjArray_1_Format">
+          <DataField>NewAdjArray_1_Format</DataField>
+        </Field>
+        <Field Name="NewAdjArray_2_">
+          <DataField>NewAdjArray_2_</DataField>
+        </Field>
+        <Field Name="NewAdjArray_2_Format">
+          <DataField>NewAdjArray_2_Format</DataField>
+        </Field>
+        <Field Name="NewAdjArray_3_">
+          <DataField>NewAdjArray_3_</DataField>
+        </Field>
+        <Field Name="NewAdjArray_3_Format">
+          <DataField>NewAdjArray_3_Format</DataField>
+        </Field>
+        <Field Name="NewAdjArray_4_">
+          <DataField>NewAdjArray_4_</DataField>
+        </Field>
+        <Field Name="NewAdjArray_4_Format">
+          <DataField>NewAdjArray_4_Format</DataField>
+        </Field>
+        <Field Name="NewAdjArray_5_">
+          <DataField>NewAdjArray_5_</DataField>
+        </Field>
+        <Field Name="NewAdjArray_5_Format">
+          <DataField>NewAdjArray_5_Format</DataField>
+        </Field>
+        <Field Name="NewAdjArray_6_">
+          <DataField>NewAdjArray_6_</DataField>
+        </Field>
+        <Field Name="NewAdjArray_6_Format">
+          <DataField>NewAdjArray_6_Format</DataField>
+        </Field>
+        <Field Name="NewAdjArray_7_">
+          <DataField>NewAdjArray_7_</DataField>
+        </Field>
+        <Field Name="NewAdjArray_7_Format">
+          <DataField>NewAdjArray_7_Format</DataField>
+        </Field>
+        <Field Name="NewAdjArray_8_">
+          <DataField>NewAdjArray_8_</DataField>
+        </Field>
+        <Field Name="NewAdjArray_8_Format">
+          <DataField>NewAdjArray_8_Format</DataField>
+        </Field>
+        <Field Name="NewAdjArray_9_">
+          <DataField>NewAdjArray_9_</DataField>
+        </Field>
+        <Field Name="NewAdjArray_9_Format">
+          <DataField>NewAdjArray_9_Format</DataField>
+        </Field>
+        <Field Name="NewAdjArray_10_">
+          <DataField>NewAdjArray_10_</DataField>
+        </Field>
+        <Field Name="NewAdjArray_10_Format">
+          <DataField>NewAdjArray_10_Format</DataField>
+        </Field>
+        <Field Name="NewAdjArray_11_">
+          <DataField>NewAdjArray_11_</DataField>
+        </Field>
+        <Field Name="NewAdjArray_11_Format">
+          <DataField>NewAdjArray_11_Format</DataField>
+        </Field>
+        <Field Name="NewAdjArray_12_">
+          <DataField>NewAdjArray_12_</DataField>
+        </Field>
+        <Field Name="NewAdjArray_12_Format">
+          <DataField>NewAdjArray_12_Format</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_1_">
+          <DataField>ForcTotalArray_1_</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_1_Format">
+          <DataField>ForcTotalArray_1_Format</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_2_">
+          <DataField>ForcTotalArray_2_</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_2_Format">
+          <DataField>ForcTotalArray_2_Format</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_3_">
+          <DataField>ForcTotalArray_3_</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_3_Format">
+          <DataField>ForcTotalArray_3_Format</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_4_">
+          <DataField>ForcTotalArray_4_</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_4_Format">
+          <DataField>ForcTotalArray_4_Format</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_5_">
+          <DataField>ForcTotalArray_5_</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_5_Format">
+          <DataField>ForcTotalArray_5_Format</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_6_">
+          <DataField>ForcTotalArray_6_</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_6_Format">
+          <DataField>ForcTotalArray_6_Format</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_7_">
+          <DataField>ForcTotalArray_7_</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_7_Format">
+          <DataField>ForcTotalArray_7_Format</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_8_">
+          <DataField>ForcTotalArray_8_</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_8_Format">
+          <DataField>ForcTotalArray_8_Format</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_9_">
+          <DataField>ForcTotalArray_9_</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_9_Format">
+          <DataField>ForcTotalArray_9_Format</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_10_">
+          <DataField>ForcTotalArray_10_</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_10_Format">
+          <DataField>ForcTotalArray_10_Format</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_11_">
+          <DataField>ForcTotalArray_11_</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_11_Format">
+          <DataField>ForcTotalArray_11_Format</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_12_">
+          <DataField>ForcTotalArray_12_</DataField>
+        </Field>
+        <Field Name="ForcTotalArray_12_Format">
+          <DataField>ForcTotalArray_12_Format</DataField>
+        </Field>
+        <Field Name="ForcStartingDateArray_1_">
+          <DataField>ForcStartingDateArray_1_</DataField>
+        </Field>
+        <Field Name="ForcStartingDateArray_2_">
+          <DataField>ForcStartingDateArray_2_</DataField>
+        </Field>
+        <Field Name="ForcStartingDateArray_3_">
+          <DataField>ForcStartingDateArray_3_</DataField>
+        </Field>
+        <Field Name="ForcStartingDateArray_4_">
+          <DataField>ForcStartingDateArray_4_</DataField>
+        </Field>
+        <Field Name="ForcStartingDateArray_5_">
+          <DataField>ForcStartingDateArray_5_</DataField>
+        </Field>
+        <Field Name="ForcStartingDateArray_6_">
+          <DataField>ForcStartingDateArray_6_</DataField>
+        </Field>
+        <Field Name="ForcStartingDateArray_7_">
+          <DataField>ForcStartingDateArray_7_</DataField>
+        </Field>
+        <Field Name="ForcStartingDateArray_8_">
+          <DataField>ForcStartingDateArray_8_</DataField>
+        </Field>
+        <Field Name="ForcStartingDateArray_9_">
+          <DataField>ForcStartingDateArray_9_</DataField>
+        </Field>
+        <Field Name="ForcStartingDateArray_10_">
+          <DataField>ForcStartingDateArray_10_</DataField>
+        </Field>
+        <Field Name="ForcStartingDateArray_11_">
+          <DataField>ForcStartingDateArray_11_</DataField>
+        </Field>
+        <Field Name="ForcStartingDateArray_12_">
+          <DataField>ForcStartingDateArray_12_</DataField>
+        </Field>
+        <Field Name="ForecastCaption">
+          <DataField>ForecastCaption</DataField>
+        </Field>
+        <Field Name="AdjustmentCaption">
+          <DataField>AdjustmentCaption</DataField>
+        </Field>
+        <Field Name="Adj__ForecastCaption">
+          <DataField>Adj__ForecastCaption</DataField>
+        </Field>
+        <Field Name="Procurement_Unit_Variant_Code">
+          <DataField>Procurement_Unit_Variant_Code</DataField>
+        </Field>
+        <Field Name="AvgUsgCaption">
+          <DataField>AvgUsgCaption</DataField>
+        </Field>
+        <Field Name="MaxUsage">
+          <DataField>MaxUsage</DataField>
+        </Field>
+        <Field Name="MaxUsageFormat">
+          <DataField>MaxUsageFormat</DataField>
+        </Field>
+        <Field Name="MinUsage">
+          <DataField>MinUsage</DataField>
+        </Field>
+        <Field Name="MinUsageFormat">
+          <DataField>MinUsageFormat</DataField>
+        </Field>
+        <Field Name="UsageFormulaStatus">
+          <DataField>UsageFormulaStatus</DataField>
+        </Field>
+      </Fields>
+    </DataSet>
+  </DataSets>
+  <ReportSections>
+    <ReportSection>
+      <Body>
+        <ReportItems>
+          <Tablix Name="Table1">
+            <TablixBody>
+              <TablixColumns>
+                <TablixColumn>
+                  <Width>0.62008in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.12486in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.79724in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.59055in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.60097in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.59055in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.59055in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.60097in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.59055in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.59055in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.60097in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.59055in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.59055in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.62492in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.62492in</Width>
+                </TablixColumn>
+              </TablixColumns>
+              <TablixRows>
+                <TablixRow>
+                  <Height>0.16654in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Text003">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!Text003.Value)</Value>
+                                  <Style>
+                                    <FontSize>8pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>97</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                        <ColSpan>3</ColSpan>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell />
+                    <TablixCell />
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox19">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!UsageCaption.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>96</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox110">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!HistUsgBeginDate.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>95</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox111">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!HistUsgEndDate.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>94</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox112">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>93</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox113">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>92</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox114">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>91</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox115">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>90</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox116">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>89</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox117">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>88</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox118">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>87</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="FORMAT_TODAY_0_4_">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!FORMAT_TODAY_0_4_.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Right</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>86</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                        <ColSpan>2</ColSpan>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell />
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.16654in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="CompanyInfo_Name">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!CompanyInfo_Name.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>85</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                        <ColSpan>3</ColSpan>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell />
+                    <TablixCell />
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox120">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!PercentageMinCaption.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>84</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox121">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!PercentageMin.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>83</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox122">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>82</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox123">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!PercentageMaxCaption.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>81</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox124">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!PercentageMax.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>80</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox125">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>79</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox126">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>78</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox127">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>77</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox128">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>76</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox129">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>75</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="CurrReport_PAGENOCaption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!CurrReport_PAGENOCaption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Right</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>74</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="CurrReport_PAGENO">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!CurrReport_PAGENO.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>73</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.33307in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Procurement_Unit__Location_Code_Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!Procurement_Unit__Location_Code_Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>72</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Procurement_Unit__Item_No__Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!Procurement_Unit__Item_No__Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>71</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox2">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox2</rd:DefaultName>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox132">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>69</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox133">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>68</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox134">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>67</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox135">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>66</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox136">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>65</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox137">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>64</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox138">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>63</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox139">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>62</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox140">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>61</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="USERID">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!USERID.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Right</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>60</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                        <ColSpan>3</ColSpan>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell />
+                    <TablixCell />
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.16654in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox1">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>59</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox11">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style />
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>58</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox12">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>57</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcStartingDateArray_1_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcStartingDateArray_1_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>56</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcStartingDateArray_2_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcStartingDateArray_2_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>55</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcStartingDateArray_3_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcStartingDateArray_3_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>54</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcStartingDateArray_4_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcStartingDateArray_4_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>53</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcStartingDateArray_5_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcStartingDateArray_5_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>52</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcStartingDateArray_6_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcStartingDateArray_6_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>51</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcStartingDateArray_7_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcStartingDateArray_7_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>50</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcStartingDateArray_8_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcStartingDateArray_8_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>49</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcStartingDateArray_9_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcStartingDateArray_9_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>48</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcStartingDateArray_10_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcStartingDateArray_10_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>47</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcStartingDateArray_11_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcStartingDateArray_11_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>46</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcStartingDateArray_12_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcStartingDateArray_12_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>45</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.16654in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Procurement_Unit__Location_Code_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Procurement_Unit__Location_Code_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>44</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Procurement_Unit__Item_No__">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Procurement_Unit__Item_No__.Value + " " + Fields!ProcurementUnit_VariantCode.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>43</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForecastCaption">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForecastCaption.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>42</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcArray_1_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcArray_1_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcArray_1_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>41</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcArray_2_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcArray_2_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcArray_2_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>40</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcArray_3_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcArray_3_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcArray_3_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>39</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcArray_4_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcArray_4_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcArray_4_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>38</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcArray_5_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcArray_5_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcArray_5_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>37</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcArray_6_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcArray_6_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcArray_6_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>36</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcArray_7_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcArray_7_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcArray_7_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>35</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcArray_8_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcArray_8_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcArray_8_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>34</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcArray_9_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcArray_9_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcArray_9_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>33</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcArray_10_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcArray_10_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcArray_10_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>32</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcArray_11_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcArray_11_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcArray_11_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>31</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcArray_12_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcArray_12_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcArray_12_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>30</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.16654in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox13">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!AvgUsgCaption.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Right</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>29</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox14">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!AvergeUsage.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Center</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>28</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="AdjustmentCaption">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!AdjustmentCaption.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>27</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="NewAdjArray_1_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!NewAdjArray_1_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!NewAdjArray_1_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>26</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="NewAdjArray_2_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!NewAdjArray_2_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!NewAdjArray_2_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>25</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="NewAdjArray_3_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!NewAdjArray_3_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!NewAdjArray_3_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>24</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="NewAdjArray_4_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!NewAdjArray_4_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!NewAdjArray_4_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>23</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="NewAdjArray_5_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!NewAdjArray_5_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!NewAdjArray_5_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>22</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="NewAdjArray_6_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!NewAdjArray_6_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!NewAdjArray_6_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>21</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="NewAdjArray_7_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!NewAdjArray_7_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!NewAdjArray_7_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>20</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="NewAdjArray_8_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!NewAdjArray_8_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!NewAdjArray_8_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>19</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="NewAdjArray_9_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!NewAdjArray_9_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!NewAdjArray_9_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>18</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="NewAdjArray_10_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!NewAdjArray_10_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!NewAdjArray_10_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>17</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="NewAdjArray_11_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!NewAdjArray_11_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!NewAdjArray_11_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>16</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="NewAdjArray_12_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!NewAdjArray_12_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!NewAdjArray_12_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>15</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.16654in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox15">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!UsageFormulaStatus.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>14</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TextBox16">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Str(Fields!MinUsage.Value) + " - "  + Str(Fields!MaxUsage.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Center</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>13</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Adj__ForecastCaption">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Adj__ForecastCaption.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>12</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcTotalArray_1_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcTotalArray_1_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcTotalArray_1_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>11</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcTotalArray_2_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcTotalArray_2_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcTotalArray_2_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>10</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcTotalArray_3_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcTotalArray_3_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcTotalArray_3_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>9</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcTotalArray_4_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcTotalArray_4_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcTotalArray_4_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>8</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcTotalArray_5_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcTotalArray_5_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcTotalArray_5_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>7</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcTotalArray_6_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcTotalArray_6_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcTotalArray_6_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>6</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcTotalArray_7_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcTotalArray_7_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcTotalArray_7_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>5</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcTotalArray_8_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcTotalArray_8_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcTotalArray_8_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>4</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcTotalArray_9_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcTotalArray_9_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcTotalArray_9_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>3</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcTotalArray_10_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcTotalArray_10_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcTotalArray_10_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>2</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcTotalArray_11_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcTotalArray_11_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcTotalArray_11_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>1</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ForcTotalArray_12_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ForcTotalArray_12_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>=Fields!ForcTotalArray_12_Format.Value</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+              </TablixRows>
+            </TablixBody>
+            <TablixColumnHierarchy>
+              <TablixMembers>
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+              </TablixMembers>
+            </TablixColumnHierarchy>
+            <TablixRowHierarchy>
+              <TablixMembers>
+                <TablixMember>
+                  <KeepWithGroup>After</KeepWithGroup>
+                  <RepeatOnNewPage>true</RepeatOnNewPage>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+                <TablixMember>
+                  <KeepWithGroup>After</KeepWithGroup>
+                  <RepeatOnNewPage>true</RepeatOnNewPage>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+                <TablixMember>
+                  <KeepWithGroup>After</KeepWithGroup>
+                  <RepeatOnNewPage>true</RepeatOnNewPage>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+                <TablixMember>
+                  <Group Name="Table1_Details_Group">
+                    <DataElementName>Detail</DataElementName>
+                  </Group>
+                  <TablixMembers>
+                    <TablixMember />
+                    <TablixMember />
+                    <TablixMember />
+                    <TablixMember />
+                  </TablixMembers>
+                  <DataElementName>Detail_Collection</DataElementName>
+                  <DataElementOutput>Output</DataElementOutput>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+              </TablixMembers>
+            </TablixRowHierarchy>
+            <DataSetName>DataSet_Result</DataSetName>
+            <Height>3.38407cm</Height>
+            <Width>24.7111cm</Width>
+            <Style />
+          </Tablix>
+        </ReportItems>
+        <Height>3.38407cm</Height>
+        <Style />
+      </Body>
+      <Width>24.71112cm</Width>
+      <Page>
+        <PageHeight>8.5in</PageHeight>
+        <PageWidth>11in</PageWidth>
+        <InteractiveHeight>29.7cm</InteractiveHeight>
+        <InteractiveWidth>28cm</InteractiveWidth>
+        <LeftMargin>1cm</LeftMargin>
+        <RightMargin>0cm</RightMargin>
+        <TopMargin>2cm</TopMargin>
+        <BottomMargin>2.423cm</BottomMargin>
+        <Style />
+      </Page>
+    </ReportSection>
+  </ReportSections>
+  <Code>Public Function BlankZero(ByVal Value As Decimal)
+    if Value = 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankPos(ByVal Value As Decimal)
+    if Value &gt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankZeroAndPos(ByVal Value As Decimal)
+    if Value &gt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNeg(ByVal Value As Decimal)
+    if Value &lt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNegAndZero(ByVal Value As Decimal)
+    if Value &lt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+</Code>
+  <Language>=User!Language</Language>
+  <ConsumeContainerWhitespace>true</ConsumeContainerWhitespace>
+  <rd:ReportUnitType>Inch</rd:ReportUnitType>
+</Report>
+    END_OF_RDLDATA
+  }
+}
+

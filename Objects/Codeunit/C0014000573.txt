@@ -1,0 +1,1092 @@
+OBJECT Codeunit 14000573 Global Usage Redirect
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/27/19;
+    Time=12:00:00 PM;
+    Version List=UBP3.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            Update;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      InvMgtSetup@1240030001 : Record 14000551;
+      LocationInventoryPeriodTmp@1240030000 : TEMPORARY Record 14000553;
+      GblTempRecursiveRedirect@1000 : TEMPORARY Record 14000575;
+      GblTempUsageRedirect@1240020001 : TEMPORARY Record 14000575;
+
+    PROCEDURE Update@1240030003();
+    VAR
+      CustUsageRedirect@1240030004 : Record 14000580;
+      Location@1240030003 : Record 14;
+      LocationUsageRedirect@1240030000 : Record 14000581;
+      ProcUnit@1240030013 : Record 14000555;
+      ProcUnit2@1240020001 : Record 14000555;
+      UsageLedgerEntry@1240030001 : Record 14000556;
+      UsageRedirect@1240030005 : Record 14000575;
+      UsageRedirectTemp@1240030006 : TEMPORARY Record 14000582;
+      OrigUsageLedgerEntry@1240030002 : TEMPORARY Record 14000556;
+      ShipToUsageRedirect@1240020000 : Record 14097460;
+      InvMgt@1240030014 : Codeunit 14000553;
+      DisplayWindow@1240030007 : Dialog;
+      Text000@1240030008 : TextConst 'ENU=Redirecting Usage...';
+      Text001@1240030009 : TextConst 'ENU=Entries to Redirect';
+      Text002@1240030010 : TextConst 'ENU=Entries Redirected';
+      ToRedirect@1240030011 : Integer;
+      Redirected@1240030012 : Integer;
+      Text003@1240030015 : TextConst 'ENU=Global Usage Redirect';
+      LogEntryNo@1240030016 : Integer;
+      LocLocationCode@1240030017 : Code[10];
+    BEGIN
+      InvMgt.CreateLogEntry('',Text003,LogEntryNo);
+
+      CheckRedirectSequence;
+      COMMIT;
+
+
+      IF GUIALLOWED THEN BEGIN
+        DisplayWindow.OPEN(
+          '#1############################\' +
+          PADSTR(Text001,30) + '#2##################\' +
+          PADSTR(Text002,30) + '#3##################');
+        DisplayWindow.UPDATE(1,Text000);
+        DisplayWindow.UPDATE(2,ToRedirect);
+        DisplayWindow.UPDATE(3,Redirected);
+      END;
+
+      InvMgtSetup.GET;
+
+      IF InvMgtSetup."Reforecast Changed Units" = InvMgtSetup."Reforecast Changed Units"::"All Items" THEN BEGIN
+        LocationInventoryPeriodTmp.RESET;
+        LocationInventoryPeriodTmp.SETCURRENTKEY("Location Code");
+        LocationInventoryPeriodTmp.DELETEALL;
+        Location.RESET;
+        IF Location.FINDSET THEN
+          REPEAT
+            IF Location.Code <> LocationInventoryPeriodTmp."Location Code" THEN BEGIN
+              LocationInventoryPeriodTmp.INIT;
+              LocationInventoryPeriodTmp."Location Code" := Location.Code;
+              LocationInventoryPeriodTmp."Work Date" := WORKDATE;
+              LocationInventoryPeriodTmp.INSERT;
+            END;
+          UNTIL Location.NEXT = 0;
+      END;
+
+      SummarizeVariants;
+
+      // Check Recursion
+      CheckAllRedirects;
+
+      UsageRedirectTemp.RESET;
+      UsageRedirectTemp.DELETEALL;
+
+      UsageLedgerEntry.RESET;
+      UsageLedgerEntry.SETCURRENTKEY(
+        "Original Location Code","Original Item No.","Original Variant Code","Entry No.");
+
+      // PUC Delete
+      UsageRedirect.RESET;
+      UsageRedirect.SETCURRENTKEY(
+        "Location Code","Change Pending","Delete Pending");
+      UsageRedirect.SETRANGE("Delete Pending",TRUE);
+      IF UsageRedirect.FINDSET THEN
+        REPEAT
+          UsageLedgerEntry.SETRANGE("Original Location Code",UsageRedirect."Location Code");
+          UsageLedgerEntry.SETRANGE("Original Item No.",UsageRedirect."Item No.");
+          IF UsageRedirect."Variant Code" <> '' THEN
+            UsageLedgerEntry.SETRANGE("Original Variant Code",UsageRedirect."Variant Code")
+          ELSE
+            UsageLedgerEntry.SETRANGE("Original Variant Code");
+          IF UsageRedirect."Customer No." <> '' THEN
+            UsageLedgerEntry.SETRANGE("Original Source No.",UsageRedirect."Customer No.")
+          ELSE
+            UsageLedgerEntry.SETRANGE("Original Source No.");
+          UsageLedgerEntry.SETRANGE("Cloned Usage",FALSE);
+          UsageLedgerEntry.SETFILTER("Usage Date", '%1..', InvMgtSetup."Usage Start Date");
+          IF UsageLedgerEntry.FINDSET THEN
+            REPEAT
+              IF NOT UsageRedirectTemp.GET(UsageLedgerEntry."Entry No.") THEN BEGIN
+              SetProcUnitChanged(UsageLedgerEntry);
+                UsageRedirectTemp."Entry No." := UsageLedgerEntry."Entry No.";
+                UsageRedirectTemp.INSERT;
+                ToRedirect := ToRedirect + 1;
+              END;
+              IF GUIALLOWED THEN
+                DisplayWindow.UPDATE(2,ToRedirect);
+            UNTIL UsageLedgerEntry.NEXT = 0;
+        UNTIL UsageRedirect.NEXT = 0;
+      UsageRedirect.DELETEALL;
+
+      UsageLedgerEntry.RESET;
+      UsageLedgerEntry.SETCURRENTKEY(
+        "Original Location Code","Original Item No.","Original Variant Code","Entry No.");
+
+      // PUC Change
+      UsageRedirect.RESET;
+      UsageRedirect.SETCURRENTKEY(
+        "Location Code","Change Pending","Delete Pending");
+      UsageRedirect.SETRANGE("Change Pending",TRUE);
+      UsageRedirect.SETRANGE("Error Found", FALSE);
+      IF UsageRedirect.FINDSET THEN
+        REPEAT
+          UsageLedgerEntry.SETRANGE("Original Location Code",UsageRedirect."Location Code");
+          UsageLedgerEntry.SETRANGE("Original Item No.",UsageRedirect."Item No.");
+          IF UsageRedirect."Variant Code" <> '' THEN
+            UsageLedgerEntry.SETRANGE("Original Variant Code",UsageRedirect."Variant Code")
+          ELSE
+            UsageLedgerEntry.SETRANGE("Original Variant Code");
+          IF UsageRedirect."Customer No." <> '' THEN
+            UsageLedgerEntry.SETRANGE("Original Source No.",UsageRedirect."Customer No.")
+          ELSE
+            UsageLedgerEntry.SETRANGE("Original Source No.");
+          UsageLedgerEntry.SETRANGE("Cloned Usage",FALSE);
+          UsageLedgerEntry.SETFILTER("Usage Date", '%1..', InvMgtSetup."Usage Start Date");
+          IF UsageLedgerEntry.FINDSET THEN
+            REPEAT
+              IF NOT UsageRedirectTemp.GET(UsageLedgerEntry."Entry No.") THEN BEGIN
+              SetProcUnitChanged(UsageLedgerEntry);
+              UsageRedirectTemp."Entry No." := UsageLedgerEntry."Entry No.";
+                UsageRedirectTemp.INSERT;
+                ToRedirect := ToRedirect + 1;
+              END;
+              IF GUIALLOWED THEN
+                DisplayWindow.UPDATE(2,ToRedirect);
+            UNTIL UsageLedgerEntry.NEXT = 0;
+        UNTIL UsageRedirect.NEXT = 0;
+      UsageRedirect.MODIFYALL("Change Pending",FALSE);
+
+      UsageLedgerEntry.RESET;
+      UsageLedgerEntry.SETCURRENTKEY(
+        "Original Location Code","Original Item No.","Original Variant Code","Entry No.");
+
+      // Location Delete
+      LocationUsageRedirect.RESET;
+      LocationUsageRedirect.SETRANGE("Delete Pending",TRUE);
+      IF LocationUsageRedirect.FINDSET THEN
+        REPEAT
+          UsageLedgerEntry.SETRANGE("Original Location Code",LocationUsageRedirect."Location Code");
+          UsageLedgerEntry.SETRANGE("Cloned Usage",FALSE);
+          UsageLedgerEntry.SETFILTER("Usage Date", '%1..', InvMgtSetup."Usage Start Date");
+          IF UsageLedgerEntry.FINDSET THEN
+            REPEAT
+              IF NOT UsageRedirectTemp.GET(UsageLedgerEntry."Entry No.") THEN BEGIN
+              SetProcUnitChanged(UsageLedgerEntry);
+              UsageRedirectTemp."Entry No." := UsageLedgerEntry."Entry No.";
+                UsageRedirectTemp.INSERT;
+                ToRedirect := ToRedirect + 1;
+              END;
+              IF GUIALLOWED THEN
+                DisplayWindow.UPDATE(2,ToRedirect);
+            UNTIL UsageLedgerEntry.NEXT = 0;
+        UNTIL LocationUsageRedirect.NEXT = 0;
+      LocationUsageRedirect.DELETEALL;
+
+      UsageLedgerEntry.RESET;
+      UsageLedgerEntry.SETCURRENTKEY(
+        "Original Location Code","Original Item No.","Original Variant Code","Entry No.");
+
+      // Location Change
+      LocationUsageRedirect.RESET;
+      LocationUsageRedirect.SETRANGE("Change Pending",TRUE);
+      IF LocationUsageRedirect.FINDSET THEN
+        REPEAT
+          UsageLedgerEntry.SETRANGE("Original Location Code",LocationUsageRedirect."Location Code");
+          UsageLedgerEntry.SETRANGE("Cloned Usage",FALSE);
+          UsageLedgerEntry.SETFILTER("Usage Date", '%1..', InvMgtSetup."Usage Start Date");
+          IF UsageLedgerEntry.FINDSET THEN
+            REPEAT
+              IF NOT UsageRedirectTemp.GET(UsageLedgerEntry."Entry No.") THEN BEGIN
+              SetProcUnitChanged(UsageLedgerEntry);
+              UsageRedirectTemp."Entry No." := UsageLedgerEntry."Entry No.";
+                UsageRedirectTemp.INSERT;
+                ToRedirect := ToRedirect + 1;
+              END;
+              IF GUIALLOWED THEN
+                DisplayWindow.UPDATE(2,ToRedirect);
+            UNTIL UsageLedgerEntry.NEXT = 0;
+        UNTIL LocationUsageRedirect.NEXT = 0;
+      LocationUsageRedirect.MODIFYALL("Change Pending",FALSE);
+
+      UsageLedgerEntry.RESET;
+      UsageLedgerEntry.SETCURRENTKEY("Original Source No.");
+
+      // Customer Delete
+      CustUsageRedirect.RESET;
+      CustUsageRedirect.SETRANGE("Delete Pending",TRUE);
+      IF CustUsageRedirect.FINDSET THEN
+        REPEAT
+          UsageLedgerEntry.SETRANGE("Original Source No.",CustUsageRedirect."Customer No.");
+          UsageLedgerEntry.SETRANGE("Cloned Usage",FALSE);
+          UsageLedgerEntry.SETFILTER("Usage Date", '%1..', InvMgtSetup."Usage Start Date");
+          IF UsageLedgerEntry.FINDSET THEN
+            REPEAT
+              IF NOT UsageRedirectTemp.GET(UsageLedgerEntry."Entry No.") THEN BEGIN
+              SetProcUnitChanged(UsageLedgerEntry);
+              UsageRedirectTemp."Entry No." := UsageLedgerEntry."Entry No.";
+                UsageRedirectTemp.INSERT;
+                ToRedirect := ToRedirect + 1;
+              END;
+              IF GUIALLOWED THEN
+                DisplayWindow.UPDATE(2,ToRedirect);
+            UNTIL UsageLedgerEntry.NEXT = 0;
+        UNTIL CustUsageRedirect.NEXT = 0;
+      CustUsageRedirect.DELETEALL;
+
+      // Customer Change
+      CustUsageRedirect.RESET;
+      CustUsageRedirect.SETRANGE("Change Pending",TRUE);
+      IF CustUsageRedirect.FINDSET THEN
+        REPEAT
+          UsageLedgerEntry.SETRANGE("Original Source No.",CustUsageRedirect."Customer No.");
+          UsageLedgerEntry.SETRANGE("Cloned Usage",FALSE);
+          UsageLedgerEntry.SETFILTER("Usage Date", '%1..', InvMgtSetup."Usage Start Date");
+          IF UsageLedgerEntry.FINDSET THEN
+            REPEAT
+              IF NOT UsageRedirectTemp.GET(UsageLedgerEntry."Entry No.") THEN BEGIN
+              SetProcUnitChanged(UsageLedgerEntry);
+              UsageRedirectTemp."Entry No." := UsageLedgerEntry."Entry No.";
+                UsageRedirectTemp.INSERT;
+                ToRedirect := ToRedirect + 1;
+              END;
+              IF GUIALLOWED THEN
+                DisplayWindow.UPDATE(2,ToRedirect);
+            UNTIL UsageLedgerEntry.NEXT = 0;
+        UNTIL CustUsageRedirect.NEXT = 0;
+      CustUsageRedirect.MODIFYALL("Change Pending",FALSE);
+
+      // Ship-to Delete
+      ShipToUsageRedirect.RESET;
+      ShipToUsageRedirect.SETRANGE("Delete Pending",TRUE);
+      IF ShipToUsageRedirect.FINDSET THEN
+        REPEAT
+          UsageLedgerEntry.SETRANGE("Original Source No.",ShipToUsageRedirect."Customer No.");
+          UsageLedgerEntry.SETRANGE("Cloned Usage",FALSE);
+          UsageLedgerEntry.SETFILTER("Usage Date", '%1..', InvMgtSetup."Usage Start Date");
+          IF UsageLedgerEntry.FINDSET THEN
+            REPEAT
+              IF NOT UsageRedirectTemp.GET(UsageLedgerEntry."Entry No.") THEN BEGIN
+              SetProcUnitChanged(UsageLedgerEntry);
+              UsageRedirectTemp."Entry No." := UsageLedgerEntry."Entry No.";
+                UsageRedirectTemp.INSERT;
+                ToRedirect := ToRedirect + 1;
+              END;
+              IF GUIALLOWED THEN
+                DisplayWindow.UPDATE(2,ToRedirect);
+            UNTIL UsageLedgerEntry.NEXT = 0;
+        UNTIL ShipToUsageRedirect.NEXT = 0;
+      ShipToUsageRedirect.DELETEALL;
+
+      // Ship-to Change
+      ShipToUsageRedirect.RESET;
+      ShipToUsageRedirect.SETRANGE("Change Pending",TRUE);
+      IF ShipToUsageRedirect.FINDSET THEN
+        REPEAT
+          UsageLedgerEntry.SETRANGE("Original Source No.",ShipToUsageRedirect."Customer No.");
+          UsageLedgerEntry.SETRANGE("Cloned Usage",FALSE);
+          UsageLedgerEntry.SETFILTER("Usage Date", '%1..', InvMgtSetup."Usage Start Date");
+          IF UsageLedgerEntry.FINDSET THEN
+            REPEAT
+              IF NOT UsageRedirectTemp.GET(UsageLedgerEntry."Entry No.") THEN BEGIN
+              SetProcUnitChanged(UsageLedgerEntry);
+              UsageRedirectTemp."Entry No." := UsageLedgerEntry."Entry No.";
+                UsageRedirectTemp.INSERT;
+                ToRedirect := ToRedirect + 1;
+              END;
+              IF GUIALLOWED THEN
+                DisplayWindow.UPDATE(2,ToRedirect);
+            UNTIL UsageLedgerEntry.NEXT = 0;
+        UNTIL ShipToUsageRedirect.NEXT = 0;
+      ShipToUsageRedirect.MODIFYALL("Change Pending",FALSE);
+
+      IF UsageRedirectTemp.FINDSET THEN
+        REPEAT
+          UsageLedgerEntry.GET(UsageRedirectTemp."Entry No.");
+          OrigUsageLedgerEntry.COPY(UsageLedgerEntry);
+          UsageLedgerEntry."Location Code" := UsageLedgerEntry."Original Location Code";
+          UsageLedgerEntry."Item No." := UsageLedgerEntry."Original Item No.";
+          UsageLedgerEntry."Variant Code" := UsageLedgerEntry."Original Variant Code";
+          UsageLedgerEntry."Source No." := UsageLedgerEntry."Original Source No.";
+          ProcessRedirectSequence(UsageLedgerEntry);
+          CheckProcUnit(UsageLedgerEntry);
+          SetProcUnitChanged(UsageLedgerEntry);
+          CheckForecastCustomer(UsageLedgerEntry);
+          UsageLedgerEntry.MODIFY(FALSE);
+          ProcUnit.GET(
+            UsageLedgerEntry."Location Code",
+            UsageLedgerEntry."Item No.",
+            UsageLedgerEntry."Variant Code");
+          IF (ProcUnit."First Stocked Date" = 0D) OR
+             (ProcUnit."First Stocked Date" > UsageLedgerEntry."Usage Date") THEN BEGIN
+            ProcUnit."First Stocked Date" := UsageLedgerEntry."Usage Date";
+            ProcUnit.MODIFY(FALSE);
+          END;
+          Redirected := Redirected + 1;
+          IF GUIALLOWED THEN
+            DisplayWindow.UPDATE(3,Redirected);
+        UNTIL UsageRedirectTemp.NEXT = 0;
+
+      ProcUnit.RESET;
+      ProcUnit.SETRANGE("Reforecast Item",TRUE);
+      IF ProcUnit.FINDSET THEN
+        REPEAT
+          LocLocationCode := '';
+          IF (ProcUnit."Replenishment Source Type" =
+            ProcUnit."Replenishment Source Type"::Location) AND
+             (ProcUnit."Replenishment Source Code" <> '')
+          THEN BEGIN
+            LocLocationCode := ProcUnit."Replenishment Source Code";
+            REPEAT
+              IF ProcUnit2.GET(
+                LocLocationCode,ProcUnit."Item No.",ProcUnit."Variant Code")
+              THEN BEGIN
+                ProcUnit2."Change Reforecast Required" := TRUE;
+                ProcUnit2."First Stocked Date" := 0D;
+                ProcUnit2.MODIFY(FALSE);
+                IF (ProcUnit2."Replenishment Source Type" =
+                  ProcUnit2."Replenishment Source Type"::Location) AND
+                   (ProcUnit2."Replenishment Source Code" <> '')
+                THEN
+                  LocLocationCode := ProcUnit2."Replenishment Source Code"
+                ELSE
+                  LocLocationCode := '';
+              END ELSE
+                LocLocationCode := '';
+            UNTIL LocLocationCode = '';
+          END;
+        UNTIL ProcUnit.NEXT = 0;
+
+      ProcUnit.MODIFYALL("Reforecast Item",FALSE);
+
+      COMMIT;
+      IF GUIALLOWED THEN
+        DisplayWindow.CLOSE;
+
+      InvMgt.CloseLogEntry(LogEntryNo,'');
+    END;
+
+    PROCEDURE RedirectProcUnit@1240030002(VAR CurrUsageLedgerEntry@1240030000 : Record 14000556);
+    VAR
+      UsageRedirect@1240030001 : Record 14000575;
+      Level@1000 : Integer;
+      TempRecursiveRedirect@1001 : TEMPORARY Record 14000575;
+      CustNo@1002 : Code[20];
+      DepthError@1003 : Boolean;
+    BEGIN
+      TempRecursiveRedirect.RESET;
+      TempRecursiveRedirect.DELETEALL;
+      UsageRedirect.SETRANGE("Item No.",CurrUsageLedgerEntry."Original Item No.");
+      UsageRedirect.SETRANGE("Location Code",CurrUsageLedgerEntry."Original Location Code");
+      UsageRedirect.SETRANGE("Variant Code",CurrUsageLedgerEntry."Original Variant Code");
+      UsageRedirect.SETRANGE("Customer No.",CurrUsageLedgerEntry."Original Source No.");
+      UsageRedirect.SETRANGE("Delete Pending",FALSE);
+      UsageRedirect.SETRANGE("Change Pending",FALSE);
+      IF UsageRedirect.ISEMPTY THEN
+        UsageRedirect.SETFILTER("Customer No.",'%1','');
+      IF UsageRedirect.FINDFIRST THEN BEGIN
+        Level := 1;
+        IF (UsageRedirect."Customer No." <> '') AND (UsageRedirect."Redirect Customer No." <> '') THEN
+          CustNo := UsageRedirect."Redirect Customer No."
+        ELSE
+          CustNo := CurrUsageLedgerEntry."Original Source No.";
+        // track initial redirect for looping
+        InsertTempRecursiveRecord(TempRecursiveRedirect, CurrUsageLedgerEntry."Location Code", CurrUsageLedgerEntry."Item No.", CurrUsageLedgerEntry."Variant Code", CurrUsageLedgerEntry."Source No.",
+            UsageRedirect."Redirect Location Code", UsageRedirect."Redirect Item No.", UsageRedirect."Redirect Variant Code", CustNo, Level, UsageRedirect."Change Pending", UsageRedirect."Delete Pending");
+        // initial redirect
+        CurrUsageLedgerEntry."Location Code" := UsageRedirect."Redirect Location Code";
+        CurrUsageLedgerEntry."Item No." := UsageRedirect."Redirect Item No.";
+        CurrUsageLedgerEntry."Variant Code" := UsageRedirect."Redirect Variant Code";
+        CurrUsageLedgerEntry."Source No." := CustNo;
+        // check/set multiple redirects
+        RedirectProcUnitRecursive(CurrUsageLedgerEntry, TempRecursiveRedirect, CurrUsageLedgerEntry."Location Code", CurrUsageLedgerEntry."Item No.", CurrUsageLedgerEntry."Variant Code", CurrUsageLedgerEntry."Source No.",Level, FALSE);
+      END;
+    END;
+
+    LOCAL PROCEDURE RedirectProcUnitRecursive@2(VAR CurrUsageLedgerEntry@1240030000 : Record 14000556;VAR TempRecursiveRedirect@1006 : TEMPORARY Record 14000575;LocationCode@1001 : Code[10];ItemNo@1000 : Code[50];VariantCode@1003 : Code[10];CustNo@1002 : Code[20];VAR Level@1004 : Integer;CheckOnly@1240020000 : Boolean) : Boolean;
+    VAR
+      UsageRedirect@1240030001 : Record 14000575;
+      locMaxErrLvl@1005 : TextConst 'ENU=Maximum Recursive Level Exceeded!';
+      NewCustNo@1007 : Code[20];
+    BEGIN
+      IF Level > 10 THEN BEGIN
+        IF GUIALLOWED THEN
+        ERROR(locMaxErrLvl);
+        TempRecursiveRedirect.MODIFYALL("Error Found", TRUE);
+        EXIT(FALSE);
+      END;
+      UsageRedirect.SETRANGE("Item No.", ItemNo);
+      UsageRedirect.SETRANGE("Location Code", LocationCode);
+      UsageRedirect.SETRANGE("Variant Code", VariantCode);
+      UsageRedirect.SETRANGE("Customer No.", CustNo);
+      IF NOT CheckOnly THEN
+      UsageRedirect.SETRANGE("Delete Pending",FALSE);
+      IF UsageRedirect.ISEMPTY THEN
+        UsageRedirect.SETFILTER("Customer No.",'%1','');
+      IF UsageRedirect.FINDFIRST THEN BEGIN
+        Level := Level + 1;
+        IF (UsageRedirect."Customer No." <> '') AND (UsageRedirect."Redirect Customer No." <> '') THEN
+          NewCustNo := UsageRedirect."Redirect Customer No."
+        ELSE
+          NewCustNo := CurrUsageLedgerEntry."Original Source No.";
+        IF NOT
+          InsertTempRecursiveRecord(TempRecursiveRedirect, UsageRedirect."Location Code", UsageRedirect."Item No.", UsageRedirect."Variant Code", CustNo,
+            UsageRedirect."Redirect Location Code", UsageRedirect."Redirect Item No.", UsageRedirect."Redirect Variant Code", NewCustNo, Level, UsageRedirect."Change Pending", UsageRedirect."Delete Pending")
+            THEN BEGIN
+          IF RedirectProcUnitRecursive(CurrUsageLedgerEntry, TempRecursiveRedirect, UsageRedirect."Redirect Location Code", UsageRedirect."Redirect Item No.", UsageRedirect."Redirect Variant Code", NewCustNo, Level, CheckOnly) THEN
+            EXIT(TRUE)
+          ELSE
+            EXIT(FALSE);
+        END ELSE
+          EXIT(FALSE);  // depth error
+          END ELSE BEGIN
+        // complete - no further redirects for this branch
+        CurrUsageLedgerEntry."Location Code" := LocationCode;
+        CurrUsageLedgerEntry."Item No." := ItemNo;
+        CurrUsageLedgerEntry."Variant Code" := VariantCode;
+        CurrUsageLedgerEntry."Source No." := CustNo;
+        EXIT(TRUE);
+        END;
+    END;
+
+    PROCEDURE RedirectLocation@1240030000(VAR LocUsageLedgerEntry@1240030000 : Record 14000556);
+    VAR
+      UsageLedgerEntry@1240030001 : Record 14000556;
+      LocationUsageRedirect@1240030002 : Record 14000581;
+    BEGIN
+      LocationUsageRedirect.SETRANGE("Location Code",LocUsageLedgerEntry."Original Location Code");
+      LocationUsageRedirect.SETRANGE("Change Pending",FALSE);
+      LocationUsageRedirect.SETRANGE("Delete Pending",FALSE);
+      IF LocationUsageRedirect.FINDFIRST THEN
+        LocUsageLedgerEntry."Location Code" := LocationUsageRedirect."To Location Code";
+    END;
+
+    PROCEDURE RedirectCustomer@1240030001(VAR LocUsageLedgerEntry@1240030000 : Record 14000556);
+    VAR
+      CustUsageRedirect@1240030001 : Record 14000580;
+      Item@1240030002 : Record 27;
+    BEGIN
+      CustUsageRedirect.RESET;
+      CustUsageRedirect.SETRANGE("Customer No.",LocUsageLedgerEntry."Original Source No.");
+      CustUsageRedirect.SETRANGE("Change Pending",FALSE);
+      CustUsageRedirect.SETRANGE("Delete Pending",FALSE);
+      IF CustUsageRedirect.FINDSET THEN
+        REPEAT
+          IF CustUsageRedirect."Item Category" = '' THEN BEGIN
+            IF CustUsageRedirect."To Location Code" <> '' THEN
+              LocUsageLedgerEntry."Location Code" := CustUsageRedirect."To Location Code";
+            IF CustUsageRedirect."To Customer Code" <> '' THEN
+              LocUsageLedgerEntry."Source No." := CustUsageRedirect."To Customer Code";
+          END ELSE BEGIN
+            Item.GET(LocUsageLedgerEntry."Original Item No.");
+            IF Item."Item Category Code" = CustUsageRedirect."Item Category" THEN BEGIN
+              IF CustUsageRedirect."To Location Code" <> '' THEN
+                LocUsageLedgerEntry."Location Code" := CustUsageRedirect."To Location Code";
+              IF CustUsageRedirect."To Customer Code" <> '' THEN
+                LocUsageLedgerEntry."Source No." := CustUsageRedirect."To Customer Code";
+            END;
+          END;
+        UNTIL CustUsageRedirect.NEXT = 0;
+      EXIT;
+    END;
+
+    PROCEDURE RedirectShipTo@1240020000(VAR LocUsageLedgerEntry@1240020002 : Record 14000556);
+    VAR
+      Item@1240020001 : Record 27;
+      ShipToUsageRedirect@1240020000 : Record 14097460;
+    BEGIN
+      ShipToUsageRedirect.RESET;
+      ShipToUsageRedirect.SETRANGE("Customer No.",LocUsageLedgerEntry."Original Source No.");
+      ShipToUsageRedirect.SETRANGE("Ship-to Code",LocUsageLedgerEntry."Original Ship-To code");
+      ShipToUsageRedirect.SETRANGE("Change Pending",FALSE);
+      ShipToUsageRedirect.SETRANGE("Delete Pending",FALSE);
+      IF ShipToUsageRedirect.FINDSET THEN
+        REPEAT
+          IF ShipToUsageRedirect."Item Category" = '' THEN BEGIN
+            IF ShipToUsageRedirect."To Location Code" <> '' THEN
+              LocUsageLedgerEntry."Location Code" := ShipToUsageRedirect."To Location Code";
+            IF ShipToUsageRedirect."To Ship-to Code" <> '' THEN
+              LocUsageLedgerEntry."Ship-To Code" := ShipToUsageRedirect."To Ship-to Code";
+          END ELSE BEGIN
+            Item.GET(LocUsageLedgerEntry."Original Item No.");
+            IF Item."Item Category Code" = ShipToUsageRedirect."Item Category" THEN BEGIN
+              IF ShipToUsageRedirect."To Location Code" <> '' THEN
+                LocUsageLedgerEntry."Location Code" := ShipToUsageRedirect."To Location Code";
+              IF ShipToUsageRedirect."To Ship-to Code" <> '' THEN
+                LocUsageLedgerEntry."Ship-To Code" := ShipToUsageRedirect."To Ship-to Code";
+            END;
+          END;
+        UNTIL ShipToUsageRedirect.NEXT = 0;
+      EXIT;
+    END;
+
+    PROCEDURE CheckProcUnit@1240030005(CurrUsageLedgerEntry@1240030000 : Record 14000556);
+    VAR
+      LocProcUnit@1240030001 : Record 14000555;
+      UsageRedirect@1240030002 : Record 14000575;
+      PreferredExists@1240030003 : Boolean;
+      CreateProcUnit@1240020000 : Codeunit 14000575;
+      ProcUnit@1240020001 : Record 14000555;
+    BEGIN
+      IF InvMgtSetup."Summarize Variant Detail" <> InvMgtSetup."Summarize Variant Detail"::Never THEN BEGIN
+        IF LocProcUnit.GET(
+          CurrUsageLedgerEntry."Original Location Code",
+          CurrUsageLedgerEntry."Original Item No.",'') THEN BEGIN
+          IF LocProcUnit."Summarize Variant Detail" THEN BEGIN
+            IF NOT ProcUnit.GET(CurrUsageLedgerEntry."Location Code",CurrUsageLedgerEntry."Item No.",'') THEN BEGIN
+              ProcUnit.INIT;
+              ProcUnit."Location Code" := CurrUsageLedgerEntry."Location Code";
+              ProcUnit."Item No." := CurrUsageLedgerEntry."Item No.";
+              ProcUnit."Variant Code" := '';
+              ProcUnit."Summarize Variant Detail" := TRUE;
+              ProcUnit."Change Reforecast Required" := TRUE;
+              ProcUnit.SetAutoInsert;
+              ProcUnit.INSERT(TRUE);
+              CreateProcUnit.CheckReplPath(ProcUnit);
+            END ELSE BEGIN
+              ProcUnit."Summarize Variant Detail" := TRUE;
+              ProcUnit."Change Reforecast Required" := TRUE;
+              ProcUnit.MODIFY;
+            END;
+            LocProcUnit.SETRANGE("Location Code",CurrUsageLedgerEntry."Original Location Code");
+            LocProcUnit.SETRANGE("Item No.",CurrUsageLedgerEntry."Original Item No.");
+            LocProcUnit.SETFILTER("Variant Code",'<>%1','');
+            LocProcUnit.SETRANGE("Preferred Variant",TRUE);
+            IF NOT LocProcUnit.ISEMPTY THEN
+              PreferredExists := TRUE
+            ELSE
+              PreferredExists := FALSE;
+            LocProcUnit.SETRANGE("Preferred Variant");
+            IF LocProcUnit.FINDSET THEN
+              REPEAT
+                ProcUnit.COPY(LocProcUnit);
+                ProcUnit."Location Code" := CurrUsageLedgerEntry."Location Code";
+                IF PreferredExists THEN
+                  ProcUnit."Preferred Variant" := FALSE;
+                IF ProcUnit.INSERT(TRUE) THEN
+                  CreateProcUnit.CheckReplPath(ProcUnit);
+                UsageRedirect."Location Code" := ProcUnit."Location Code";
+                UsageRedirect."Item No." := ProcUnit."Item No.";
+                UsageRedirect."Variant Code" := ProcUnit."Variant Code";
+                UsageRedirect."Redirect Location Code" := ProcUnit."Location Code";
+                UsageRedirect."Redirect Item No." := ProcUnit."Item No.";
+                UsageRedirect."Redirect Variant Code" := '';
+                IF NOT UsageRedirect.INSERT(FALSE) THEN;
+              UNTIL LocProcUnit.NEXT = 0;
+          END;
+        END;
+      END;
+
+      IF NOT ProcUnit.GET(
+          CurrUsageLedgerEntry."Location Code",
+          CurrUsageLedgerEntry."Item No.",
+          CurrUsageLedgerEntry."Variant Code") THEN BEGIN
+        ProcUnit.INIT;
+        ProcUnit."Location Code" := CurrUsageLedgerEntry."Location Code";
+        ProcUnit."Item No." := CurrUsageLedgerEntry."Item No.";
+        ProcUnit."Variant Code" := CurrUsageLedgerEntry."Variant Code";
+        ProcUnit.SetAutoInsert;
+        ProcUnit.INSERT(TRUE);
+      END;
+    END;
+
+    PROCEDURE SaveBeginDate@1240030010(LocUsageLedgerEntry@1240030000 : Record 14000556);
+    BEGIN
+      LocationInventoryPeriodTmp.SETRANGE("Location Code",LocUsageLedgerEntry."Location Code");
+      LocationInventoryPeriodTmp.FINDFIRST;
+      IF LocUsageLedgerEntry."Usage Date" < LocationInventoryPeriodTmp."Work Date" THEN BEGIN
+        LocationInventoryPeriodTmp."Work Date" := LocUsageLedgerEntry."Usage Date";
+        LocationInventoryPeriodTmp.MODIFY;
+      END;
+
+      IF LocUsageLedgerEntry."Location Code" <> LocUsageLedgerEntry."Original Location Code" THEN BEGIN
+        LocationInventoryPeriodTmp.SETRANGE("Location Code",LocUsageLedgerEntry."Original Location Code");
+        LocationInventoryPeriodTmp.FINDFIRST;
+        IF LocUsageLedgerEntry."Usage Date" < LocationInventoryPeriodTmp."Work Date" THEN BEGIN
+          LocationInventoryPeriodTmp."Work Date" := LocUsageLedgerEntry."Usage Date";
+          LocationInventoryPeriodTmp.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE SetProcUnitChanged@1240030015(LocUsageLedgerEntry@1240030000 : Record 14000556);
+    VAR
+      ProcUnit@1240020000 : Record 14000555;
+    BEGIN
+      IF InvMgtSetup."Usage Start Date" = 0D THEN
+        InvMgtSetup.GET;
+      IF (LocUsageLedgerEntry."Location Code" <> LocUsageLedgerEntry."Original Location Code") OR
+         (LocUsageLedgerEntry."Item No." <> LocUsageLedgerEntry."Original Item No.") OR
+         (LocUsageLedgerEntry."Variant Code" <> LocUsageLedgerEntry."Original Variant Code") THEN BEGIN
+        IF ProcUnit.GET(
+          LocUsageLedgerEntry."Location Code",
+          LocUsageLedgerEntry."Item No.",
+          LocUsageLedgerEntry."Variant Code") THEN BEGIN
+            ProcUnit."Change Reforecast Required" := TRUE;
+            IF InvMgtSetup."Roll Up Via Repl. Path" THEN
+              ProcUnit."Reforecast Item" := TRUE;
+            ProcUnit.MODIFY;
+        END;
+        IF ProcUnit.GET(
+          LocUsageLedgerEntry."Original Location Code",
+          LocUsageLedgerEntry."Original Item No.",
+          LocUsageLedgerEntry."Original Variant Code") THEN BEGIN
+            ProcUnit."Change Reforecast Required" := TRUE;
+            IF InvMgtSetup."Roll Up Via Repl. Path" THEN
+              ProcUnit."Reforecast Item" := TRUE;
+            ProcUnit.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE SummarizeVariants@1240030004();
+    VAR
+      ProcUnit@1240030000 : Record 14000555;
+      ProcUnit2@1240030001 : Record 14000555;
+      ProcUnit3@1240030003 : Record 14000555;
+      UsageRedirect@1240030002 : Record 14000575;
+    BEGIN
+
+      ProcUnit.RESET;
+      ProcUnit.SETCURRENTKEY("Summarize Pending");
+      ProcUnit.SETRANGE("Summarize Pending",TRUE);
+      IF ProcUnit.FINDSET THEN BEGIN
+        REPEAT
+          IF ProcUnit."Summarize Variant Detail" THEN BEGIN
+            ProcUnit2.SETRANGE("Location Code",ProcUnit."Location Code");
+            ProcUnit2.SETRANGE("Item No.",ProcUnit."Item No.");
+            ProcUnit2.SETFILTER("Variant Code",'<>%1','');
+            IF ProcUnit2.FINDSET THEN BEGIN
+              UsageRedirect.SETCURRENTKEY("Item No.","Location Code","Variant Code","Customer No.");
+              REPEAT
+                UsageRedirect.SETRANGE("Item No.", ProcUnit2."Item No.");
+                UsageRedirect.SETRANGE("Location Code", ProcUnit2."Location Code");
+                UsageRedirect.SETRANGE("Variant Code", ProcUnit2."Variant Code");
+                IF UsageRedirect.ISEMPTY THEN BEGIN
+                UsageRedirect.INIT;
+                UsageRedirect."Item No." := ProcUnit2."Item No.";
+                UsageRedirect."Location Code" := ProcUnit2."Location Code";
+                UsageRedirect."Variant Code" := ProcUnit2."Variant Code";
+                UsageRedirect."Redirect Location Code" := ProcUnit."Location Code";
+                UsageRedirect."Redirect Item No." := ProcUnit."Item No.";
+                UsageRedirect."Redirect Variant Code" := '';
+                UsageRedirect."Change Pending" := TRUE;
+                  UsageRedirect.INSERT(TRUE);
+                  ProcUnit2."Exclude From Replenishment" := TRUE;
+                  ProcUnit2.MODIFY(FALSE);
+                SetReforecast(UsageRedirect);
+                END;
+              UNTIL ProcUnit2.NEXT = 0;
+            END;
+          END ELSE BEGIN
+            UsageRedirect.SETCURRENTKEY("Redirect Location Code","Redirect Item No.","Redirect Variant Code");
+            UsageRedirect.SETRANGE("Redirect Location Code",ProcUnit."Location Code");
+            UsageRedirect.SETRANGE("Redirect Item No.",ProcUnit."Item No.");
+            UsageRedirect.SETFILTER("Redirect Variant Code",'=%1','');
+            IF UsageRedirect.FINDSET THEN
+              REPEAT
+                UsageRedirect.VALIDATE("Delete Redirect",TRUE);
+                UsageRedirect.MODIFY;
+                SetReforecast(UsageRedirect);
+              UNTIL UsageRedirect.NEXT = 0;
+            ProcUnit2.SETRANGE("Location Code",ProcUnit."Location Code");
+            ProcUnit2.SETRANGE("Item No.",ProcUnit."Item No.");
+            ProcUnit2.SETFILTER("Variant Code",'<>%1','');
+            IF ProcUnit2.FINDSET THEN
+              REPEAT
+                ProcUnit2."Preferred Variant" := FALSE;
+                ProcUnit2."Exclude From Replenishment" := FALSE;
+                ProcUnit2.MODIFY(FALSE);
+              UNTIL ProcUnit2.NEXT = 0;
+          END;
+        UNTIL ProcUnit.NEXT = 0;
+        ProcUnit3.SETCURRENTKEY("Summarize Pending");
+        ProcUnit3.SETRANGE("Summarize Pending",TRUE);
+        ProcUnit3.MODIFYALL("Summarize Pending", FALSE, FALSE);
+      END;
+    END;
+
+    LOCAL PROCEDURE SetReforecast@1240030006(CurrUsageRedirect@1240030000 : Record 14000575);
+    VAR
+      LocProcUnit@1240030001 : Record 14000555;
+    BEGIN
+      IF InvMgtSetup."Usage Start Date" = 0D THEN
+        InvMgtSetup.GET;
+      IF LocProcUnit.GET(
+        CurrUsageRedirect."Location Code",
+        CurrUsageRedirect."Item No.",
+        CurrUsageRedirect."Variant Code") THEN BEGIN
+          LocProcUnit."Change Reforecast Required" := TRUE;
+          IF InvMgtSetup."Roll Up Via Repl. Path" THEN
+            LocProcUnit."Reforecast Item" := TRUE;
+          LocProcUnit.MODIFY(FALSE);
+      END;
+      IF LocProcUnit.GET(
+        CurrUsageRedirect."Redirect Location Code",
+        CurrUsageRedirect."Redirect Item No.",
+        CurrUsageRedirect."Redirect Variant Code") THEN BEGIN
+          LocProcUnit."Change Reforecast Required" := TRUE;
+          IF InvMgtSetup."Roll Up Via Repl. Path" THEN
+            LocProcUnit."Reforecast Item" := TRUE;
+          LocProcUnit.MODIFY(FALSE);
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckForecastCustomer@1240030007(VAR CurrUsageLedgerEntry@1240030000 : Record 14000556);
+    VAR
+      ForCustItem@1240030001 : Record 14002602;
+    BEGIN
+      IF CurrUsageLedgerEntry."Entry Type" = CurrUsageLedgerEntry."Entry Type"::Sale THEN BEGIN
+        ForCustItem.RESET;
+        IF ForCustItem.GET(
+          CurrUsageLedgerEntry."Source No.",CurrUsageLedgerEntry."Location Code",
+          CurrUsageLedgerEntry."Item No.",CurrUsageLedgerEntry."Variant Code")
+        THEN BEGIN
+          IF ForCustItem."Forecast Type" = ForCustItem."Forecast Type"::Total THEN
+            CurrUsageLedgerEntry."Forecast Customer" := TRUE
+          ELSE
+            CurrUsageLedgerEntry."Forecast Customer" := FALSE;
+        END ELSE
+          CurrUsageLedgerEntry."Forecast Customer" := FALSE;
+      END;
+    END;
+
+    PROCEDURE ProcessRedirectSequence@1(VAR UsageLedgerEntry@1000 : Record 14000556);
+    VAR
+      UsageRedirectSeq@1001 : Record 14097482;
+      i@1002 : Integer;
+    BEGIN
+      UsageRedirectSeq.SETCURRENTKEY(Sequence);
+      UsageRedirectSeq.SETFILTER(Sequence, '%1..', 1);
+      IF UsageRedirectSeq.FINDSET THEN BEGIN
+        REPEAT
+          CASE UsageRedirectSeq."Redirect Type" OF
+            'PUC': RedirectProcUnit(UsageLedgerEntry);
+            'CUSTOMER': RedirectCustomer(UsageLedgerEntry);
+            'SHIPTO': RedirectShipTo(UsageLedgerEntry);
+            'LOCATION': RedirectLocation(UsageLedgerEntry);
+          END;
+        UNTIL UsageRedirectSeq.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ProcessRedirectSequenceUsageAdj@1240020004(VAR UsageLedgerEntry@1000 : Record 14000556);
+    VAR
+      ItemUsageAdj@1240020000 : Record 14000558;
+      UsageRedirectSeq@1001 : Record 14097482;
+      i@1002 : Integer;
+    BEGIN
+      UsageRedirectSeq.SETCURRENTKEY(Sequence);
+      UsageRedirectSeq.SETFILTER(Sequence, '%1..', 1);
+
+      ItemUsageAdj.SETRANGE("Original Location Code", UsageLedgerEntry."Original Location Code");
+      ItemUsageAdj.SETRANGE("Original Item No.", UsageLedgerEntry."Original Item No.");
+      IF UsageLedgerEntry."Original Variant Code" <> '' THEN
+        ItemUsageAdj.SETRANGE("Original Variant Code", UsageLedgerEntry."Original Variant Code");
+      IF UsageLedgerEntry."Original Source No." <> '' THEN
+        ItemUsageAdj.SETRANGE("Original Customer Code", UsageLedgerEntry."Original Source No.");
+      IF ItemUsageAdj.FINDSET THEN BEGIN
+        REPEAT
+          IF UsageRedirectSeq.FINDSET THEN BEGIN
+            REPEAT
+              CASE UsageRedirectSeq."Redirect Type" OF
+                'PUC': RedirectProcUnit(UsageLedgerEntry);
+                'CUSTOMER': RedirectCustomer(UsageLedgerEntry);
+                'SHIPTO': RedirectShipTo(UsageLedgerEntry);
+                'LOCATION': RedirectLocation(UsageLedgerEntry);
+              END;
+            UNTIL UsageRedirectSeq.NEXT = 0;
+          END;
+        UNTIL ItemUsageAdj.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertTempRecursiveRecord@9(VAR TempRecursiveRedirect@1004 : TEMPORARY Record 14000575;LocationCode@1003 : Code[10];ItemNo@1002 : Code[50];VariantCode@1001 : Code[10];CustNo@1000 : Code[20];ToLocationCode@1009 : Code[10];ToItemNo@1008 : Code[50];ToVariantCode@1007 : Code[10];ToCustNo@1006 : Code[20];Level@1010 : Integer;FromChangePending@1240020000 : Boolean;FromDeletePending@1240020001 : Boolean) DepthError : Boolean;
+    VAR
+      ErrInfiniteRecursion@1005 : TextConst 'ENU=ERROR:   Usage Redirect for %1,  %2, %3, %4  is creating a loop for redirection.';
+    BEGIN
+      DepthError := FALSE;
+      IF TempRecursiveRedirect.GET(ItemNo, LocationCode, VariantCode, CustNo) THEN BEGIN
+        TempRecursiveRedirect.MODIFYALL("Error Found", TRUE, FALSE);
+        DepthError := TRUE;
+        EXIT(DepthError);
+      END ELSE BEGIN
+        TempRecursiveRedirect.INIT;
+        TempRecursiveRedirect."Item No." := ItemNo;
+        TempRecursiveRedirect."Location Code" := LocationCode;
+        TempRecursiveRedirect."Variant Code" := VariantCode;
+        TempRecursiveRedirect."Customer No." := CustNo;
+        TempRecursiveRedirect."Redirect Item No." := ToItemNo;
+        TempRecursiveRedirect."Redirect Location Code" := ToLocationCode;
+        TempRecursiveRedirect."Redirect Variant Code" := ToVariantCode;
+        TempRecursiveRedirect."Redirect Customer No." := ToCustNo;
+        TempRecursiveRedirect.Level := Level;
+        TempRecursiveRedirect."Change Pending" := FromChangePending;
+        TempRecursiveRedirect."Delete Pending" := FromDeletePending;
+        TempRecursiveRedirect.INSERT(FALSE);
+        EXIT(DepthError);
+      END;
+    END;
+
+    PROCEDURE CheckRedirectProcUnit@12(LocationCode@1005 : Code[10];ItemNo@1004 : Code[50];VariantCode@1003 : Code[10];CustNo@1002 : Code[20]);
+    VAR
+      UsageRedirect@1240030001 : Record 14000575;
+      Level@1000 : Integer;
+      TempRecursiveRedirect@1001 : TEMPORARY Record 14000575;
+      DummyUsageLedgerEntry@1006 : Record 14000556;
+      NewCustNo@1007 : Code[20];
+      DepthError@1008 : Boolean;
+      ModifyRec@1000000000 : Boolean;
+    BEGIN
+      IF (LocationCode = '') OR (ItemNo = '') THEN
+        EXIT;
+      GblTempUsageRedirect.DELETEALL;
+
+      UsageRedirect.SETRANGE("Item No.", ItemNo);
+      UsageRedirect.SETRANGE("Location Code", LocationCode);
+      UsageRedirect.SETRANGE("Variant Code", VariantCode);
+      UsageRedirect.SETRANGE("Customer No.", CustNo);
+      IF UsageRedirect.ISEMPTY THEN
+        UsageRedirect.SETFILTER("Customer No.",'%1','');
+      IF UsageRedirect.FINDFIRST THEN BEGIN
+        Level := 0;
+        ModifyRec := FALSE;
+        InsertTempRecursiveRecord(GblTempRecursiveRedirect, UsageRedirect."Location Code", UsageRedirect."Item No.", UsageRedirect."Variant Code",UsageRedirect."Customer No.",
+           UsageRedirect."Redirect Location Code", UsageRedirect."Redirect Item No.", UsageRedirect."Redirect Variant Code", UsageRedirect."Redirect Customer No.", Level,
+           UsageRedirect."Change Pending", UsageRedirect."Delete Pending");
+
+        // find starting entry
+        FindFirstRedirectEntry(UsageRedirect, UsageRedirect."Location Code", UsageRedirect."Item No.", UsageRedirect."Variant Code", Level);
+        // set all errors for user visibility if recursion failed
+        GblTempRecursiveRedirect.SETRANGE("Error Found", TRUE);
+        IF NOT GblTempRecursiveRedirect.ISEMPTY THEN BEGIN
+          UsageRedirect."Error Found" := TRUE;
+          UsageRedirect.MODIFY(FALSE);
+        END;
+        GblTempRecursiveRedirect.SETRANGE("Error Found");
+      END;
+
+      GblTempUsageRedirect.RESET;
+      IF GblTempUsageRedirect.FINDSET THEN BEGIN
+        // remove orignal chain from above if records exist
+        GblTempRecursiveRedirect.DELETEALL;
+        REPEAT
+          TempRecursiveRedirect.DELETEALL;
+          IF (GblTempUsageRedirect."Customer No." <> '') AND (GblTempUsageRedirect."Redirect Customer No." <> '') THEN
+            NewCustNo := GblTempUsageRedirect."Redirect Customer No."
+          ELSE
+            NewCustNo := CustNo;
+          Level := 1;
+          // temp recursive redirect is used to traverse the tree checking for loops and depth errrors
+         InsertTempRecursiveRecord(TempRecursiveRedirect, GblTempUsageRedirect."Location Code", GblTempUsageRedirect."Item No.", GblTempUsageRedirect."Variant Code",GblTempUsageRedirect."Customer No.",
+           GblTempUsageRedirect."Redirect Location Code", GblTempUsageRedirect."Redirect Item No.", GblTempUsageRedirect."Redirect Variant Code", NewCustNo, Level,
+           GblTempUsageRedirect."Change Pending", GblTempUsageRedirect."Delete Pending");
+          RedirectProcUnitRecursive(DummyUsageLedgerEntry, TempRecursiveRedirect, GblTempUsageRedirect."Redirect Location Code", GblTempUsageRedirect."Redirect Item No.", GblTempUsageRedirect."Redirect Variant Code", CustNo ,Level, TRUE);
+
+          // global is used to show users
+          CopyTempToGlobalTemp(TempRecursiveRedirect);
+        UNTIL GblTempUsageRedirect.NEXT = 0;
+      END ELSE
+        EXIT;  // if none found an error was found in the "find first redirect entry" process so leave the recursion in place to show the user
+      TempRecursiveRedirect.DELETEALL;
+      GblTempUsageRedirect.DELETEALL;
+      // modify all existing records to show the changes created by the check routine
+      GblTempRecursiveRedirect.RESET;
+      GblTempRecursiveRedirect.SETRANGE("Error Found", TRUE);
+      IF NOT GblTempRecursiveRedirect.ISEMPTY THEN BEGIN
+        GblTempRecursiveRedirect.SETRANGE("Error Found");
+        IF GblTempRecursiveRedirect.FINDSET THEN BEGIN
+          REPEAT
+            UsageRedirect.SETRANGE("Location Code", GblTempRecursiveRedirect."Location Code");
+            UsageRedirect.SETRANGE("Item No.", GblTempRecursiveRedirect."Item No.");
+            UsageRedirect.MODIFYALL("Error Found", TRUE);
+            UsageRedirect.SETRANGE("Location Code");
+            UsageRedirect.SETRANGE("Item No.");
+            UsageRedirect.SETRANGE("Redirect Location Code", GblTempRecursiveRedirect."Location Code");
+            UsageRedirect.SETRANGE("Redirect Item No.", GblTempRecursiveRedirect."Item No.");
+            UsageRedirect.MODIFYALL("Error Found", TRUE);
+          UNTIL GblTempRecursiveRedirect.NEXT = 0;
+        END;
+      END;
+
+      GblTempRecursiveRedirect.RESET;
+      GblTempRecursiveRedirect.SETRANGE("Change Pending", TRUE);
+      IF NOT GblTempRecursiveRedirect.ISEMPTY THEN BEGIN
+        GblTempRecursiveRedirect.SETRANGE("Change Pending");
+        IF GblTempRecursiveRedirect.FINDSET THEN BEGIN
+        REPEAT
+            UsageRedirect.SETRANGE("Location Code", GblTempRecursiveRedirect."Location Code");
+            UsageRedirect.SETRANGE("Item No.", GblTempRecursiveRedirect."Item No.");
+          UsageRedirect.MODIFYALL("Change Pending", TRUE);
+
+          UsageRedirect.SETRANGE("Location Code");
+          UsageRedirect.SETRANGE("Item No.");
+            UsageRedirect.SETRANGE("Redirect Location Code", GblTempRecursiveRedirect."Location Code");
+            UsageRedirect.SETRANGE("Redirect Item No.", GblTempRecursiveRedirect."Item No.");
+          UsageRedirect.MODIFYALL("Change Pending", TRUE);
+
+          UNTIL GblTempRecursiveRedirect.NEXT = 0;
+        END;
+      END;
+
+      GblTempRecursiveRedirect.SETRANGE("Change Pending");
+      GblTempRecursiveRedirect.SETRANGE("Delete Pending", TRUE);
+      IF NOT GblTempRecursiveRedirect.ISEMPTY THEN BEGIN
+        GblTempRecursiveRedirect.SETRANGE("Delete Pending");
+        IF GblTempRecursiveRedirect.FINDSET THEN BEGIN
+        REPEAT
+            UsageRedirect.SETRANGE("Location Code", GblTempRecursiveRedirect."Location Code");
+            UsageRedirect.SETRANGE("Item No.", GblTempRecursiveRedirect."Item No.");
+          UsageRedirect.MODIFYALL("Change Pending", TRUE);
+
+          UsageRedirect.SETRANGE("Location Code");
+          UsageRedirect.SETRANGE("Item No.");
+            UsageRedirect.SETRANGE("Redirect Location Code", GblTempRecursiveRedirect."Location Code");
+            UsageRedirect.SETRANGE("Redirect Item No.", GblTempRecursiveRedirect."Item No.");
+          UsageRedirect.MODIFYALL("Change Pending", TRUE);
+          UNTIL GblTempRecursiveRedirect.NEXT = 0;
+      END;
+
+      END;
+
+      GblTempRecursiveRedirect.SETRANGE("Delete Pending");
+
+      IF GblTempRecursiveRedirect.FINDSET THEN BEGIN
+        REPEAT
+          // reset the change pending flags that may have been set on delete rows
+          IF UsageRedirect.GET(GblTempRecursiveRedirect."Item No.", GblTempRecursiveRedirect."Location Code", GblTempRecursiveRedirect."Variant Code", GblTempRecursiveRedirect."Customer No.") THEN BEGIN
+            IF GblTempRecursiveRedirect."Delete Pending" THEN BEGIN
+              UsageRedirect."Change Pending" := FALSE;
+          UsageRedirect.MODIFY(FALSE);
+            END;
+            // set pending flags to the temp records for the modifyall above
+            IF (GblTempRecursiveRedirect."Change Pending" <> UsageRedirect."Change Pending") THEN BEGIN
+              GblTempRecursiveRedirect."Change Pending" := UsageRedirect."Change Pending";
+              GblTempRecursiveRedirect.MODIFY(FALSE);
+        END;
+      END;
+        UNTIL GblTempRecursiveRedirect.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE ShowRecursionPage@3();
+    BEGIN
+      IF GUIALLOWED THEN BEGIN
+        GblTempRecursiveRedirect.SETCURRENTKEY(Level);
+        PAGE.RUN(PAGE::"Usage Redirects", GblTempRecursiveRedirect);
+      END;
+    END;
+
+    LOCAL PROCEDURE CopyTempToGlobalTemp@4(VAR TempRecursiveRedirect@1000 : TEMPORARY Record 14000575);
+    BEGIN
+      IF TempRecursiveRedirect.FINDSET THEN BEGIN
+        REPEAT
+          GblTempRecursiveRedirect.INIT;
+          GblTempRecursiveRedirect := TempRecursiveRedirect;
+          IF GblTempRecursiveRedirect.INSERT(FALSE) THEN;
+        UNTIL TempRecursiveRedirect.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckAllRedirects@7();
+    VAR
+      UsageRedirect@1240030001 : Record 14000575;
+      Level@1000 : Integer;
+      TempRecursiveRedirect@1001 : TEMPORARY Record 14000575;
+      DummyUsageLedgerEntry@1006 : Record 14000556;
+      NewCustNo@1007 : Code[20];
+      DepthError@1008 : Boolean;
+      ExistingErrors@1240020000 : Boolean;
+      ExistingChanges@1240020001 : Boolean;
+      ExistingDeletions@1240020002 : Boolean;
+    BEGIN
+      IF UsageRedirect.ISEMPTY THEN
+        EXIT;
+      ExistingErrors := FALSE;
+      UsageRedirect.SETRANGE("Error Found", TRUE);
+      IF NOT UsageRedirect.ISEMPTY THEN
+        ExistingErrors := TRUE;
+      IF ExistingErrors THEN BEGIN
+      UsageRedirect.MODIFYALL("Error Found", FALSE);
+        COMMIT;
+      END;
+      UsageRedirect.SETRANGE("Error Found");
+      UsageRedirect.SETRANGE("Change Pending", TRUE);
+      IF NOT UsageRedirect.ISEMPTY THEN
+        ExistingChanges := TRUE;
+      UsageRedirect.SETRANGE("Change Pending");
+      IF (NOT ExistingChanges) AND (NOT ExistingErrors) THEN BEGIN
+        UsageRedirect.SETRANGE("Delete Pending", TRUE);
+        IF NOT UsageRedirect.ISEMPTY THEN
+          ExistingDeletions := TRUE;
+        UsageRedirect.SETRANGE("Delete Pending");
+      END;
+      IF (NOT ExistingErrors) AND (NOT ExistingChanges) AND (NOT ExistingDeletions)  THEN
+        EXIT;
+      GblTempRecursiveRedirect.DELETEALL;
+      IF UsageRedirect.FINDSET THEN BEGIN
+        REPEAT
+          // global temp recursive is used to loop the path
+          IF NOT GblTempRecursiveRedirect.GET(UsageRedirect."Item No.", UsageRedirect."Location Code", UsageRedirect."Variant Code", UsageRedirect."Customer No.") THEN
+            CheckRedirectProcUnit(UsageRedirect."Location Code", UsageRedirect."Item No.", UsageRedirect."Variant Code", UsageRedirect."Customer No.");
+        UNTIL UsageRedirect.NEXT = 0;
+      END;
+      GblTempRecursiveRedirect.DELETEALL;
+    END;
+
+    PROCEDURE CheckRedirectSequence@1240020002();
+    VAR
+      UsageRedirectSeq@1240020001 : Record 14097482;
+    BEGIN
+      // check sequence
+      IF UsageRedirectSeq.ISEMPTY THEN
+        UsageRedirectSeq.SetDefaultTypes;
+    END;
+
+    PROCEDURE FindFirstRedirectEntry@1240020001(VAR FromUsageRedirect@1240020000 : Record 14000575;ToLocationCode@1240020003 : Code[10];ToItemNo@1240020002 : Code[50];ToVariantCode@1240020004 : Code[10];Level@1240020006 : Integer) : Boolean;
+    VAR
+      UsageRedirect@1240020001 : Record 14000575;
+      ModifyRec@1000000000 : Boolean;
+    BEGIN
+      // find the beginning of the redirects for this item, location
+      UsageRedirect.SETRANGE("Redirect Item No.", ToItemNo);
+      UsageRedirect.SETRANGE("Redirect Location Code", ToLocationCode);
+      UsageRedirect.SETRANGE("Redirect Variant Code", ToVariantCode);
+      IF UsageRedirect.FINDSET THEN BEGIN
+        Level := Level - 1;
+        IF ABS(Level) > 10 THEN BEGIN
+          IF GblTempRecursiveRedirect.GET(FromUsageRedirect."Item No.", FromUsageRedirect."Location Code", FromUsageRedirect."Variant Code", FromUsageRedirect."Customer No.") THEN BEGIN
+            GblTempRecursiveRedirect."Error Found" := TRUE;
+            GblTempRecursiveRedirect.MODIFY(FALSE);
+          END;
+          EXIT(TRUE);
+          END;
+        REPEAT
+          InsertTempRecursiveRecord(GblTempRecursiveRedirect, UsageRedirect."Location Code", UsageRedirect."Item No.", UsageRedirect."Variant Code",UsageRedirect."Customer No.",
+           UsageRedirect."Redirect Location Code", UsageRedirect."Redirect Item No.", UsageRedirect."Redirect Variant Code", UsageRedirect."Redirect Customer No.", Level,
+           UsageRedirect."Change Pending", UsageRedirect."Delete Pending");
+          IF GblTempRecursiveRedirect."Error Found" THEN
+            EXIT(TRUE);
+          IF FindFirstRedirectEntry(UsageRedirect, UsageRedirect."Location Code", UsageRedirect."Item No.", UsageRedirect."Variant Code", Level) THEN
+            EXIT(TRUE);
+        UNTIL UsageRedirect.NEXT = 0;
+      END ELSE BEGIN
+        IF NOT GblTempUsageRedirect.GET(FromUsageRedirect."Item No.", FromUsageRedirect."Location Code", FromUsageRedirect."Variant Code", FromUsageRedirect."Customer No.") THEN BEGIN
+          GblTempUsageRedirect.INIT;
+          GblTempUsageRedirect := FromUsageRedirect;
+          GblTempUsageRedirect.Level := Level;
+          GblTempUsageRedirect.INSERT(FALSE);
+          EXIT(TRUE);
+        END;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

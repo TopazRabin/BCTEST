@@ -1,0 +1,190 @@
+OBJECT Report 51714 Create Mfr. Rep. Payable Doc.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=TPZ000.00.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Create Mfr. Rep. Payable Doc.;
+    ProcessingOnly=Yes;
+    OnInitReport=BEGIN
+                   CommSetup.GET;
+                 END;
+
+  }
+  DATASET
+  {
+    { 1000000000;;DataItem;                  ;
+               DataItemTable=Table50027;
+               OnPreDataItem=BEGIN
+                               InvNo := 0;
+                               CrMemoNo := 0;
+
+                               CommSetup.TESTFIELD("Mfr. Rep. Payable Account");
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  CommJnlLine@1000000002 : Record 51705;
+                                  PayableAmount@1000000001 : Decimal;
+                                  CreditAmount@1000000000 : Decimal;
+                                  Amount@1000000003 : Decimal;
+                                BEGIN
+                                  PayableAmount := 0;
+                                  CreditAmount := 0;
+
+                                  CommJnlLine.RESET;
+                                  CommJnlLine.SETRANGE("Journal Template Name",JnlTemplateName);
+                                  CommJnlLine.SETRANGE("Journal Batch Name",JnlBatchName);
+                                  CommJnlLine.SETRANGE("Account Type",CommJnlLine."Account Type"::"Mfr. Rep.");
+                                  CommJnlLine.SETRANGE("Account No.",Code);
+                                  IF CommJnlLine.FINDSET THEN
+                                    REPEAT
+                                      IF CommJnlLine.Amount > 0 THEN
+                                        PayableAmount := PayableAmount + CommJnlLine.Amount
+                                      ELSE
+                                        CreditAmount := CreditAmount + CommJnlLine.Amount;
+                                      CommJnlLine.Invoiced := TRUE;
+                                      CommJnlLine.MODIFY;
+                                      IF CommJnlLine."Shortcut Dimension 5 Code" <> '' THEN
+                                        DivisionCode := CommJnlLine."Shortcut Dimension 5 Code";
+                                    UNTIL CommJnlLine.NEXT = 0;
+
+                                  Amount := PayableAmount + CreditAmount;
+
+                                  IF Amount > 0 THEN
+                                    CreateInvoice(Amount)
+                                  ELSE
+                                    CreateCreditMemo(Amount);
+                                END;
+
+               OnPostDataItem=BEGIN
+                                IF (InvNo > 0) AND (CrMemoNo > 0) THEN
+                                  MESSAGE(Text51700,InvNo,CrMemoNo);
+                                IF (InvNo > 0) AND (CrMemoNo = 0) THEN
+                                  MESSAGE(Text51701,InvNo);
+                                IF (InvNo = 0) AND (CrMemoNo > 0) THEN
+                                  MESSAGE(Text51702,CrMemoNo);
+                                IF (InvNo = 0) AND (CrMemoNo = 0) THEN
+                                  MESSAGE(Text51703);
+                              END;
+                               }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      CommSetup@1000000000 : Record 51700;
+      JnlTemplateName@1000000002 : Code[10];
+      JnlBatchName@1000000003 : Code[10];
+      InvNo@1000000001 : Integer;
+      CrMemoNo@1000000004 : Integer;
+      Text51700@1000000005 : TextConst 'ENU=%1 Invoice(s) and %2 Credit Memo(s) have been created.';
+      Text51701@1000000007 : TextConst 'ENU=%1 Invoice(s) have been created.';
+      Text51702@1000000008 : TextConst 'ENU=%1 Credit Memos have been created.';
+      Text51703@1000000006 : TextConst 'ENU=There is nothing to create.';
+      DivisionCode@1000000009 : Code[20];
+
+    PROCEDURE InitializeRequest@1000000001(NewJnlTemplateName@1000000000 : Code[10];NewJnlBatchName@1000000001 : Code[10]);
+    BEGIN
+      JnlTemplateName := NewJnlTemplateName;
+      JnlBatchName := NewJnlBatchName;
+    END;
+
+    PROCEDURE CreateInvoice@1000000002(Amount@1000000000 : Decimal);
+    VAR
+      PurchaseHeader@1000000001 : Record 38;
+      PurchaseLine@1000000002 : Record 39;
+    BEGIN
+      IF Amount = 0 THEN
+        EXIT;
+
+      PurchaseHeader.INIT;
+      PurchaseHeader."Document Type" := PurchaseHeader."Document Type"::Invoice;
+      PurchaseHeader.INSERT(TRUE);
+      IF "Mfr. Rep."."Pay-to Vendor No." <> '' THEN
+        PurchaseHeader.VALIDATE("Buy-from Vendor No.","Mfr. Rep."."Pay-to Vendor No.")
+      ELSE
+        PurchaseHeader.VALIDATE("Buy-from Vendor No.","Mfr. Rep.".Code);
+
+      PurchaseHeader.VALIDATE("Vendor Invoice No.", "Mfr. Rep.".Code + FORMAT(PurchaseHeader."Order Date"));
+      PurchaseHeader.VALIDATE("Shortcut Dimension 1 Code",'0140');
+      PurchaseHeader.VALIDATE("Shortcut Dimension 2 Code",'1');
+      PurchaseHeader.ValidateShortcutDimCode(5,DivisionCode);
+      PurchaseHeader.MODIFY;
+
+      PurchaseLine.INIT;
+      PurchaseLine."Document Type" := PurchaseHeader."Document Type";
+      PurchaseLine."Document No." := PurchaseHeader."No.";
+      PurchaseLine."Line No." := 10000;
+      PurchaseLine.VALIDATE(Type,PurchaseLine.Type::"G/L Account");
+      PurchaseLine.VALIDATE("No.",CommSetup."Mfr. Rep. Payable Account");
+      PurchaseLine.VALIDATE("Direct Unit Cost",ABS(Amount));
+      PurchaseLine.VALIDATE(Quantity,1);
+      PurchaseLine.INSERT(TRUE);
+
+      InvNo := InvNo + 1;
+    END;
+
+    PROCEDURE CreateCreditMemo@1000000003(Amount@1000000000 : Decimal);
+    VAR
+      PurchaseHeader@1000000002 : Record 38;
+      PurchaseLine@1000000001 : Record 39;
+    BEGIN
+      IF Amount = 0 THEN
+        EXIT;
+
+      PurchaseHeader.INIT;
+      PurchaseHeader."Document Type" := PurchaseHeader."Document Type"::"Credit Memo";
+      PurchaseHeader.INSERT(TRUE);
+      IF "Mfr. Rep."."Pay-to Vendor No." <> '' THEN
+        PurchaseHeader.VALIDATE("Buy-from Vendor No.","Mfr. Rep."."Pay-to Vendor No.")
+      ELSE
+        PurchaseHeader.VALIDATE("Buy-from Vendor No.","Mfr. Rep.".Code);
+
+      PurchaseHeader.VALIDATE("Vendor Cr. Memo No.", "Mfr. Rep.".Code + FORMAT(PurchaseHeader."Order Date"));
+      PurchaseHeader.VALIDATE("Shortcut Dimension 1 Code",'0140');
+      PurchaseHeader.VALIDATE("Shortcut Dimension 2 Code",'1');
+      PurchaseHeader.ValidateShortcutDimCode(5,DivisionCode);
+      PurchaseHeader.MODIFY(TRUE);
+
+      PurchaseLine.INIT;
+      PurchaseLine."Document Type" := PurchaseHeader."Document Type";
+      PurchaseLine."Document No." := PurchaseHeader."No.";
+      PurchaseLine."Line No." := 10000;
+      PurchaseLine.VALIDATE(Type,PurchaseLine.Type::"G/L Account");
+      PurchaseLine.VALIDATE("No.",CommSetup."Mfr. Rep. Payable Account");
+      PurchaseLine.VALIDATE("Direct Unit Cost",ABS(Amount));
+      PurchaseLine.VALIDATE(Quantity,1);
+      PurchaseLine.INSERT(TRUE);
+
+      CrMemoNo := CrMemoNo + 1;
+    END;
+
+    BEGIN
+    {
+      2015-05-11 TPZ92 TAKHMETO
+        Report has been created
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

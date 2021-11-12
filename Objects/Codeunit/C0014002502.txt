@@ -1,0 +1,706 @@
+OBJECT Codeunit 14002502 RF Pallet Adjustment
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/17/17;
+    Time=12:00:00 PM;
+    Version List=RF1.50.09;
+  }
+  PROPERTIES
+  {
+    TableNo=7700;
+    OnRun=VAR
+            MiniformMgmt@1240020000 : Codeunit 7702;
+          BEGIN
+            MiniformMgmt.Initialize(
+              MiniformHeader,Rec,DOMxmlin,ReturnedNode,
+              RootNode,XMLDOMMgmt,ADCSCommunication,LoginID,
+              CurrentCode,StackCode,WhseEmpId,LocationFilter);
+
+            IF Code <> CurrentCode THEN
+              PrepareData
+            ELSE
+              ProcessInput;
+
+            CLEAR(DOMxmlin);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      MiniformHeader@1240020015 : Record 7700;
+      RFEmployeeSetup@1240020014 : Record 14002802;
+      XMLDOMMgmt@1240020013 : Codeunit 6224;
+      ADCSCommunication@1240020012 : Codeunit 7701;
+      ADCSNasStartup@1240020011 : Codeunit 7700;
+      DOMxmlin@1240020009 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      ReturnedNode@1240020008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      RootNode@1240020007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      Remark@1240020006 : Text[250];
+      WhseEmpId@1240020010 : Text[250];
+      LocationFilter@1240020005 : Text[250];
+      CurrentCode@1240020004 : Text[250];
+      StackCode@1240020003 : Text[250];
+      LoginID@1240020016 : Text[250];
+      RFGroupFilter@1240020002 : Code[250];
+      ActiveInputField@1240020001 : Integer;
+      RecRef@1240020000 : RecordRef;
+      Text001@1240020048 : TextConst 'ENU=Unknown function %1';
+      Text004@1240020047 : TextConst 'ENU=Invalid %1.';
+      Text006@1240020046 : TextConst 'ENU=No input Node found';
+      Text008@1240020044 : TextConst 'ENU=End of Document';
+      Text022@1240020033 : TextConst 'ENU=Not a Number';
+      Text030@1240020025 : TextConst 'ENU=Item Variant not valid';
+      Text038@1240020017 : TextConst 'ENU=Bin Not Found';
+      Text041@1240020050 : TextConst 'ENU=Is not an adjustment';
+      Text042@1240020051 : TextConst 'ENU=Item is not Lot Tracked';
+      Text043@1240020052 : TextConst 'ENU=Tracking Info not Consistent';
+      Text044@1240020053 : TextConst 'ENU=Item is not Serial Tracked';
+      Text045@1240020054 : TextConst 'ENU=Qty must be 0 or 1 if SN tracked';
+      Text046@1240020055 : TextConst 'ENU=QA Blocked Operation';
+      Text047@1240020056 : TextConst 'ENU=Pallet is Picked';
+
+    PROCEDURE ProcessInput@1240020000();
+    VAR
+      BoxHandlingLine@1240020034 : Record 14002970;
+      BoxHandlingLine3@1240020033 : Record 14002970;
+      MiniformLine@1240020032 : Record 7701;
+      Bin@1240020031 : Record 7354;
+      BinContent@1240020030 : Record 7302;
+      Bin3@1240020029 : Record 7354;
+      FuncGroup@1240020028 : Record 7702;
+      RFEmployeeMenuFilter@1240020027 : Record 14002806;
+      WarehouseEntry@1240020026 : Record 7312;
+      ItemIdent@1240020025 : Record 7704;
+      Item@1240020024 : Record 27;
+      ItemTrackingCode@1240020023 : Record 6502;
+      Location@1240020020 : Record 14;
+      ItemVariant@1240020019 : Record 5401;
+      RFSetup@1240020000 : Record 14002801;
+      ItemUnitofMeasure@1240020042 : Record 5404;
+      PalletBinContent@1240020043 : Record 14002963;
+      LicensePlateMgt@1240020017 : Codeunit 14002971;
+      RFMgt@1240020016 : Codeunit 14002801;
+      PalletQAMgt@1240020044 : Codeunit 14002513;
+      ReturnedNode2@1240020001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      FieldID@1240020014 : Text[250];
+      TextValue@1240020013 : Text[250];
+      TableNo@1240020012 : Integer;
+      i@1240020035 : Integer;
+      RecordId@1240020011 : RecordID;
+      FldNo@1240020010 : Integer;
+      AvailableQuantity@1240020041 : Decimal;
+      Command@1240020009 : Code[10];
+      LotNo@1240020007 : Code[20];
+      SerialNo@1240020006 : Code[20];
+      BinCode@1240020005 : Code[20];
+      PalletNo@1240020039 : Code[20];
+      BoxNo@1240020040 : Code[20];
+      NewQty@1240020003 : Decimal;
+      AdjustQty@1240020002 : Decimal;
+    BEGIN
+      IF XMLDOMMgmt.FindNode(RootNode,'Header/Input',ReturnedNode) THEN
+        TextValue := ReturnedNode.InnerText
+      ELSE
+        ERROR(Text006);
+
+      XMLDOMMgmt.FindNode(RootNode,'ExtraInfo',ReturnedNode2);
+      Bin3.Code := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'BinCode');
+      RFGroupFilter := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'RFGroupFilter');
+      IF RFGroupFilter = '' THEN
+        RFGroupFilter := '0';
+
+      ADCSCommunication.SetExtraValue('BinCode',Bin3.Code);
+
+      EVALUATE(TableNo,ADCSCommunication.GetNodeAttribute(ReturnedNode,'TableNo'));
+      RecRef.OPEN(TableNo);
+      EVALUATE(RecordId,ADCSCommunication.GetNodeAttribute(ReturnedNode,'RecordID'));
+      IF RecRef.GET(RecordId) THEN BEGIN
+        RecRef.SETTABLE(BoxHandlingLine);
+        RecRef.GETTABLE(BoxHandlingLine);
+        ADCSCommunication.SetRecRef(RecRef);
+      END ELSE BEGIN
+        ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+        EXIT;
+      END;
+
+      FuncGroup.KeyDef := ADCSCommunication.GetFunctionKey(MiniformHeader.Code,TextValue);
+
+      CASE FuncGroup.KeyDef OF
+        FuncGroup.KeyDef::Esc:
+          BEGIN
+            BoxHandlingLine3.SETRANGE("Warehouse Employee Code",BoxHandlingLine."Warehouse Employee Code");
+            BoxHandlingLine3.DELETEALL;
+            ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+          END;
+        FuncGroup.KeyDef::First:
+          ADCSCommunication.FindRecRef(0,MiniformHeader."No. of Records in List");
+        FuncGroup.KeyDef::LnDn:
+          IF NOT ADCSCommunication.FindRecRef(1,MiniformHeader."No. of Records in List") THEN
+            Remark := Text008;
+        FuncGroup.KeyDef::LnUp:
+          ADCSCommunication.FindRecRef(2,MiniformHeader."No. of Records in List");
+        FuncGroup.KeyDef::Last:
+          ADCSCommunication.FindRecRef(3,MiniformHeader."No. of Records in List");
+        FuncGroup.KeyDef::PgDn:
+          IF NOT ADCSCommunication.FindRecRef(4,MiniformHeader."No. of Records in List") THEN
+            Remark := Text008;
+        FuncGroup.KeyDef::PgUp:
+          ADCSCommunication.FindRecRef(5,MiniformHeader."No. of Records in List");
+        FuncGroup.KeyDef::Reset:
+          BEGIN
+            RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+            IF RFEmployeeSetup."Local Menu Button" IN
+               [RFEmployeeSetup."Local Menu Button"::F4,
+                RFEmployeeSetup."Local Menu Button"::"F4 (F3 Post)"]
+            THEN BEGIN
+              MiniformHeader.TESTFIELD("Local Menu Miniform Code");
+              ADCSCommunication.SetExtraValue('PrimaryMiniForm',MiniformHeader.Code);
+              MiniformHeader.GET(MiniformHeader."Local Menu Miniform Code");
+              IF RFEmployeeMenuFilter.GET(
+                   RFEmployeeSetup.Code,MiniformHeader.Code)
+              THEN
+                ADCSCommunication.SetRFFunctionFilter(
+                  RFEmployeeMenuFilter."RF Function Filter");
+              ADCSCommunication.EncodeMiniForm(MiniformHeader,StackCode,DOMxmlin,1,'',LoginID);
+              ADCSCommunication.GetReturnXML(DOMxmlin);
+              ADCSNasStartup.SendXMLReply(DOMxmlin);
+
+              EXIT;
+            END;
+          END;
+        FuncGroup.KeyDef::Register:
+          BEGIN
+            RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+            IF RFEmployeeSetup."Local Menu Button" IN [RFEmployeeSetup."Local Menu Button"::F3]
+            THEN BEGIN
+              MiniformHeader.TESTFIELD("Local Menu Miniform Code");
+              ADCSCommunication.SetExtraValue('PrimaryMiniForm',MiniformHeader.Code);
+              MiniformHeader.GET(MiniformHeader."Local Menu Miniform Code");
+              IF RFEmployeeMenuFilter.GET(
+                   RFEmployeeSetup.Code,MiniformHeader.Code)
+              THEN
+                ADCSCommunication.SetRFFunctionFilter(
+                  RFEmployeeMenuFilter."RF Function Filter");
+              ADCSCommunication.EncodeMiniForm(MiniformHeader,StackCode,DOMxmlin,1,'',LoginID);
+              ADCSCommunication.GetReturnXML(DOMxmlin);
+              ADCSNasStartup.SendXMLReply(DOMxmlin);
+
+              EXIT;
+            END;
+          END;
+        FuncGroup.KeyDef::Input:
+          BEGIN
+            FieldID := ADCSCommunication.GetNodeAttribute(ReturnedNode,'FieldID');
+            Command := '';
+            IF STRLEN(TextValue) >= 3 THEN
+              IF COPYSTR(TextValue,1,2) = '//' THEN
+                Command := COPYSTR(TextValue,3,MAXSTRLEN(Command));
+            IF (FieldID = '') OR (Command <> '') THEN BEGIN
+              RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+
+              IF Command <> '' THEN BEGIN
+                MiniformLine.RESET;
+                MiniformLine.SETRANGE("Miniform Code",MiniformHeader."Local Menu Miniform Code");
+                MiniformLine.SETRANGE(Hide,FALSE);
+                IF RFEmployeeMenuFilter.GET(
+                     RFEmployeeSetup.Code,MiniformHeader."Local Menu Miniform Code")
+                THEN
+                  MiniformLine.SETFILTER("RF Function No.",RFEmployeeMenuFilter."RF Function Filter");
+                MiniformLine.SETRANGE(MiniformLine."Command Text",Command);
+                MiniformLine.FIND('-');
+              END ELSE BEGIN
+                MiniformLine.RESET;
+                MiniformLine.SETRANGE("Miniform Code",MiniformHeader.Code);
+                MiniformLine.SETRANGE(Hide,FALSE);
+                IF RFEmployeeMenuFilter.GET(RFEmployeeSetup.Code,MiniformHeader.Code) THEN
+                  MiniformLine.SETFILTER("RF Function No.",RFEmployeeMenuFilter."RF Function Filter");
+                MiniformLine.SETRANGE(Text,ReturnedNode.InnerText);
+                MiniformLine.FIND('-');
+                XMLDOMMgmt.FindNode(RootNode,'ExtraInfo',ReturnedNode2);
+                MiniformHeader.Code :=
+                  ADCSCommunication.GetNodeAttribute(ReturnedNode2,'PrimaryMiniForm');
+                MiniformHeader.GET(MiniformHeader.Code);
+              END;
+              CASE MiniformLine."RF Function No." OF
+                0: // Escape or Return
+                  BEGIN
+                    BoxHandlingLine3.SETRANGE("Warehouse Employee Code",WhseEmpId);
+                    IF BoxHandlingLine3.FIND('-') THEN
+                      REPEAT
+                        BoxHandlingLine3.DELETE;
+                      UNTIL BoxHandlingLine3.NEXT = 0;
+                  END;
+                1,2,3: // Register
+                  BEGIN
+                  END;
+                ELSE
+                  Remark := STRSUBSTNO(Text001,MiniformLine."RF Function No.");
+              END;
+            END ELSE BEGIN
+              EVALUATE(FldNo,FieldID);
+              CASE FldNo OF
+                BoxHandlingLine.FIELDNO("Pallet No."):
+                  BEGIN
+                    IF TextValue = '' THEN
+                      Remark := STRSUBSTNO(Text004,BoxHandlingLine.FIELDCAPTION("Pallet No."));
+
+                    IF Remark = '' THEN
+                      IF LicensePlateMgt.GetStorageID(TextValue,PalletNo,BoxNo,WhseEmpId)
+                      THEN BEGIN
+                        BoxHandlingLine."Pallet No." := PalletNo;
+                        BoxHandlingLine."Box No." := BoxNo;
+                      END ELSE
+                        Remark := STRSUBSTNO(Text004,BoxHandlingLine.FIELDCAPTION("Pallet No."));
+
+                    IF Remark = '' THEN
+                      IF LicensePlateMgt.PalletInShipBin(PalletNo) THEN
+                        Remark := STRSUBSTNO(Text004,BoxHandlingLine.FIELDCAPTION("Bin Code"));
+
+                    IF Remark = '' THEN
+                      IF LicensePlateMgt.PalletIsPicked(PalletNo) THEN
+                        Remark := Text047;
+
+                    IF Remark = '' THEN BEGIN
+                      IF PalletQAMgt.PosAdjRestricted(PalletNo,Remark) AND
+                         PalletQAMgt.NegAdjRestricted(PalletNo,Remark)
+                      THEN
+                        IF Remark = '' THEN
+                          Remark := Text046;
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      IF LicensePlateMgt.GetStorageIDBin(TextValue,WhseEmpId,BinCode) THEN BEGIN
+                        BoxHandlingLine.Location := LocationFilter;
+                        BoxHandlingLine."Bin Code" := BinCode;
+                      END ELSE
+                        Remark := Text038;
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      BoxHandlingLine.MODIFY;
+                    END;
+                  END;
+                BoxHandlingLine.FIELDNO("Item No."):
+                  BEGIN
+                    RFGroupFilter := '0';
+                    RFSetup.GET('');
+                    RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+                    IF NOT RFMgt.GetItem(
+                             TextValue,RFEmployeeSetup,ItemIdent."Item No.",
+                             ItemIdent."Variant Code",
+                             ItemIdent."Unit of Measure Code",LotNo,SerialNo)
+                    THEN
+                      Remark := STRSUBSTNO(Text004,BoxHandlingLine.FIELDCAPTION("Item No."));
+
+                    IF Remark = '' THEN  BEGIN
+                      IF ItemIdent."Variant Code" <> '' THEN BEGIN
+                        ItemVariant.SETRANGE("Item No.",ItemIdent."Item No.");
+                        ItemVariant.SETRANGE(Code,ItemIdent."Variant Code");
+                        IF NOT ItemVariant.FIND('-') THEN
+                          Remark := Text030;
+                      END;
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      IF ItemIdent."Unit of Measure Code" = '' THEN BEGIN
+                        Item.GET(ItemIdent."Item No.");
+                        BoxHandlingLine."Unit of Measure Code" := Item."Base Unit of Measure";
+                      END;
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      BoxHandlingLine."Item No." := ItemIdent."Item No.";
+                      IF BoxHandlingLine."Variant Code" = '' THEN
+                        BoxHandlingLine."Variant Code" := ItemIdent."Variant Code";
+                      IF BoxHandlingLine."Unit of Measure Code" = '' THEN
+                        BoxHandlingLine."Unit of Measure Code" := ItemIdent."Unit of Measure Code";
+
+                      IF Item.GET(ItemIdent."Item No.") THEN BEGIN
+                        IF ItemTrackingCode.GET(Item."Item Tracking Code") THEN BEGIN
+                          IF ItemTrackingCode."Lot Warehouse Tracking" THEN
+                            RFGroupFilter := RFGroupFilter + '|1';
+                          IF ItemTrackingCode."SN Warehouse Tracking" THEN
+                            RFGroupFilter := RFGroupFilter + '|2';
+                        END;
+                      END;
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      ItemIdent."Item No." := BoxHandlingLine."Item No.";
+                      ItemIdent."Variant Code" := BoxHandlingLine."Variant Code";
+                      ItemIdent."Unit of Measure Code" := BoxHandlingLine."Unit of Measure Code";
+                      BoxHandlingLine.Quantity := LicensePlateMgt.GetItemQtyOfStorageID(
+                        BoxHandlingLine."Pallet No.",BoxHandlingLine."Box No.",
+                        ItemIdent,BoxHandlingLine."Lot No.",BoxHandlingLine."Serial No.");
+                      BoxHandlingLine.MODIFY;
+                      IF BoxHandlingLine."Variant Code" <> '' THEN
+                        RFGroupFilter := RFGroupFilter + '|3';
+                      IF LicensePlateMgt.IsWhseLotTracked(BoxHandlingLine."Item No.") THEN
+                        RFGroupFilter := RFGroupFilter + '|1';
+                      IF LicensePlateMgt.IsWhseSerialTracked(BoxHandlingLine."Item No.") THEN
+                        RFGroupFilter := RFGroupFilter + '|2';
+                    END;
+                  END;
+                BoxHandlingLine.FIELDNO("Lot No."):
+                  BEGIN
+                    RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+
+                    IF TextValue = '' THEN
+                      Remark := STRSUBSTNO(Text004,BoxHandlingLine.FIELDCAPTION("Lot No."));
+
+                    IF Remark = '' THEN
+                      IF NOT LicensePlateMgt.IsWhseLotTracked(BoxHandlingLine."Item No.")
+                      THEN
+                        Remark := Text042;
+
+                    IF Remark = '' THEN BEGIN
+                      PalletBinContent.SETRANGE("Pallet No.",BoxHandlingLine."Pallet No.");
+                      PalletBinContent.SETRANGE("Item No.",BoxHandlingLine."Item No.");
+                      IF PalletBinContent.FINDFIRST THEN BEGIN
+                        IF PalletBinContent."Lot No." = '' THEN
+                          Remark := Text043;
+                      END;
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      PalletBinContent.SETRANGE("Pallet No.",BoxHandlingLine."Pallet No.");
+                      PalletBinContent.SETRANGE("Item No.",BoxHandlingLine."Item No.");
+                      PalletBinContent.SETRANGE("Lot No.",TextValue);
+                      IF PalletBinContent.ISEMPTY THEN
+                        Remark := STRSUBSTNO(Text004,PalletBinContent.FIELDCAPTION("Lot No."));
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      ItemIdent."Item No." := BoxHandlingLine."Item No.";
+                      ItemIdent."Variant Code" := BoxHandlingLine."Variant Code";
+                      ItemIdent."Unit of Measure Code" := BoxHandlingLine."Unit of Measure Code";
+                      BoxHandlingLine.Quantity := LicensePlateMgt.GetItemQtyOfStorageID(
+                        BoxHandlingLine."Pallet No.",BoxHandlingLine."Box No.",
+                        ItemIdent,TextValue,BoxHandlingLine."Serial No.");
+                      BoxHandlingLine."Quantity (Base)" := BoxHandlingLine.Quantity *
+                        BoxHandlingLine."Qty. per UOM";
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      BoxHandlingLine."Lot No." := TextValue;
+                      BoxHandlingLine.MODIFY;
+                    END;
+                  END;
+                BoxHandlingLine.FIELDNO("Serial No."):
+                  BEGIN
+                    RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+
+                    IF TextValue = '' THEN
+                      Remark := STRSUBSTNO(Text004,BoxHandlingLine.FIELDCAPTION("Serial No."));
+
+                    IF Remark = '' THEN
+                      IF NOT LicensePlateMgt.IsWhseSerialTracked(BoxHandlingLine."Item No.")
+                      THEN
+                        Remark := Text044;
+
+                    PalletBinContent.SETRANGE("Pallet No.",BoxHandlingLine."Pallet No.");
+                    PalletBinContent.SETRANGE("Item No.",BoxHandlingLine."Item No.");
+                    IF PalletBinContent.FINDFIRST THEN BEGIN
+                      IF PalletBinContent."Serial No." = '' THEN
+                        Remark := Text043;
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      BoxHandlingLine."Serial No." := TextValue;
+                      BoxHandlingLine.Quantity := 1;
+                      BoxHandlingLine."Quantity (Base)" :=
+                        BoxHandlingLine.Quantity * BoxHandlingLine."Qty. per UOM";
+                      BoxHandlingLine.MODIFY;
+                    END;
+                  END;
+
+                BoxHandlingLine.FIELDNO(Quantity):
+                  BEGIN
+                    RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+
+                    IF TextValue = '' THEN
+                      Remark := STRSUBSTNO(Text004,BoxHandlingLine.FIELDCAPTION(Quantity));
+
+                    IF Remark = '' THEN BEGIN
+                      IF NOT EVALUATE(NewQty,TextValue) THEN
+                        Remark := Text022;
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      IF (NewQty < 0) OR (TextValue = '') THEN
+                        Remark := STRSUBSTNO(Text004,BoxHandlingLine.FIELDCAPTION(Quantity));
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      ItemIdent."Item No." := BoxHandlingLine."Item No.";
+                      ItemIdent."Variant Code" := BoxHandlingLine."Variant Code";
+                      ItemIdent."Unit of Measure Code" := BoxHandlingLine."Unit of Measure Code";
+
+                      AvailableQuantity := LicensePlateMgt.GetMaxAdjustQty(ItemIdent,WhseEmpId);
+                      IF AvailableQuantity > 0 THEN BEGIN
+                        IF AvailableQuantity < NewQty - BoxHandlingLine.Quantity THEN
+                          Remark := STRSUBSTNO(Text004,BoxHandlingLine.FIELDCAPTION(Quantity));
+                      END;
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      BoxHandlingLine.Quantity := NewQty;
+                      IF BoxHandlingLine."Unit of Measure Code" <> '' THEN BEGIN
+                        ItemUnitofMeasure.SETRANGE("Item No.",BoxHandlingLine."Item No.");
+                        ItemUnitofMeasure.SETRANGE(Code,BoxHandlingLine."Unit of Measure Code");
+                        IF ItemUnitofMeasure.FINDFIRST THEN BEGIN
+                          BoxHandlingLine."Quantity (Base)" := BoxHandlingLine.Quantity *
+                            ItemUnitofMeasure."Qty. per Unit of Measure";
+                          BoxHandlingLine."Qty. per UOM" :=
+                            ItemUnitofMeasure."Qty. per Unit of Measure";
+                        END ELSE BEGIN
+                          BoxHandlingLine."Quantity (Base)" := BoxHandlingLine.Quantity;
+                          BoxHandlingLine."Qty. per UOM" := 1;
+                        END;
+                      END;
+                      BoxHandlingLine.MODIFY;
+
+                      BoxHandlingLine.Quantity := LicensePlateMgt.GetItemQtyOfStorageID(
+                        BoxHandlingLine."Pallet No.",BoxHandlingLine."Box No.",
+                        ItemIdent,BoxHandlingLine."Lot No.",BoxHandlingLine."Serial No.");
+                      BoxHandlingLine."Quantity (Base)" := BoxHandlingLine.Quantity *
+                        BoxHandlingLine."Qty. per UOM";
+
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      IF BoxHandlingLine.Quantity = NewQty THEN
+                        Remark := Text041;
+
+                      IF Remark = '' THEN BEGIN
+                        IF BoxHandlingLine.Quantity > NewQty THEN BEGIN
+                          IF PalletQAMgt.NegAdjRestricted(
+                               BoxHandlingLine."Pallet No.",Remark)
+                          THEN
+                            IF Remark = '' THEN
+                              Remark := Text046;
+                        END;
+                      END;
+
+                      IF Remark = '' THEN BEGIN
+                        IF BoxHandlingLine.Quantity < NewQty THEN BEGIN
+                          IF PalletQAMgt.PosAdjRestricted(
+                               BoxHandlingLine."Pallet No.",Remark)
+                          THEN
+                            IF Remark = '' THEN
+                              Remark := Text046;
+                        END;
+                      END;
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      IF LicensePlateMgt.IsWhseSerialTracked(BoxHandlingLine."Item No.")
+                      THEN BEGIN
+                        IF NOT ((NewQty = 0) OR (NewQty = 1)) THEN
+                          Remark := Text045
+                        ELSE BEGIN
+                          WarehouseEntry.RESET;
+                          WarehouseEntry.SETCURRENTKEY("Item No.","Bin Code","Location Code",
+                            "Variant Code","Unit of Measure Code","Lot No.","Serial No.","Entry Type");
+                          WarehouseEntry.SETRANGE("Location Code",BoxHandlingLine.Location);
+                          WarehouseEntry.SETRANGE("Item No.",BoxHandlingLine."Item No.");
+                          WarehouseEntry.SETRANGE("Serial No.",BoxHandlingLine."Serial No.");
+                          WarehouseEntry.CALCSUMS(Quantity);
+                        END;
+                        IF Remark = '' THEN BEGIN
+                          IF NewQty = 0 THEN BEGIN
+                            PalletBinContent.SETRANGE("Pallet No.",BoxHandlingLine."Pallet No.");
+                            PalletBinContent.SETRANGE("Item No.",BoxHandlingLine."Item No.");
+                            PalletBinContent.SETRANGE("Serial No.",BoxHandlingLine."Serial No.");
+                            IF PalletBinContent.ISEMPTY THEN
+                              Remark := STRSUBSTNO(Text004,BoxHandlingLine.FIELDCAPTION("Serial No."));
+                            IF WarehouseEntry.Quantity <> 1 THEN
+                              Remark := STRSUBSTNO(Text004,BoxHandlingLine.FIELDCAPTION("Serial No."));
+                          END;
+
+                          IF NewQty = 1 THEN BEGIN
+                            WarehouseEntry.SETRANGE("Location Code",BoxHandlingLine.Location);
+                            PalletBinContent.SETRANGE("Item No.",BoxHandlingLine."Item No.");
+                            PalletBinContent.SETRANGE("Serial No.",BoxHandlingLine."Serial No.");
+                            IF PalletBinContent.ISEMPTY THEN
+                              Remark := STRSUBSTNO(Text004,BoxHandlingLine.FIELDCAPTION("Serial No."));
+                            IF WarehouseEntry.Quantity > 0 THEN
+                              Remark := STRSUBSTNO(Text004,BoxHandlingLine.FIELDCAPTION("Serial No."));
+                          END;
+                        END;
+                      END;
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      LicensePlateMgt.AdjustStorageIDQty(
+                        BoxHandlingLine,NewQty,WhseEmpId,Remark);
+
+                      LicensePlateMgt.UpdatePalletBinContent(BoxHandlingLine.Location,
+                        BoxHandlingLine."Bin Code",BoxHandlingLine."Pallet No.",
+                        BoxHandlingLine."Box No.",BoxHandlingLine."Item No.",
+                        BoxHandlingLine."Variant Code",BoxHandlingLine."Unit of Measure Code",
+                        BoxHandlingLine."Lot No.",BoxHandlingLine."Serial No.",
+                        BoxHandlingLine."Expiry Date",NewQty-BoxHandlingLine.Quantity,-1,WhseEmpId);
+                    END;
+
+                    IF Remark = '' THEN BEGIN
+                      IF RFEmployeeSetup."Exit after LP Adjust Item" THEN BEGIN
+                        BoxHandlingLine3.RESET;
+                        BoxHandlingLine3.SETRANGE("Warehouse Employee Code",WhseEmpId);
+                        BoxHandlingLine3.DELETEALL;
+
+                        ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+                        EXIT;
+                      END;
+                    END;
+                  END;
+                ELSE BEGIN
+                  ADCSCommunication.FieldSetvalue(RecRef,FldNo,TextValue);
+                  RecRef.SETTABLE(Bin);
+                END;
+              END;
+                ADCSCommunication.SetExtraValue('RFGroupFilter',RFGroupFilter);
+                ADCSCommunication.SetRFGroupFilter(RFGroupFilter);
+                RecRef.GETTABLE(BoxHandlingLine);
+                ADCSCommunication.SetRecRef(RecRef);
+                ActiveInputField := ADCSCommunication.GetActiveInputNo(CurrentCode,FldNo);
+                IF Remark = '' THEN
+                  IF ADCSCommunication.LastEntryField(CurrentCode,FldNo) THEN BEGIN
+                    RecRef.GETTABLE(BoxHandlingLine);
+                    IF NOT ADCSCommunication.FindRecRef(1,ActiveInputField) THEN BEGIN
+                      BoxHandlingLine."Bin Code" := '';
+                      BoxHandlingLine."Item No." := '';
+                      BoxHandlingLine."Variant Code" := '';
+                      BoxHandlingLine."Unit of Measure Code" := '';
+                      BoxHandlingLine."Pallet No." := '';
+                      BoxHandlingLine."Box No." := '';
+                      BoxHandlingLine."To Pallet No." := '';
+                      BoxHandlingLine."To Bin Code" := '';
+                      BoxHandlingLine."Lot No." := '';
+                      BoxHandlingLine."Serial No." := '';
+                      BoxHandlingLine."Quantity (Base)" := 0;
+                      BoxHandlingLine.Quantity := 0;
+                      BoxHandlingLine."New Quanitity (Base)" := 0;
+                      BoxHandlingLine."New Quantity" := 0;
+                      BoxHandlingLine."Adjust Quantity (Base)" := 0;
+                      BoxHandlingLine."Adjust Quantity" := 0;
+                      BoxHandlingLine."Qty. per UOM" := 0;
+                      BoxHandlingLine.Integer1 := 0;
+                      BoxHandlingLine."Expiry Date" := 0D;
+                      BoxHandlingLine.MODIFY;
+                    END;
+                    ActiveInputField := 1;
+                  END ELSE
+                    ActiveInputField += 1;
+                RecRef.GETTABLE(BoxHandlingLine);
+                ADCSCommunication.SetRecRef(RecRef);
+              END;
+          END;
+      END;
+
+      ADCSCommunication.SetExtraValue('FromCard','Yes');
+      IF NOT (FuncGroup.KeyDef IN [FuncGroup.KeyDef::Esc]) THEN
+        Sendform(ActiveInputField);
+    END;
+
+    PROCEDURE PrepareData@1240020001();
+    VAR
+      PalletJournalLine@1240020008 : Record 14002966;
+      BoxHandlingLine@1240020007 : Record 14002970;
+      BoxHandlingLine3@1240020006 : Record 14002970;
+      ReturnedNode2@1240020004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      TableNo@1240020002 : Integer;
+      RecordId@1240020001 : RecordID;
+      Box@1240020000 : Code[20];
+    BEGIN
+      XMLDOMMgmt.FindNode(RootNode,'Header/Input',ReturnedNode);
+
+      XMLDOMMgmt.FindNode(RootNode,'ExtraInfo',ReturnedNode2);
+      Box := ADCSCommunication.GetNodeAttribute(ReturnedNode2,'Box');
+      IF EVALUATE(TableNo,ADCSCommunication.GetNodeAttribute(ReturnedNode,'TableNo'))
+      THEN BEGIN
+        RecRef.OPEN(TableNo);
+        IF EVALUATE(RecordId,ADCSCommunication.GetNodeAttribute(ReturnedNode,'RecordID'))
+        THEN BEGIN
+          IF RecRef.GET(RecordId) THEN BEGIN
+            RecRef.SETTABLE(PalletJournalLine);
+            PalletJournalLine.RESET;
+            PalletJournalLine.SETRANGE("Line No.",PalletJournalLine."Line No.");
+          END;
+          RecRef.CLOSE;
+          RecRef.OPEN(DATABASE::"Pallet Journal Line");
+          RecRef.GETTABLE(PalletJournalLine);
+          ADCSCommunication.SetRecRef(RecRef);
+          RecRef.CLOSE;
+        END;
+      END;
+
+      BoxHandlingLine.SETRANGE("Warehouse Employee Code",WhseEmpId);
+      IF BoxHandlingLine.FIND('-') THEN
+        BoxHandlingLine.DELETEALL;
+
+      BoxHandlingLine3.RESET;
+      IF BoxHandlingLine3.FIND('+') THEN
+        BoxHandlingLine."Line No." := BoxHandlingLine3."Line No." + 10000
+      ELSE
+        BoxHandlingLine."Line No." := 10000;
+      BoxHandlingLine.INIT;
+      BoxHandlingLine."Warehouse Employee Code" := WhseEmpId;
+      BoxHandlingLine.Location := LocationFilter;
+      BoxHandlingLine."Box No." := PalletJournalLine."Box No.";
+      BoxHandlingLine.INSERT;
+
+      RecRef.OPEN(DATABASE::"Box Handling Line");
+      RecRef.GETTABLE(BoxHandlingLine);
+      ADCSCommunication.SetRecRef(RecRef);
+      ActiveInputField := 1;
+      Sendform(ActiveInputField);
+    END;
+
+    PROCEDURE Sendform@1240020002(InputField@1240020000 : Integer);
+    BEGIN
+      // Prepare Miniform
+      ADCSCommunication.EncodeMiniForm(MiniformHeader,StackCode,DOMxmlin,InputField,Remark,LoginID);
+      ADCSCommunication.GetReturnXML(DOMxmlin);
+      ADCSNasStartup.SendXMLReply(DOMxmlin);
+    END;
+
+    EVENT DOMxmlin@1240020009::ondataavailable@198();
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020009::onreadystatechange@-609();
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020009::NodeInserting@93(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020009::NodeInserted@94(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020009::NodeRemoving@95(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020009::NodeRemoved@96(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020009::NodeChanging@97(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020009::NodeChanged@98(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

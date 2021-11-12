@@ -1,0 +1,1421 @@
+OBJECT Table 14000555 Procurement Unit
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.02;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 32=r;
+    OnInsert=VAR
+               ProcUnit@1240020000 : Record 14000555;
+               Item@1240020001 : Record 27;
+               Vendor@1240020002 : Record 23;
+               Location@1240020003 : Record 14;
+               UsageLedgerEntry@1240020004 : Record 14000556;
+               VendBuyingCalendar@1240020005 : Record 14000563;
+               StockkeepingUnit@1240020007 : Record 5700;
+               ProdItemGroup@1240020006 : Record 14002676;
+             BEGIN
+               GetInventorySetup;
+               Item.GET("Item No.");
+               Location.GET("Location Code");
+
+
+               "Replenishment Model" := InvMgtSetup."Default Replenishment Model";
+
+               VALIDATE("Purchase Unit of Measure",Item."Purch. Unit of Measure");
+               GetUOM;
+               IF (Item."Order Multiple" > 0) AND
+                  ((Item."Order Multiple" MOD ItemUOM."Qty. per Unit of Measure") = 0) THEN
+                 "Order Multiple" := Item."Order Multiple"
+               ELSE
+                 "Order Multiple" := ItemUOM."Qty. per Unit of Measure";
+
+               IF (Item."Minimum Order Quantity" > 1) AND
+                  ((Item."Minimum Order Quantity" MOD ItemUOM."Qty. per Unit of Measure") = 0) THEN
+                 "Order Minimum" := Item."Minimum Order Quantity"
+               ELSE
+                 "Order Minimum" := 0;
+
+               "Order Qty. Method" := InvMgtSetup."Default Order Qty. Method";
+
+               "Stocking Rule Code" := Location."Stocking Rule Code";
+               "Minimum Days Supply" := Location."Def. Minimum Days";
+               "Maximum Days Supply" := Location."Def. Maximum Days";
+
+               CASE Location."Def. Repl. Source Type" OF
+                 Location."Def. Repl. Source Type"::Location:
+                   BEGIN
+                     "Replenishment Source Type" := Location."Def. Repl. Source Type";
+                     "Replenishment Source Code" := Location."Def. Repl. Source Code";
+                     "Replenishment Model" := "Replenishment Model"::"Min/Max";
+                   END;
+                 Location."Def. Repl. Source Type"::Vendor:
+                   BEGIN
+                     "Replenishment Source Type" := Location."Def. Repl. Source Type";
+                     "Replenishment Source Code" := Location."Def. Repl. Source Code";
+                     IF StockkeepingUnit.GET("Location Code","Item No.","Variant Code") AND
+                        (StockkeepingUnit."Vendor No." <> '')
+                     THEN
+                       "Replenishment Source Code" := StockkeepingUnit."Vendor No."
+                     ELSE BEGIN
+                       IF Item."Vendor No." <> '' THEN
+                         "Replenishment Source Code" := Item."Vendor No.";
+                     END;
+                   IF NOT Vendor.GET("Replenishment Source Code") THEN BEGIN
+                     "Replenishment Source Code" := '';
+                     Vendor.INIT;
+                   END;
+                   IF Vendor.Blocked = Vendor.Blocked::All THEN
+                     "Replenishment Source Code" := '';
+                     IF NOT VendBuyingCalendar.GET("Replenishment Source Code","Location Code", "Division Code") THEN
+                       VendBuyingCalendar.INIT;
+                   END;
+                 ELSE BEGIN
+                   "Replenishment Source Type" := "Replenishment Source Type"::" ";
+                   "Replenishment Source Code" := '';
+                 END;
+               END;
+
+               "Safety Stock Calc. Method" := Location."Def. Safety Stock Calc. Method";
+               "Target Customer Service Level" := Location."Def. Target Cust. Service Lvl.";
+               "Nonstock Unit" := Location."Def. Nonstock Unit";
+               "Include Drop Ship Usage" := Location."Def. Include Drop Ship Usage";
+
+               IF VendBuyingCalendar."Default Repl. Location Code" <> '' THEN BEGIN
+                 VALIDATE("Replenishment Source Type","Replenishment Source Type"::Location);
+                 VALIDATE("Replenishment Source Code",VendBuyingCalendar."Default Repl. Location Code");
+                 "Maximum Inventory" := VendBuyingCalendar."Default Max. Inventory";
+                 "Minimum Inventory" := VendBuyingCalendar."Default Min. Inventory";
+                 "Minimum Days Supply" := VendBuyingCalendar."Default Min. Days Supply";
+                 "Maximum Days Supply" := VendBuyingCalendar."Default Max. Days Supply";
+               END;
+
+               IF NOT Temp THEN
+                 VALIDATE("Replenishment Source Code","Replenishment Source Code");
+
+               IF NOT Temp THEN BEGIN
+                 IF (Location."Last Day-End Date" <> 0D) THEN BEGIN
+                   UsageLedgerEntry.SETCURRENTKEY("Item No.","Usage Date");
+                   UsageLedgerEntry.SETRANGE("Item No.","Item No.");
+                   UsageLedgerEntry.SETFILTER("Usage Date",'<=%1',Location."Last Day-End Date");
+                   UsageLedgerEntry.SETRANGE("Original Variant Code","Variant Code");
+                   UsageLedgerEntry.SETRANGE("Original Location Code","Location Code");
+                   IF NOT UsageLedgerEntry.ISEMPTY THEN BEGIN
+                     "Change Reforecast Required" := TRUE;
+                     IF UBP.SpokesExist(Rec) OR ("Replenishment Source Type" = "Replenishment Source Type"::Location) THEN
+                     "Reforecast Item" := TRUE;
+                   END;
+                 END;
+               END;
+               IF ("Variant Code" <> '') AND (NOT Temp) THEN BEGIN
+                 IF ProcUnit.GET("Location Code","Item No.",'') THEN BEGIN
+                   IF ProcUnit."Summarize Variant Detail" THEN BEGIN
+                     ProcUnit."Summarize Pending" := TRUE;
+                     ProcUnit.MODIFY(FALSE);
+                   END;
+                 END;
+               END;
+
+               IF StockkeepingUnit.GET(
+                 "Location Code","Item No.","Variant Code")
+               THEN BEGIN
+                 CASE StockkeepingUnit."Replenishment System" OF
+                   StockkeepingUnit."Replenishment System"::"Prod. Order":
+                     BEGIN
+                       "Replenishment Source Type" :=
+                         "Replenishment Source Type"::Production;
+                       IF ProdItemGroup.FIND('-') THEN
+                         "Replenishment Source Code" := ProdItemGroup.Code
+                       ELSE
+                         "Replenishment Source Code" := '';
+                     END;
+                   StockkeepingUnit."Replenishment System"::Transfer:
+                     BEGIN
+                       "Replenishment Source Type" :=
+                         "Replenishment Source Type"::Location;
+                       "Replenishment Source Code" :=
+                         StockkeepingUnit."Transfer-from Code";
+                       "Replenishment Model" := "Replenishment Model"::"Min/Max";
+                     END;
+                  StockkeepingUnit."Replenishment System"::Purchase:
+                     BEGIN
+                       IF "Replenishment Source Type" = "Replenishment Source Type"::" " THEN BEGIN
+                       "Replenishment Source Type" :=
+                         "Replenishment Source Type"::Vendor;
+                       "Replenishment Source Code" :=
+                         StockkeepingUnit."Vendor No.";
+                       END;
+                     END;
+                   StockkeepingUnit."Replenishment System"::Assembly:
+                     BEGIN
+                       "Replenishment Source Type" :=
+                         "Replenishment Source Type"::Assembly;
+                       "Replenishment Source Code" := '';
+                     END;
+                 END;
+               END ELSE BEGIN
+                 IF "Replenishment Source Type" = "Replenishment Source Type"::" " THEN BEGIN
+                   IF Item."Replenishment System" =  Item."Replenishment System"::Purchase THEN BEGIN
+                         "Replenishment Source Type" :=
+                           "Replenishment Source Type"::Vendor;
+                         "Replenishment Source Code" :=
+                           Item."Vendor No.";
+                   END;
+                 END ELSE BEGIN
+                   IF ("Replenishment Source Type" = "Replenishment Source Type"::Vendor) THEN BEGIN
+                 CASE Item."Replenishment System" OF
+                   Item."Replenishment System"::"Prod. Order":
+                     BEGIN
+                       "Replenishment Source Type" :=
+                         "Replenishment Source Type"::Production;
+                       IF ProdItemGroup.FIND('-') THEN
+                         "Replenishment Source Code" := ProdItemGroup.Code
+                       ELSE
+                         "Replenishment Source Code" := '';
+                     END;
+                   Item."Replenishment System"::Assembly:
+                     BEGIN
+                       "Replenishment Source Type" :=
+                         "Replenishment Source Type"::Assembly;
+                       "Replenishment Source Code" := '';
+                         END;
+                     END;
+                     END;
+                   END;
+               END;
+
+               IF "Replenishment Source Type" = "Replenishment Source Type"::Vendor THEN
+                 IF NOT Vendor.GET("Replenishment Source Code") THEN
+                   "Replenishment Source Code" := '';
+
+               Review := TRUE;
+               "Date Created" := TODAY;
+               "User ID" := USERID;
+             END;
+
+    OnModify=VAR
+               ProcUnit@1240020000 : Record 14000555;
+             BEGIN
+               CheckChangedFields(Rec,xRec);
+               IF "Change Reforecast Required" THEN BEGIN
+                 ProcUnit.SETRANGE("Item No.","Item No.");
+                 IF ProcUnit.FINDSET THEN
+                   REPEAT
+                     IF (ProcUnit."Location Code" = "Location Code") AND
+                        (ProcUnit."Variant Code" = "Variant Code")
+                     THEN BEGIN
+                       "Usage Location Filter String" := '';
+                       "Location Filter String" := '';
+                     END ELSE BEGIN
+                       ProcUnit."Usage Location Filter String" := '';
+                       ProcUnit."Location Filter String" := '';
+                       ProcUnit.MODIFY;
+                     END;
+                   UNTIL ProcUnit.NEXT = 0;
+               END;
+
+               "Date Changed" := TODAY;
+               "User ID" := USERID;
+             END;
+
+    OnDelete=VAR
+               UsageRedirect@1240020000 : Record 14000575;
+               ItemUsage@1240020001 : Record 14000557;
+               UsageLedgerEntry@1240020002 : Record 14000556;
+             BEGIN
+               IF NOT OverrideToDelete THEN BEGIN
+                 SETFILTER("Location Filter",UBP.GetLocationFilter(Rec,FALSE));
+                 CALCFIELDS(Inventory);
+                 IF Inventory <> 0 THEN
+                   ERROR(
+                     Text005,
+                     TABLENAME,"Location Code","Item No.","Variant Code",FIELDNAME(Inventory));
+
+                 IF "Summarize Variant Detail" THEN
+                   ERROR(Text009);
+               END;
+
+               UsageRedirect.RESET;
+               UsageRedirect.SETCURRENTKEY(
+                 "Redirect Location Code","Redirect Item No.","Redirect Variant Code");
+               UsageRedirect.SETRANGE("Redirect Location Code","Location Code");
+               UsageRedirect.SETRANGE("Redirect Item No.","Item No.");
+               UsageRedirect.SETRANGE("Redirect Variant Code","Variant Code");
+               UsageRedirect.SETRANGE("Delete Pending",FALSE);
+               IF UsageRedirect.FIND('-') THEN
+                 REPEAT
+                   IF UsageRedirect."Change Pending" THEN
+                     UsageRedirect.DELETE
+                   ELSE BEGIN
+                     UsageRedirect."Delete Redirect" := TRUE;
+                     UsageRedirect."Delete Pending" := TRUE;
+                     UsageRedirect.MODIFY;
+                   END;
+                 UNTIL UsageRedirect.NEXT = 0;
+               UsageRedirect.RESET;
+               UsageRedirect.SETRANGE("Location Code","Location Code");
+               UsageRedirect.SETRANGE("Item No.","Item No.");
+               UsageRedirect.SETRANGE("Variant Code","Variant Code");
+               UsageRedirect.SETRANGE("Delete Pending",FALSE);
+               IF UsageRedirect.FIND('-') THEN
+                 REPEAT
+                   IF UsageRedirect."Change Pending" THEN
+                     UsageRedirect.DELETE
+                   ELSE BEGIN
+                     UsageRedirect."Delete Redirect" := TRUE;
+                     UsageRedirect."Delete Pending" := TRUE;
+                     UsageRedirect.MODIFY;
+                   END;
+                 UNTIL UsageRedirect.NEXT = 0;
+
+               UsageLedgerEntry.SETCURRENTKEY("Item No.","Location Code","Variant Code");
+               UsageLedgerEntry.SETRANGE("Item No.","Item No.");
+               UsageLedgerEntry.SETRANGE("Location Code","Location Code");
+               UsageLedgerEntry.SETRANGE("Variant Code","Variant Code");
+               UsageLedgerEntry.DELETEALL;
+
+               ItemUsage.RESET;
+               ItemUsage.SETCURRENTKEY("Location Code","Item No.","Variant Code");
+               ItemUsage.SETRANGE("Location Code","Location Code");
+               ItemUsage.SETRANGE("Item No.","Item No.");
+               ItemUsage.SETRANGE("Variant Code","Variant Code");
+               ItemUsage.DELETEALL;
+             END;
+
+    CaptionML=ENU=Procurement Unit;
+    LookupPageID=Page14000559;
+    DrillDownPageID=Page14000559;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Location Code       ;Code10        ;TableRelation=Location.Code;
+                                                   CaptionML=ENU=Location Code }
+    { 2   ;   ;Item No.            ;Code50        ;TableRelation=Item.No.;
+                                                   CaptionML=ENU=Item No. }
+    { 3   ;   ;Variant Code        ;Code10        ;TableRelation="Item Variant".Code WHERE (Item No.=FIELD(Item No.));
+                                                   CaptionML=ENU=Variant Code }
+    { 11  ;   ;Location Name       ;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Location.Name WHERE (Code=FIELD(Location Code)));
+                                                   CaptionML=ENU=Location Name }
+    { 12  ;   ;Description         ;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Item.Description WHERE (No.=FIELD(Item No.)));
+                                                   CaptionML=ENU=Description;
+                                                   Editable=No }
+    { 21  ;   ;Inventory           ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Item Ledger Entry".Quantity WHERE (Item No.=FIELD(Item No.),
+                                                                                                       Variant Code=FIELD(Variant Code),
+                                                                                                       Location Code=FIELD(Location Filter)));
+                                                   CaptionML=ENU=Inventory;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 22  ;   ;Inventory Net Change;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Item Ledger Entry".Quantity WHERE (Item No.=FIELD(Item No.),
+                                                                                                       Variant Code=FIELD(Variant Code),
+                                                                                                       Location Code=FIELD(Location Filter),
+                                                                                                       Posting Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Inventory Net Change;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 23  ;   ;Qty. on Purchase Order;Decimal     ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Purchase Line"."Outstanding Qty. (Base)" WHERE (Document Type=FILTER(Order),
+                                                                                                                    Location Code=FIELD(Location Filter),
+                                                                                                                    Type=FILTER(Item),
+                                                                                                                    No.=FIELD(Item No.),
+                                                                                                                    Drop Shipment=FILTER(No),
+                                                                                                                    Variant Code=FIELD(Variant Code),
+                                                                                                                    Expected Receipt Date=FIELD(Date Filter),
+                                                                                                                    Special Order=CONST(No)));
+                                                   CaptionML=ENU=Qty. on Purchase Order;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 24  ;   ;Qty. on Sales Order ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Sales Line"."Outstanding Qty. (Base)" WHERE (Document Type=FILTER(Order),
+                                                                                                                 Location Code=FIELD(Location Filter),
+                                                                                                                 Type=FILTER(Item),
+                                                                                                                 No.=FIELD(Item No.),
+                                                                                                                 Drop Shipment=FILTER(No),
+                                                                                                                 Variant Code=FIELD(Variant Code),
+                                                                                                                 Shipment Date=FIELD(Date Filter),
+                                                                                                                 Special Order=CONST(No)));
+                                                   CaptionML=ENU=Qty. on Sales Order;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 25  ;   ;Qty. on Transfer Out;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Transfer Line"."Outstanding Qty. (Base)" WHERE (Transfer-from Code=FIELD(Location Filter),
+                                                                                                                    Item No.=FIELD(Item No.),
+                                                                                                                    Variant Code=FIELD(Variant Code),
+                                                                                                                    Shipment Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Transfer Out;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 26  ;   ;Qty. on Transfer In ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Transfer Line"."Outstanding Qty. (Base)" WHERE (Transfer-to Code=FIELD(Location Filter),
+                                                                                                                    Item No.=FIELD(Item No.),
+                                                                                                                    Variant Code=FIELD(Variant Code),
+                                                                                                                    Receipt Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Transfer In;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 27  ;   ;Qty. Expected Less On Order;Decimal;CaptionML=ENU=Qty. Expected Less On Order }
+    { 28  ;   ;Qty. on Vend. Return Order;Decimal ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Purchase Line"."Outstanding Qty. (Base)" WHERE (Document Type=FILTER(Return Order),
+                                                                                                                    Location Code=FIELD(Location Filter),
+                                                                                                                    Type=FILTER(Item),
+                                                                                                                    No.=FIELD(Item No.),
+                                                                                                                    Drop Shipment=FILTER(No),
+                                                                                                                    Variant Code=FIELD(Variant Code),
+                                                                                                                    Expected Receipt Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Vend. Return Order;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 29  ;   ;Qty. Expected       ;Decimal       ;CaptionML=ENU=Qty. Expected;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 30  ;   ;Qty. on Prod. Order ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Prod. Order Line"."Remaining Qty. (Base)" WHERE (Location Code=FIELD(Location Filter),
+                                                                                                                     Status=FIELD(Prod. Order Status Filter),
+                                                                                                                     Item No.=FIELD(Item No.),
+                                                                                                                     Variant Code=FIELD(Variant Code),
+                                                                                                                     Due Date=FIELD(Date Filter)));
+                                                   OnLookup=VAR
+                                                              ProdOrderLine@1000 : Record 5406;
+                                                            BEGIN
+                                                              ProdOrderLine.SETRANGE("Location Code","Location Code");
+                                                              ProdOrderLine.SETRANGE("Item No.","Item No.");
+                                                              ProdOrderLine.SETRANGE("Variant Code","Variant Code");
+                                                              ProdOrderLine.SETFILTER("Due Date",GETFILTER("Date Filter"));
+                                                              PAGE.RUNMODAL(PAGE::"Prod. Order Lines",ProdOrderLine);
+                                                            END;
+
+                                                   CaptionML=ENU=Qty. on Prod. Order;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 31  ;   ;Qty. on Component Lines;Decimal    ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Prod. Order Component"."Remaining Qty. (Base)" WHERE (Location Code=FIELD(Location Filter),
+                                                                                                                          Status=FIELD(Prod. Order Status Filter),
+                                                                                                                          Item No.=FIELD(Item No.),
+                                                                                                                          Variant Code=FIELD(Variant Code),
+                                                                                                                          Due Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Component Lines;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 32  ;   ;Qty. on Service Order;Decimal      ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Service Line"."Outstanding Qty. (Base)" WHERE (Type=CONST(Item),
+                                                                                                                   Location Code=FIELD(Location Filter),
+                                                                                                                   No.=FIELD(Item No.),
+                                                                                                                   Variant Code=FIELD(Variant Code),
+                                                                                                                   Posting Date=FIELD(Date Filter),
+                                                                                                                   Document Type=CONST(Order)));
+                                                   CaptionML=ENU=Qty. on Service Order;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 33  ;   ;Replenishment Source Type;Option   ;OnValidate=BEGIN
+                                                                IF "Replenishment Source Type" = "Replenishment Source Type"::Production THEN
+                                                                  TESTFIELD("Variant Code",'');
+                                                                IF "Replenishment Source Type" <> xRec."Replenishment Source Type" THEN BEGIN
+                                                                  VALIDATE("Replenishment Source Code",'');
+                                                                  VALIDATE("Order Qty. Method","Order Qty. Method"::" ");
+                                                                  "Manual Bypass Replenishment" := FALSE;
+                                                                END;
+                                                                IF "Replenishment Source Type" = "Replenishment Source Type"::Location THEN
+                                                                  "Replenishment Model" := "Replenishment Model"::"Min/Max";
+                                                              END;
+
+                                                   CaptionML=ENU=Replenishment Source Type;
+                                                   OptionCaptionML=ENU=" ,Location,Vendor,Production,Assembly";
+                                                   OptionString=[ ,Location,Vendor,Production,Assembly] }
+    { 34  ;   ;Replenishment Source Code;Code20   ;TableRelation=IF (Replenishment Source Type=CONST(Location)) Location.Code WHERE (Use As In-Transit=CONST(No))
+                                                                 ELSE IF (Replenishment Source Type=CONST(Vendor)) Vendor.No.
+                                                                 ELSE IF (Replenishment Source Type=CONST(Production)) "Production Item Group".Code;
+                                                   OnValidate=VAR
+                                                                Text001@1240030000 : TextConst 'ENU=Replenishment Path Loop for Item %1 %2';
+                                                                Vendor@1240020001 : Record 23;
+                                                                VendPerfCalc@1240020002 : Codeunit 14000551;
+                                                                VendBuyingCalendar@1240020003 : Record 14000563;
+                                                              BEGIN
+
+                                                                "Average Lead Time (Days)" := 0;
+                                                                "Purchaser Code" := '';
+                                                                IF UBP.CheckReplPathLoop(Rec) THEN BEGIN
+                                                                  IF AutoInsert THEN BEGIN
+                                                                    "Replenishment Source Type" := "Replenishment Source Type"::" ";
+                                                                    "Replenishment Source Code" := '';
+                                                                    EXIT;
+                                                                  END ELSE BEGIN
+                                                                    IF GUIALLOWED THEN
+                                                                      ERROR(Text001,"Item No.","Variant Code")
+                                                                    ELSE BEGIN
+                                                                      "Replenishment Source Type" := "Replenishment Source Type"::" ";
+                                                                      "Replenishment Source Code" := '';
+                                                                      EXIT;
+                                                                    END;
+                                                                  END;
+                                                                END;
+                                                                IF Temp THEN
+                                                                  EXIT;
+                                                                IF "Replenishment Source Type" = "Replenishment Source Type"::Vendor THEN BEGIN
+                                                                  IF "Replenishment Source Code" <> '' THEN BEGIN
+                                                                    IF NOT VendBuyingCalendar.GET("Replenishment Source Code","Location Code", "Division Code") THEN BEGIN
+                                                                      VendBuyingCalendar.INIT;
+                                                                      VendBuyingCalendar."Vendor No." := "Replenishment Source Code";
+                                                                      VendBuyingCalendar."Location Code" := "Location Code";
+                                                                      VendBuyingCalendar."Division Code" := "Division Code";
+                                                                      VendBuyingCalendar."Line Buy Vendor" := TRUE;
+                                                                      GetInventorySetup;
+                                                                      VendBuyingCalendar."Frozen Review Cycle (Days)" := InvMgtSetup."Def. Vend. Review Cycle (Days)";
+                                                                      VendBuyingCalendar."Review Cycle (Days)" := VendBuyingCalendar."Frozen Review Cycle (Days)";
+                                                                      IF Vendor.GET("Replenishment Source Code") THEN
+                                                                        VendBuyingCalendar."Purchaser Code" := Vendor."Purchaser Code";
+                                                                      VendBuyingCalendar.INSERT(TRUE);
+                                                                      IF (InvMgtSetup."Force Purchaser Code Synch.") OR ("Purchaser Code" = '') THEN
+                                                                      "Purchaser Code" := VendBuyingCalendar."Purchaser Code";
+                                                                    END ELSE BEGIN
+                                                                      IF (InvMgtSetup."Force Purchaser Code Synch.") OR ("Purchaser Code" = '') THEN
+                                                                      "Purchaser Code" := VendBuyingCalendar."Purchaser Code";
+                                                                    END;
+                                                                    VendPerfCalc.CalcAveLeadTime(Rec);
+                                                                  END;
+                                                                END;
+                                                                UpdatePurchaserCode(TRUE);
+                                                              END;
+
+                                                   CaptionML=ENU=Replenishment Source Code }
+    { 35  ;   ;Include Drop Ship Usage;Boolean    ;CaptionML=ENU=Include Drop Ship Usage }
+    { 36  ;   ;Average Lead Time (Days);Integer   ;CaptionML=ENU=Average Lead Time (Days);
+                                                   Editable=No }
+    { 37  ;   ;Maximum Inventory   ;Decimal       ;OnValidate=BEGIN
+                                                                IF "Maximum Inventory" < 0 THEN
+                                                                  ERROR(Text013);
+                                                              END;
+
+                                                   CaptionML=ENU=Maximum Inventory;
+                                                   DecimalPlaces=0:5 }
+    { 38  ;   ;Minimum Inventory   ;Decimal       ;OnValidate=BEGIN
+                                                                IF "Minimum Inventory" < 0 THEN
+                                                                  ERROR(Text013);
+                                                              END;
+
+                                                   CaptionML=ENU=Minimum Inventory;
+                                                   DecimalPlaces=0:5 }
+    { 39  ;   ;Frozen Lead Time (Days);Integer    ;CaptionML=ENU=Frozen Lead Time (Days) }
+    { 40  ;   ;Frozen Lead Time Expir. Date;Date  ;CaptionML=ENU=Frozen Lead Time Expir. Date }
+    { 41  ;   ;Frozen Usage per Day;Decimal       ;CaptionML=ENU=Frozen Forecast Usage per Day;
+                                                   DecimalPlaces=0:5 }
+    { 42  ;   ;Frozen Usage Expiration Date;Date  ;TableRelation="Forecast Inventory Period"."Ending Date" WHERE (Type=CONST(" "));
+                                                   OnValidate=BEGIN
+                                                                IF "Frozen Usage Expiration Date" > 0D THEN
+                                                                  UBP.CheckForecastPeriodEndDate("Frozen Usage Expiration Date");
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              VALIDATE("Frozen Usage Expiration Date", UBP.RunForecastPeriodPageForEndDate);
+                                                            END;
+
+                                                   ValidateTableRelation=No;
+                                                   CaptionML=ENU=Frozen Forc. Usage Expiration Date }
+    { 43  ;   ;Frozen Order Point  ;Decimal       ;CaptionML=ENU=Frozen Order Point;
+                                                   DecimalPlaces=0:5 }
+    { 44  ;   ;Frozen Order Point Expiration;Date ;TableRelation="Forecast Inventory Period"."Starting Date";
+                                                   CaptionML=ENU=Frozen Order Point Expiration }
+    { 45  ;   ;Frozen Safety Allowance %;Decimal  ;CaptionML=ENU=Frozen Safety Stock Qty.;
+                                                   DecimalPlaces=0:5 }
+    { 46  ;   ;Frozen Safety Expiration Date;Date ;TableRelation="Forecast Inventory Period"."Ending Date" WHERE (Type=CONST(" "));
+                                                   OnValidate=BEGIN
+                                                                IF "Frozen Safety Expiration Date" > 0D THEN
+                                                                  UBP.CheckForecastPeriodEndDate("Frozen Safety Expiration Date");
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              VALIDATE("Frozen Safety Expiration Date", UBP.RunForecastPeriodPageForEndDate);
+                                                            END;
+
+                                                   ValidateTableRelation=No;
+                                                   CaptionML=ENU=Frozen Safety Expiration Date }
+    { 47  ;   ;Order Qty. Method   ;Option        ;InitValue=Item Class;
+                                                   CaptionML=ENU=Order Qty. Method;
+                                                   OptionCaptionML=ENU=" ,EOQ,Item Class";
+                                                   OptionString=[ ,EOQ,Item Class] }
+    { 48  ;   ;Order Qty. (Item Class);Decimal    ;CaptionML=ENU=Order Qty. (Item Class) }
+    { 49  ;   ;Order Qty. (EOQ)    ;Decimal       ;CaptionML=ENU=Order Qty. (EOQ) }
+    { 50  ;   ;Purchase Unit of Measure;Code10    ;TableRelation="Item Unit of Measure".Code WHERE (Item No.=FIELD(Item No.));
+                                                   OnValidate=VAR
+                                                                Item@1240020000 : Record 27;
+                                                              BEGIN
+                                                                IF ("Purchase Unit of Measure" <> '') THEN BEGIN
+                                                                  GetUOM;
+                                                                  "Order Multiple" := ItemUOM."Qty. per Unit of Measure";
+                                                                  "Order Minimum" := ItemUOM."Qty. per Unit of Measure"
+                                                                END ELSE BEGIN
+                                                                  "Order Multiple" := 0;
+                                                                  "Order Minimum" := 0;
+                                                                END;
+
+                                                                IF ("Purchase Unit of Measure" <> '') THEN BEGIN
+                                                                  IF ("Order Minimum" <> 0) AND
+                                                                     ("Order Minimum" MOD ItemUOM."Qty. per Unit of Measure" <> 0)
+                                                                  THEN
+                                                                    ERROR(Text012,"Location Code","Item No.","Variant Code","Order Minimum",ItemUOM."Qty. per Unit of Measure");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Purchase Unit of Measure }
+    { 51  ;   ;Seasonal Item       ;Boolean       ;CaptionML=ENU=Seasonal Item }
+    { 52  ;   ;Season Starting Date;Date          ;TableRelation="Location Inventory Period"."Starting Date" WHERE (Location Code=FIELD(Location Code));
+                                                   CaptionML=ENU=Season Starting Date }
+    { 53  ;   ;Season Ending Date  ;Date          ;CaptionML=ENU=Season Ending Date }
+    { 54  ;   ;Season Purch. Lead Time (Days);Integer;
+                                                   CaptionML=ENU=Season Purch. Lead Time (Days) }
+    { 56  ;   ;Frozen Controls     ;Boolean       ;CaptionML=ENU=Frozen Controls }
+    { 59  ;   ;Seasonal Item Review;Boolean       ;CaptionML=ENU=Seasonal Item Review;
+                                                   Editable=No }
+    { 60  ;   ;Seasonal Review Date;Date          ;CaptionML=ENU=Seasonal Review Date;
+                                                   Editable=No }
+    { 61  ;   ;Date Filter         ;Date          ;FieldClass=FlowFilter;
+                                                   CaptionML=ENU=Date Filter }
+    { 62  ;   ;Nonstock Unit       ;Boolean       ;CaptionML=ENU=Nonstock Unit }
+    { 63  ;   ;Seasonal Item Trend %;Decimal      ;CaptionML=ENU=Seasonal Item Trend %;
+                                                   DecimalPlaces=0:5 }
+    { 64  ;   ;Replenishment Model ;Option        ;CaptionML=ENU=Replenishment Model;
+                                                   OptionCaptionML=ENU=" ,Min/Max,Usage Based Procurement,Lead Time Horizon";
+                                                   OptionString=[ ,Min/Max,Usage Based Procurement,Lead Time Horizon] }
+    { 65  ;   ;Minimum Days Supply ;Decimal       ;CaptionML=ENU=Minimum Days Supply;
+                                                   DecimalPlaces=0:5 }
+    { 66  ;   ;Maximum Days Supply ;Decimal       ;CaptionML=ENU=Maximum Days Supply;
+                                                   DecimalPlaces=0:5 }
+    { 68  ;   ;First Stocked Date  ;Date          ;CaptionML=ENU=First Stocked Date;
+                                                   Editable=No }
+    { 69  ;   ;Season Min. Days Supply;Integer    ;CaptionML=ENU=Season Min. Days Supply }
+    { 70  ;   ;Season Max. Days Supply;Integer    ;CaptionML=ENU=Season Max. Days Supply }
+    { 71  ;   ;Stocking Rule Code  ;Code10        ;TableRelation="Stocking Rule".Code;
+                                                   CaptionML=ENU=Stocking Rule Code }
+    { 72  ;   ;Track All Formula Calculations;Boolean;
+                                                   CaptionML=ENU=Track All Formula Calculations }
+    { 73  ;   ;Frozen Formula      ;Code20        ;TableRelation=Formula.Code;
+                                                   CaptionML=ENU=Frozen Formula }
+    { 74  ;   ;Frozen Formula Expiration Date;Date;TableRelation="Forecast Inventory Period"."Ending Date" WHERE (Type=CONST(" "));
+                                                   OnValidate=BEGIN
+                                                                IF "Frozen Formula Expiration Date" > 0D THEN
+                                                                  UBP.CheckForecastPeriodEndDate("Frozen Formula Expiration Date");
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              VALIDATE("Frozen Formula Expiration Date", UBP.RunForecastPeriodPageForEndDate);
+                                                            END;
+
+                                                   ValidateTableRelation=No;
+                                                   CaptionML=ENU=Frozen Formula Expiration Date }
+    { 75  ;   ;Qty. Shipped        ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=-Sum("Item Ledger Entry".Quantity WHERE (Location Code=FIELD(Location Filter),
+                                                                                                        Item No.=FIELD(Item No.),
+                                                                                                        Variant Code=FIELD(Variant Code),
+                                                                                                        Entry Type=CONST(Sale),
+                                                                                                        Posting Date=FIELD(Date Filter),
+                                                                                                        Drop Shipment=CONST(No),
+                                                                                                        Positive=CONST(No)));
+                                                   CaptionML=ENU=Qty. Shipped;
+                                                   Editable=No }
+    { 76  ;   ;Order Multiple      ;Decimal       ;OnValidate=BEGIN
+                                                                IF ("Purchase Unit of Measure" <> '') AND
+                                                                   ("Order Multiple" <> 0) THEN BEGIN
+                                                                  GetUOM;
+                                                                  IF "Order Multiple" MOD ItemUOM."Qty. per Unit of Measure" <> 0 THEN
+                                                                     ERROR(Text012,"Location Code","Item No.","Variant Code","Order Multiple",ItemUOM."Qty. per Unit of Measure");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Order Multiple;
+                                                   DecimalPlaces=0:5;
+                                                   MinValue=0 }
+    { 77  ;   ;Order Minimum       ;Decimal       ;OnValidate=BEGIN
+                                                                IF ("Purchase Unit of Measure" <> '') AND
+                                                                   ("Order Minimum" <> 0) THEN BEGIN
+                                                                  GetUOM;
+                                                                  IF "Order Minimum" MOD ItemUOM."Qty. per Unit of Measure" <> 0 THEN
+                                                                    ERROR(Text012,"Location Code","Item No.","Variant Code","Order Minimum",ItemUOM."Qty. per Unit of Measure");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Order Minimum;
+                                                   DecimalPlaces=0:5;
+                                                   MinValue=0 }
+    { 78  ;   ;Review              ;Boolean       ;CaptionML=ENU=Review }
+    { 79  ;   ;Date Created        ;Date          ;CaptionML=ENU=Date Created;
+                                                   Editable=No }
+    { 80  ;   ;User ID             ;Code60        ;CaptionML=ENU=User ID;
+                                                   Editable=No }
+    { 81  ;   ;Date Changed        ;Date          ;CaptionML=ENU=Date Changed;
+                                                   Editable=No }
+    { 82  ;   ;Prod. Order Status Filter;Option   ;FieldClass=FlowFilter;
+                                                   CaptionML=ENU=Prod. Order Status Filter;
+                                                   OptionCaptionML=ENU=Simulated,Planned,Firm Planned,Released;
+                                                   OptionString=Simulated,Planned,Firm Planned,Released }
+    { 83  ;   ;Safety Stock Days   ;Decimal       ;CaptionML=ENU=Safety Stock Days;
+                                                   DecimalPlaces=0:2 }
+    { 84  ;   ;Item Class Ranking  ;Integer       ;CaptionML=ENU=Item Class Ranking;
+                                                   Editable=No }
+    { 85  ;   ;Item Class Description;Text30      ;CaptionML=ENU=Item Class Description;
+                                                   Editable=No }
+    { 86  ;   ;Ranking Code        ;Code10        ;CaptionML=ENU=Ranking Code;
+                                                   Editable=No }
+    { 87  ;   ;Frozen Formula Group;Code10        ;TableRelation="Formula Group".Code;
+                                                   CaptionML=ENU=Frozen Formula Group }
+    { 88  ;   ;Frozen Formula Group Exp. Date;Date;TableRelation="Forecast Inventory Period"."Ending Date" WHERE (Type=CONST(" "));
+                                                   OnValidate=BEGIN
+                                                                IF "Frozen Formula Group Exp. Date" > 0D THEN
+                                                                  UBP.CheckForecastPeriodEndDate("Frozen Formula Group Exp. Date");
+                                                              END;
+
+                                                   OnLookup=BEGIN
+                                                              VALIDATE("Frozen Formula Group Exp. Date", UBP.RunForecastPeriodPageForEndDate);
+                                                            END;
+
+                                                   ValidateTableRelation=No;
+                                                   CaptionML=ENU=Frozen Fromula Group Exp. Date }
+    { 89  ;   ;Additional Demand   ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Additional Demand".Quantity WHERE (Location Code=FIELD(Location Filter),
+                                                                                                       Item=FIELD(Item No.),
+                                                                                                       Variant=FIELD(Variant Code),
+                                                                                                       Expected Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Additional Demand;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 90  ;   ;Summarize Variant Detail;Boolean   ;OnValidate=VAR
+                                                                ProcUnit@1240020000 : Record 14000555;
+                                                              BEGIN
+                                                                GetInventorySetup;
+                                                                IF InvMgtSetup."Summarize Variant Detail" = InvMgtSetup."Summarize Variant Detail"::Never THEN
+                                                                  ERROR(Text007);
+                                                                IF "Summarize Variant Detail" THEN BEGIN
+                                                                  "Summarize Pending" := TRUE;
+                                                                  "Preferred Variant" := TRUE;
+                                                                END ELSE BEGIN
+                                                                  "Preferred Variant" := FALSE;
+                                                                END;
+
+                                                                ProcUnit.SETRANGE("Location Code","Location Code");
+                                                                ProcUnit.SETRANGE("Item No.","Item No.");
+                                                                ProcUnit.SETFILTER("Variant Code",'<>%1','');
+                                                                ProcUnit.MODIFYALL("Preferred Variant", FALSE);
+                                                                ProcUnit.MODIFYALL("Exclude From Replenishment", "Summarize Variant Detail", FALSE);
+                                                                ProcUnit.MODIFYALL("Manual Bypass Replenishment", "Summarize Variant Detail", FALSE);
+                                                              END;
+
+                                                   CaptionML=ENU=Summarize Variant Detail }
+    { 91  ;   ;Summarize Pending   ;Boolean       ;CaptionML=ENU=Summarize Pending;
+                                                   Editable=No }
+    { 92  ;   ;Inventory Sum.      ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Item Ledger Entry".Quantity WHERE (Item No.=FIELD(Item No.),
+                                                                                                       Location Code=FIELD(Location Filter)));
+                                                   CaptionML=ENU=Inventory Sum.;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 93  ;   ;Inventory Net Change Sum.;Decimal  ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Item Ledger Entry".Quantity WHERE (Item No.=FIELD(Item No.),
+                                                                                                       Location Code=FIELD(Location Filter),
+                                                                                                       Posting Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Inventory Net Change Sum.;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 94  ;   ;Qty. on Purchase Order Sum.;Decimal;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Purchase Line"."Outstanding Qty. (Base)" WHERE (Document Type=FILTER(Order),
+                                                                                                                    Location Code=FIELD(Location Filter),
+                                                                                                                    Type=FILTER(Item),
+                                                                                                                    No.=FIELD(Item No.),
+                                                                                                                    Drop Shipment=FILTER(No),
+                                                                                                                    Expected Receipt Date=FIELD(Date Filter),
+                                                                                                                    Special Order=CONST(No)));
+                                                   CaptionML=ENU=Qty. on Purchase Order Sum.;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 95  ;   ;Qty. on Sales Order Sum.;Decimal   ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Sales Line"."Outstanding Qty. (Base)" WHERE (Document Type=FILTER(Order),
+                                                                                                                 Location Code=FIELD(Location Filter),
+                                                                                                                 Type=FILTER(Item),
+                                                                                                                 No.=FIELD(Item No.),
+                                                                                                                 Drop Shipment=FILTER(No),
+                                                                                                                 Shipment Date=FIELD(Date Filter),
+                                                                                                                 Special Order=CONST(No)));
+                                                   CaptionML=ENU=Qty. on Sales Order Sum.;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 96  ;   ;Qty. on Transfer Out Sum.;Decimal  ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Transfer Line"."Outstanding Qty. (Base)" WHERE (Transfer-from Code=FIELD(Location Filter),
+                                                                                                                    Item No.=FIELD(Item No.),
+                                                                                                                    Shipment Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Transfer Out Sum.;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 97  ;   ;Qty. on Transfer In Sum.;Decimal   ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Transfer Line"."Outstanding Qty. (Base)" WHERE (Transfer-to Code=FIELD(Location Filter),
+                                                                                                                    Item No.=FIELD(Item No.),
+                                                                                                                    Receipt Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Transfer In Sum.;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 98  ;   ;Qty. on Vend. Ret. Order Sum.;Decimal;
+                                                   FieldClass=FlowField;
+                                                   CalcFormula=Sum("Purchase Line"."Outstanding Qty. (Base)" WHERE (Document Type=FILTER(Return Order),
+                                                                                                                    Location Code=FIELD(Location Filter),
+                                                                                                                    Type=FILTER(Item),
+                                                                                                                    No.=FIELD(Item No.),
+                                                                                                                    Drop Shipment=FILTER(No),
+                                                                                                                    Expected Receipt Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Vend. Ret. Order Sum.;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 99  ;   ;Qty. on Prod. Order Sum.;Decimal   ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Prod. Order Line"."Remaining Qty. (Base)" WHERE (Location Code=FIELD(Location Filter),
+                                                                                                                     Status=FIELD(Prod. Order Status Filter),
+                                                                                                                     Item No.=FIELD(Item No.),
+                                                                                                                     Due Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Prod. Order Sum.;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 100 ;   ;Qty. on Component Lines Sum.;Decimal;
+                                                   FieldClass=FlowField;
+                                                   CalcFormula=Sum("Prod. Order Component"."Remaining Qty. (Base)" WHERE (Location Code=FIELD(Location Filter),
+                                                                                                                          Status=FIELD(Prod. Order Status Filter),
+                                                                                                                          Item No.=FIELD(Item No.),
+                                                                                                                          Due Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Component Lines Sum.;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 101 ;   ;Qty. on Service Order Sum.;Decimal ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Service Line"."Outstanding Qty. (Base)" WHERE (Type=CONST(Item),
+                                                                                                                   Location Code=FIELD(Location Filter),
+                                                                                                                   No.=FIELD(Item No.),
+                                                                                                                   Posting Date=FIELD(Date Filter),
+                                                                                                                   Document Type=CONST(Order)));
+                                                   CaptionML=ENU=Qty. on Service Order Sum.;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 102 ;   ;Additional Demand Sum.;Decimal     ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Additional Demand".Quantity WHERE (Location Code=FIELD(Location Filter),
+                                                                                                       Item=FIELD(Item No.),
+                                                                                                       Expected Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Additional Demand Sum.;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 103 ;   ;Qty. Shipped Sum.   ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=-Sum("Item Ledger Entry".Quantity WHERE (Location Code=FIELD(Location Filter),
+                                                                                                        Item No.=FIELD(Item No.),
+                                                                                                        Entry Type=CONST(Sale),
+                                                                                                        Posting Date=FIELD(Date Filter),
+                                                                                                        Drop Shipment=CONST(No),
+                                                                                                        Positive=CONST(No)));
+                                                   CaptionML=ENU=Qty. Shipped Sum.;
+                                                   Editable=No }
+    { 104 ;   ;Preferred Variant   ;Boolean       ;OnValidate=VAR
+                                                                ProcUnit@1240020000 : Record 14000555;
+                                                              BEGIN
+                                                                IF "Preferred Variant" AND ("Variant Code" <> '') THEN
+                                                                TESTFIELD("Replenishment Source Type","Replenishment Source Type"::Vendor);
+
+                                                                IF "Preferred Variant" THEN BEGIN
+                                                                  ProcUnit.SETRANGE("Location Code","Location Code");
+                                                                  ProcUnit.SETRANGE("Item No.","Item No.");
+                                                                  ProcUnit.SETFILTER("Variant Code",'<>%1',"Variant Code");
+                                                                  ProcUnit.MODIFYALL("Preferred Variant", FALSE, FALSE);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Preferred Variant }
+    { 105 ;   ;Change Reforecast Required;Boolean ;OnValidate=BEGIN
+                                                                IF xRec."Change Reforecast Required" AND (NOT "Change Reforecast Required") THEN
+                                                                  ERROR(Text010);
+                                                                GetInventorySetup;
+                                                                IF (InvMgtSetup."Roll Up Via Repl. Path") AND (UBP.SpokesExist(Rec)
+                                                                  OR ("Replenishment Source Type" = "Replenishment Source Type"::Location)) THEN
+                                                                  "Reforecast Item" := TRUE;
+                                                              END;
+
+                                                   CaptionML=ENU=Change Reforecast Required }
+    { 106 ;   ;Customer Reforecast Required;Boolean;
+                                                   CaptionML=ENU=Customer Reforecast Required;
+                                                   Editable=No }
+    { 107 ;   ;Qty. Comp. Consumed ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=-Sum("Item Ledger Entry".Quantity WHERE (Location Code=FIELD(Location Filter),
+                                                                                                        Item No.=FIELD(Item No.),
+                                                                                                        Variant Code=FIELD(Variant Code),
+                                                                                                        Entry Type=FIELD(Comp. Consumed Option Filter),
+                                                                                                        Posting Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. Comp. Consumed;
+                                                   Editable=No }
+    { 108 ;   ;Qty. Comp. Consumed Sum.;Decimal   ;FieldClass=FlowField;
+                                                   CalcFormula=-Sum("Item Ledger Entry".Quantity WHERE (Location Code=FIELD(Location Filter),
+                                                                                                        Item No.=FIELD(Item No.),
+                                                                                                        Entry Type=FIELD(Comp. Consumed Option Filter),
+                                                                                                        Posting Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. Comp. Consumed Sum.;
+                                                   Editable=No }
+    { 109 ;   ;Safety Stock Calc. Method;Option   ;OnValidate=BEGIN
+                                                                IF "Safety Stock Calc. Method" = "Safety Stock Calc. Method"::Fixed THEN
+                                                                  "Target Customer Service Level" := '';
+                                                              END;
+
+                                                   CaptionML=ENU=Safety Stock Calc. Method;
+                                                   OptionCaptionML=ENU=Fixed,Forecast Deviation;
+                                                   OptionString=Fixed,Forecast Deviation }
+    { 110 ;   ;Target Customer Service Level;Code10;
+                                                   TableRelation="Target Customer Service Level".Code;
+                                                   CaptionML=ENU=Target Customer Service Level }
+    { 111 ;   ;Qty. on Prod. Order Start Date;Decimal;
+                                                   FieldClass=FlowField;
+                                                   CalcFormula=Sum("Prod. Order Line"."Remaining Qty. (Base)" WHERE (Location Code=FIELD(Location Filter),
+                                                                                                                     Status=FIELD(Prod. Order Status Filter),
+                                                                                                                     Item No.=FIELD(Item No.),
+                                                                                                                     Variant Code=FIELD(Variant Code),
+                                                                                                                     Starting Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Prod. Order Start Date;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 112 ;   ;Qty. on Assy. Comp. ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Assembly Line"."Remaining Quantity (Base)" WHERE (Document Type=CONST(Order),
+                                                                                                                      Type=CONST(Item),
+                                                                                                                      No.=FIELD(Item No.),
+                                                                                                                      Variant Code=FIELD(Variant Code),
+                                                                                                                      Location Code=FIELD(Location Filter),
+                                                                                                                      Due Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Assy. Comp.;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 113 ;   ;Qty. on Assy. Order FC;Decimal     ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Assembly Forecast Line"."Quantity (Base)" WHERE (Assy. Item No.=FIELD(Item No.),
+                                                                                                                     Assy. Location Code=FIELD(Location Filter),
+                                                                                                                     Assy. Variant Code=FIELD(Variant Code),
+                                                                                                                     Required Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Assy. Order FC;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 114 ;   ;Qty. on Assy. Comp. FC;Decimal     ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Assembly Comp. Forecast Line"."Quantity (Base)" WHERE (Comp. Item No.=FIELD(Item No.),
+                                                                                                                           Comp. Location Code=FIELD(Location Code),
+                                                                                                                           Comp. Variant Code=FIELD(Variant Code),
+                                                                                                                           Required Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Assy. Comp. FC;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 115 ;   ;Qty. on Assy. Order ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Assembly Header"."Remaining Quantity (Base)" WHERE (Document Type=CONST(Order),
+                                                                                                                        Item No.=FIELD(Item No.),
+                                                                                                                        Variant Code=FIELD(Variant Code),
+                                                                                                                        Location Code=FIELD(Location Filter),
+                                                                                                                        Due Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Assy. Order;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 116 ;   ;Additional Stock Quantity;Decimal  ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Additional Stock Quantity".Quantity WHERE (Location Code=FIELD(Location Filter),
+                                                                                                               Item No.=FIELD(Item No.),
+                                                                                                               Variant Code=FIELD(Variant Code),
+                                                                                                               Expire Date=FIELD(Expire Date Filter)));
+                                                   CaptionML=ENU=Additional Stock Quantity;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 117 ;   ;Additional Stock Quantity Sum.;Decimal;
+                                                   FieldClass=FlowField;
+                                                   CalcFormula=Sum("Additional Stock Quantity".Quantity WHERE (Location Code=FIELD(Location Filter),
+                                                                                                               Item No.=FIELD(Item No.),
+                                                                                                               Expire Date=FIELD(Expire Date Filter)));
+                                                   CaptionML=ENU=Additional Stock Quantity Sum.;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 118 ;   ;Expire Date Filter  ;Date          ;FieldClass=FlowFilter;
+                                                   CaptionML=ENU=Expire Date Filter;
+                                                   Editable=No }
+    { 119 ;   ;Variant Description ;Text50        ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup("Item Variant".Description WHERE (Code=FIELD(Variant Code),
+                                                                                                        Item No.=FIELD(Item No.)));
+                                                   CaptionML=ENU=Variant Description;
+                                                   Editable=No }
+    { 120 ;   ;Exclude From Replenishment;Boolean ;CaptionML=ENU=Internal Exclude From Replenishment }
+    { 121 ;   ;Completed Prod. Plan Level;Integer ;CaptionML=ENU=Completed Prod. Plan Level;
+                                                   Editable=No }
+    { 122 ;   ;Bypass Production Plan;Boolean     ;CaptionML=ENU=Bypass Production Plan;
+                                                   Editable=No }
+    { 123 ;   ;Location Filter     ;Code10        ;FieldClass=FlowFilter;
+                                                   CaptionML=ENU=Location Filter }
+    { 124 ;   ;Auto Variant Redirect;Boolean      ;CaptionML=ENU=Auto Variant Redirect }
+    { 125 ;   ;Reforecast Item     ;Boolean       ;CaptionML=ENU=Reforecast Item;
+                                                   Editable=No }
+    { 126 ;   ;Item Blocked        ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Lookup(Item.Blocked WHERE (No.=FIELD(Item No.)));
+                                                   CaptionML=ENU=Item Blocked;
+                                                   Editable=No }
+    { 127 ;   ;LTH Order Add Days  ;Integer       ;CaptionML=ENU=LTH Order Add Days }
+    { 128 ;   ;Sporadic Rule       ;Code10        ;TableRelation="Sporadic Rule".Code;
+                                                   CaptionML=ENU=Sporadic Rule }
+    { 129 ;   ;Alert               ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("AFP Alert Line" WHERE (Item No.=FIELD(Item No.),
+                                                                                             Location Code=FIELD(Location Code),
+                                                                                             Variant Code=FIELD(Variant Code)));
+                                                   CaptionML=ENU=Alert;
+                                                   Editable=No }
+    { 130 ;   ;Comp. Consumed Option;Option       ;CaptionML=ENU=Comp. Consumed Option;
+                                                   OptionCaptionML=ENU=Purchase,Sale,Positive Adjmt.,Negative Adjmt.,Transfer,Consumption,Output, ,Assembly Consumption,Assembly Output;
+                                                   OptionString=Purchase,Sale,Positive Adjmt.,Negative Adjmt.,Transfer,Consumption,Output, ,Assembly Consumption,Assembly Output }
+    { 131 ;   ;Usage Location Filter String;Text250;
+                                                   CaptionML=ENU=Usage Location Filter String }
+    { 132 ;   ;Location Filter String;Text250     ;CaptionML=ENU=Location Filter String }
+    { 133 ;   ;Periods With Sales  ;Integer       ;CaptionML=ENU=Periods With Sales;
+                                                   Editable=No }
+    { 134 ;   ;Imported Lead Time (Days);Decimal  ;CaptionML=ENU=Imported Lead Time (Days);
+                                                   DecimalPlaces=0:2;
+                                                   Editable=No }
+    { 135 ;   ;Safety Stock Modifier;Code10       ;TableRelation="Safety Stock Modifier".Code;
+                                                   CaptionML=ENU=Safety Stock Modifier }
+    { 136 ;   ;Planned Assembly Filter;Boolean    ;FieldClass=FlowFilter;
+                                                   CaptionML=ENU=Planned Assembly Filter;
+                                                   Editable=No }
+    { 137 ;   ;Maximum Shelf Stock ;Decimal       ;CaptionML=ENU=Maximum Shelf Stock;
+                                                   DecimalPlaces=0:5 }
+    { 138 ;   ;Minimum Shelf Stock ;Decimal       ;CaptionML=ENU=Minimum Shelf Stock;
+                                                   DecimalPlaces=0:5 }
+    { 139 ;   ;Comp. Consumed Option Filter;Option;FieldClass=FlowFilter;
+                                                   CaptionML=ENU=Comp. Consumed Option Filter;
+                                                   OptionCaptionML=ENU=Purchase,Sale,Positive Adjmt.,Negative Adjmt.,Transfer,Consumption,Output, ,Assembly Consumption,Assembly Output;
+                                                   OptionString=Purchase,Sale,Positive Adjmt.,Negative Adjmt.,Transfer,Consumption,Output, ,Assembly Consumption,Assembly Output;
+                                                   Editable=No }
+    { 140 ;   ;Usage Formula Status;Option        ;CaptionML=ENU=Usage Formula Status;
+                                                   OptionCaptionML=ENU=" ,New,L.T. Formula Req.,Seasonal,Sporadic,Reoccuring";
+                                                   OptionString=[ ,New,L.T. Formula Req.,Seasonal,Sporadic,Reoccuring] }
+    { 141 ;   ;Replenishment Hierarchy;Option     ;CaptionML=ENU=Replenishment Hierarchy;
+                                                   OptionCaptionML=ENU=" ,Hub,Spoke,Hub and Spoke";
+                                                   OptionString=[ ,Hub,Spoke,Hub and Spoke] }
+    { 142 ;   ;Qty. on Sales Return Order;Decimal ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Sales Line"."Outstanding Qty. (Base)" WHERE (Document Type=FILTER(Return Order),
+                                                                                                                 Location Code=FIELD(Location Filter),
+                                                                                                                 Type=FILTER(Item),
+                                                                                                                 No.=FIELD(Item No.),
+                                                                                                                 Drop Shipment=FILTER(No),
+                                                                                                                 Variant Code=FIELD(Variant Code),
+                                                                                                                 Shipment Date=FIELD(Date Filter),
+                                                                                                                 Special Order=CONST(No)));
+                                                   CaptionML=ENU=Qty. on Sales Return Order;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 143 ;   ;Top Repl. Source Type;Option       ;CaptionML=ENU=Top Level Repl. Source Type;
+                                                   OptionCaptionML=ENU=" ,Location,Vendor,Production,Assembly";
+                                                   OptionString=[ ,Location,Vendor,Production,Assembly] }
+    { 144 ;   ;Top Repl. Source Code;Code20       ;TableRelation=IF (Top Repl. Source Type=CONST(Location)) Location.Code WHERE (Use As In-Transit=CONST(No))
+                                                                 ELSE IF (Top Repl. Source Type=CONST(Vendor)) Vendor.No.
+                                                                 ELSE IF (Top Repl. Source Type=CONST(Production)) "Production Item Group".Code;
+                                                   OnValidate=VAR
+                                                                Text001@1240030000 : TextConst 'ENU=Replenishment Path Loop for Item %1 %2';
+                                                              BEGIN
+                                                              END;
+
+                                                   CaptionML=ENU=Top Level Repl. Source Code }
+    { 145 ;   ;Qty. on Assy. Comp. Sum.;Decimal   ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Assembly Line"."Remaining Quantity (Base)" WHERE (Document Type=CONST(Order),
+                                                                                                                      Type=CONST(Item),
+                                                                                                                      No.=FIELD(Item No.),
+                                                                                                                      Location Code=FIELD(Location Filter),
+                                                                                                                      Due Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Assy. Comp. Sum;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 146 ;   ;Qty. on Assy. Order FC Sum.;Decimal;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Assembly Forecast Line"."Quantity (Base)" WHERE (Assy. Item No.=FIELD(Item No.),
+                                                                                                                     Assy. Location Code=FIELD(Location Filter),
+                                                                                                                     Required Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Assy. Order FC Sum;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 147 ;   ;Qty. on Assy. Comp. FC Sum.;Decimal;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Assembly Comp. Forecast Line"."Quantity (Base)" WHERE (Comp. Item No.=FIELD(Item No.),
+                                                                                                                           Comp. Location Code=FIELD(Location Code),
+                                                                                                                           Required Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Assy. Comp. FC Sum;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 148 ;   ;Qty. on Assy. Order Sum.;Decimal   ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Assembly Header"."Remaining Quantity (Base)" WHERE (Document Type=CONST(Order),
+                                                                                                                        Item No.=FIELD(Item No.),
+                                                                                                                        Location Code=FIELD(Location Filter),
+                                                                                                                        Due Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Assy. Order Sum;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 149 ;   ;Purchaser Code      ;Code20        ;TableRelation=Salesperson/Purchaser;
+                                                   OnValidate=BEGIN
+                                                                UpdatePurchaserCode(FALSE);
+                                                              END;
+
+                                                   CaptionML=ENU=Purchaser Code }
+    { 152 ;   ;Low-Level Code      ;Integer       ;CaptionML=ENU=Low-Level Code;
+                                                   Editable=No }
+    { 154 ;   ;Manual Bypass Replenishment;Boolean;CaptionML=ENU=Manual Bypass Replenishment }
+    { 155 ;   ;Fill Rate Percentage;Decimal       ;OnLookup=VAR
+                                                              HorizonToUse@1240020000 : Date;
+                                                            BEGIN
+                                                              CalcFillRateForecastView;
+                                                            END;
+
+                                                   CaptionML=ENU=Fill Rate Percentage;
+                                                   DecimalPlaces=0:2;
+                                                   MaxValue=100;
+                                                   Editable=No }
+    { 156 ;   ;Fill Rate Calculation Date;DateTime;OnLookup=VAR
+                                                              HorizonToUse@1240020000 : Date;
+                                                            BEGIN
+                                                              CalcFillRateForecastView;
+                                                            END;
+
+                                                   CaptionML=ENU=Fill Rate Calculation Date;
+                                                   Editable=No }
+    { 157 ;   ;Fill Rate Total Demand;Decimal     ;CaptionML=ENU=Fill Rate Total Demand;
+                                                   DecimalPlaces=0:5;
+                                                   BlankZero=Yes;
+                                                   Editable=No }
+    { 158 ;   ;Qty. on Prod. Plan  ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("AFP Production Planning Line"."Quantity (Base)" WHERE (Item No.=FIELD(Item No.),
+                                                                                                                           Location Code=FIELD(Location Filter),
+                                                                                                                           Variant Code=FIELD(Variant Code),
+                                                                                                                           Required Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Prod. Plan;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 159 ;   ;Qty. on Prod. Plan Sum.;Decimal    ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("AFP Production Planning Line"."Quantity (Base)" WHERE (Item No.=FIELD(Item No.),
+                                                                                                                           Location Code=FIELD(Location Filter),
+                                                                                                                           Required Date=FIELD(Date Filter)));
+                                                   CaptionML=ENU=Qty. on Prod. Plan Sum;
+                                                   DecimalPlaces=0:5;
+                                                   Editable=No }
+    { 160 ;   ;Division Code       ;Code10        ;OnValidate=VAR
+                                                                Vendor@1240020001 : Record 23;
+                                                                VendBuyingCalendar@1240020000 : Record 14000563;
+                                                              BEGIN
+                                                                IF "Replenishment Source Type" = "Replenishment Source Type"::Vendor THEN BEGIN
+                                                                  IF "Replenishment Source Code" <> '' THEN BEGIN
+                                                                    IF NOT VendBuyingCalendar.GET("Replenishment Source Code","Location Code", "Division Code") THEN BEGIN
+                                                                      VendBuyingCalendar.INIT;
+                                                                      VendBuyingCalendar."Vendor No." := "Replenishment Source Code";
+                                                                      VendBuyingCalendar."Location Code" := "Location Code";
+                                                                      VendBuyingCalendar."Division Code" := "Division Code";
+                                                                      VendBuyingCalendar."Line Buy Vendor" := TRUE;
+                                                                      GetInventorySetup;
+                                                                      VendBuyingCalendar."Frozen Review Cycle (Days)" := InvMgtSetup."Def. Vend. Review Cycle (Days)";
+                                                                      VendBuyingCalendar."Review Cycle (Days)" := VendBuyingCalendar."Frozen Review Cycle (Days)";
+                                                                      IF Vendor.GET("Replenishment Source Code") THEN
+                                                                        VendBuyingCalendar."Purchaser Code" := Vendor."Purchaser Code";
+                                                                      VendBuyingCalendar.INSERT(TRUE);
+                                                                      IF (InvMgtSetup."Force Purchaser Code Synch.") OR ("Purchaser Code" = '') THEN
+                                                                        "Purchaser Code" := VendBuyingCalendar."Purchaser Code";
+                                                                    END ELSE BEGIN
+                                                                      IF (InvMgtSetup."Force Purchaser Code Synch.") OR ("Purchaser Code" = '') THEN
+                                                                        "Purchaser Code" := VendBuyingCalendar."Purchaser Code";
+                                                                    END;
+                                                                  END;
+                                                                  UpdatePurchaserCode(TRUE);
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=ENU=Division Code }
+    { 161 ;   ;Surplus Available   ;Boolean       ;FieldClass=FlowField;
+                                                   CalcFormula=Exist("Surplus Inventory Value" WHERE (Item No.=FIELD(Item No.),
+                                                                                                      Location Code=FIELD(Location Code),
+                                                                                                      Variant Code=FIELD(Variant Code),
+                                                                                                      Surplus Available=CONST(Yes)));
+                                                   CaptionML=ENU=Surplus Available;
+                                                   Editable=No }
+  }
+  KEYS
+  {
+    {    ;Location Code,Item No.,Variant Code     ;Clustered=Yes }
+    {    ;Item No.,Variant Code,Location Code      }
+    {    ;Location Code,Replenishment Source Type,Replenishment Source Code,Usage Location Filter String;
+                                                   MaintainSQLIndex=No;
+                                                   MaintainSIFTIndex=No }
+    {    ;Summarize Pending,Location Code         ;MaintainSQLIndex=No;
+                                                   MaintainSIFTIndex=No }
+    {    ;Location Code,Usage Location Filter String }
+    {    ;Low-Level Code                           }
+    {    ;Item No.,Replenishment Source Type,Replenishment Source Code,Variant Code,Location Code }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      ItemUOM@1240030016 : Record 5404;
+      InvMgtSetup@14000507 : Record 14000551;
+      UBP@1240020002 : Codeunit 14000564;
+      SetupAvailable@14000516 : Boolean;
+      Text001@1002 : TextConst 'ENU=%1 is not a valid Inventory Period Ending Date.';
+      Text002@1003 : TextConst 'ENU=Season Starting Date %1 must be before Season Ending Date %2.';
+      Text003@1006 : TextConst 'ENU=Season Min. Days Supply %1 cannot be greater than Season Max. Days Supply 2%.';
+      Text004@1004 : TextConst 'ENU=Season Ending Date %1 must be before work date %2.';
+      Text005@1240030002 : TextConst 'ENU=Unable to delete %1 %2 %3 %4 because %5 is not zero.';
+      Temp@1240030003 : Boolean;
+      Text006@1240030004 : TextConst 'ENU=Detail can only be sumarized on a Procurement Unit that does not have a variant.';
+      Text007@1240030006 : TextConst 'ENU=The field Summarize Variant Detail on the Inventory Management Setup Card is set to Never.';
+      Text008@1240030008 : TextConst 'ENU=Preferred Variant is already set for variant %1.';
+      Text009@1240030009 : TextConst 'ENU=Unable to delete a Procurement Unit with Summarize Variant Detail set.';
+      AutoInsert@1240030012 : Boolean;
+      Text010@1240030015 : TextConst 'ENU=The system must reset this field by reforecasting the item.';
+      Text012@1240030018 : TextConst 'ENU=%1 %2 %3 Order Minimum %4 must be a multiple of %5';
+      Text013@1240020000 : TextConst 'ENU=Minimum and Maximum Inventory must both be positive.';
+      OverrideToDelete@1240020001 : Boolean;
+
+    PROCEDURE CalcQuantities@6();
+    BEGIN
+      SETFILTER("Location Filter",UBP.GetLocationFilter(Rec,TRUE));
+      SETFILTER("Prod. Order Status Filter",UBP.GetProductionStatusFilter);
+      IF "Summarize Variant Detail" THEN BEGIN
+        CALCFIELDS(
+          "Inventory Sum.","Qty. on Purchase Order Sum.","Qty. on Transfer In Sum.","Qty. on Prod. Order Sum.",
+          "Qty. on Sales Order Sum.","Qty. on Transfer Out Sum.","Qty. on Component Lines Sum.",
+          "Qty. on Service Order Sum.","Qty. on Vend. Ret. Order Sum.","Additional Demand Sum.",
+          "Qty. on Assy. Order FC Sum.","Qty. on Assy. Comp. FC Sum.",
+          "Qty. on Assy. Order Sum.","Qty. on Assy. Comp. Sum.");
+        Inventory := "Inventory Sum.";
+        "Inventory Net Change" := "Inventory Net Change Sum.";
+        "Qty. on Purchase Order" := "Qty. on Purchase Order Sum.";
+        "Qty. on Sales Order" := "Qty. on Sales Order Sum.";
+        "Qty. on Transfer Out" := "Qty. on Transfer Out Sum.";
+        "Qty. on Transfer In" := "Qty. on Transfer In Sum.";
+        "Qty. on Vend. Return Order" := "Qty. on Vend. Ret. Order Sum.";
+        "Qty. on Prod. Order" := "Qty. on Prod. Order Sum.";
+        "Qty. on Component Lines" := "Qty. on Component Lines Sum.";
+        "Qty. on Service Order" := "Qty. on Service Order Sum.";
+        "Additional Demand" := "Additional Demand Sum.";
+        "Qty. on Assy. Order FC" := "Qty. on Assy. Order FC Sum.";
+        "Qty. on Assy. Order" := "Qty. on Assy. Order Sum.";
+        "Qty. on Assy. Comp. FC" := "Qty. on Assy. Comp. FC Sum.";
+        "Qty. on Assy. Comp." := "Qty. on Assy. Comp. Sum.";
+      END ELSE
+        CALCFIELDS(
+          Inventory,"Qty. on Purchase Order","Qty. on Transfer In","Qty. on Prod. Order","Qty. on Sales Order",
+          "Qty. on Transfer Out","Qty. on Component Lines","Qty. on Service Order","Qty. on Vend. Return Order",
+          "Additional Demand","Qty. on Sales Return Order",
+          "Qty. on Assy. Order FC","Qty. on Assy. Comp. FC",
+          "Qty. on Assy. Order","Qty. on Assy. Comp.");
+    END;
+
+    PROCEDURE QtyExpected@1() QuantityExpected2@14000500 : Decimal;
+    VAR
+      QuantityExpectedLessOnOrder@1240020001 : Decimal;
+      QuantityOnOrder@1240020000 : Decimal;
+    BEGIN
+      GetInventorySetup;
+      CalcQuantities;
+
+      IF Inventory < 0 THEN
+        QuantityExpected2 := 0
+      ELSE
+        QuantityExpected2 := Inventory;
+      QuantityExpectedLessOnOrder := QuantityExpected2;
+      QuantityOnOrder := 0;
+
+      QuantityExpected2 :=
+        QuantityExpected2 + ("Qty. on Purchase Order" - "Qty. on Vend. Return Order");
+      QuantityOnOrder :=
+        QuantityOnOrder + ("Qty. on Purchase Order" - "Qty. on Vend. Return Order");
+
+      QuantityExpected2 := QuantityExpected2 + "Qty. on Transfer In";
+      QuantityOnOrder := QuantityOnOrder + "Qty. on Transfer In";
+
+      QuantityExpected2 := QuantityExpected2 + "Qty. on Prod. Order";
+      QuantityOnOrder := QuantityOnOrder + "Qty. on Prod. Order";
+
+      QuantityExpected2 := QuantityExpected2 - "Qty. on Sales Order";
+      QuantityExpectedLessOnOrder := QuantityExpectedLessOnOrder - "Qty. on Sales Order";
+
+      IF InvMgtSetup."Incl. Qty. on Sales Ret. Order" THEN BEGIN
+        QuantityExpected2 := QuantityExpected2 + "Qty. on Sales Return Order";
+        QuantityExpectedLessOnOrder := QuantityExpectedLessOnOrder + "Qty. on Sales Return Order";
+      END;
+
+      QuantityExpected2 := QuantityExpected2 - "Qty. on Transfer Out";
+      QuantityExpectedLessOnOrder := QuantityExpectedLessOnOrder - "Qty. on Transfer Out";
+
+      QuantityExpected2 := QuantityExpected2 - "Qty. on Component Lines";
+      QuantityExpectedLessOnOrder := QuantityExpectedLessOnOrder - "Qty. on Component Lines";
+
+      QuantityExpected2 := QuantityExpected2 - "Qty. on Assy. Comp.";
+      QuantityExpectedLessOnOrder := QuantityExpectedLessOnOrder - "Qty. on Assy. Comp.";
+      QuantityExpected2 := QuantityExpected2 + "Qty. on Assy. Order";
+      QuantityExpectedLessOnOrder := QuantityExpectedLessOnOrder + "Qty. on Assy. Order";
+
+      QuantityExpected2 := QuantityExpected2 - "Qty. on Assy. Comp. FC";
+      QuantityExpectedLessOnOrder := QuantityExpectedLessOnOrder - "Qty. on Assy. Comp. FC";
+      QuantityExpected2 := QuantityExpected2 + "Qty. on Assy. Order FC";
+      QuantityExpectedLessOnOrder := QuantityExpectedLessOnOrder + "Qty. on Assy. Order FC";
+
+      QuantityExpected2 := QuantityExpected2 - "Qty. on Service Order";
+      QuantityExpectedLessOnOrder := QuantityExpectedLessOnOrder - "Qty. on Service Order";
+
+      QuantityExpected2 := QuantityExpected2 - "Additional Demand";
+      QuantityExpectedLessOnOrder := QuantityExpectedLessOnOrder - "Additional Demand";
+
+      EXIT(QuantityExpected2);
+    END;
+
+    PROCEDURE QtyInvPlusExpRec@1240030000() QtyInvPlusExpRec2@1240030000 : Decimal;
+    BEGIN
+      // Used by Forecast CU
+      GetInventorySetup;
+      CalcQuantities;
+
+      IF Inventory < 0 THEN
+        QtyInvPlusExpRec2 := 0
+      ELSE
+        QtyInvPlusExpRec2 := Inventory;
+
+      QtyInvPlusExpRec2 :=
+        QtyInvPlusExpRec2 + ("Qty. on Purchase Order" - "Qty. on Vend. Return Order");
+
+      QtyInvPlusExpRec2 := QtyInvPlusExpRec2 + "Qty. on Transfer In";
+
+      QtyInvPlusExpRec2 := QtyInvPlusExpRec2 - "Qty. on Transfer Out";
+
+      QtyInvPlusExpRec2 := QtyInvPlusExpRec2 + "Qty. on Prod. Order";
+
+      IF InvMgtSetup."Incl. Qty. on Sales Ret. Order" THEN
+        QtyInvPlusExpRec2 := QtyInvPlusExpRec2 + "Qty. on Sales Return Order";
+
+      QtyInvPlusExpRec2 := QtyInvPlusExpRec2 + "Qty. on Assy. Order";
+
+      QtyInvPlusExpRec2 := QtyInvPlusExpRec2 + "Qty. on Assy. Order FC";
+
+      EXIT(QtyInvPlusExpRec2);
+    END;
+
+    PROCEDURE GetInventorySetup@2();
+    BEGIN
+      IF NOT SetupAvailable THEN BEGIN
+        InvMgtSetup.GET;
+        SetupAvailable := TRUE;
+      END;
+    END;
+
+    PROCEDURE SetTemp@1240030001();
+    BEGIN
+      Temp := TRUE;
+    END;
+
+    PROCEDURE AdditionalStockQty@1240030002() : Decimal;
+    BEGIN
+      SETFILTER("Expire Date Filter",'>=%1',WORKDATE);
+      CALCFIELDS("Additional Stock Quantity");
+      EXIT("Additional Stock Quantity");
+    END;
+
+    PROCEDURE SetAutoInsert@1240030003();
+    BEGIN
+      AutoInsert := TRUE;
+    END;
+
+    PROCEDURE CheckChangedFields@1240030004(VAR CurrProcUnitNew@1240030000 : Record 14000555;CurrProcUnitOld@1240030001 : Record 14000555);
+    VAR
+      LocInvMgtSetup@1240030002 : Record 14000551;
+    BEGIN
+      IF Temp THEN
+        EXIT;
+      IF (CurrProcUnitNew."Replenishment Source Type" <> CurrProcUnitOld."Replenishment Source Type") OR
+         (CurrProcUnitNew."Replenishment Source Code" <> CurrProcUnitOld."Replenishment Source Code") OR
+         (CurrProcUnitNew."Frozen Lead Time (Days)" <> CurrProcUnitOld."Frozen Lead Time (Days)") OR
+         (CurrProcUnitNew."Frozen Lead Time Expir. Date" <> CurrProcUnitOld."Frozen Lead Time Expir. Date") OR
+         (CurrProcUnitNew."Frozen Usage per Day" <> CurrProcUnitOld."Frozen Usage per Day") OR
+         (CurrProcUnitNew."Frozen Usage Expiration Date" <> CurrProcUnitOld."Frozen Usage Expiration Date") OR
+         (CurrProcUnitNew."Frozen Safety Allowance %" <> CurrProcUnitOld."Frozen Safety Allowance %") OR
+         (CurrProcUnitNew."Frozen Safety Expiration Date" <> CurrProcUnitOld."Frozen Safety Expiration Date") OR
+         (CurrProcUnitNew."Frozen Order Point" <> CurrProcUnitOld."Frozen Order Point") OR
+         (CurrProcUnitNew."Frozen Order Point Expiration" <> CurrProcUnitOld."Frozen Order Point Expiration") OR
+         (CurrProcUnitNew."Frozen Formula" <> CurrProcUnitOld."Frozen Formula") OR
+         (CurrProcUnitNew."Frozen Formula Expiration Date" <> CurrProcUnitOld."Frozen Formula Expiration Date") OR
+         (CurrProcUnitNew."Frozen Formula Group" <> CurrProcUnitOld."Frozen Formula Group") OR
+         (CurrProcUnitNew."Frozen Formula Group Exp. Date" <> CurrProcUnitOld."Frozen Formula Group Exp. Date") OR
+         (CurrProcUnitNew."Safety Stock Calc. Method" <> CurrProcUnitOld."Safety Stock Calc. Method") OR
+         (CurrProcUnitNew."Target Customer Service Level" <> CurrProcUnitOld."Target Customer Service Level") OR
+         (CurrProcUnitNew."Nonstock Unit" <> CurrProcUnitOld."Nonstock Unit") OR
+         (CurrProcUnitNew."Include Drop Ship Usage" <> CurrProcUnitOld."Include Drop Ship Usage") OR
+         (CurrProcUnitNew."Maximum Inventory" <> CurrProcUnitOld."Maximum Inventory") OR
+         (CurrProcUnitNew."Sporadic Rule" <> CurrProcUnitOld."Sporadic Rule") OR
+         (((CurrProcUnitNew."Replenishment Model" = CurrProcUnitNew."Replenishment Model"::"Min/Max") OR
+           (CurrProcUnitOld."Replenishment Model" = CurrProcUnitOld."Replenishment Model"::"Min/Max")) AND
+           (CurrProcUnitNew."Replenishment Model" <> CurrProcUnitOld."Replenishment Model"))
+      THEN BEGIN
+        CurrProcUnitNew."Date Changed" := TODAY;
+        CurrProcUnitNew."User ID" := USERID;
+        CurrProcUnitNew."Change Reforecast Required" := TRUE;
+        IF UBP.SpokesExist(Rec) THEN
+          CurrProcUnitNew."Reforecast Item" := TRUE;
+      END;
+    END;
+
+    PROCEDURE GetUOM@1240030006();
+    BEGIN
+      IF "Purchase Unit of Measure" <> '' THEN
+        IF (ItemUOM."Item No." <> "Item No.") OR
+           (ItemUOM.Code <> "Purchase Unit of Measure")
+        THEN
+          ItemUOM.GET("Item No.","Purchase Unit of Measure");
+    END;
+
+    PROCEDURE SetOverrideToDelete@1240020000();
+    BEGIN
+      OverrideToDelete := TRUE;
+    END;
+
+    LOCAL PROCEDURE ViewForecast@1240020001(CurrHorizonDate@1240020000 : Date);
+    VAR
+      ForecastView@1240020001 : Page 14002661;
+    BEGIN
+      CLEAR(ForecastView);
+      ForecastView.SetLTHDate(CurrHorizonDate);
+      ForecastView.SetProcUnitandSourceNo(Rec,'');
+      ForecastView.RUN;
+    END;
+
+    LOCAL PROCEDURE CalcFillRateForecastView@1240020002();
+    VAR
+      HorizonToUse@1240020000 : Date;
+    BEGIN
+      InvMgtSetup.GET;
+      IF ("Fill Rate Calculation Date" <> 0DT)  THEN BEGIN
+        IF InvMgtSetup."Fill Rate - Horizon Days" <= 0 THEN
+          HorizonToUse := WORKDATE
+        ELSE
+          HorizonToUse := CALCDATE('<+'+ FORMAT(InvMgtSetup."Fill Rate - Horizon Days") + 'D>', DT2DATE("Fill Rate Calculation Date"));
+        IF (HorizonToUse <> 0D) THEN BEGIN
+          ViewForecast(HorizonToUse);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdatePurchaserCode@1240020003(UpdateReplSource@1240020000 : Boolean);
+    VAR
+      ProcUnit@1240020001 : Record 14000555;
+    BEGIN
+      IF ("Replenishment Source Type" = "Replenishment Source Type"::Vendor) OR
+             ("Replenishment Source Type" = "Replenishment Source Type"::Production) OR
+             ("Replenishment Source Type" = "Replenishment Source Type"::Assembly) THEN BEGIN
+        GetInventorySetup;
+        ProcUnit.SETFILTER("Location Code", '<>%1', "Location Code");
+        ProcUnit.SETRANGE("Item No.", "Item No.");
+        ProcUnit.SETRANGE("Variant Code", "Variant Code");
+        ProcUnit.SETRANGE("Replenishment Source Type", "Replenishment Source Type"::Location);
+        ProcUnit.SETRANGE("Replenishment Source Code", "Location Code");
+        IF UpdateReplSource THEN BEGIN
+          ProcUnit.MODIFYALL("Top Repl. Source Type", "Replenishment Source Type");
+          ProcUnit.MODIFYALL("Top Repl. Source Code", "Replenishment Source Code");
+        END;
+        IF NOT InvMgtSetup."Force Purchaser Code Synch." THEN
+          ProcUnit.SETFILTER("Purchaser Code", '%1', '');
+        ProcUnit.MODIFYALL("Purchaser Code", "Purchaser Code");
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,461 @@
+OBJECT Codeunit 14000590 Create P.O. From Cont. Plan
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.02;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CalcLine@1240030028 : Record 14000569;
+      ContainerPlanHdr@1240030019 : Record 14097458;
+      ContainerPlanLine@1240030005 : Record 14097459;
+      Item@1240030009 : Record 27;
+      InvMgtSetup@1240030018 : Record 14000551;
+      Location@1240030023 : Record 14;
+      PlanContainerNo@1240030000 : Record 14097457;
+      PostedCalcLine@1240030029 : Record 14000570;
+      PostedSugOrderHdr@1240030020 : Record 14000567;
+      PostedSugOrderLine@1240030021 : Record 14000568;
+      PurchaseHdr@1240030002 : Record 38;
+      PurchaseLine@1240030003 : Record 39;
+      PurchaseLine2@1240030014 : Record 39;
+      SugOrderHdr@1240030006 : Record 14000565;
+      SugOrderLine@1240030001 : Record 14000566;
+      SurplusInvValue@1240030022 : Record 14000584;
+      TransferHdr@1240030016 : Record 5740;
+      TransferLine@1240030017 : Record 5741;
+      VendorTmp@1240030004 : TEMPORARY Record 23;
+      VendorBuyingCalendar@1240030024 : Record 14000563;
+      ReleasePurchDocument@1240030035 : Codeunit 415;
+      UBP@1240020001 : Codeunit 14000564;
+      ProgWindow@1240030030 : Dialog;
+      ExtText@1240030012 : Boolean;
+      NextLineNo@1240030013 : Integer;
+      PurchQty@1240030008 : Decimal;
+      ReceivingLocation@1240030007 : Code[10];
+      Text001@1240030015 : TextConst 'ENU=Do you wish to create all purchase orders for the Container Plan?';
+      Text002@1240030031 : TextConst 'ENU=Creating Purchase and Transfer Order(s)';
+      Text003@1240030032 : TextConst 'ENU=Suggested Order';
+      Text004@1240030033 : TextConst 'ENU=Item';
+      Text005@1240030034 : TextConst 'ENU=Posting Plan and Suggested Order';
+      Text006@1240030036 : TextConst 'ENU="Some Suggested Order Lines on this Container Plan have not been reviewed.  Do you wish to continue?  "';
+      SetupRetrieved@1240020000 : Boolean;
+
+    PROCEDURE ByPlan@1240030000(CurrContainerPlanHdr@1240030000 : Record 14097458);
+    BEGIN
+      IF NOT CONFIRM(Text001) THEN
+        EXIT;
+
+      GetSetup;
+      IF InvMgtSetup."Check Lines Reviewed" THEN BEGIN
+        ContainerPlanLine.RESET;
+        ContainerPlanLine.SETRANGE("Container Plan No.",CurrContainerPlanHdr."No.");
+        IF ContainerPlanLine.FINDSET THEN BEGIN
+          SugOrderLine.SETCURRENTKEY("Container Plan No.","Buy-from Vendor No.","Document No.","Container No.");
+          REPEAT
+            SugOrderLine.SETRANGE("Container Plan No.",ContainerPlanLine."Container Plan No.");
+            SugOrderLine.SETRANGE("Container No.",PlanContainerNo."Container No.");
+            SugOrderLine.SETRANGE("Line Reviewed",FALSE);
+            IF NOT SugOrderLine.ISEMPTY THEN
+              IF NOT CONFIRM(Text006) THEN
+                EXIT;
+          UNTIL ContainerPlanLine.NEXT = 0;
+        END;
+      END;
+
+      IF GUIALLOWED THEN BEGIN
+        ProgWindow.OPEN('#1#####################################\' +
+          PADSTR(Text003,20) + '#2##################################\' +
+          PADSTR(Text004,20) + '#3#################');
+        ProgWindow.UPDATE(1,Text002);
+      END;
+
+      ContainerPlanHdr.GET(CurrContainerPlanHdr."No.");
+      ReceivingLocation := CurrContainerPlanHdr."Receiving Location";
+
+      // Zero Quantities on Sug. Order Lines not assigned to a container
+      ContainerPlanLine.RESET;
+      ContainerPlanLine.SETRANGE("Container Plan No.",CurrContainerPlanHdr."No.");
+      IF ContainerPlanLine.FINDSET THEN
+        REPEAT
+          SugOrderLine.RESET;
+          SugOrderLine.SETRANGE("Buy-from Vendor No.",ContainerPlanLine."Buy From Vendor No.");
+          SugOrderLine.SETRANGE("Document No.",ContainerPlanLine."Suggested Order No.");
+          SugOrderLine.SETFILTER("Container Plan No.",'=%1',' ');
+          SugOrderLine.SETFILTER("Container No.",'=%1',' ');
+          IF SugOrderLine.FINDSET THEN
+            REPEAT
+              IF GUIALLOWED THEN BEGIN
+                ProgWindow.UPDATE(2,SugOrderLine."Buy-from Vendor No." + '-' + SugOrderLine."Document No.");
+                ProgWindow.UPDATE(3,SugOrderLine."No.");
+              END;
+              SugOrderLine.VALIDATE(Quantity,0);
+              SugOrderLine.MODIFY(TRUE);
+            UNTIL SugOrderLine.NEXT = 0;
+        UNTIL ContainerPlanLine.NEXT = 0;
+
+      PlanContainerNo.RESET;
+      PlanContainerNo.SETRANGE("Container Plan No.",CurrContainerPlanHdr."No.");
+      IF PlanContainerNo.FINDSET THEN
+        REPEAT
+          VendorTmp.RESET;
+          VendorTmp.DELETEALL;
+          SugOrderLine.RESET;
+          SugOrderLine.SETCURRENTKEY("Container Plan No.","Buy-from Vendor No.","Document No.","Container No.");
+          SugOrderLine.SETRANGE("Container Plan No.",PlanContainerNo."Container Plan No.");
+          SugOrderLine.SETRANGE("Container No.",PlanContainerNo."Container No.");
+          IF SugOrderLine.FINDSET THEN
+            REPEAT
+              IF GUIALLOWED THEN BEGIN
+                ProgWindow.UPDATE(2,SugOrderLine."Buy-from Vendor No." + '-' + SugOrderLine."Document No.");
+                ProgWindow.UPDATE(3,SugOrderLine."No.");
+              END;
+              IF NOT VendorTmp.GET(SugOrderLine."Buy-from Vendor No.") THEN BEGIN
+                VendorTmp.INIT;
+                VendorTmp."No." := SugOrderLine."Buy-from Vendor No.";
+                VendorTmp.INSERT(FALSE);
+              END;
+            UNTIL SugOrderLine.NEXT = 0;
+          IF VendorTmp.FINDSET THEN
+            REPEAT
+              SugOrderLine.SETRANGE("Buy-from Vendor No.",VendorTmp."No.");
+              SugOrderLine.SETFILTER(Quantity,'<>%1',0);
+              IF SugOrderLine.FINDSET THEN BEGIN
+                SugOrderHdr.GET(SugOrderLine."Buy-from Vendor No.",SugOrderLine."Document No.");
+                SugOrderHdr.GetPostingNo;
+                SugOrderHdr."Container Plan No." := CurrContainerPlanHdr."No.";
+                SugOrderHdr.MODIFY(FALSE);
+                CreatePurchHdr;
+                REPEAT
+                  IF GUIALLOWED THEN BEGIN
+                    ProgWindow.UPDATE(2,SugOrderLine."Buy-from Vendor No." + '-' + SugOrderLine."Document No.");
+                    ProgWindow.UPDATE(3,SugOrderLine."No.");
+                  END;
+                  CreatePurchLine;
+                  IF SugOrderLine."Location Code" <> ReceivingLocation THEN
+                    CreateTransfer(ReceivingLocation,SugOrderLine."Location Code");
+                UNTIL SugOrderLine.NEXT = 0;
+                // AV Release Purchase Order
+                IF InvMgtSetup."Enable AV Interface" THEN
+                  ReleasePurchDocument.RUN(PurchaseHdr);
+                OnAfterCreatePurchaseOrder(SugOrderHdr, PurchaseHdr);
+              END;
+            UNTIL VendorTmp.NEXT = 0;
+        UNTIL PlanContainerNo.NEXT = 0;
+
+      IF GUIALLOWED THEN
+      ProgWindow.UPDATE(1,Text005);
+
+      PostSuggestedOrder;
+      PostContainerPlan;
+
+      IF GUIALLOWED THEN
+        ProgWindow.CLOSE;
+    END;
+
+    PROCEDURE CreatePurchHdr@1240030002();
+    BEGIN
+      PurchaseHdr.INIT;
+      PurchaseHdr."Document Type" := PurchaseHdr."Document Type"::Order;
+      PurchaseHdr."No." := '';
+      PurchaseHdr.INSERT(TRUE);
+      PurchaseHdr.VALIDATE("Buy-from Vendor No.",SugOrderLine."Buy-from Vendor No.");
+      PurchaseHdr.VALIDATE("Location Code",ReceivingLocation);
+      PurchaseHdr."Created from Suggested Order" := TRUE;
+      PurchaseHdr."Creation Date" := WORKDATE;
+      PurchaseHdr."Created By" := USERID;
+      PurchaseHdr."Suggested Order No." := SugOrderHdr."Posting No.";
+      PurchaseHdr."Created from Suggested Order" := TRUE;
+      PurchaseHdr."Creation Date" := WORKDATE;
+      PurchaseHdr."Requested Receipt Date" := SugOrderHdr."Requested Receipt Date";
+      PurchaseHdr."Created By" := USERID;
+      PurchaseHdr."Container Plan No." := PlanContainerNo."Container Plan No.";
+      PurchaseHdr."Container No." := PlanContainerNo."Container No.";
+      PurchaseHdr."Suggested Order No." := SugOrderHdr."Posting No.";
+      PurchaseHdr."Purchaser Code" := SugOrderHdr."Purchaser Code";
+      PurchaseHdr.MODIFY(TRUE);
+      OnAfterCreatePurchaseOrderHeader(SugOrderHdr, PurchaseHdr);
+    END;
+
+    PROCEDURE CreatePurchLine@1240030001();
+    VAR
+      ExtTextHdr@1240020001 : Record 279;
+      ExtTextLine@1240020000 : Record 280;
+    BEGIN
+      IF (SugOrderLine.Quantity - SugOrderLine."Qty. Transferred (Base)") > 0 THEN BEGIN
+        PurchaseLine."Document Type" := PurchaseHdr."Document Type";
+        PurchaseLine."Document No." := PurchaseHdr."No.";
+        PurchaseLine."Line No." := SugOrderLine."Line No.";
+        PurchaseLine."Buy-from Vendor No." := PurchaseHdr."Buy-from Vendor No.";
+        PurchaseLine.VALIDATE(Type,SugOrderLine.Type);
+        PurchaseLine.VALIDATE("No.",SugOrderLine."No.");
+        PurchaseLine.VALIDATE("Variant Code",SugOrderLine."Variant Code");
+        PurchaseLine.VALIDATE("Unit of Measure Code",SugOrderLine."Unit of Measure Code");
+        SugOrderLine.CALCFIELDS("Qty. Transferred (Base)");
+        PurchQty := SugOrderLine.Quantity - SugOrderLine."Qty. Transferred (Base)";
+        PurchaseLine.VALIDATE(Quantity,PurchQty);
+        PurchaseLine."Expected Receipt Date" := SugOrderLine."Expected Receipt Date";
+        PurchaseLine."Planned Receipt Date" := SugOrderLine."Planned Receipt Date";
+        PurchaseLine.INSERT(TRUE);
+        OnAfterCreatePurchaseOrderItemLine(SugOrderHdr, SugOrderLine, PurchaseHdr, PurchaseLine);
+        IF PurchaseLine.Type = PurchaseLine.Type::Item THEN BEGIN
+          Item.GET(SugOrderLine."No.");
+          IF Item."Automatic Ext. Texts" THEN BEGIN
+            ExtText := TRUE;
+            ExtTextHdr.SETCURRENTKEY("Table Name","No.","Language Code","All Language Codes","Starting Date","Ending Date");
+            ExtTextHdr.SETRANGE("Table Name",ExtTextHdr."Table Name"::Item);
+            ExtTextHdr.SETRANGE("No.",PurchaseLine."No.");
+            ExtTextHdr.SETRANGE("Purchase Order",TRUE);
+            ExtTextHdr.SETRANGE("Starting Date",0D,WORKDATE);
+            ExtTextHdr.SETFILTER("Ending Date",'%1..|%2',WORKDATE,0D);
+            IF PurchaseHdr."Language Code" = '' THEN BEGIN
+              ExtTextHdr.SETRANGE("Language Code",'');
+              IF NOT ExtTextHdr.FIND('+') THEN
+                ExtText := FALSE;
+            END ELSE BEGIN
+              ExtTextHdr.SETRANGE("Language Code",PurchaseHdr."Language Code");
+              IF NOT ExtTextHdr.FIND('+') THEN BEGIN
+                ExtTextHdr.SETRANGE("All Language Codes",TRUE);
+                ExtTextHdr.SETRANGE("Language Code",'');
+                IF NOT ExtTextHdr.FIND('+') THEN
+                  ExtText := FALSE;
+              END;
+            END;
+            IF ExtText THEN BEGIN
+              NextLineNo := PurchaseLine."Line No.";
+              ExtTextLine.SETRANGE("Table Name",ExtTextHdr."Table Name");
+              ExtTextLine.SETRANGE("No.",ExtTextHdr."No.");
+              ExtTextLine.SETRANGE("Language Code",ExtTextHdr."Language Code");
+              ExtTextLine.SETRANGE("Text No.",ExtTextHdr."Text No.");
+              IF ExtTextLine.FIND('-') THEN
+                REPEAT
+                  PurchaseLine2.INIT;
+                  PurchaseLine2."Document Type" := PurchaseLine."Document Type";
+                  PurchaseLine2."Document No." := PurchaseLine."Document No.";
+                  NextLineNo := NextLineNo + 10000;
+                  PurchaseLine2."Line No." := NextLineNo;
+                  PurchaseLine2.Description := ExtTextLine.Text;
+                  PurchaseLine2.INSERT;
+                UNTIL ExtTextLine.NEXT = 0;
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE CreateTransfer@1240030003(CurrFromLocation@1240030000 : Code[10];CurrToLocation@1240030001 : Code[10]);
+    BEGIN
+      TransferHdr.RESET;
+      TransferHdr.SETCURRENTKEY(TransferHdr."Container Plan No.");
+      TransferHdr.SETRANGE("Container Plan No.",PlanContainerNo."Container Plan No.");
+      TransferHdr.SETRANGE("Container No.",PlanContainerNo."Container No.");
+      IF NOT TransferHdr.FINDFIRST THEN BEGIN
+        TransferHdr."No." := '';
+        TransferHdr.INSERT(TRUE);
+        TransferHdr.VALIDATE("Transfer-from Code",CurrFromLocation);
+        TransferHdr.VALIDATE("Transfer-to Code",CurrToLocation);
+        TransferHdr.VALIDATE("In-Transit Code",InvMgtSetup."In-Transit Code");
+        TransferHdr."Created from Suggested Order" := TRUE;
+        TransferHdr."Creation Date" := WORKDATE;
+        TransferHdr."Created By" := USERID;
+        SugOrderHdr.GET(SugOrderLine."Buy-from Vendor No.",SugOrderLine."Document No.");
+        TransferHdr."Suggested Order No." := SugOrderHdr."Posting No.";
+        TransferHdr."Container Plan No." := PlanContainerNo."Container Plan No.";
+        TransferHdr."Container No." := PlanContainerNo."Container No.";
+        TransferHdr.MODIFY(TRUE);
+        OnAfterCreateTransferOrderHeader(SugOrderHdr, TransferHdr);
+      END;
+
+      TransferLine."Document No." := TransferHdr."No.";
+      TransferLine."Line No." := SugOrderLine."Line No.";
+      TransferLine.INSERT;
+      TransferLine.VALIDATE("Item No.",SugOrderLine."No.");
+      TransferLine."Variant Code" := SugOrderLine."Variant Code";
+      TransferLine.VALIDATE("Unit of Measure Code",SugOrderLine."Unit of Measure Code");
+      TransferLine.VALIDATE(Quantity,SugOrderLine.Quantity - SugOrderLine."Qty. Transferred (Base)");
+      TransferLine.VALIDATE("Shipment Date",SugOrderLine."Expected Receipt Date");
+      TransferLine.MODIFY(TRUE);
+      OnAfterCreateTransferOrderLine(SugOrderHdr, SugOrderLine, TransferHdr, TransferLine);
+    END;
+
+    PROCEDURE PostSuggestedOrder@1240030005();
+    BEGIN
+      ContainerPlanLine.RESET;
+      ContainerPlanLine.SETRANGE("Container Plan No.",ContainerPlanHdr."No.");
+      IF ContainerPlanLine.FINDSET THEN
+        REPEAT
+          SugOrderHdr.GET(ContainerPlanLine."Buy From Vendor No.",ContainerPlanLine."Suggested Order No.");
+          OnBeforePostSuggestedOrder(SugOrderHdr);
+          PostedSugOrderHdr.TRANSFERFIELDS(SugOrderHdr,TRUE);
+          PostedSugOrderHdr."No." := SugOrderHdr."Posting No.";
+          PostedSugOrderHdr."Posted Date" := WORKDATE;
+          PostedSugOrderHdr.INSERT(TRUE);
+
+          ContainerPlanLine."Posted Sug. Order No." := PostedSugOrderHdr."No.";
+          ContainerPlanLine.MODIFY(FALSE);
+
+          SugOrderLine.RESET;
+          SugOrderLine.SETRANGE("Buy-from Vendor No.",SugOrderHdr."Buy-from Vendor No.");
+          SugOrderLine.SETRANGE("Document No.",SugOrderHdr."No.");
+          IF SugOrderLine.FINDSET THEN
+            REPEAT
+              IF GUIALLOWED THEN BEGIN
+                ProgWindow.UPDATE(2,SugOrderLine."Buy-from Vendor No." + '-' + SugOrderLine."Document No.");
+                ProgWindow.UPDATE(3,SugOrderLine."No.");
+              END;
+
+              PostedSugOrderLine.TRANSFERFIELDS(SugOrderLine,TRUE);
+              SugOrderLine.CALCFIELDS("Qty. Transferred (Base)");
+              PostedSugOrderLine."Qty. Transferred" := SugOrderLine."Qty. Transferred (Base)";
+              PostedSugOrderLine."Document No." := PostedSugOrderHdr."No.";
+              PostedSugOrderLine.INSERT;
+
+              CalcLine.SETRANGE("Location Code",SugOrderLine."Location Code");
+              CalcLine.SETRANGE("Item No.",SugOrderLine."No.");
+              IF SugOrderLine."Summarize Variant Detail" THEN
+                CalcLine.SETFILTER("Variant Code",'=%1','')
+              ELSE
+                CalcLine.SETRANGE("Variant Code",SugOrderLine."Variant Code");
+              IF CalcLine.FINDSET THEN
+                REPEAT
+                  PostedCalcLine.TRANSFERFIELDS(CalcLine);
+                  IF SugOrderLine."Summarize Variant Detail" THEN
+                    PostedCalcLine."Variant Code" := SugOrderLine."Variant Code";
+                  PostedCalcLine."Suggested Order No." := SugOrderHdr."Posting No.";
+                  PostedCalcLine."Suggested Order Line No." := SugOrderLine."Line No.";
+                  PostedCalcLine."Purchase Order No." := '';
+                  PostedCalcLine."Purchase Order Line No." := 0;
+                  IF PostedCalcLine.INSERT THEN;
+                UNTIL CalcLine.NEXT = 0;
+            UNTIL SugOrderLine.NEXT = 0;
+
+          SurplusInvValue.SETCURRENTKEY("Buy-from Vendor No.","Suggested Order No.");
+          SurplusInvValue.SETRANGE("Buy-from Vendor No.",SugOrderHdr."Buy-from Vendor No.");
+          SurplusInvValue.SETRANGE("Suggested Order No.",SugOrderHdr."No.");
+          IF SurplusInvValue.FINDSET THEN
+            REPEAT
+              SurplusInvValue."Quantity To Transfer" := 0;
+              SurplusInvValue."Quantity Transferred" := 0;
+              SurplusInvValue."Transfer To Location Code" := '';
+              SurplusInvValue."Buy-from Vendor No." := '';
+              SurplusInvValue."Suggested Order No." := '';
+              SurplusInvValue."Suggested Order Line No." := 0;
+              SurplusInvValue.MODIFY(FALSE);
+            UNTIL SurplusInvValue.NEXT = 0;
+
+          IF SugOrderHdr."Procurement Group Code" = '' THEN BEGIN
+            IF UBP.GetVendBuyingCalendarFromSuggOrdHeader(SugOrderHdr, VendorBuyingCalendar) THEN BEGIN
+            VendorBuyingCalendar."Last Review Date" := WORKDATE;
+            VendorBuyingCalendar."Next Review Date" :=
+                CALCDATE(STRSUBSTNO('<+%1D>',VendorBuyingCalendar."Review Cycle (Days)"), VendorBuyingCalendar."Last Review Date");
+              VendorBuyingCalendar.MODIFY(FALSE);
+            END;
+          END ELSE BEGIN
+            VendorBuyingCalendar.RESET;
+            VendorBuyingCalendar.SETRANGE("Vendor No.",SugOrderHdr."Buy-from Vendor No.");
+            VendorBuyingCalendar.SETRANGE("Procurement Group Code",SugOrderHdr."No.");
+            IF VendorBuyingCalendar.FIND('-') THEN
+              REPEAT
+                VendorBuyingCalendar."Last Review Date" := WORKDATE;
+                VendorBuyingCalendar."Next Review Date" :=
+                  CALCDATE(STRSUBSTNO('<+%1D>',VendorBuyingCalendar."Review Cycle (Days)"),WORKDATE);
+                VendorBuyingCalendar.MODIFY;
+              UNTIL VendorBuyingCalendar.NEXT = 0;
+          END;
+          SugOrderHdr.DELETE(TRUE);
+          OnAfterPostSuggestedOrder(SugOrderHdr, PostedSugOrderHdr);
+        UNTIL ContainerPlanLine.NEXT = 0;
+    END;
+
+    PROCEDURE PostContainerPlan@1240030004();
+    VAR
+      PostedContainerPlan@1240020002 : Record 14097455;
+      PostedContainerPlanLine@1240020001 : Record 14097456;
+      PostedPlanContainerNo@1240020000 : Record 14097454;
+    BEGIN
+      PostedContainerPlan.INIT;
+      PostedContainerPlan.TRANSFERFIELDS(ContainerPlanHdr,TRUE);
+      PostedContainerPlan.INSERT(TRUE);
+
+      ContainerPlanLine.RESET;
+      ContainerPlanLine.SETRANGE("Container Plan No.",ContainerPlanHdr."No.");
+      IF ContainerPlanLine.FINDSET THEN
+        REPEAT
+          IF GUIALLOWED THEN BEGIN
+            ProgWindow.UPDATE(2,ContainerPlanLine."Buy From Vendor No." + '-' + ContainerPlanLine."Suggested Order No.");
+            ProgWindow.UPDATE(3,'');
+          END;
+          PostedContainerPlanLine.TRANSFERFIELDS(ContainerPlanLine,TRUE);
+          PostedContainerPlanLine."Suggested Order No." := ContainerPlanLine."Posted Sug. Order No.";
+          PostedContainerPlanLine.INSERT(TRUE);
+        UNTIL ContainerPlanLine.NEXT = 0;
+
+      PlanContainerNo.RESET;
+      PlanContainerNo.SETRANGE("Container Plan No.",ContainerPlanHdr."No.");
+      IF PlanContainerNo.FINDSET THEN
+        REPEAT
+          PostedPlanContainerNo.INIT;
+          PostedPlanContainerNo.TRANSFERFIELDS(PlanContainerNo,TRUE);
+          PostedPlanContainerNo.INSERT;
+        UNTIL PlanContainerNo.NEXT = 0;
+
+      ContainerPlanHdr.DELETE(TRUE);
+    END;
+
+    LOCAL PROCEDURE GetSetup@1240020009();
+    BEGIN
+      IF NOT SetupRetrieved THEN BEGIN
+        InvMgtSetup.GET;
+        SetupRetrieved := TRUE;
+      END;
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCreatePurchaseOrderHeader@1240020007(VAR CurrSugOrderHeader@1240020001 : Record 14000565;VAR CurrPurchOrderHeader@1240020000 : Record 38);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCreatePurchaseOrderItemLine@1240020004(VAR CurrSugOrderHeader@1240020001 : Record 14000565;VAR CurrSugOrderLine@1240020002 : Record 14000566;VAR CurrPurchOrderHeader@1240020000 : Record 38;VAR CurrPurchOrderLine@1240020003 : Record 39);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnBeforePostSuggestedOrder@1240020002(VAR CurrSugOrderHeader@1240020000 : Record 14000565);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterPostSuggestedOrder@1240020003(VAR CurrSugOrderHeader@1240020000 : Record 14000565;VAR CurrPostedSugOrderHeader@1240020001 : Record 14000567);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCreatePurchaseOrder@1240020001(VAR CurrSugOrderHeader@1240020002 : Record 14000565;VAR CurrPurchOrderHeader@1240020000 : Record 38);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCreateTransferOrderHeader@1240020015(VAR CurrSugOrderHeader@1240020003 : Record 14000565;VAR CurrTransferOrderHeader@1240020002 : Record 5740);
+    BEGIN
+    END;
+
+    [Integration]
+    LOCAL PROCEDURE OnAfterCreateTransferOrderLine@1240020014(VAR CurrSugOrderHeader@1240020001 : Record 14000565;VAR CurrSugOrderLine@1240020002 : Record 14000566;VAR CurrTransferOrderHeader@1240020004 : Record 5740;VAR CurrTransferOrderLine@1240020000 : Record 5741);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

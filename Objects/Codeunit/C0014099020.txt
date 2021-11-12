@@ -1,0 +1,2355 @@
+OBJECT Codeunit 14099020 Pick Request Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/21/18;
+    Time=12:00:00 PM;
+    Version List=RF1.50.13;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1240020001 : TextConst 'ENU=Pick Request Header already exists.';
+      Text002@1240020002 : TextConst 'ENU=Pick Request Header does not exist.';
+      Text003@1240020003 : TextConst 'ENU=Pick Request Header failed to get created.';
+      Text007@1240020007 : TextConst 'ENU=Pick Request Header failed to register.';
+      Text008@1240020008 : TextConst 'ENU=Pick Request Line failed to register.';
+      Text010@1240020010 : TextConst 'ENU=Pick Request No. Series is not setup.';
+      Text011@1240020013 : TextConst 'ENU=No Warehouse Requests found.';
+      Text012@1240020015 : TextConst 'ENU=%1 Picks created from %2 Warehouse Request .';
+      Text013@1240020014 : TextConst 'ENU=Pick %1 created.';
+      Text020@1240020011 : TextConst 'ENU=OWR Location Setup not defined for %1.';
+      Text021@1240020012 : TextConst 'ENU=Use Pick Requests not enabled in OWR Location Setup for %1.';
+      Text022@1240020016 : TextConst 'ENU=Pick Request Exists';
+      Text023@1240020017 : TextConst 'ENU=ATO Pick Request Exists';
+      Text024@1240020000 : TextConst 'ENU=In Progress';
+      Text025@1240020004 : TextConst 'ENU=Picked Short';
+      Text026@1240020005 : TextConst 'ENU=Picked Complete';
+
+    [External]
+    PROCEDURE CreateSinglePick@1240020028(CurrentWarehouseRequest@1240020005 : Record 5765;OutboundWhseRequestFilter@1240020004 : Record 14002863;AssignedID@1240020003 : Code[50];AssignedWhseGroupCode@1240020002 : Code[20];VAR NewPickNo@1240020001 : Code[20];GiveError@1240020000 : Boolean) : Boolean;
+    VAR
+      Location@1240020010 : Record 14;
+      OWRLocationSetup@1240020011 : Record 14099030;
+      PickRqstHeader@1240020013 : Record 14099020;
+      WarehouseRequest@1240020009 : Record 5765;
+      RFMgt@1240020012 : Codeunit 14002801;
+      PickRqstNo@1240020008 : Code[20];
+      PickCreated@1240020006 : Boolean;
+    BEGIN
+      CurrentWarehouseRequest.TESTFIELD(Type,CurrentWarehouseRequest.Type::Outbound);
+
+      WarehouseRequest.RESET;
+      WarehouseRequest := CurrentWarehouseRequest;
+      WarehouseRequest.SETRECFILTER;
+
+      PickCreated := FALSE;
+      Location.GET(WarehouseRequest."Location Code");
+      OWRLocationSetup.RESET;
+      IF NOT OWRLocationSetup.GET(Location.Code) THEN
+        IF GiveError THEN
+          ERROR(STRSUBSTNO(Text020,Location.Code))
+        ELSE
+          EXIT(FALSE);
+
+      IF NOT OWRLocationSetup."Use Pick Requests" THEN
+        IF GiveError THEN
+          ERROR(STRSUBSTNO(Text021,Location.Code))
+        ELSE
+          EXIT(FALSE);
+
+      IF NOT RFMgt.CheckIfCreateOutboundWhseRequest(Location.Code) THEN
+        EXIT(FALSE);
+
+      IF CreatePickRqstHeader(WarehouseRequest,Location.Code,PickRqstNo,AssignedID) THEN BEGIN
+        IF CreatePickRqstLine(WarehouseRequest,OutboundWhseRequestFilter,PickRqstNo) THEN
+          PickCreated := TRUE;
+
+        IF PickCreated AND (OutboundWhseRequestFilter."Print Document") THEN BEGIN
+          PickRqstHeader.RESET;
+          PickRqstHeader.SETRANGE("Pick Request No.",PickRqstNo);
+          IF PickRqstHeader.FIND('-') THEN
+            PrintPickRqst(PickRqstHeader,FALSE);
+        END;
+
+        IF PickCreated THEN
+          OnAfterCreatePickRqstEvent(PickRqstNo);
+
+        IF NOT PickCreated THEN
+          DeletePickRqst(
+            PickRqstNo,Location.Code,WarehouseRequest."Source No.",
+            WarehouseRequest."Source Type",WarehouseRequest."Source Subtype");
+      END;
+
+      IF PickRqstNo <> '' THEN
+        NewPickNo := PickRqstNo;
+
+      IF PickCreated THEN
+        EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE CreateCombinedPick@1240020030(VAR WarehouseRequest@1240020005 : Record 5765;OutboundWhseRequestFilter@1240020004 : Record 14002863;AssignedID@1240020003 : Code[50];AssignedWhseGroupCode@1240020002 : Code[20];VAR NewPickNo@1240020001 : Code[20];VAR PicksCreated@1240020016 : Integer;GiveError@1240020000 : Boolean) : Boolean;
+    VAR
+      Location@1240020010 : Record 14;
+      OWRLocationSetup@1240020013 : Record 14099030;
+      WarehouseRequest2@1240020009 : Record 5765;
+      PickRqstHeader@1240020017 : Record 14099020;
+      RFMgt@1240020014 : Codeunit 14002801;
+      PickRqstNo@1240020008 : Code[20];
+      FirstLocationCode@1240020012 : Code[10];
+      PickCreated@1240020006 : Boolean;
+      DocPrinted@1240020018 : Boolean;
+      NoOfWarehouseRequest@1240020011 : Integer;
+      BatchGroupSize@1240020015 : Integer;
+    BEGIN
+      IF NOT WarehouseRequest.FIND('-') THEN
+        IF GiveError THEN
+          ERROR(Text011)
+        ELSE
+          EXIT(FALSE);
+
+      Location.GET(WarehouseRequest."Location Code");
+      OWRLocationSetup.RESET;
+      IF NOT OWRLocationSetup.GET(Location.Code) THEN
+        IF GiveError THEN
+          ERROR(STRSUBSTNO(Text020,Location.Code))
+        ELSE
+          EXIT(FALSE);
+
+      IF NOT OWRLocationSetup."Use Pick Requests" THEN
+        IF GiveError THEN
+          ERROR(STRSUBSTNO(Text021,Location.Code))
+        ELSE
+          EXIT(FALSE);
+
+      IF NOT RFMgt.CheckIfCreateOutboundWhseRequest(Location.Code) THEN
+        EXIT(FALSE);
+
+      NoOfWarehouseRequest := 0;
+      FirstLocationCode := Location.Code;
+      REPEAT
+        IF (WarehouseRequest."Location Code" = FirstLocationCode) AND
+           (WarehouseRequest."Document Status" = WarehouseRequest."Document Status"::Released)
+        THEN BEGIN
+          PickCreated := FALSE;
+          DocPrinted := FALSE;
+
+          IF (NoOfWarehouseRequest = 0) OR
+             ((BatchGroupSize >= OutboundWhseRequestFilter."Warehouse Activity Group Size") AND
+              (OutboundWhseRequestFilter."Warehouse Activity Group Size" <> 0))
+          THEN BEGIN
+            CLEAR(PickRqstNo);
+            IF CreatePickRqstHeader(WarehouseRequest,Location.Code,PickRqstNo,AssignedID) THEN
+              BatchGroupSize := 0;
+          END;
+
+          IF PickRqstNo <> '' THEN
+            IF CreatePickRqstLine(WarehouseRequest,OutboundWhseRequestFilter,PickRqstNo) THEN BEGIN
+              PickCreated := TRUE;
+              BatchGroupSize += 1;
+              NoOfWarehouseRequest += 1;
+            END;
+
+          IF PickCreated AND
+             ((BatchGroupSize >= OutboundWhseRequestFilter."Warehouse Activity Group Size") AND
+              (OutboundWhseRequestFilter."Warehouse Activity Group Size" <> 0))
+          THEN
+            OnAfterCreatePickRqstEvent(PickRqstNo);
+
+          IF OutboundWhseRequestFilter."Print Document" AND PickCreated THEN BEGIN
+            PickRqstHeader.RESET;
+            PickRqstHeader.SETRANGE("Pick Request No.",PickRqstNo);
+            IF PickRqstHeader.FIND('-') THEN BEGIN
+              IF OutboundWhseRequestFilter."Warehouse Activity Group Size" <> 0 THEN BEGIN
+                IF (BatchGroupSize >= OutboundWhseRequestFilter."Warehouse Activity Group Size") THEN BEGIN
+                  PrintPickRqst(PickRqstHeader,FALSE);
+                  DocPrinted := TRUE;
+                END;
+              END ELSE BEGIN
+                PrintPickRqst(PickRqstHeader,FALSE);
+                DocPrinted := TRUE;
+              END;
+            END;
+          END;
+        END;
+      UNTIL WarehouseRequest.NEXT = 0;
+
+      IF (BatchGroupSize = 0) AND PickCreated THEN
+        OnAfterCreatePickRqstEvent(PickRqstNo);
+
+      IF (BatchGroupSize = 0) AND (NOT PickCreated) THEN
+        IF PickRqstHeader.GET(PickRqstNo) THEN
+          DeletePickRqst(
+            PickRqstNo,Location.Code,WarehouseRequest."Source No.",
+            WarehouseRequest."Source Type",WarehouseRequest."Source Subtype");
+
+      IF PickCreated AND
+         (NOT DocPrinted) AND
+         (BatchGroupSize > 0) AND
+         (OutboundWhseRequestFilter."Warehouse Activity Group Size" <> 0) AND
+         (OutboundWhseRequestFilter."Print Document")
+      THEN BEGIN
+        PickRqstHeader.RESET;
+        PickRqstHeader.SETRANGE("Pick Request No.",PickRqstNo);
+        IF PickRqstHeader.FIND('-') THEN BEGIN
+          PrintPickRqst(PickRqstHeader,FALSE);
+          DocPrinted := TRUE;
+        END;
+      END;
+
+      PicksCreated := NoOfWarehouseRequest;
+
+      IF PicksCreated > 0 THEN
+        EXIT(TRUE);
+    END;
+
+    [External]
+    PROCEDURE CreatePriorityPick@1240020019(VAR WarehouseRequest@1240020005 : Record 5765;OutboundWhseRequestFilter@1240020004 : Record 14002863;AssignedID@1240020003 : Code[50];AssignedWhseGroupCode@1240020002 : Code[20];VAR NewPickNo@1240020001 : Code[20];VAR PicksCreated@1240020016 : Integer;GiveError@1240020000 : Boolean;CombinePicks@1240020017 : Boolean) : Boolean;
+    VAR
+      Location@1240020010 : Record 14;
+      OWRLocationSetup@1240020013 : Record 14099030;
+      WarehouseRequest2@1240020009 : Record 5765;
+      PickRqstHeader@1240020023 : Record 14099020;
+      RFSetup@1240020018 : Record 14002801;
+      RFMgt@1240020014 : Codeunit 14002801;
+      PickRqstNo@1240020008 : Code[20];
+      FirstLocationCode@1240020012 : Code[10];
+      PickNo@1240020020 : Code[20];
+      PickCreated@1240020006 : Boolean;
+      PriorityPickComplete@1240020019 : Boolean;
+      DocPrinted@1240020024 : Boolean;
+      NoOfWarehouseRequest@1240020011 : Integer;
+      BatchGroupSize@1240020015 : Integer;
+      NoOfPicksCreated@1240020022 : Integer;
+      NoOfPrioritiesSkipped@1240020021 : Integer;
+    BEGIN
+      IF NOT WarehouseRequest.FIND('-') THEN
+        IF GiveError THEN
+          ERROR(Text011)
+        ELSE
+          EXIT(FALSE);
+
+      Location.GET(WarehouseRequest."Location Code");
+      OWRLocationSetup.RESET;
+      IF NOT OWRLocationSetup.GET(Location.Code) THEN
+        IF GiveError THEN
+          ERROR(STRSUBSTNO(Text020,Location.Code))
+        ELSE
+          EXIT(FALSE);
+
+      IF NOT OWRLocationSetup."Use Pick Requests" THEN
+        IF GiveError THEN
+          ERROR(STRSUBSTNO(Text021,Location.Code))
+        ELSE
+          EXIT(FALSE);
+
+      IF NOT RFMgt.CheckIfCreateOutboundWhseRequest(Location.Code) THEN
+        EXIT(FALSE);
+
+      RFSetup.GET;
+
+      NoOfPicksCreated := 0;
+      NoOfPrioritiesSkipped := 0;
+      NoOfWarehouseRequest := 0;
+      PriorityPickComplete := FALSE;
+      FirstLocationCode := Location.Code;
+      WarehouseRequest2.RESET;
+      WarehouseRequest2.SETCURRENTKEY("Picking Priority");
+      WarehouseRequest2.SETRANGE(Type,WarehouseRequest2.Type::Outbound);
+      WarehouseRequest2.SETRANGE("Location Code",Location.Code);
+      WarehouseRequest2.SETFILTER("Picking Priority",'>0');
+      WarehouseRequest2.ASCENDING(FALSE);
+      IF WarehouseRequest2.FIND('-') THEN
+        REPEAT
+          WarehouseRequest2.CALCFIELDS("Pick Request Exists");
+
+          IF NOT WarehouseRequest2."Pick Request Exists" THEN BEGIN
+
+            IF (WarehouseRequest2."Location Code" = FirstLocationCode) AND
+               (WarehouseRequest2."Document Status" = WarehouseRequest2."Document Status"::Released)
+            THEN BEGIN
+              PickCreated := FALSE;
+              DocPrinted := FALSE;
+
+              IF (NoOfWarehouseRequest = 0) OR
+                 ((BatchGroupSize >= OutboundWhseRequestFilter."Warehouse Activity Group Size") AND
+                  (OutboundWhseRequestFilter."Warehouse Activity Group Size" <> 0)) OR
+                 (NOT CombinePicks)
+              THEN BEGIN
+                CLEAR(PickRqstNo);
+                IF CreatePickRqstHeader(WarehouseRequest2,Location.Code,PickRqstNo,AssignedID) THEN
+                  BatchGroupSize := 0;
+              END;
+
+              IF PickRqstNo <> '' THEN
+                IF CreatePickRqstLine(WarehouseRequest2,OutboundWhseRequestFilter,PickRqstNo) THEN BEGIN
+                  PickCreated := TRUE;
+                  BatchGroupSize += 1;
+                  NoOfWarehouseRequest += 1;
+                END;
+
+              IF PickCreated AND
+                 (((BatchGroupSize >= OutboundWhseRequestFilter."Warehouse Activity Group Size") AND
+                  (OutboundWhseRequestFilter."Warehouse Activity Group Size" <> 0)) OR
+                  (NOT CombinePicks))
+              THEN
+                OnAfterCreatePickRqstEvent(PickRqstNo);
+
+              IF OutboundWhseRequestFilter."Print Document" AND PickCreated THEN BEGIN
+                PickRqstHeader.RESET;
+                PickRqstHeader.SETRANGE("Pick Request No.",PickRqstNo);
+                IF PickRqstHeader.FIND('-') THEN BEGIN
+                  IF OutboundWhseRequestFilter."Warehouse Activity Group Size" <> 0 THEN BEGIN
+                    IF (BatchGroupSize >= OutboundWhseRequestFilter."Warehouse Activity Group Size") THEN BEGIN
+                      PrintPickRqst(PickRqstHeader,FALSE);
+                      DocPrinted := TRUE;
+                    END;
+                  END ELSE BEGIN
+                    PrintPickRqst(PickRqstHeader,FALSE);
+                    DocPrinted := TRUE;
+                  END;
+                END;
+              END;
+
+              IF NOT PickCreated THEN BEGIN
+                IF NOT RFSetup."Skip Priority Pick with Shorts" THEN
+                  NoOfPrioritiesSkipped := NoOfPrioritiesSkipped + 1;
+              END ELSE
+                NoOfPicksCreated := NoOfPicksCreated + 1;
+            END;
+          END;
+
+          IF OutboundWhseRequestFilter."No. of Picks to create" = 0 THEN
+            IF ((RFSetup."Skip Priority Pick with Shorts") AND
+                  (NoOfPicksCreated > 0)) OR
+                ((NOT RFSetup."Skip Priority Pick with Shorts") AND
+                  ((NoOfPicksCreated + NoOfPrioritiesSkipped) > 0))
+            THEN
+              PriorityPickComplete := TRUE;
+
+          IF OutboundWhseRequestFilter."No. of Picks to create" > 0 THEN
+            IF RFSetup."Skip Priority Pick with Shorts" THEN BEGIN
+              IF NoOfPicksCreated >= OutboundWhseRequestFilter."No. of Picks to create" THEN
+                PriorityPickComplete := TRUE;
+            END ELSE
+              IF (NoOfPicksCreated + NoOfPrioritiesSkipped) >=
+                OutboundWhseRequestFilter."No. of Picks to create"
+              THEN
+                PriorityPickComplete := TRUE;
+
+        UNTIL (WarehouseRequest2.NEXT = 0) OR (PriorityPickComplete);
+
+      IF (BatchGroupSize = 0) AND (NOT PickCreated) THEN
+        IF PickRqstHeader.GET(PickRqstNo) THEN
+          DeletePickRqst(
+            PickRqstNo,Location.Code,WarehouseRequest2."Source No.",
+            WarehouseRequest2."Source Type",WarehouseRequest2."Source Subtype");
+
+      IF PickCreated AND
+         (NOT DocPrinted) AND
+         (BatchGroupSize > 0) AND
+         (OutboundWhseRequestFilter."Warehouse Activity Group Size" <> 0) AND
+         (OutboundWhseRequestFilter."Print Document")
+      THEN BEGIN
+        PickRqstHeader.RESET;
+        PickRqstHeader.SETRANGE("Pick Request No.",PickRqstNo);
+        IF PickRqstHeader.FIND('-') THEN BEGIN
+          PrintPickRqst(PickRqstHeader,FALSE);
+          DocPrinted := TRUE;
+        END;
+      END;
+
+      PicksCreated := NoOfPicksCreated;
+
+      IF PicksCreated > 0 THEN
+        EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CreatePickRqstHeader@1240020039(VAR WarehouseRequest@1240020003 : Record 5765;LocationCode@1240020005 : Code[10];VAR PickRqstNo@1240020002 : Code[20];AssignedID@1240020004 : Code[50]) : Boolean;
+    VAR
+      PickRqstHeader@1240020000 : Record 14099020;
+      NoSeries@1240020001 : Code[20];
+    BEGIN
+      PickRqstNo := GetNextPickRequestNo(LocationCode,NoSeries);
+
+      IF NOT PickRqstHeader.GET(PickRqstNo) THEN BEGIN
+        PickRqstHeader.INIT;
+        PickRqstHeader."Pick Request No." := PickRqstNo;
+        IF WarehouseRequest."Source Type" = 901 THEN
+          PickRqstHeader."Pick Request Type" := PickRqstHeader."Pick Request Type"::Assembly
+        ELSE
+          PickRqstHeader."Pick Request Type" := PickRqstHeader."Pick Request Type"::Shipment;
+        PickRqstHeader."Location Code" := LocationCode;
+        PickRqstHeader.Status := PickRqstHeader.Status::Ready;
+        PickRqstHeader."No. Series" := NoSeries;
+        PickRqstHeader."Assigned User ID" := AssignedID;
+        PickRqstHeader."Creation Date" := TODAY;
+        PickRqstHeader."Creation Time" := TIME;
+        PickRqstHeader."Creation Date/Time" := CURRENTDATETIME;
+        IF PickRqstHeader.INSERT THEN
+          EXIT(TRUE);
+      END ELSE
+        ERROR(Text001);
+    END;
+
+    LOCAL PROCEDURE CreatePickRqstLine@1240020040(WarehouseRequest@1240020003 : Record 5765;OutboundWhseRequestFilter@1240020000 : Record 14002863;PickRqstNo@1240020002 : Code[20]) : Boolean;
+    VAR
+      PickRqstHeader@1240020005 : Record 14099020;
+      PickRqstLine@1240020004 : Record 14099021;
+      PickRqstLineTmp@1240020012 : TEMPORARY Record 14099021;
+      SalesLine@1240020006 : Record 37;
+      ATOLink@1240020009 : Record 904;
+      ATOLine@1240020010 : Record 901;
+      PurchLine@1240020014 : Record 39;
+      TransLine@1240020015 : Record 5741;
+      NextLineNo@1240020001 : Integer;
+      CompleteOrderRequested@1240020011 : Boolean;
+      AllocQty@1240020007 : Decimal;
+      AllocQtyBase@1240020013 : Decimal;
+      InProcessQtyBase@1240020016 : Decimal;
+      QtyToFulfillBase@1240020017 : Decimal;
+    BEGIN
+      IF NOT PickRqstHeader.GET(PickRqstNo) THEN
+        ERROR(Text002);
+
+      CLEAR(NextLineNo);
+      PickRqstLine.RESET;
+      PickRqstLine.SETRANGE("Pick Request No.",PickRqstHeader."Pick Request No.");
+      IF PickRqstLine.FINDLAST THEN
+        NextLineNo := PickRqstLine."Line No." + 10000
+      ELSE
+        NextLineNo := 10000;
+
+      PickRqstLineTmp.RESET;
+      PickRqstLineTmp.DELETEALL;
+
+      IF ((WarehouseRequest."Shipping Advice" = WarehouseRequest."Shipping Advice"::Complete) AND
+          (OutboundWhseRequestFilter."Shipping Advice Handling" =
+           OutboundWhseRequestFilter."Shipping Advice Handling"::"Use Shipping Advice")) OR
+         (OutboundWhseRequestFilter."Shipping Advice Handling" = OutboundWhseRequestFilter."Shipping Advice Handling"::"All Available")
+      THEN
+        CompleteOrderRequested := TRUE
+      ELSE
+        CompleteOrderRequested := FALSE;
+
+      CASE WarehouseRequest."Source Type" OF
+        37:
+          BEGIN
+            SalesLine.RESET;
+            SalesLine.SETCURRENTKEY(
+              "Document Type",Type,"No.","Variant Code","Drop Shipment","Location Code","Shipment Date");
+            SalesLine.SETRANGE("Document Type",WarehouseRequest."Source Subtype");
+            SalesLine.SETRANGE("Document No.",WarehouseRequest."Source No.");
+            SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+            SalesLine.SETFILTER("No.",'<>%1','');
+            SalesLine.SETRANGE("Location Code",WarehouseRequest."Location Code");
+            SalesLine.SETRANGE("Drop Shipment",FALSE);
+            SalesLine.SETFILTER("Outstanding Quantity",'<>0');
+            IF WarehouseRequest."Shipping Advice" <> WarehouseRequest."Shipping Advice"::Complete THEN
+              IF OutboundWhseRequestFilter."Line Date Filter" <> '' THEN
+                SalesLine.SETFILTER("Shipment Date",OutboundWhseRequestFilter."Line Date Filter");
+            IF SalesLine.FIND('-') THEN BEGIN
+              REPEAT
+                IF SalesLine."Qty. to Assemble to Order" > 0 THEN BEGIN
+                  ATOLink.RESET;
+                  ATOLink.SETCURRENTKEY(Type,"Document Type","Document No.","Document Line No.");
+                  ATOLink.SETRANGE(Type,ATOLink.Type::Sale);
+                  ATOLink.SETRANGE("Document Type",ATOLink."Document Type"::Order);
+                  ATOLink.SETRANGE("Document No.",WarehouseRequest."Source No.");
+                  ATOLink.SETRANGE("Document Line No.",SalesLine."Line No.");
+                  IF ATOLink.FINDSET(FALSE) THEN BEGIN
+                    ATOLine.RESET;
+                    ATOLine.SETCURRENTKEY("Document Type","Document No.",Type,"Location Code");
+                    ATOLine.SETRANGE("Document Type",ATOLink."Assembly Document Type");
+                    ATOLine.SETRANGE("Document No.",ATOLink."Assembly Document No.");
+                    ATOLine.SETRANGE(Type,ATOLine.Type::Item);
+                    ATOLine.SETRANGE("Location Code",WarehouseRequest."Location Code");
+                    IF ATOLine.FINDSET(FALSE) THEN
+                      REPEAT
+                        InProcessQtyBase :=
+                          CalcQtyInProcess(ATOLine."Location Code",ATOLine."Document No.",
+                            DATABASE::"Assembly Line",ATOLine."Document Type",ATOLine."Line No.",0);
+
+                        QtyToFulfillBase := ATOLine."Quantity to Consume (Base)" - InProcessQtyBase;
+
+                        IF QtyToFulfillBase > 0 THEN BEGIN
+                          AllocQtyBase :=
+                            CalcQtyAvailToAllocate(
+                              PickRqstLineTmp,ATOLine."No.",ATOLine."Variant Code",ATOLine."Unit of Measure Code",
+                              ATOLine."Location Code",ATOLine."Bin Code",ATOLine."Document No.",
+                              DATABASE::"Assembly Line",ATOLine."Document Type",ATOLine."Line No.",0,
+                              QtyToFulfillBase);
+
+                          IF CompleteOrderRequested AND (QtyToFulfillBase > AllocQtyBase) THEN BEGIN
+                            PickRqstLineTmp.RESET;
+                            PickRqstLineTmp.DELETEALL;
+                            EXIT(FALSE);
+                          END;
+
+                          IF AllocQtyBase > 0 THEN BEGIN
+                            AllocQty := ROUND(AllocQtyBase / ATOLine."Qty. per Unit of Measure",0.00001);
+
+                            InsertPickRqstLineTmp(
+                              PickRqstLineTmp,PickRqstNo,ATOLine."No.",ATOLine."Variant Code",
+                              ATOLine."Unit of Measure Code",ATOLine."Location Code",ATOLine."Bin Code",
+                              WarehouseRequest."Source No.",ATOLine."Document No.",DATABASE::"Assembly Line",
+                              ATOLine."Document Type",ATOLine."Line No.",0,NextLineNo,
+                              ATOLine."Qty. per Unit of Measure",AllocQty,AllocQtyBase);
+                          END;
+                        END;
+                      UNTIL ATOLine.NEXT = 0;
+                  END;
+                END ELSE BEGIN
+                  InProcessQtyBase :=
+                    CalcQtyInProcess(SalesLine."Location Code",SalesLine."Document No.",
+                      DATABASE::"Sales Line",SalesLine."Document Type",SalesLine."Line No.",0);
+
+                  QtyToFulfillBase := SalesLine."Outstanding Qty. (Base)" - InProcessQtyBase;
+
+                  IF QtyToFulfillBase > 0 THEN BEGIN
+                    AllocQtyBase :=
+                      CalcQtyAvailToAllocate(
+                        PickRqstLineTmp,SalesLine."No.",SalesLine."Variant Code",SalesLine."Unit of Measure Code",
+                        SalesLine."Location Code",SalesLine."Bin Code",SalesLine."Document No.",
+                        DATABASE::"Sales Line",SalesLine."Document Type",SalesLine."Line No.",0,
+                        QtyToFulfillBase);
+
+                    IF CompleteOrderRequested AND (QtyToFulfillBase > AllocQtyBase) THEN BEGIN
+                      PickRqstLineTmp.RESET;
+                      PickRqstLineTmp.DELETEALL;
+                      EXIT(FALSE);
+                    END;
+
+                    IF AllocQtyBase > 0 THEN BEGIN
+                      AllocQty := ROUND(AllocQtyBase / SalesLine."Qty. per Unit of Measure",0.00001);
+
+                      InsertPickRqstLineTmp(
+                        PickRqstLineTmp,PickRqstNo,SalesLine."No.",SalesLine."Variant Code",
+                        SalesLine."Unit of Measure Code",SalesLine."Location Code",SalesLine."Bin Code",
+                        WarehouseRequest."Source No.",SalesLine."Document No.",DATABASE::"Sales Line",
+                        SalesLine."Document Type",SalesLine."Line No.",0,NextLineNo,
+                        SalesLine."Qty. per Unit of Measure",AllocQty,AllocQtyBase);
+                    END;
+                  END;
+                END;
+              UNTIL SalesLine.NEXT = 0;
+            END;
+          END;
+        39:
+          BEGIN
+            PurchLine.RESET;
+            PurchLine.SETCURRENTKEY(
+              "Document Type",Type,"No.","Variant Code","Drop Shipment","Location Code","Expected Receipt Date");
+            PurchLine.SETRANGE("Document Type",WarehouseRequest."Source Subtype");
+            PurchLine.SETRANGE("Document No.",WarehouseRequest."Source No.");
+            PurchLine.SETRANGE(Type,PurchLine.Type::Item);
+            PurchLine.SETFILTER("No.",'<>%1','');
+            PurchLine.SETRANGE("Location Code",WarehouseRequest."Location Code");
+            PurchLine.SETFILTER("Outstanding Quantity",'<>0');
+            IF WarehouseRequest."Shipping Advice" <> WarehouseRequest."Shipping Advice"::Complete THEN
+              IF OutboundWhseRequestFilter."Line Date Filter" <> '' THEN
+                PurchLine.SETFILTER("Expected Receipt Date",OutboundWhseRequestFilter."Line Date Filter");
+            IF PurchLine.FIND('-') THEN BEGIN
+              REPEAT
+                InProcessQtyBase :=
+                  CalcQtyInProcess(PurchLine."Location Code",PurchLine."Document No.",
+                    DATABASE::"Purchase Line",PurchLine."Document Type",PurchLine."Line No.",0);
+
+                QtyToFulfillBase := PurchLine."Outstanding Qty. (Base)" - InProcessQtyBase;
+
+                IF QtyToFulfillBase > 0 THEN BEGIN
+                  AllocQtyBase :=
+                    CalcQtyAvailToAllocate(
+                      PickRqstLineTmp,PurchLine."No.",PurchLine."Variant Code",PurchLine."Unit of Measure Code",
+                      PurchLine."Location Code",PurchLine."Bin Code",PurchLine."Document No.",
+                      DATABASE::"Purchase Line",PurchLine."Document Type",PurchLine."Line No.",0,
+                      QtyToFulfillBase);
+
+                  IF CompleteOrderRequested AND (QtyToFulfillBase > AllocQtyBase) THEN BEGIN
+                    PickRqstLineTmp.RESET;
+                    PickRqstLineTmp.DELETEALL;
+                    EXIT(FALSE);
+                  END;
+
+                  IF AllocQtyBase > 0 THEN BEGIN
+                    AllocQty := ROUND(AllocQtyBase / PurchLine."Qty. per Unit of Measure",0.00001);
+
+                    InsertPickRqstLineTmp(
+                      PickRqstLineTmp,PickRqstNo,PurchLine."No.",PurchLine."Variant Code",
+                      PurchLine."Unit of Measure Code",PurchLine."Location Code",PurchLine."Bin Code",
+                      WarehouseRequest."Source No.",PurchLine."Document No.",DATABASE::"Purchase Line",
+                      PurchLine."Document Type",PurchLine."Line No.",0,NextLineNo,
+                      PurchLine."Qty. per Unit of Measure",AllocQty,AllocQtyBase);
+                  END;
+                END;
+              UNTIL PurchLine.NEXT = 0;
+            END;
+          END;
+        5741:
+          BEGIN
+            TransLine.RESET;
+            TransLine.SETCURRENTKEY(
+              "Transfer-from Code",Status,"Derived From Line No.","Item No.","Variant Code",
+              "Shortcut Dimension 1 Code","Shortcut Dimension 2 Code","Shipment Date","In-Transit Code");
+            TransLine.SETRANGE("Document No.",WarehouseRequest."Source No.");
+            TransLine.SETRANGE("Transfer-from Code",WarehouseRequest."Location Code");
+            TransLine.SETFILTER("Outstanding Quantity",'<>0');
+            IF WarehouseRequest."Shipping Advice" <> WarehouseRequest."Shipping Advice"::Complete THEN
+              IF OutboundWhseRequestFilter."Line Date Filter" <> '' THEN
+                TransLine.SETFILTER("Shipment Date",OutboundWhseRequestFilter."Line Date Filter");
+            IF TransLine.FIND('-') THEN BEGIN
+              REPEAT
+                InProcessQtyBase :=
+                  CalcQtyInProcess(WarehouseRequest."Location Code",TransLine."Document No.",
+                      DATABASE::"Transfer Line",0,TransLine."Line No.",0);
+
+                QtyToFulfillBase := TransLine."Outstanding Qty. (Base)" - InProcessQtyBase;
+
+                IF QtyToFulfillBase > 0 THEN BEGIN
+                  AllocQtyBase :=
+                    CalcQtyAvailToAllocate(
+                      PickRqstLineTmp,TransLine."Item No.",TransLine."Variant Code",TransLine."Unit of Measure Code",
+                      WarehouseRequest."Location Code",TransLine."Transfer-from Bin Code",TransLine."Document No.",
+                      DATABASE::"Transfer Line",0,TransLine."Line No.",0,QtyToFulfillBase);
+
+                  IF CompleteOrderRequested AND (QtyToFulfillBase > AllocQtyBase) THEN BEGIN
+                    PickRqstLineTmp.RESET;
+                    PickRqstLineTmp.DELETEALL;
+                    EXIT(FALSE);
+                  END;
+
+                  IF AllocQtyBase > 0 THEN BEGIN
+                    AllocQty := ROUND(AllocQtyBase / TransLine."Qty. per Unit of Measure",0.00001);
+
+                    InsertPickRqstLineTmp(
+                      PickRqstLineTmp,PickRqstNo,TransLine."Item No.",TransLine."Variant Code",
+                      TransLine."Unit of Measure Code",WarehouseRequest."Location Code",TransLine."Transfer-from Bin Code",
+                      WarehouseRequest."Source No.",TransLine."Document No.",DATABASE::"Transfer Line",0,
+                      TransLine."Line No.",0,NextLineNo,TransLine."Qty. per Unit of Measure",AllocQty,AllocQtyBase);
+                  END;
+                END;
+              UNTIL TransLine.NEXT = 0;
+            END;
+          END;
+      END;
+
+      PickRqstLineTmp.RESET;
+      PickRqstLineTmp.SETRANGE("Pick Request No.",PickRqstNo);
+      IF NOT PickRqstLineTmp.ISEMPTY THEN BEGIN
+        OnBeforeInsertOrderPickRqstLines(PickRqstLineTmp,PickRqstNo);
+        InsertOrderPickRqstLines(PickRqstLineTmp,PickRqstNo);
+        OnAfterInsertOrderPickRqstLines(PickRqstNo);
+        EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE InsertPickRqstLineTmp@1240020060(VAR PickRqstLineTmp@1240020012 : TEMPORARY Record 14099021;PickRqstNo@1240020013 : Code[20];ItemNo@1240020011 : Code[20];VariantCode@1240020010 : Code[10];UnitOfMeasureCode@1240020009 : Code[10];LocationCode@1240020008 : Code[10];BinCode@1240020007 : Code[20];ParentOrderNo@1240020018 : Code[20];SourceNo@1240020006 : Code[20];SourceType@1240020005 : Integer;SourceSubtype@1240020004 : Integer;SourceLineNo@1240020003 : Integer;SourceSubLineNo@1240020002 : Integer;VAR NextLineNo@1240020015 : Integer;QtyPerUnitOfMeasure@1240020016 : Decimal;AllocQty@1240020001 : Decimal;AllocQtyBase@1240020000 : Decimal);
+    VAR
+      PickRqstHeader@1240020014 : Record 14099020;
+      Location@1240020017 : Record 14;
+    BEGIN
+      PickRqstHeader.RESET;
+      IF NOT PickRqstHeader.GET(PickRqstNo) THEN
+        ERROR(Text002);
+
+      Location.GET(LocationCode);
+
+      PickRqstLineTmp.RESET;
+      PickRqstLineTmp.SETRANGE("Pick Request No.",PickRqstHeader."Pick Request No.");
+      PickRqstLineTmp.SETRANGE("Pick Request Type",PickRqstHeader."Pick Request Type");
+      PickRqstLineTmp.SETRANGE("Location Code",LocationCode);
+      PickRqstLineTmp.SETRANGE("Source No.",SourceNo);
+      PickRqstLineTmp.SETRANGE("Source Type",SourceType);
+      PickRqstLineTmp.SETRANGE("Source Subtype",SourceSubtype);
+      PickRqstLineTmp.SETRANGE("Source Line No.",SourceLineNo);
+      PickRqstLineTmp.SETRANGE("Source Subtype",SourceSubLineNo);
+      PickRqstLineTmp.SETRANGE("Item No.",ItemNo);
+      PickRqstLineTmp.SETRANGE("Variant Code",VariantCode);
+      PickRqstLineTmp.SETRANGE("Unit of Measure Code",UnitOfMeasureCode);
+      IF BinCode <> '' THEN
+        PickRqstLineTmp.SETRANGE("Bin Code",BinCode);
+      IF NOT PickRqstLineTmp.FINDSET(FALSE) THEN BEGIN
+        PickRqstLineTmp.INIT;
+        PickRqstLineTmp."Pick Request No." := PickRqstHeader."Pick Request No.";
+        PickRqstLineTmp."Pick Request Type" := PickRqstHeader."Pick Request Type";
+        PickRqstLineTmp."Location Code" := LocationCode;
+        PickRqstLineTmp."Line No." := NextLineNo;
+        PickRqstLineTmp."Source Type" := SourceType;
+        PickRqstLineTmp."Source Subtype" := SourceSubtype;
+        PickRqstLineTmp."Source No." := SourceNo;
+        PickRqstLineTmp."Source Line No." := SourceLineNo;
+        PickRqstLineTmp."Source Subline No." := SourceSubLineNo;
+        PickRqstLineTmp."Order No." := ParentOrderNo;
+        PickRqstLineTmp."Item No." := ItemNo;
+        PickRqstLineTmp."Variant Code" := VariantCode;
+        PickRqstLineTmp."Unit of Measure Code" := UnitOfMeasureCode;
+        PickRqstLineTmp."Qty. per Unit of Measure" := QtyPerUnitOfMeasure;
+        PickRqstLineTmp.Description := GetItemDescription(ItemNo,VariantCode);
+        IF (Location."Bin Mandatory") AND (BinCode <> '') THEN
+          PickRqstLineTmp."Bin Code" := BinCode
+        ELSE
+          PickRqstLineTmp."Shelf No." := GetItemShelfNo(ItemNo,VariantCode,LocationCode);
+        PickRqstLineTmp."Pick Quantity" := AllocQty;
+        PickRqstLineTmp."Pick Qty. (Base)" := AllocQtyBase;
+        PickRqstLineTmp."Created By User" := USERID;
+        PickRqstLineTmp."Creation Date" := TODAY;
+        PickRqstLineTmp."Creation Time" := TIME;
+        PickRqstLineTmp."Creation Date/Time" := CURRENTDATETIME;
+        PickRqstLineTmp.INSERT;
+
+        NextLineNo += 10000;
+      END;
+    END;
+
+    LOCAL PROCEDURE InsertOrderPickRqstLines@1240020061(VAR PickRqstLineTmp@1240020000 : TEMPORARY Record 14099021;PickRqstNo@1240020001 : Code[20]);
+    VAR
+      PickRqstLine@1240020002 : Record 14099021;
+    BEGIN
+      PickRqstLineTmp.RESET;
+      PickRqstLineTmp.SETRANGE("Pick Request No.",PickRqstNo);
+      IF PickRqstLineTmp.FINDSET(FALSE) THEN
+        REPEAT
+          PickRqstLine.INIT;
+          PickRqstLine := PickRqstLineTmp;
+          PickRqstLine.INSERT;
+        UNTIL PickRqstLineTmp.NEXT = 0;
+
+      PickRqstLineTmp.RESET;
+      PickRqstLineTmp.DELETEALL;
+    END;
+
+    [External]
+    PROCEDURE CheckIfCreatePickRqst@1240020050(LocationCode@1240020000 : Code[10]) : Boolean;
+    VAR
+      OWRLocationSetup@1240020002 : Record 14099030;
+    BEGIN
+      IF NOT OWRLocationSetup.GET(LocationCode) THEN
+        EXIT(FALSE);
+
+      EXIT(OWRLocationSetup."Use Pick Requests");
+    END;
+
+    LOCAL PROCEDURE CalcQtyInProcess@1240020043(LocationCode@1240020005 : Code[10];SourceNo@1240020004 : Code[20];SourceType@1240020003 : Integer;SourceSubtype@1240020002 : Integer;SourceLineNo@1240020001 : Integer;SourceSubLineNo@1240020000 : Integer) : Decimal;
+    VAR
+      PickRqstLine@1240020006 : Record 14099021;
+      QtyInProcessBase@1240020007 : Decimal;
+    BEGIN
+      CLEAR(QtyInProcessBase);
+      PickRqstLine.RESET;
+      PickRqstLine.SETRANGE("Location Code",LocationCode);
+      PickRqstLine.SETRANGE("Source No.",SourceNo);
+      PickRqstLine.SETRANGE("Source Type",SourceType);
+      PickRqstLine.SETRANGE("Source Subtype",SourceSubtype);
+      PickRqstLine.SETRANGE("Source Line No.",SourceLineNo);
+      PickRqstLine.SETRANGE("Source Subline No.",SourceSubLineNo);
+      IF PickRqstLine.FINDSET(FALSE) THEN
+        REPEAT
+          QtyInProcessBase += PickRqstLine."Pick Qty. (Base)";
+        UNTIL PickRqstLine.NEXT = 0;
+
+      EXIT(QtyInProcessBase);
+    END;
+
+    LOCAL PROCEDURE CalcQtyAvailToAllocate@1240020042(VAR PickRqstLineTmp@1240020014 : TEMPORARY Record 14099021;ItemNo@1240020011 : Code[20];VariantCode@1240020010 : Code[10];UnitOfMeasureCode@1240020009 : Code[10];LocationCode@1240020008 : Code[10];BinCode@1240020007 : Code[20];SourceNo@1240020006 : Code[20];SourceType@1240020005 : Integer;SourceSubtype@1240020004 : Integer;SourceLineNo@1240020003 : Integer;SourceSubLineNo@1240020020 : Integer;OutstandingQtyBase@1240020013 : Decimal) : Decimal;
+    VAR
+      Location@1240020002 : Record 14;
+      AllocQtyBase@1240020021 : Decimal;
+      QtyNotInProcessBase@1240020015 : Decimal;
+      AvailQtyBase@1240020016 : Decimal;
+      QtyNotAvailBase@1240020019 : Decimal;
+      ExistingPickQtyBase@1240020017 : Decimal;
+      PendingPickQtyBase@1240020018 : Decimal;
+    BEGIN
+      Location.GET(LocationCode);
+
+      IF BinCode <> '' THEN
+        AvailQtyBase := CalcBinInvBalance(LocationCode,ItemNo,VariantCode,UnitOfMeasureCode,BinCode)
+      ELSE
+        AvailQtyBase := CalcLocationInvBalance(LocationCode,ItemNo,VariantCode);
+
+      PendingPickQtyBase :=
+        CalcPendingPickQty(PickRqstLineTmp,ItemNo,VariantCode,UnitOfMeasureCode,LocationCode,BinCode);
+
+      ExistingPickQtyBase :=
+        CalcExistingPickQty(LocationCode,ItemNo,VariantCode,UnitOfMeasureCode,BinCode);
+
+      CLEAR(QtyNotInProcessBase);
+      QtyNotInProcessBase := AvailQtyBase - (ExistingPickQtyBase + PendingPickQtyBase);
+
+      IF OutstandingQtyBase > QtyNotInProcessBase THEN
+        QtyNotAvailBase := OutstandingQtyBase - QtyNotInProcessBase
+      ELSE
+        QtyNotAvailBase := 0;
+
+      AllocQtyBase := OutstandingQtyBase - QtyNotAvailBase;
+
+      CalcAvailPickQtyAgainstReserve(
+        PickRqstLineTmp,LocationCode,ItemNo,VariantCode,UnitOfMeasureCode,SourceNo,
+        SourceSubtype,SourceType,SourceLineNo,0,OutstandingQtyBase,AllocQtyBase,QtyNotAvailBase);
+
+      EXIT(AllocQtyBase);
+    END;
+
+    [External]
+    PROCEDURE CalcLocationInvBalance@1240020049(LocationCode@1240020000 : Code[10];ItemNo@1240020001 : Code[20];VariantCode@1240020002 : Code[10]) : Decimal;
+    VAR
+      ItemLedgerEntry@1240020003 : Record 32;
+    BEGIN
+      ItemLedgerEntry.RESET;
+      ItemLedgerEntry.SETCURRENTKEY("Item No.",Open,"Variant Code",Positive,"Location Code","Posting Date");
+      ItemLedgerEntry.SETRANGE("Location Code",LocationCode);
+      ItemLedgerEntry.SETRANGE("Item No.",ItemNo);
+      ItemLedgerEntry.SETRANGE(Open,TRUE);
+      ItemLedgerEntry.SETRANGE("Variant Code",VariantCode);
+      ItemLedgerEntry.CALCSUMS("Remaining Quantity");
+
+      IF ItemLedgerEntry."Remaining Quantity" < 0 THEN
+        EXIT(0)
+      ELSE
+        EXIT(ItemLedgerEntry."Remaining Quantity");
+    END;
+
+    [External]
+    PROCEDURE CalcBinInvBalance@1240020052(LocationCode@1240020002 : Code[10];ItemNo@1240020001 : Code[20];VariantCode@1240020000 : Code[10];UnitOfMeasureCode@1240020005 : Code[10];BinCode@1240020003 : Code[20]) : Decimal;
+    VAR
+      BinContent@1240020004 : Record 7302;
+    BEGIN
+      BinContent.RESET;
+      BinContent.SETCURRENTKEY("Location Code","Bin Code","Item No.","Variant Code","Unit of Measure Code");
+      BinContent.SETRANGE("Location Code",LocationCode);
+      BinContent.SETRANGE("Bin Code",BinCode);
+      BinContent.SETRANGE("Item No.",ItemNo);
+      BinContent.SETRANGE("Variant Code",VariantCode);
+      BinContent.SETRANGE("Unit of Measure Code",UnitOfMeasureCode);
+      IF BinContent.FIND('-') THEN
+        BinContent.CALCFIELDS("Quantity (Base)");
+
+      EXIT(BinContent."Quantity (Base)");
+    END;
+
+    [External]
+    PROCEDURE CalcExistingPickQty@1240020048(LocationCode@1240020002 : Code[10];ItemNo@1240020001 : Code[20];VariantCode@1240020000 : Code[10];UnitOfMeasureCode@1240020007 : Code[10];BinCode@1240020004 : Code[20]) : Decimal;
+    VAR
+      PickRqstLine@1240020003 : Record 14099021;
+      QtyOnPickBase@1240020005 : Decimal;
+    BEGIN
+      IF CheckIfCreatePickRqst(LocationCode) THEN BEGIN
+        CLEAR(QtyOnPickBase);
+        PickRqstLine.RESET;
+        PickRqstLine.SETRANGE("Location Code",LocationCode);
+        PickRqstLine.SETRANGE("Item No.",ItemNo);
+        PickRqstLine.SETRANGE("Variant Code",VariantCode);
+        PickRqstLine.SETRANGE("Unit of Measure Code",UnitOfMeasureCode);
+        IF BinCode <> '' THEN
+          PickRqstLine.SETRANGE("Bin Code",BinCode);
+        IF PickRqstLine.FINDSET(FALSE) THEN
+          REPEAT
+            QtyOnPickBase += PickRqstLine."Pick Qty. (Base)";
+          UNTIL PickRqstLine.NEXT = 0;
+      END;
+
+      EXIT(QtyOnPickBase);
+    END;
+
+    LOCAL PROCEDURE CalcPendingPickQty@1240020051(VAR PickRqstLineTmp@1240020005 : TEMPORARY Record 14099021;ItemNo@1240020004 : Code[20];VariantCode@1240020003 : Code[10];UnitOfMeasureCode@1240020002 : Code[10];LocationCode@1240020001 : Code[10];BinCode@1240020000 : Code[20]) : Decimal;
+    VAR
+      PendingPickQtyBase@1240020006 : Decimal;
+    BEGIN
+      CLEAR(PendingPickQtyBase);
+      PickRqstLineTmp.RESET;
+      PickRqstLineTmp.SETRANGE("Location Code",LocationCode);
+      PickRqstLineTmp.SETRANGE("Item No.",ItemNo);
+      PickRqstLineTmp.SETRANGE("Variant Code",VariantCode);
+      PickRqstLineTmp.SETRANGE("Unit of Measure Code",UnitOfMeasureCode);
+      IF BinCode <> '' THEN
+        PickRqstLineTmp.SETRANGE("Bin Code",BinCode);
+      IF PickRqstLineTmp.FINDSET(FALSE) THEN
+        REPEAT
+          PendingPickQtyBase += PickRqstLineTmp."Pick Qty. (Base)";
+        UNTIL PickRqstLineTmp.NEXT = 0;
+
+      EXIT(PendingPickQtyBase);
+    END;
+
+    [External]
+    PROCEDURE CalcAvailPickQtyAgainstReserve@14002810(PickRqstLineTmp@1240020017 : TEMPORARY Record 14099021;LocationCode@1240020008 : Code[10];ItemNo@1240020007 : Code[20];VariantCode@1240020006 : Code[10];UnitofMeasureCode@1240020005 : Code[10];SourceNo@1240020012 : Code[20];SourceSubType@1240020013 : Option;SourceType@1240020014 : Integer;SourceLineNo@1240020015 : Integer;SourceSubLineNo@1240020016 : Integer;OutstandingQtyBase@1240020002 : Decimal;VAR TotalQtytoAllocateBase@1240020000 : Decimal;QtyNotAvailBase@1240020001 : Decimal);
+    VAR
+      WarehouseStreamlineMgt@1240020011 : Codeunit 14002809;
+      InvReservedQtyBase@1240020010 : Decimal;
+    BEGIN
+      IF SourceNo = '' THEN
+        EXIT;
+
+      InvReservedQtyBase :=
+        WarehouseStreamlineMgt.CalcLineReservedQtyonInvt2(
+          SourceType,SourceSubType,SourceNo,SourceLineNo,SourceSubLineNo);
+      TotalQtytoAllocateBase := CalcAvailQtyAgainstReserve(
+        PickRqstLineTmp,ItemNo,VariantCode,UnitofMeasureCode,LocationCode,
+        OutstandingQtyBase,QtyNotAvailBase,InvReservedQtyBase);
+    END;
+
+    [External]
+    PROCEDURE CalcAvailQtyAgainstReserve@1240020057(PickRqstLineTmp@1240020014 : TEMPORARY Record 14099021;ItemNo@1240020000 : Code[20];VariantCode@1240020001 : Code[10];UnitOfMeasureCode@1240020007 : Code[10];LocationCode@1240020002 : Code[10];OutstandingQtyBase@1240020003 : Decimal;VAR QtyNotAvailBase@1240020004 : Decimal;InvReservedQtyBase@1240020005 : Decimal) : Decimal;
+    VAR
+      AvailableQuantity@1240020008 : Decimal;
+      LineAvailResQty@1240020009 : Decimal;
+      LineAvailPickQty@1240020010 : Decimal;
+      AvailQtyBase@1240020011 : Decimal;
+      AvailQtyReserved@1240020012 : Decimal;
+      AvailQtyNotReserved@1240020013 : Decimal;
+      TotalInvReservedQty@1240020015 : Decimal;
+      TotalAvailQty@1240020016 : Decimal;
+      AvailInvNotReservedBase@1240020021 : Decimal;
+    BEGIN
+      CLEAR(AvailableQuantity);
+
+      CLEAR(TotalInvReservedQty);
+      TotalInvReservedQty := CalcInvReserveQty(ItemNo,VariantCode,LocationCode);
+
+      CLEAR(AvailInvNotReservedBase);
+      IF TotalInvReservedQty > 0 THEN BEGIN
+        AvailInvNotReservedBase := CalcLocationInvBalance(LocationCode,ItemNo,VariantCode) -
+          (CalcExistingPickQty(LocationCode,ItemNo,VariantCode,UnitOfMeasureCode,'') +
+           CalcPendingPickQty(PickRqstLineTmp,ItemNo,VariantCode,UnitOfMeasureCode,LocationCode,'') +
+           TotalInvReservedQty);
+
+        CLEAR(LineAvailPickQty);
+        CLEAR(LineAvailResQty);
+        LineAvailPickQty := (OutstandingQtyBase - QtyNotAvailBase);
+        IF InvReservedQtyBase > LineAvailPickQty THEN
+          LineAvailResQty := LineAvailPickQty
+        ELSE
+          IF InvReservedQtyBase <> 0 THEN
+            LineAvailResQty := InvReservedQtyBase
+          ELSE
+            LineAvailResQty := 0;
+
+        CLEAR(AvailQtyReserved);
+        CLEAR(AvailQtyNotReserved);
+        AvailQtyReserved := LineAvailResQty;
+        IF AvailInvNotReservedBase < LineAvailPickQty THEN
+          AvailQtyNotReserved := AvailInvNotReservedBase
+        ELSE
+          AvailQtyNotReserved := LineAvailPickQty - LineAvailResQty;
+
+        CLEAR(TotalAvailQty);
+        IF InvReservedQtyBase <> 0 THEN BEGIN
+          TotalAvailQty := AvailQtyReserved + AvailQtyNotReserved;
+          IF TotalAvailQty > OutstandingQtyBase THEN
+            AvailableQuantity := OutstandingQtyBase
+          ELSE
+            AvailableQuantity := TotalAvailQty;
+        END ELSE
+          AvailableQuantity := AvailQtyNotReserved;
+
+      END ELSE
+        AvailableQuantity := OutstandingQtyBase - QtyNotAvailBase;
+
+      QtyNotAvailBase := OutstandingQtyBase - AvailableQuantity;
+
+      EXIT(AvailableQuantity);
+    END;
+
+    [External]
+    PROCEDURE CalcInvReserveQty@1240020056(ItemNo@1240020000 : Code[20];VariantCode@1240020001 : Code[10];LocationCode@1240020002 : Code[10]) : Decimal;
+    VAR
+      Item@1240020003 : Record 27;
+      TotalInvReserveQtyBase@1240020005 : Decimal;
+    BEGIN
+      CLEAR(TotalInvReserveQtyBase);
+      Item.RESET;
+      Item.SETCURRENTKEY("No.");
+      Item.SETRANGE("No.",ItemNo);
+      Item.SETFILTER("Variant Filter",VariantCode);
+      Item.SETFILTER("Location Filter",LocationCode);
+      IF Item.FIND('-') THEN
+        Item.CALCFIELDS(Item."Reserved Qty. on Inventory");
+
+      TotalInvReserveQtyBase := Item."Reserved Qty. on Inventory";
+
+      EXIT(TotalInvReserveQtyBase);
+    END;
+
+    [External]
+    PROCEDURE DeletePickRqst@1240020006(PickRqstNo@1240020000 : Code[20];LocationCode@1240020004 : Code[10];SourceNo@1240020005 : Code[20];SourceType@1240020006 : Integer;SourceSubtype@1240020007 : Integer) : Decimal;
+    VAR
+      PickRqstHeader@1240020001 : Record 14099020;
+      PickRqstLine@1240020002 : Record 14099021;
+      PickDeleted@1240020008 : Integer;
+      CustomDeletionProcess@1240020009 : Boolean;
+    BEGIN
+      CustomDeletionProcess := FALSE;
+      DeletePickRqstEvent(
+        PickRqstNo,LocationCode,SourceNo,SourceType,SourceSubtype,CustomDeletionProcess);
+
+      IF NOT CustomDeletionProcess THEN BEGIN
+        PickDeleted := 0;
+        IF PickRqstNo <> '' THEN BEGIN
+          PickRqstHeader.RESET;
+          PickRqstHeader.SETRANGE("Pick Request No.",PickRqstNo);
+          IF PickRqstHeader.FINDSET(FALSE) THEN BEGIN
+            PickRqstHeader.DELETE(TRUE);
+            PickDeleted := 1;
+          END;
+
+        END ELSE BEGIN
+          PickRqstLine.RESET;
+          PickRqstLine.SETRANGE("Location Code",LocationCode);
+          PickRqstLine.SETRANGE("Source No.",SourceNo);
+          PickRqstLine.SETRANGE("Source Type",SourceType);
+          PickRqstLine.SETRANGE("Source Subtype",SourceSubtype);
+          IF PickRqstLine.FINDSET(FALSE) THEN BEGIN
+            REPEAT
+              PickRqstHeader.RESET;
+              PickRqstHeader.SETRANGE("Pick Request No.",PickRqstLine."Pick Request No.");
+              IF PickRqstHeader.FINDSET(FALSE) THEN BEGIN
+                PickRqstHeader.DELETE(TRUE);
+                PickDeleted += 1;
+              END;
+            UNTIL PickRqstLine.NEXT = 0;
+          END;
+        END;
+      END;
+
+      EXIT(PickDeleted);
+    END;
+
+    [External]
+    PROCEDURE PostWhsePickRqstProcessing@1240020032(LocationCode@1240020011 : Code[10];SourceNo@1240020000 : Code[20];SourceType@1240020001 : Integer;SourceSubtype@1240020002 : Integer);
+    VAR
+      WarehouseRequest@1240020003 : Record 5765;
+      PickRqstHeader@1240020005 : Record 14099020;
+      PickRqstLine@1240020006 : Record 14099021;
+      ATOLink@1240020008 : Record 904;
+      PickRqstNo@1240020007 : Code[20];
+    BEGIN
+      CLEAR(PickRqstNo);
+      PickRqstLine.RESET;
+      PickRqstLine.SETRANGE("Location Code",LocationCode);
+      PickRqstLine.SETRANGE("Source Type",SourceType);
+      PickRqstLine.SETRANGE("Source Subtype",SourceSubtype);
+      PickRqstLine.SETRANGE("Source No.",SourceNo);
+      IF PickRqstLine.FINDSET(FALSE) THEN
+        REPEAT
+          IF (PickRqstNo = '') OR
+              (PickRqstNo <> PickRqstLine."Pick Request No.")
+          THEN BEGIN
+            PickRqstHeader.RESET;
+            PickRqstHeader.SETRANGE(
+              "Pick Request No.",PickRqstLine."Pick Request No.");
+            IF PickRqstHeader.FINDSET(FALSE) THEN
+              RegisterPickRqst(
+                PickRqstLine."Pick Request No.",LocationCode,
+                SourceNo,SourceType,SourceSubtype);
+          END;
+
+          PickRqstNo := PickRqstLine."Pick Request No.";
+        UNTIL PickRqstLine.NEXT = 0;
+
+      ATOLink.RESET;
+      ATOLink.SETCURRENTKEY(Type,"Document Type","Document No.","Document Line No.");
+      ATOLink.SETRANGE(Type,ATOLink.Type::Sale);
+      ATOLink.SETRANGE("Document Type",ATOLink."Document Type"::Order);
+      ATOLink.SETRANGE("Document No.",SourceNo);
+      IF ATOLink.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          CLEAR(PickRqstNo);
+          PickRqstLine.RESET;
+          PickRqstLine.SETRANGE("Location Code",LocationCode);
+          PickRqstLine.SETRANGE("Source Type",DATABASE::"Assembly Line");
+          PickRqstLine.SETRANGE("Source Subtype",1);
+          PickRqstLine.SETRANGE("Source No.",ATOLink."Assembly Document No.");
+          IF PickRqstLine.FINDSET(FALSE) THEN
+            REPEAT
+              IF (PickRqstNo = '') OR
+                  (PickRqstNo <> PickRqstLine."Pick Request No.")
+              THEN BEGIN
+                PickRqstHeader.RESET;
+                PickRqstHeader.SETRANGE(
+                  "Pick Request No.",PickRqstLine."Pick Request No.");
+                IF PickRqstHeader.FINDSET(FALSE) THEN
+                  RegisterPickRqst(
+                    PickRqstLine."Pick Request No.",PickRqstLine."Location Code",
+                    PickRqstLine."Source No.",PickRqstLine."Source Type",
+                    PickRqstLine."Source Subtype");
+              END;
+
+              PickRqstNo := PickRqstLine."Pick Request No.";
+            UNTIL PickRqstLine.NEXT = 0;
+        UNTIL ATOLink.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateSalesOrderPickRqstLines@1240020011(VAR SalesHeader@1240020002 : Record 36;VAR SalesShipmentHeader@1240020001 : Record 110;VAR LocationCode@1240020000 : Code[10]);
+    VAR
+      SalesShipmentLine@1240020010 : Record 111;
+      PostedATOLink@1240020011 : Record 914;
+      PostedAssemblyLine@1240020013 : Record 911;
+      PickRqstLine@1240020008 : Record 14099021;
+      QtyToShip@1240020003 : Decimal;
+      ATOLinkExists@1240020012 : Boolean;
+    BEGIN
+      SalesShipmentLine.RESET;
+      SalesShipmentLine.SETRANGE("Document No.",SalesShipmentHeader."No.");
+      SalesShipmentLine.SETRANGE("Order No.",SalesShipmentHeader."Order No.");
+      SalesShipmentLine.SETRANGE("Location Code",LocationCode);
+      SalesShipmentLine.SETRANGE(Type,SalesShipmentLine.Type::Item);
+      SalesShipmentLine.SETFILTER(Quantity,'<>0');
+      IF SalesShipmentLine.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          ATOLinkExists := FALSE;
+          PostedATOLink.RESET;
+          PostedATOLink.SETRANGE("Document No.",SalesShipmentLine."Document No.");
+          PostedATOLink.SETRANGE("Order No.",SalesShipmentLine."Order No.");
+          PostedATOLink.SETRANGE("Order Line No.",SalesShipmentLine."Order Line No.");
+          IF PostedATOLink.FINDFIRST THEN
+            ATOLinkExists := TRUE;
+
+          IF ATOLinkExists THEN BEGIN
+            PostedAssemblyLine.RESET;
+            PostedAssemblyLine.SETRANGE("Document No.",PostedATOLink."Assembly Document No.");
+            PostedAssemblyLine.SETRANGE("Order No.",PostedATOLink."Assembly Order No.");
+            IF PostedAssemblyLine.FINDSET(FALSE) THEN BEGIN
+              REPEAT
+                QtyToShip := PostedAssemblyLine.Quantity;
+                PickRqstLine.RESET;
+                PickRqstLine.SETRANGE("Location Code",SalesShipmentLine."Location Code");
+                PickRqstLine.SETRANGE("Order No.",SalesShipmentLine."Order No.");
+                PickRqstLine.SETRANGE("Source No.",PostedATOLink."Assembly Order No.");
+                PickRqstLine.SETRANGE("Source Type",DATABASE::"Assembly Line");
+                PickRqstLine.SETRANGE("Source Line No.",PostedAssemblyLine."Order Line No.");
+                PickRqstLine.SETRANGE("Item No.",PostedAssemblyLine."No.");
+                PickRqstLine.SETRANGE("Variant Code",PostedAssemblyLine."Variant Code");
+                PickRqstLine.SETRANGE("Unit of Measure Code",PostedAssemblyLine."Unit of Measure Code");
+                IF PickRqstLine.FIND('-') THEN BEGIN
+                  REPEAT
+                    IF QtyToShip > PickRqstLine."Pick Quantity" THEN BEGIN
+                      PickRqstLine.VALIDATE("Qty. Shipped",PickRqstLine."Pick Quantity");
+                      QtyToShip := QtyToShip - PickRqstLine."Pick Quantity";
+                    END ELSE BEGIN
+                      PickRqstLine.VALIDATE("Qty. Shipped",QtyToShip);
+                      QtyToShip := 0;
+                    END;
+
+                    PickRqstLine.MODIFY;
+                  UNTIL (QtyToShip = 0) OR (PickRqstLine.NEXT = 0);
+                END;
+              UNTIL PostedAssemblyLine.NEXT = 0;
+            END;
+          END ELSE BEGIN
+            QtyToShip := SalesShipmentLine.Quantity;
+            PickRqstLine.RESET;
+            PickRqstLine.SETRANGE("Location Code",SalesShipmentLine."Location Code");
+            PickRqstLine.SETRANGE("Order No.",SalesShipmentLine."Order No.");
+            PickRqstLine.SETRANGE("Source No.",SalesShipmentLine."Order No.");
+            PickRqstLine.SETRANGE("Source Type",DATABASE::"Sales Line");
+            PickRqstLine.SETRANGE("Source Line No.",SalesShipmentLine."Order Line No.");
+            IF PickRqstLine.FIND('-') THEN BEGIN
+              REPEAT
+                IF QtyToShip > PickRqstLine."Pick Quantity" THEN BEGIN
+                  PickRqstLine.VALIDATE("Qty. Shipped",PickRqstLine."Pick Quantity");
+                  QtyToShip := QtyToShip - PickRqstLine."Pick Quantity";
+                END ELSE BEGIN
+                  PickRqstLine.VALIDATE("Qty. Shipped",QtyToShip);
+                  QtyToShip := 0;
+                END;
+
+                PickRqstLine.MODIFY;
+              UNTIL (QtyToShip = 0) OR (PickRqstLine.NEXT = 0);
+            END;
+          END;
+        UNTIL SalesShipmentLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdatePurchOrderPickRqstLines@1240020014(VAR PurchHeader@1240020002 : Record 38;VAR ReturnShptHeader@1240020001 : Record 6650;VAR LocationCode@1240020000 : Code[10]);
+    VAR
+      ReturnShptLine@1240020003 : Record 6651;
+      PickRqstLine@1240020004 : Record 14099021;
+      QtyToShip@1240020005 : Decimal;
+    BEGIN
+      ReturnShptLine.RESET;
+      ReturnShptLine.SETRANGE("Document No.",ReturnShptHeader."No.");
+      ReturnShptLine.SETRANGE("Return Order No.",ReturnShptHeader."Return Order No.");
+      ReturnShptLine.SETRANGE("Location Code",LocationCode);
+      ReturnShptLine.SETRANGE(Type,ReturnShptLine.Type::Item);
+      ReturnShptLine.SETFILTER(Quantity,'<>0');
+      IF ReturnShptLine.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          QtyToShip := ReturnShptLine.Quantity;
+          PickRqstLine.RESET;
+          PickRqstLine.SETRANGE("Location Code",ReturnShptLine."Location Code");
+          PickRqstLine.SETRANGE("Order No.",ReturnShptLine."Return Order No.");
+          PickRqstLine.SETRANGE("Source No.",ReturnShptLine."Return Order No.");
+          PickRqstLine.SETRANGE("Source Type",DATABASE::"Purchase Line");
+          PickRqstLine.SETRANGE("Source Line No.",ReturnShptLine."Return Order Line No.");
+          IF PickRqstLine.FIND('-') THEN BEGIN
+            REPEAT
+              IF QtyToShip > PickRqstLine."Pick Quantity" THEN BEGIN
+                PickRqstLine.VALIDATE("Qty. Shipped",PickRqstLine."Pick Quantity");
+                QtyToShip := QtyToShip - PickRqstLine."Pick Quantity";
+              END ELSE BEGIN
+                PickRqstLine.VALIDATE("Qty. Shipped",QtyToShip);
+                QtyToShip := 0;
+              END;
+
+              PickRqstLine.MODIFY;
+            UNTIL (QtyToShip = 0) OR (PickRqstLine.NEXT = 0);
+          END;
+        UNTIL ReturnShptLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateTransOrderPickRqstLines@1240020015(VAR TransferHeader@1240020001 : Record 5740;VAR LocationCode@1240020000 : Code[10]);
+    VAR
+      TransferLine@1240020002 : Record 5741;
+      PickRqstLine@1240020003 : Record 14099021;
+      QtyToShip@1240020004 : Decimal;
+    BEGIN
+      TransferLine.RESET;
+      TransferLine.SETRANGE("Document No.",TransferHeader."No.");
+      TransferLine.SETRANGE("Transfer-from Code",LocationCode);
+      IF TransferLine.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          QtyToShip := TransferLine.Quantity;
+          PickRqstLine.RESET;
+          PickRqstLine.SETRANGE("Location Code",TransferLine."Transfer-from Code");
+          PickRqstLine.SETRANGE("Order No.",TransferLine."Document No.");
+          PickRqstLine.SETRANGE("Source No.",TransferLine."Document No.");
+          PickRqstLine.SETRANGE("Source Type",DATABASE::"Transfer Line");
+          PickRqstLine.SETRANGE("Source Line No.",TransferLine."Line No.");
+          IF PickRqstLine.FIND('-') THEN BEGIN
+            REPEAT
+              IF QtyToShip > PickRqstLine."Pick Quantity" THEN BEGIN
+                PickRqstLine.VALIDATE("Qty. Shipped",PickRqstLine."Pick Quantity");
+                QtyToShip := QtyToShip - PickRqstLine."Pick Quantity";
+              END ELSE BEGIN
+                PickRqstLine.VALIDATE("Qty. Shipped",QtyToShip);
+                QtyToShip := 0;
+              END;
+
+              PickRqstLine.MODIFY;
+            UNTIL (QtyToShip = 0) OR (PickRqstLine.NEXT = 0);
+          END;
+        UNTIL TransferLine.NEXT = 0;
+      END;
+    END;
+
+    [External]
+    PROCEDURE RegisterPickRqst@1240020033(PickRqstNo@1240020000 : Code[20];LocationCode@1240020010 : Code[10];SourceNo@1240020007 : Code[20];SourceType@1240020008 : Integer;SourceSubtype@1240020009 : Integer);
+    VAR
+      PickRqstHeader@1240020001 : Record 14099020;
+      PickRqstLine@1240020002 : Record 14099021;
+      RegPickRqstHeader@1240020004 : Record 14099022;
+      RegPickRqstLine@1240020005 : Record 14099023;
+      RegisterDate@1240020003 : Date;
+      RegisterTime@1240020006 : Time;
+      RegisterDateTime@1240020011 : DateTime;
+    BEGIN
+      RegisterDate := TODAY;
+      RegisterTime := TIME;
+      RegisterDateTime := CURRENTDATETIME;
+
+      PickRqstHeader.RESET;
+      PickRqstHeader.SETRANGE("Pick Request No.",PickRqstNo);
+      IF PickRqstHeader.FINDSET(FALSE) THEN BEGIN
+        RegPickRqstHeader.RESET;
+        IF NOT RegPickRqstHeader.GET(PickRqstHeader."Pick Request No.") THEN BEGIN
+          RegPickRqstHeader.INIT;
+          RegPickRqstHeader.TRANSFERFIELDS(PickRqstHeader);
+          RegPickRqstHeader."Register Date" := RegisterDate;
+          RegPickRqstHeader."Register Time" := RegisterTime;
+          RegPickRqstHeader."Register Date/Time" := RegisterDateTime;
+          RegPickRqstHeader.INSERT(TRUE);
+
+          PickRqstLine.RESET;
+          PickRqstLine.SETRANGE("Pick Request No.",PickRqstNo);
+          PickRqstLine.SETRANGE("Location Code",LocationCode);
+          PickRqstLine.SETRANGE("Source No.",SourceNo);
+          PickRqstLine.SETRANGE("Source Type",SourceType);
+          PickRqstLine.SETRANGE("Source Subtype",SourceSubtype);
+          IF PickRqstLine.FINDSET(FALSE) THEN BEGIN
+            REPEAT
+              RegPickRqstLine.INIT;
+              RegPickRqstLine.TRANSFERFIELDS(PickRqstLine);
+              RegPickRqstLine."Register Date" := RegisterDate;
+              RegPickRqstLine."Register Time" := RegisterTime;
+              RegPickRqstLine."Register Date/Time" := RegisterDateTime;
+              RegPickRqstLine.INSERT(TRUE);
+
+              PickRqstLine.DELETE(TRUE);
+            UNTIL PickRqstLine.NEXT = 0;
+          END ELSE
+            ERROR(Text008);
+
+        END ELSE BEGIN
+          RegPickRqstHeader."Register Date" := RegisterDate;
+          RegPickRqstHeader."Register Time" := RegisterTime;
+          RegPickRqstHeader."Register Date/Time" := RegisterDateTime;
+          RegPickRqstHeader.MODIFY(TRUE);
+
+          PickRqstLine.RESET;
+          PickRqstLine.SETRANGE("Pick Request No.",PickRqstNo);
+          PickRqstLine.SETRANGE("Location Code",LocationCode);
+          PickRqstLine.SETRANGE("Source No.",SourceNo);
+          PickRqstLine.SETRANGE("Source Type",SourceType);
+          PickRqstLine.SETRANGE("Source Subtype",SourceSubtype);
+          IF PickRqstLine.FINDSET(FALSE) THEN BEGIN
+            REPEAT
+              RegPickRqstLine.INIT;
+              RegPickRqstLine.TRANSFERFIELDS(PickRqstLine);
+              RegPickRqstLine."Register Date" := RegisterDate;
+              RegPickRqstLine."Register Time" := RegisterTime;
+              RegPickRqstLine."Register Date/Time" := RegisterDateTime;
+              RegPickRqstLine.INSERT(TRUE);
+
+              PickRqstLine.DELETE(TRUE);
+            UNTIL PickRqstLine.NEXT = 0;
+          END ELSE
+            ERROR(Text008);
+        END;
+      END ELSE
+        ERROR(Text007);
+
+      PickRqstLine.RESET;
+      PickRqstLine.SETRANGE("Pick Request No.",PickRqstNo);
+      IF PickRqstLine.ISEMPTY THEN BEGIN
+        IF PickRqstHeader.GET(PickRqstNo) THEN
+          PickRqstHeader.DELETE(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE GetNextPickRequestNo@1240020036(LocationCode@1240020004 : Code[10];VAR NoSeries@1240020003 : Code[20]) : Code[20];
+    VAR
+      OWRLocationSetup@1240020000 : Record 14099030;
+      NoSeriesMgt@1240020001 : Codeunit 396;
+      PickRqstNo@1240020002 : Code[20];
+    BEGIN
+      IF NOT OWRLocationSetup.GET(LocationCode) THEN
+        ERROR(STRSUBSTNO(Text020,LocationCode));
+
+      IF OWRLocationSetup."Pick Request No. Series" <> '' THEN BEGIN
+        NoSeries := OWRLocationSetup."Pick Request No. Series";
+        PickRqstNo := NoSeriesMgt.GetNextNo(NoSeries,WORKDATE,TRUE);
+        EXIT(PickRqstNo);
+      END ELSE
+        ERROR(Text010);
+    END;
+
+    LOCAL PROCEDURE GetItemDescription@1240020012(ItemNo@1240020000 : Code[20];VariantCode@1240020001 : Code[10]) : Text[50];
+    VAR
+      Item@1240020002 : Record 27;
+      ItemVariant@1240020003 : Record 5401;
+    BEGIN
+      IF VariantCode <> '' THEN
+        IF ItemVariant.GET(ItemNo,VariantCode) THEN
+          EXIT(ItemVariant.Description);
+
+      IF Item.GET(ItemNo) THEN
+        EXIT(Item.Description);
+    END;
+
+    LOCAL PROCEDURE GetItemShelfNo@1240020023(ItemNo@1240020000 : Code[20];VariantCode@1240020001 : Code[10];LocationCode@1240020002 : Code[10]) : Code[10];
+    VAR
+      Item@1240020003 : Record 27;
+      SKUCard@1240020004 : Record 5700;
+    BEGIN
+      IF SKUCard.GET(LocationCode,ItemNo,VariantCode) THEN
+        EXIT(SKUCard."Shelf No.");
+
+      IF Item.GET(ItemNo) THEN
+        EXIT(Item."Shelf No.");
+    END;
+
+    [External]
+    PROCEDURE CalculateSourcePickQuantity@1240020029(LocationCode@1240020006 : Code[10];SourceNo@1240020007 : Code[20];SourceType@1240020000 : Integer;SourceSubtype@1240020001 : Integer;SourceLineNo@1240020003 : Integer) : Decimal;
+    VAR
+      PickRqstLine@1240020004 : Record 14099021;
+      SourcePickQtyBase@1240020005 : Decimal;
+    BEGIN
+      CLEAR(SourcePickQtyBase);
+      PickRqstLine.RESET;
+      PickRqstLine.SETRANGE("Location Code",LocationCode);
+      PickRqstLine.SETRANGE("Source No.",SourceNo);
+      PickRqstLine.SETRANGE("Source Type",SourceType);
+      PickRqstLine.SETRANGE("Source Subtype",SourceSubtype);
+      PickRqstLine.SETRANGE("Source Line No.",SourceLineNo);
+      IF PickRqstLine.FINDSET(FALSE) THEN
+        REPEAT
+          SourcePickQtyBase += PickRqstLine."Pick Qty. (Base)" - PickRqstLine."Qty. Shipped (Base)";
+        UNTIL PickRqstLine.NEXT = 0;
+
+      EXIT(SourcePickQtyBase);
+    END;
+
+    [External]
+    PROCEDURE PrintPickRqst@1240020000(VAR PickRqstHeader@1240020000 : Record 14099020;ShowUseRequest@1240020004 : Boolean);
+    VAR
+      OWRLocationSetup@1240020002 : Record 14099030;
+      PrinterSelection@1240020003 : Record 78;
+      OWRPickRqstLineReport@1240020001 : Report 14099020;
+      CustomPrintComplete@1240020005 : Boolean;
+    BEGIN
+      CustomPrintComplete := FALSE;
+      PrintCustomPickRqstEvent(PickRqstHeader,ShowUseRequest,CustomPrintComplete);
+      IF CustomPrintComplete THEN
+        EXIT;
+
+      IF OWRLocationSetup.GET(PickRqstHeader."Location Code") THEN
+        IF OWRLocationSetup."Pick Request Report ID" <> 0 THEN BEGIN
+          PrinterSelection.RESET;
+          PrinterSelection.SETRANGE("User ID",USERID);
+          PrinterSelection.SETRANGE("Report ID",OWRLocationSetup."Pick Request Report ID");
+          IF PrinterSelection.FIND('-') THEN
+            REPORT.RUNMODAL(OWRLocationSetup."Pick Request Report ID",ShowUseRequest,FALSE,PickRqstHeader)
+          ELSE
+            REPORT.RUNMODAL(OWRLocationSetup."Pick Request Report ID",ShowUseRequest,TRUE,PickRqstHeader);
+        END ELSE BEGIN
+          CLEAR(OWRPickRqstLineReport);
+          OWRPickRqstLineReport.SETTABLEVIEW(PickRqstHeader);
+          OWRPickRqstLineReport.USEREQUESTPAGE(ShowUseRequest);
+          OWRPickRqstLineReport.RUNMODAL;
+        END;
+    END;
+
+    [External]
+    PROCEDURE ShowPickRqst@1240020008(VAR WarehouseRequest@1240020000 : Record 5765);
+    VAR
+      PickRqstHeader@1240020004 : Record 14099020;
+      PickRqstLine@1240020003 : Record 14099021;
+      ATOLink@1240020002 : Record 904;
+      SalesLine@1240020001 : Record 37;
+      FirstPickRqstNo@1240020005 : Code[20];
+    BEGIN
+      WITH WarehouseRequest DO BEGIN
+        IF CheckIfCreatePickRqst("Location Code") THEN BEGIN
+          CLEAR(FirstPickRqstNo);
+          CALCFIELDS("Pick Request Exists","ATO Pick Rqst. Exists");
+          IF "Pick Request Exists" THEN BEGIN
+            PickRqstLine.RESET;
+            PickRqstLine.SETRANGE("Source No.","Source No.");
+            PickRqstLine.SETRANGE("Source Type","Source Type");
+            PickRqstLine.SETRANGE("Source Subtype","Source Subtype");
+            PickRqstLine.SETRANGE("Location Code","Location Code");
+            IF PickRqstLine.FIND('-') THEN
+              IF PickRqstHeader.GET(PickRqstLine."Pick Request No.") THEN BEGIN
+                PickRqstHeader.SETRECFILTER;
+                PAGE.RUNMODAL(PAGE::"Pick Request Header",PickRqstHeader);
+                FirstPickRqstNo := PickRqstHeader."Pick Request No.";
+              END;
+          END;
+
+          IF "ATO Pick Rqst. Exists" THEN BEGIN
+            SalesLine.RESET;
+            SalesLine.SETCURRENTKEY(
+              "Document Type",Type,"No.","Variant Code","Drop Shipment","Location Code","Shipment Date");
+            SalesLine.SETRANGE("Document No.","Source No.");
+            SalesLine.SETRANGE("Document Type","Source Subtype");
+            SalesLine.SETRANGE("Location Code","Location Code");
+            SalesLine.SETRANGE("Drop Shipment",FALSE);
+            SalesLine.SETFILTER("Qty. to Assemble to Order",'<>0');
+            SalesLine.SETFILTER("Outstanding Quantity",'<>0');
+            IF SalesLine.FINDFIRST THEN BEGIN
+              ATOLink.RESET;
+              ATOLink.SETCURRENTKEY(Type,"Document Type","Document No.","Document Line No.");
+              ATOLink.SETRANGE(Type,ATOLink.Type::Sale);
+              ATOLink.SETRANGE("Document Type",ATOLink."Document Type"::Order);
+              ATOLink.SETRANGE("Document No.",SalesLine."Document No.");
+              ATOLink.SETRANGE("Document Line No.",SalesLine."Line No.");
+              IF ATOLink.FIND('-') THEN BEGIN
+                PickRqstLine.RESET;
+                PickRqstLine.SETRANGE("Source No.",ATOLink."Assembly Document No.");
+                PickRqstLine.SETRANGE("Source Type",DATABASE::"Assembly Line");
+                PickRqstLine.SETRANGE("Source Subtype",1);
+                PickRqstLine.SETRANGE("Location Code","Location Code");
+                IF PickRqstLine.FIND('-') THEN
+                  IF PickRqstHeader.GET(PickRqstLine."Pick Request No.") THEN BEGIN
+                    IF PickRqstHeader."Pick Request No." = FirstPickRqstNo THEN
+                      EXIT;
+                    PickRqstHeader.SETRECFILTER;
+                    PAGE.RUNMODAL(PAGE::"Pick Request Header",PickRqstHeader);
+                  END;
+              END;
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE ShowRegPickRqstLines@1240020009(VAR WarehouseRequest@1240020000 : Record 5765);
+    VAR
+      RegPickRqstHeader@1240020002 : Record 14099022;
+      RegPickRqstLine@1240020001 : Record 14099023;
+    BEGIN
+      WITH WarehouseRequest DO BEGIN
+        IF CheckIfCreatePickRqst("Location Code") THEN BEGIN
+          IF NOT "ATO Pick Required" THEN BEGIN
+            RegPickRqstLine.RESET;
+            RegPickRqstLine.SETRANGE("Source No.","Source No.");
+            RegPickRqstLine.SETRANGE("Source Type","Source Type");
+            RegPickRqstLine.SETRANGE("Source Subtype","Source Subtype");
+            RegPickRqstLine.SETRANGE("Location Code","Location Code");
+            IF RegPickRqstLine.FIND('-') THEN BEGIN
+              PAGE.RUNMODAL(PAGE::"Reg. Pick Request Lines",RegPickRqstLine);
+            END;
+          END ELSE BEGIN
+            RegPickRqstLine.RESET;
+            RegPickRqstLine.SETRANGE("Order No.","Source No.");
+            RegPickRqstLine.SETRANGE("Location Code","Location Code");
+            IF RegPickRqstLine.FIND('-') THEN BEGIN
+              PAGE.RUNMODAL(PAGE::"Reg. Pick Request Lines",RegPickRqstLine);
+            END;
+          END;
+        END;
+      END;
+    END;
+
+    [External]
+    PROCEDURE SetPickRqstStatusPicked@1240020034(VAR PickRqstHeader@1240020000 : Record 14099020);
+    VAR
+      PickRqstLine@1240020001 : Record 14099021;
+    BEGIN
+      PickRqstLine.RESET;
+      PickRqstLine.SETRANGE("Pick Request No.",PickRqstHeader."Pick Request No.");
+      PickRqstLine.SETRANGE("Pick Request Type",PickRqstHeader."Pick Request Type");
+      PickRqstLine.SETRANGE("Completely Picked",FALSE);
+      IF PickRqstLine.FINDFIRST THEN
+        PickRqstHeader.Status := PickRqstHeader.Status::"Picked Short"
+      ELSE
+        PickRqstHeader.Status := PickRqstHeader.Status::Picked;
+
+      PickRqstHeader.MODIFY;
+    END;
+
+    LOCAL PROCEDURE GetPickRqstStatus@1240020059(VAR WhseRqst@1240020000 : Record 5765;VAR EventStatusText@1240020004 : Text[250]);
+    VAR
+      PickRqstHeader@1240020001 : Record 14099020;
+      PickRqstLine@1240020002 : Record 14099021;
+      ATOLink@1240020003 : Record 904;
+      NonATOPickAlsoExists@1240020005 : Boolean;
+      InProgress@1240020008 : Boolean;
+      Picked@1240020006 : Boolean;
+      PickedShort@1240020007 : Boolean;
+    BEGIN
+      IF EventStatusText <> '' THEN
+        EXIT;
+
+      NonATOPickAlsoExists := FALSE;
+      InProgress := FALSE;
+      Picked := FALSE;
+      PickedShort := FALSE;
+      IF WhseRqst."ATO Pick Required" THEN BEGIN
+        WhseRqst.CALCFIELDS("Pick Request No.","ATO Pick Rqst. No.");
+        IF (WhseRqst."ATO Pick Rqst. No." <> '') AND
+            (WhseRqst."ATO Pick Rqst. No." <> WhseRqst."Pick Request No.")
+        THEN
+          NonATOPickAlsoExists := TRUE;
+
+        ATOLink.RESET;
+        ATOLink.SETCURRENTKEY(Type,"Document Type","Document No.","Document Line No.");
+        ATOLink.SETRANGE(Type,ATOLink.Type::Sale);
+        ATOLink.SETRANGE("Document Type",ATOLink."Document Type"::Order);
+        ATOLink.SETRANGE("Document No.",WhseRqst."Source No.");
+        IF ATOLink.FINDSET(FALSE) THEN BEGIN
+          PickRqstLine.RESET;
+          PickRqstLine.SETRANGE("Location Code",WhseRqst."Location Code");
+          PickRqstLine.SETRANGE("Source No.",ATOLink."Assembly Document No.");
+          PickRqstLine.SETRANGE("Source Type",DATABASE::"Assembly Line");
+          PickRqstLine.SETRANGE("Source Subtype",1);
+        END;
+      END ELSE BEGIN
+        PickRqstLine.RESET;
+        PickRqstLine.SETRANGE("Location Code",WhseRqst."Location Code");
+        PickRqstLine.SETRANGE("Source No.",WhseRqst."Source No.");
+        PickRqstLine.SETRANGE("Source Type",WhseRqst."Source Type");
+        PickRqstLine.SETRANGE("Source Subtype",WhseRqst."Source Subtype");
+      END;
+      IF PickRqstLine.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          PickRqstHeader.RESET;
+          PickRqstHeader.SETRANGE("Pick Request No.",PickRqstLine."Pick Request No.");
+          IF PickRqstHeader.FIND('-') THEN BEGIN
+            IF PickRqstHeader.Status = PickRqstHeader.Status::"In Progress" THEN
+              InProgress := TRUE;
+            IF PickRqstHeader.Status = PickRqstHeader.Status::"Picked Short" THEN
+              PickedShort := TRUE;
+            IF PickRqstHeader.Status = PickRqstHeader.Status::Picked THEN
+              Picked := TRUE;
+          END;
+        UNTIL PickRqstLine.NEXT = 0;
+      END;
+
+      IF NonATOPickAlsoExists THEN BEGIN
+        PickRqstLine.RESET;
+        PickRqstLine.SETRANGE("Location Code",WhseRqst."Location Code");
+        PickRqstLine.SETRANGE("Source No.",WhseRqst."Source No.");
+        PickRqstLine.SETRANGE("Source Type",WhseRqst."Source Type");
+        PickRqstLine.SETRANGE("Source Subtype",WhseRqst."Source Subtype");
+        IF PickRqstLine.FINDSET(FALSE) THEN BEGIN
+          REPEAT
+            PickRqstHeader.RESET;
+            PickRqstHeader.SETRANGE("Pick Request No.",PickRqstLine."Pick Request No.");
+            IF PickRqstHeader.FIND('-') THEN BEGIN
+              IF PickRqstHeader.Status = PickRqstHeader.Status::"In Progress" THEN
+                InProgress := TRUE;
+              IF PickRqstHeader.Status = PickRqstHeader.Status::"Picked Short" THEN
+                PickedShort := TRUE;
+              IF PickRqstHeader.Status = PickRqstHeader.Status::Picked THEN
+                Picked := TRUE;
+            END;
+          UNTIL PickRqstLine.NEXT = 0;
+        END;
+      END;
+
+      IF InProgress THEN
+        EventStatusText := Text024;
+
+      IF PickedShort AND (EventStatusText = '') THEN
+        EventStatusText := Text025;
+
+      IF Picked AND (EventStatusText = '') THEN
+        EventStatusText := Text026;
+    END;
+
+    [External]
+    PROCEDURE ResetPickRqstStatus@1240020037(VAR PickRqstHeader@1240020000 : Record 14099020);
+    VAR
+      PickRqstLine@1240020001 : Record 14099021;
+    BEGIN
+      PickRqstLine.RESET;
+      PickRqstLine.SETRANGE("Pick Request No.",PickRqstHeader."Pick Request No.");
+      PickRqstLine.SETRANGE("Pick Request Type",PickRqstHeader."Pick Request Type");
+      PickRqstLine.SETFILTER("Applied Qty. (Base)",'<>0');
+      IF NOT PickRqstLine.ISEMPTY THEN
+        PickRqstHeader.Status := PickRqstHeader.Status::"In Progress"
+      ELSE
+        PickRqstHeader.Status := PickRqstHeader.Status::Ready;
+
+      PickRqstHeader.MODIFY;
+    END;
+
+    [External]
+    PROCEDURE ResetPickRqstLines@1240020044(VAR PickRqstHeader@1240020000 : Record 14099020);
+    VAR
+      PickRqstLine@1240020001 : Record 14099021;
+    BEGIN
+      PickRqstLine.RESET;
+      PickRqstLine.SETRANGE("Pick Request No.",PickRqstHeader."Pick Request No.");
+      PickRqstLine.SETRANGE("Pick Request Type",PickRqstHeader."Pick Request Type");
+      IF PickRqstLine.FINDSET(FALSE) THEN
+        REPEAT
+          PickRqstLine.VALIDATE("Applied Quantity",0);
+          PickRqstLine.VALIDATE("Completely Picked",FALSE);
+          PickRqstLine.MODIFY;
+        UNTIL PickRqstLine.NEXT = 0;
+
+      ResetPickRqstStatus(PickRqstHeader);
+    END;
+
+    [External]
+    PROCEDURE ArchiveRegPickRequest@1240020027(VAR CurrentRegPickRqstHeader@1240020000 : Record 14099022;VAR ReviewCount@1240020003 : Integer;VAR ArchiveCount@1240020004 : Integer);
+    VAR
+      ArchPickRqstHeader@1240020001 : Record 14099024;
+      ArchPickRqstLine@1240020005 : Record 14099025;
+      RegPickRqstHeader@1240020002 : Record 14099022;
+      RegPickRqstHeader2@1240020007 : Record 14099022;
+      RegPickRqstLine@1240020006 : Record 14099023;
+      RegPickRqstLine2@1240020008 : Record 14099023;
+    BEGIN
+      RegPickRqstHeader.RESET;
+      RegPickRqstHeader.SETRANGE("Pick Request No.",CurrentRegPickRqstHeader."Pick Request No.");
+      IF RegPickRqstHeader.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          ReviewCount := ReviewCount + 1;
+          ArchPickRqstHeader.RESET;
+          IF NOT ArchPickRqstHeader.GET(RegPickRqstHeader."Pick Request No.") THEN BEGIN
+            ArchPickRqstHeader.INIT;
+            ArchPickRqstHeader.TRANSFERFIELDS(RegPickRqstHeader);
+            ArchPickRqstHeader.INSERT(TRUE);
+
+            RegPickRqstLine.RESET;
+            RegPickRqstLine.SETRANGE("Pick Request No.",RegPickRqstHeader."Pick Request No.");
+            IF RegPickRqstLine.FINDSET(FALSE) THEN
+              REPEAT
+                ArchPickRqstLine.RESET;
+                ArchPickRqstLine.SETRANGE("Pick Request No.",RegPickRqstLine."Pick Request No.");
+                ArchPickRqstLine.SETRANGE("Pick Request Type",RegPickRqstLine."Pick Request Type");
+                ArchPickRqstLine.SETRANGE("Location Code",RegPickRqstLine."Location Code");
+                ArchPickRqstLine.SETRANGE("Line No.",RegPickRqstLine."Line No.");
+                IF ArchPickRqstLine.FIND('-') THEN
+                  ArchPickRqstLine.DELETE(TRUE);
+
+                ArchPickRqstLine.INIT;
+                ArchPickRqstLine.TRANSFERFIELDS(RegPickRqstLine);
+                ArchPickRqstLine.INSERT(TRUE);
+
+                RegPickRqstLine.DELETE(TRUE);
+              UNTIL RegPickRqstLine.NEXT = 0;
+
+            RegPickRqstLine2.RESET;
+            RegPickRqstLine2.SETRANGE("Pick Request No.",RegPickRqstHeader."Pick Request No.");
+            IF RegPickRqstLine2.ISEMPTY THEN BEGIN
+              IF RegPickRqstHeader2.GET(RegPickRqstHeader."Pick Request No.") THEN
+                RegPickRqstHeader2.DELETE(TRUE);
+
+              ArchiveCount := ArchiveCount + 1;
+            END;
+          END;
+        UNTIL RegPickRqstHeader.NEXT = 0;
+      END;
+    END;
+
+    [External]
+    PROCEDURE BatchArchiveRegPickRequest@1240020047(LocationCode@1240020000 : Code[10];OlderThanDate@1240020001 : Date;VAR ReviewCount@1240020007 : Integer;VAR ArchiveCount@1240020006 : Integer);
+    VAR
+      ArchPickRqstHeader@1240020003 : Record 14099024;
+      RegPickRqstHeader@1240020002 : Record 14099022;
+      OWRLocationSetup@1240020004 : Record 14099030;
+    BEGIN
+      ReviewCount := 0;
+      ArchiveCount := 0;
+
+      IF (OlderThanDate = 0D) AND (LocationCode <> '') THEN
+        IF OWRLocationSetup.GET(LocationCode) THEN
+          IF FORMAT(OWRLocationSetup."Pick Request Move to Archive") <> '' THEN
+            OlderThanDate := CALCDATE(OWRLocationSetup."Pick Request Move to Archive",WORKDATE);
+
+      IF OlderThanDate = 0D THEN
+        EXIT;
+
+      RegPickRqstHeader.RESET;
+      RegPickRqstHeader.SETCURRENTKEY("Register Date");
+      RegPickRqstHeader.SETRANGE("Register Date",0D,OlderThanDate);
+      IF RegPickRqstHeader.FINDSET(FALSE) THEN
+        REPEAT
+          ArchiveRegPickRequest(RegPickRqstHeader,ReviewCount,ArchiveCount);
+        UNTIL RegPickRqstHeader.NEXT = 0;
+    END;
+
+    [External]
+    PROCEDURE RestoreRegPickRequest@1240020046(VAR CurrentArchPickRqstHeader@1240020000 : Record 14099024;VAR ReviewCount@1240020006 : Integer;VAR RestoreCount@1240020005 : Integer);
+    VAR
+      ArchPickRqstHeader@1240020002 : Record 14099024;
+      ArchPickRqstHeader2@1240020007 : Record 14099024;
+      ArchPickRqstLine@1240020004 : Record 14099025;
+      ArchPickRqstLine2@1240020008 : Record 14099025;
+      RegPickRqstHeader@1240020001 : Record 14099022;
+      RegPickRqstLine@1240020003 : Record 14099023;
+    BEGIN
+      ReviewCount := 0;
+      RestoreCount := 0;
+      ArchPickRqstHeader.RESET;
+      ArchPickRqstHeader.SETRANGE("Pick Request No.",CurrentArchPickRqstHeader."Pick Request No.");
+      IF ArchPickRqstHeader.FIND('-') THEN BEGIN
+        REPEAT
+          ReviewCount := ReviewCount + 1;
+          RegPickRqstHeader.RESET;
+          IF NOT RegPickRqstHeader.GET(ArchPickRqstHeader."Pick Request No.") THEN BEGIN
+            RegPickRqstHeader.INIT;
+            RegPickRqstHeader.TRANSFERFIELDS(ArchPickRqstHeader);
+            RegPickRqstHeader.INSERT(TRUE);
+
+            ArchPickRqstLine.RESET;
+            ArchPickRqstLine.SETRANGE("Pick Request No.",ArchPickRqstHeader."Pick Request No.");
+            IF ArchPickRqstLine.FINDSET(FALSE) THEN
+              REPEAT
+                RegPickRqstLine.RESET;
+                RegPickRqstLine.SETRANGE("Pick Request No.",ArchPickRqstLine."Pick Request No.");
+                RegPickRqstLine.SETRANGE("Line No.",ArchPickRqstLine."Line No.");
+                IF RegPickRqstLine.FIND('-') THEN
+                  RegPickRqstLine.DELETE(TRUE);
+
+                RegPickRqstLine.INIT;
+                RegPickRqstLine.TRANSFERFIELDS(ArchPickRqstLine);
+                RegPickRqstLine.INSERT(TRUE);
+
+                ArchPickRqstLine.DELETE(TRUE);
+              UNTIL ArchPickRqstLine.NEXT = 0;
+
+            ArchPickRqstLine2.RESET;
+            ArchPickRqstLine2.SETRANGE("Pick Request No.",ArchPickRqstHeader."Pick Request No.");
+            IF ArchPickRqstLine2.ISEMPTY THEN BEGIN
+              IF ArchPickRqstHeader2.GET(ArchPickRqstHeader."Pick Request No.") THEN
+                ArchPickRqstHeader2.DELETE(TRUE);
+
+              RestoreCount := RestoreCount + 1;
+            END;
+          END;
+        UNTIL ArchPickRqstHeader.NEXT = 0;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,14002863,CreatePickRequest)]
+    LOCAL PROCEDURE "OWRMgt-CreatePickRqst"@1240020018(VAR WarehouseRequest@1240020000 : Record 5765;VAR OutboundWhseRequestFilter@1240020001 : Record 14002863;VAR AssignedID@1240020002 : Code[50];VAR AssignedWhseGroupCode@1240020003 : Code[20];VAR PickNo@1240020004 : Code[20];VAR NoOfWarehouseRequests@1240020005 : Integer;VAR PicksCreated@1240020006 : Integer;CombinePicks@1240020007 : Boolean;PriorityPick@1240020008 : Boolean);
+    VAR
+      WarehouseRequest2@1240020016 : Record 5765;
+      WarehouseRequestTmp@1240020015 : TEMPORARY Record 5765;
+      Location@1240020014 : Record 14;
+      CreatePickMgt@1240020013 : Codeunit 14002861;
+      OWRSingleInstance@1240020012 : Codeunit 14002864;
+      MultipleWarehouseRequests@1240020011 : Boolean;
+      PickCreated@1240020010 : Boolean;
+      FirstLocationCode@1240020009 : Code[10];
+    BEGIN
+      // <CU14002863> Outbound Whse Request Mgt. - CreatePickRqstEvent
+      MultipleWarehouseRequests :=
+        WarehouseRequest.FIND('-') AND (WarehouseRequest.NEXT <> 0);
+
+      IF CombinePicks OR
+         (MultipleWarehouseRequests AND
+          OutboundWhseRequestFilter."Combine Picks Whse. Act. Group")
+      THEN BEGIN
+        WarehouseRequestTmp.RESET;
+        WarehouseRequestTmp.DELETEALL;
+
+        NoOfWarehouseRequests := 0;
+        PicksCreated := 0;
+        PickCreated := FALSE;
+        FirstLocationCode := WarehouseRequest."Location Code";
+        IF WarehouseRequest.FIND('-') THEN
+          IF PriorityPick THEN BEGIN
+            IF CreatePriorityPick(
+              WarehouseRequest,OutboundWhseRequestFilter,AssignedID,
+              AssignedWhseGroupCode,PickNo,PicksCreated,TRUE,CombinePicks)
+            THEN
+              PickCreated := TRUE
+            ELSE
+              PickCreated := FALSE;
+          END ELSE BEGIN
+            WarehouseRequestTmp.RESET;
+            WarehouseRequestTmp.DELETEALL;
+            REPEAT
+              IF (WarehouseRequest.Type = WarehouseRequest.Type::Outbound) AND
+                 (WarehouseRequest."Location Code" = FirstLocationCode)
+              THEN BEGIN
+                NoOfWarehouseRequests := NoOfWarehouseRequests + 1;
+
+                WarehouseRequestTmp := WarehouseRequest;
+                WarehouseRequestTmp.INSERT;
+              END;
+            UNTIL WarehouseRequest.NEXT = 0;
+
+            IF CreateCombinedPick(
+              WarehouseRequestTmp,OutboundWhseRequestFilter,AssignedID,
+              AssignedWhseGroupCode,PickNo,PicksCreated,TRUE)
+            THEN
+              PickCreated := TRUE
+            ELSE
+              PickCreated := FALSE;
+
+            WarehouseRequestTmp.RESET;
+            WarehouseRequestTmp.DELETEALL;
+          END;
+      END ELSE BEGIN
+        IF PriorityPick THEN BEGIN
+          IF WarehouseRequest.FIND('-') THEN
+            IF CreatePriorityPick(
+              WarehouseRequest,OutboundWhseRequestFilter,AssignedID,
+              AssignedWhseGroupCode,PickNo,PicksCreated,TRUE,CombinePicks)
+            THEN
+              PickCreated := TRUE
+            ELSE
+              PickCreated := FALSE;
+        END ELSE BEGIN
+          NoOfWarehouseRequests := 0;
+          PicksCreated := 0;
+          PickCreated := FALSE;
+          IF WarehouseRequest.FIND('-') THEN
+            REPEAT
+              WarehouseRequest2 := WarehouseRequest;
+              WarehouseRequest2.FIND;
+
+              NoOfWarehouseRequests := NoOfWarehouseRequests + 1;
+
+              IF WarehouseRequest2."Document Status" = WarehouseRequest2."Document Status"::Released
+              THEN BEGIN
+                IF CreatePickMgt.AvailPerShippingAdviceHandling(WarehouseRequest2,OutboundWhseRequestFilter) THEN BEGIN
+                  IF CreateSinglePick(
+                    WarehouseRequest2,OutboundWhseRequestFilter,AssignedID,
+                    AssignedWhseGroupCode,PickNo,TRUE)
+                  THEN
+                    PickCreated := TRUE
+                  ELSE
+                    PickCreated := FALSE;
+                END ELSE
+                  PickCreated := FALSE;
+
+                IF PickCreated THEN
+                  PicksCreated := PicksCreated + 1;
+              END;
+            UNTIL WarehouseRequest.NEXT = 0;
+        END;
+      END;
+
+      IF GUIALLOWED THEN BEGIN
+        IF NoOfWarehouseRequests > 1 THEN
+          MESSAGE(Text012,PicksCreated,NoOfWarehouseRequests)
+        ELSE
+          IF (NoOfWarehouseRequests = 1) AND (PicksCreated > 0) THEN
+            MESSAGE(Text013,PickNo);
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,14002863,OnBeforeDeleteShipAndPick)]
+    LOCAL PROCEDURE "OWRMgt-OnBeforeDeleteShipAndPick"@1240020026(VAR CurrentWarehouseRequest@1240020000 : Record 5765;VAR PickDeleted@1240020001 : Integer;VAR ShipmentDeleted@1240020002 : Integer);
+    VAR
+      ATOLink@1240020004 : Record 904;
+      ATOPickDeleted@1240020003 : Integer;
+      NormalPickDeleted@1240020005 : Integer;
+    BEGIN
+      // <CU14002863> Outbound Whse Request Mgt. - OnBeforeDeleteShipAndPickEvent
+      IF CurrentWarehouseRequest."ATO Pick Required" THEN BEGIN
+        ATOLink.RESET;
+        ATOLink.SETCURRENTKEY(Type,"Document Type","Document No.","Document Line No.");
+        ATOLink.SETRANGE(Type,ATOLink.Type::Sale);
+        ATOLink.SETRANGE("Document Type",ATOLink."Document Type"::Order);
+        ATOLink.SETRANGE("Document No.",CurrentWarehouseRequest."Source No.");
+        IF ATOLink.FINDSET(FALSE) THEN BEGIN
+          ATOPickDeleted :=
+            DeletePickRqst('',CurrentWarehouseRequest."Location Code",ATOLink."Assembly Document No.",
+              DATABASE::"Assembly Line",ATOLink."Assembly Document Type");
+        END;
+
+        NormalPickDeleted :=
+          DeletePickRqst('',CurrentWarehouseRequest."Location Code",CurrentWarehouseRequest."Source No.",
+            CurrentWarehouseRequest."Source Type",CurrentWarehouseRequest."Source Subtype");
+
+        PickDeleted := ATOPickDeleted + NormalPickDeleted;
+      END ELSE
+        PickDeleted :=
+          DeletePickRqst('',CurrentWarehouseRequest."Location Code",CurrentWarehouseRequest."Source No.",
+            CurrentWarehouseRequest."Source Type",CurrentWarehouseRequest."Source Subtype");
+    END;
+
+    [EventSubscriber(Codeunit,14002863,PrintDocumentEvent)]
+    LOCAL PROCEDURE "OWRMgt-PrintDocumentEvent"@1240020001(VAR WarehouseRequest@1240020000 : Record 5765;VAR PickNo@1240020001 : Code[20];VAR PrintComplete@1240020002 : Boolean);
+    VAR
+      PickRqstLine@1240020004 : Record 14099021;
+      PickRqstHeader@1240020006 : Record 14099020;
+      PickRqstHeaderTmp@1240020003 : TEMPORARY Record 14099020;
+      ATOLink@1240020005 : Record 904;
+      NonATOPickAlsoExists@1240020007 : Boolean;
+    BEGIN
+      // <CU14002863> Outbound Whse Request Mgt. - PrintDocumentEvent
+      IF NOT CheckIfCreatePickRqst(WarehouseRequest."Location Code") THEN
+        EXIT;
+
+      PickRqstHeaderTmp.RESET;
+      PickRqstHeaderTmp.DELETEALL;
+      NonATOPickAlsoExists := FALSE;
+      IF WarehouseRequest."ATO Pick Required" THEN BEGIN
+        WarehouseRequest.CALCFIELDS("Pick Request No.","ATO Pick Rqst. No.");
+        IF (WarehouseRequest."ATO Pick Rqst. No." <> '') AND
+            (WarehouseRequest."ATO Pick Rqst. No." <> WarehouseRequest."Pick Request No.")
+        THEN
+          NonATOPickAlsoExists := TRUE;
+
+        ATOLink.RESET;
+        ATOLink.SETCURRENTKEY(Type,"Document Type","Document No.","Document Line No.");
+        ATOLink.SETRANGE(Type,ATOLink.Type::Sale);
+        ATOLink.SETRANGE("Document Type",ATOLink."Document Type"::Order);
+        ATOLink.SETRANGE("Document No.",WarehouseRequest."Source No.");
+        IF ATOLink.FINDSET(FALSE) THEN BEGIN
+          PickRqstLine.RESET;
+          PickRqstLine.SETRANGE("Location Code",WarehouseRequest."Location Code");
+          PickRqstLine.SETRANGE("Source No.",ATOLink."Assembly Document No.");
+          PickRqstLine.SETRANGE("Source Type",DATABASE::"Assembly Line");
+          PickRqstLine.SETRANGE("Source Subtype",1);
+        END;
+      END ELSE BEGIN
+        PickRqstLine.RESET;
+        PickRqstLine.SETRANGE("Location Code",WarehouseRequest."Location Code");
+        PickRqstLine.SETRANGE("Source No.",WarehouseRequest."Source No.");
+        PickRqstLine.SETRANGE("Source Type",WarehouseRequest."Source Type");
+        PickRqstLine.SETRANGE("Source Subtype",WarehouseRequest."Source Subtype");
+      END;
+      IF PickRqstLine.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          PickRqstHeaderTmp.RESET;
+          IF NOT PickRqstHeaderTmp.GET(PickRqstLine."Pick Request No.") THEN BEGIN
+            PrintComplete := FALSE;
+            PickRqstHeader.RESET;
+            PickRqstHeader.SETRANGE("Pick Request No.",PickRqstLine."Pick Request No.");
+            IF PickRqstHeader.FIND('-') THEN BEGIN
+              PrintPickRqst(PickRqstHeader,FALSE);
+              PrintComplete := TRUE;
+              PickNo := PickRqstHeader."Pick Request No.";
+            END;
+
+            IF PrintComplete THEN BEGIN
+              PickRqstHeaderTmp.INIT;
+              PickRqstHeaderTmp."Pick Request No." := PickNo;
+              PickRqstHeaderTmp.INSERT;
+            END;
+          END;
+        UNTIL PickRqstLine.NEXT = 0;
+      END;
+
+      IF NonATOPickAlsoExists THEN BEGIN
+        PickRqstLine.RESET;
+        PickRqstLine.SETRANGE("Location Code",WarehouseRequest."Location Code");
+        PickRqstLine.SETRANGE("Source No.",WarehouseRequest."Source No.");
+        PickRqstLine.SETRANGE("Source Type",WarehouseRequest."Source Type");
+        PickRqstLine.SETRANGE("Source Subtype",WarehouseRequest."Source Subtype");
+        IF PickRqstLine.FINDSET(FALSE) THEN BEGIN
+          REPEAT
+            PickRqstHeaderTmp.RESET;
+            IF NOT PickRqstHeaderTmp.GET(PickRqstLine."Pick Request No.") THEN BEGIN
+              PrintComplete := FALSE;
+              PickRqstHeader.RESET;
+              PickRqstHeader.SETRANGE("Pick Request No.",PickRqstLine."Pick Request No.");
+              IF PickRqstHeader.FIND('-') THEN BEGIN
+                PrintPickRqst(PickRqstHeader,FALSE);
+                PrintComplete := TRUE;
+                PickNo := PickRqstHeader."Pick Request No.";
+              END;
+
+              IF PrintComplete THEN BEGIN
+                PickRqstHeaderTmp.INIT;
+                PickRqstHeaderTmp."Pick Request No." := PickNo;
+                PickRqstHeaderTmp.INSERT;
+              END;
+            END;
+          UNTIL PickRqstLine.NEXT = 0;
+        END;
+      END;
+
+      PickRqstHeaderTmp.RESET;
+      PickRqstHeaderTmp.DELETEALL;
+    END;
+
+    [EventSubscriber(Codeunit,14002809,UpdateRFStatEntryTmpInfo)]
+    LOCAL PROCEDURE "WarehouseStreamlineMgt-UpdateRFStatEntryTmpInfo"@1240020038(VAR RFStatEntryTmp@1240020000 : Record 14002804;LocationCode@1240020001 : Code[10];SourceNo@1240020002 : Code[20];SourceType@1240020003 : Integer;SourceSubtype@1240020004 : Integer;SourceLineNo@1240020005 : Integer);
+    VAR
+      Location@1240020006 : Record 14;
+    BEGIN
+      // <CU14002809> Warehouse Streamline Mgt. - UpdateRFStatEntryTmpInfo Event
+      IF CheckIfCreatePickRqst(LocationCode) THEN BEGIN
+        RFStatEntryTmp."Pick Qty. (Base)" := 0;
+        RFStatEntryTmp."Shipment Qty. (Base)" := 0;
+        RFStatEntryTmp."Picked Qty. (Base)" := 0;
+        RFStatEntryTmp."Shipped Qty. (Base)" := 0;
+
+        RFStatEntryTmp."Pick Qty. (Base)" :=
+          CalculateSourcePickQuantity(LocationCode,SourceNo,SourceType,SourceSubtype,SourceLineNo);
+
+        RFStatEntryTmp."Outstanding Qty. (Base)" :=
+          RFStatEntryTmp."Source Outstanding Qty. (Base)" - RFStatEntryTmp."Pick Qty. (Base)";
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,14002809,CalcExistingPickQtyNotAvail)]
+    LOCAL PROCEDURE "WarehouseStreamlineMgt-CalcExistingPickQtyNotAvail"@1240020041(LocationCode@1240020000 : Code[10];ItemNo@1240020001 : Code[20];VariantCode@1240020002 : Code[10];UnitOfMeasureCode@1240020003 : Code[10];VAR QtyOnPickBase@1240020004 : Decimal);
+    BEGIN
+      // <CU14002809> Warehouse Streamline Mgt. - CalcExistingPickQtyNotAvail Event
+      IF CheckIfCreatePickRqst(LocationCode) THEN
+        QtyOnPickBase :=
+          CalcExistingPickQty(LocationCode,ItemNo,VariantCode,UnitOfMeasureCode,'');
+    END;
+
+    [EventSubscriber(Codeunit,14002809,UpdateStatusTextEvent)]
+    LOCAL PROCEDURE "WarehouseStreamlineMgt-EventStatusText"@1240020035(CurrentWarehouseRequest@1240020000 : Record 5765;VAR RFStatEntryTotal@1240020001 : Record 14002804;VAR EventStatusText@1240020002 : Text[250]);
+    BEGIN
+      // <CU14002809> Warehouse Streamline Mgt. - UpdateStatusTextEvent
+      GetPickRqstStatus(CurrentWarehouseRequest,EventStatusText);
+      IF EventStatusText <> '' THEN
+        EXIT;
+
+      CurrentWarehouseRequest.CALCFIELDS("Pick Request Exists","ATO Pick Rqst. Exists");
+      IF CurrentWarehouseRequest."Pick Request Exists" THEN BEGIN
+        EventStatusText := Text022;
+        EXIT;
+      END;
+
+      IF CurrentWarehouseRequest."ATO Pick Rqst. Exists" THEN BEGIN
+        EventStatusText := Text023;
+        EXIT;
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,14002809,GetAssignedUserIDEvent)]
+    LOCAL PROCEDURE "WarehouseStreamlineMgt-GetAssignedUserIDEvent"@1240020010(CurrentWarehouseRequest@1240020000 : Record 5765;VAR AssignedUserID@1240020001 : Code[50]);
+    VAR
+      PickRqstHeader@1240020002 : Record 14099020;
+      PickRqstLine@1240020003 : Record 14099021;
+      ATOLink@1240020004 : Record 904;
+    BEGIN
+      // <CU14002809> Warehouse Streamline Mgt. - GetAssignedUserIDEvent
+      IF NOT CheckIfCreatePickRqst(CurrentWarehouseRequest."Location Code") THEN
+        EXIT;
+
+      IF CurrentWarehouseRequest."ATO Pick Required" THEN BEGIN
+        ATOLink.RESET;
+        ATOLink.SETCURRENTKEY(Type,"Document Type","Document No.","Document Line No.");
+        ATOLink.SETRANGE(Type,ATOLink.Type::Sale);
+        ATOLink.SETRANGE("Document Type",ATOLink."Document Type"::Order);
+        ATOLink.SETRANGE("Document No.",CurrentWarehouseRequest."Source No.");
+        IF ATOLink.FIND('-') THEN BEGIN
+          PickRqstLine.RESET;
+          PickRqstLine.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+          PickRqstLine.SETRANGE("Source No.",ATOLink."Assembly Document No.");
+          PickRqstLine.SETRANGE("Source Type",DATABASE::"Assembly Line");
+          PickRqstLine.SETRANGE("Source Subtype",1);
+        END;
+      END ELSE BEGIN
+        PickRqstLine.RESET;
+        PickRqstLine.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+        PickRqstLine.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+        PickRqstLine.SETRANGE("Source Type",CurrentWarehouseRequest."Source Type");
+        PickRqstLine.SETRANGE("Source Subtype",CurrentWarehouseRequest."Source Subtype");
+      END;
+      IF PickRqstLine.FIND('-') THEN BEGIN
+        PickRqstHeader.RESET;
+        PickRqstHeader.SETRANGE("Pick Request No.",PickRqstLine."Pick Request No.");
+        IF PickRqstHeader.FIND('-') THEN
+          AssignedUserID := PickRqstHeader."Assigned User ID";
+      END;
+    END;
+
+    [EventSubscriber(Codeunit,14002809,UpdatePickAssignedUserIDEvent)]
+    LOCAL PROCEDURE "WarehouseStreamlineMgt-UpdatePickAssignedUserIDEvent"@1240020022(CurrentWarehouseRequest@1240020000 : Record 5765;LocationCode@1240020001 : Code[10];AssignedID@1240020002 : Code[50]);
+    VAR
+      PickRqstLine@1240020007 : Record 14099021;
+      PickRqstHeader@1240020006 : Record 14099020;
+      PickRqstHeaderTmp@1240020005 : TEMPORARY Record 14099020;
+      ATOLink@1240020004 : Record 904;
+      NonATOPickAlsoExists@1240020003 : Boolean;
+    BEGIN
+      // <CU14002809> Warehouse Streamline Mgt. - UpdatePickAssignedUserIDEvent
+      IF NOT CheckIfCreatePickRqst(CurrentWarehouseRequest."Location Code") THEN
+        EXIT;
+
+      PickRqstHeaderTmp.RESET;
+      PickRqstHeaderTmp.DELETEALL;
+      NonATOPickAlsoExists := FALSE;
+      IF CurrentWarehouseRequest."ATO Pick Required" THEN BEGIN
+        CurrentWarehouseRequest.CALCFIELDS("Pick Request No.","ATO Pick Rqst. No.");
+        IF (CurrentWarehouseRequest."ATO Pick Rqst. No." <> '') AND
+            (CurrentWarehouseRequest."ATO Pick Rqst. No." <> CurrentWarehouseRequest."Pick Request No.")
+        THEN
+          NonATOPickAlsoExists := TRUE;
+
+        ATOLink.RESET;
+        ATOLink.SETCURRENTKEY(Type,"Document Type","Document No.","Document Line No.");
+        ATOLink.SETRANGE(Type,ATOLink.Type::Sale);
+        ATOLink.SETRANGE("Document Type",ATOLink."Document Type"::Order);
+        ATOLink.SETRANGE("Document No.",CurrentWarehouseRequest."Source No.");
+        IF ATOLink.FINDSET(FALSE) THEN BEGIN
+          PickRqstLine.RESET;
+          PickRqstLine.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+          PickRqstLine.SETRANGE("Source No.",ATOLink."Assembly Document No.");
+          PickRqstLine.SETRANGE("Source Type",DATABASE::"Assembly Line");
+          PickRqstLine.SETRANGE("Source Subtype",1);
+        END;
+      END ELSE BEGIN
+        PickRqstLine.RESET;
+        PickRqstLine.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+        PickRqstLine.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+        PickRqstLine.SETRANGE("Source Type",CurrentWarehouseRequest."Source Type");
+        PickRqstLine.SETRANGE("Source Subtype",CurrentWarehouseRequest."Source Subtype");
+      END;
+      IF PickRqstLine.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          PickRqstHeaderTmp.RESET;
+          IF NOT PickRqstHeaderTmp.GET(PickRqstLine."Pick Request No.") THEN BEGIN
+            PickRqstHeader.RESET;
+            PickRqstHeader.SETRANGE("Pick Request No.",PickRqstLine."Pick Request No.");
+            IF PickRqstHeader.FIND('-') THEN BEGIN
+              PickRqstHeader.VALIDATE("Assigned User ID",AssignedID);
+              PickRqstHeader.MODIFY;
+
+              PickRqstHeaderTmp.INIT;
+              PickRqstHeaderTmp."Pick Request No." := PickRqstHeader."Pick Request No.";
+              PickRqstHeaderTmp.INSERT;
+            END;
+          END;
+        UNTIL PickRqstLine.NEXT = 0;
+      END;
+
+      IF NonATOPickAlsoExists THEN BEGIN
+        PickRqstLine.RESET;
+        PickRqstLine.SETRANGE("Location Code",CurrentWarehouseRequest."Location Code");
+        PickRqstLine.SETRANGE("Source No.",CurrentWarehouseRequest."Source No.");
+        PickRqstLine.SETRANGE("Source Type",CurrentWarehouseRequest."Source Type");
+        PickRqstLine.SETRANGE("Source Subtype",CurrentWarehouseRequest."Source Subtype");
+        IF PickRqstLine.FINDSET(FALSE) THEN BEGIN
+          REPEAT
+            PickRqstHeaderTmp.RESET;
+            IF NOT PickRqstHeaderTmp.GET(PickRqstLine."Pick Request No.") THEN BEGIN
+              PickRqstHeader.RESET;
+              PickRqstHeader.SETRANGE("Pick Request No.",PickRqstLine."Pick Request No.");
+              IF PickRqstHeader.FIND('-') THEN BEGIN
+                PickRqstHeader.VALIDATE("Assigned User ID",AssignedID);
+                PickRqstHeader.MODIFY;
+
+                PickRqstHeaderTmp.INIT;
+                PickRqstHeaderTmp."Pick Request No." := PickRqstHeader."Pick Request No.";
+                PickRqstHeaderTmp.INSERT;
+              END;
+            END;
+          UNTIL PickRqstLine.NEXT = 0;
+        END;
+      END;
+
+      PickRqstHeaderTmp.RESET;
+      PickRqstHeaderTmp.DELETEALL;
+    END;
+
+    [EventSubscriber(Codeunit,14002801,OnBeforePostWhseProcessing)]
+    LOCAL PROCEDURE "RFMgt-OnBeforePostWhseProcessing"@1240020007(LocationCode@1240020000 : Code[10];SourceNo@1240020001 : Code[20];SourceType@1240020002 : Integer;SourceSubtype@1240020003 : Integer);
+    BEGIN
+      // <CU14002801> RF Management - OnBeforePostWhseProcessingEvent
+      PostWhsePickRqstProcessing(LocationCode,SourceNo,SourceType,SourceSubtype);
+    END;
+
+    [EventSubscriber(Codeunit,14002801,OnAfterPostWhseProcessing)]
+    LOCAL PROCEDURE "RFMgt-OnAfterPostWhseProcessing"@1240020045(LocationCode@1240020000 : Code[10];SourceNo@1240020001 : Code[20];SourceType@1240020002 : Integer;SourceSubtype@1240020003 : Integer);
+    BEGIN
+      // <CU14002801> RF Management - OnAfterPostWhseProcessingEvent
+    END;
+
+    [EventSubscriber(Codeunit,14002801,PostSalesShptWhseProcessing)]
+    LOCAL PROCEDURE "RFMgt-PostSalesShptWhseProcessing"@1240020020(VAR SalesHeader@1240020000 : Record 36;VAR SalesShipmentHeader@1240020001 : Record 110;VAR LocationCode@1240020002 : Code[10]);
+    VAR
+      OWRLocationSetup@1240020003 : Record 14099030;
+    BEGIN
+      // <CU14002801> RF Management - PostSalesShptWhseProcessingEvent
+      IF OWRLocationSetup.GET(LocationCode) THEN
+        IF (NOT OWRLocationSetup."Use Pick Requests") THEN
+          EXIT;
+
+      UpdateSalesOrderPickRqstLines(SalesHeader,SalesShipmentHeader,LocationCode);
+    END;
+
+    [EventSubscriber(Codeunit,14002801,PostPurchShptWhseProcessing)]
+    LOCAL PROCEDURE "RFMgt-PostPurchShptWhseProcessing"@1240020004(VAR PurchHeader@1240020000 : Record 38;VAR ReturnShptHeader@1240020001 : Record 6650;VAR LocationCode@1240020002 : Code[10]);
+    VAR
+      OWRLocationSetup@1240020003 : Record 14099030;
+    BEGIN
+      // <CU14002801> RF Management - PostPurchShptWhseProcessingEvent
+      IF OWRLocationSetup.GET(LocationCode) THEN
+        IF (NOT OWRLocationSetup."Use Pick Requests") THEN
+          EXIT;
+
+      UpdatePurchOrderPickRqstLines(PurchHeader,ReturnShptHeader,LocationCode);
+    END;
+
+    [EventSubscriber(Codeunit,14002801,PostTransShptWhseProcessing)]
+    LOCAL PROCEDURE "RFMgt-PostTransShptWhseProcessing"@1240020016(VAR TransferHeader@1240020000 : Record 5740;VAR LocationCode@1240020001 : Code[10]);
+    VAR
+      OWRLocationSetup@1240020002 : Record 14099030;
+    BEGIN
+      // <CU14002801> RF Management - PostTransShptWhseProcessingEvent
+      IF OWRLocationSetup.GET(LocationCode) THEN
+        IF (NOT OWRLocationSetup."Use Pick Requests") THEN
+          EXIT;
+
+      UpdateTransOrderPickRqstLines(TransferHeader,LocationCode);
+    END;
+
+    [EventSubscriber(Page,14002805,OnAfterActionEvent,"Show Pick")]
+    LOCAL PROCEDURE "OWRPage-OnAfterActionEvent-ShowPick"@1240020013(VAR Rec@1240020000 : Record 5765);
+    VAR
+      PickRqstHeader@1240020002 : Record 14099020;
+      PickRqstLine@1240020001 : Record 14099021;
+      ATOLink@1240020003 : Record 904;
+      SalesLine@1240020004 : Record 37;
+    BEGIN
+      // <P14002805 - Show Pick Action> Outbound Warehouse Request Page - OnAfterActionEvent
+      ShowPickRqst(Rec);
+    END;
+
+    [EventSubscriber(Page,14002805,OnAfterActionEvent,"Reg. Pick Request Lines")]
+    LOCAL PROCEDURE "OWRPage-OnAfterActionEvent-RegPickRqstLines"@1240020053(VAR Rec@1240020000 : Record 5765);
+    VAR
+      RegPickRqstHeader@1240020004 : Record 14099022;
+      RegPickRqstLine@1240020003 : Record 14099023;
+    BEGIN
+      // <P14002805 - Reg. Pick Request Lines Action> Outbound Warehouse Request Page - OnAfterActionEvent
+      ShowRegPickRqstLines(Rec);
+    END;
+
+    [EventSubscriber(Page,14002867,OnAfterActionEvent,"Show Pick")]
+    LOCAL PROCEDURE "OWRSimplePage-OnAfterActionEvent-ShowPick"@1240020002(VAR Rec@1240020000 : Record 5765);
+    VAR
+      PickRqstHeader@1240020004 : Record 14099020;
+      PickRqstLine@1240020003 : Record 14099021;
+      ATOLink@1240020002 : Record 904;
+      SalesLine@1240020001 : Record 37;
+    BEGIN
+      // <P14002867 - Show Pick Action> Outbound Whse. Req. Simple Page - OnAfterActionEvent
+      ShowPickRqst(Rec);
+    END;
+
+    [EventSubscriber(Page,14002867,OnAfterActionEvent,"Reg. Pick Request Lines")]
+    LOCAL PROCEDURE "OWRSimplePage-OnAfterActionEvent-RegPickRqstLines"@1240020003(VAR Rec@1240020000 : Record 5765);
+    VAR
+      RegPickRqstHeader@1240020002 : Record 14099022;
+      RegPickRqstLine@1240020001 : Record 14099023;
+    BEGIN
+      // <P14002867 - Reg. Pick Request Lines Action> Outbound Whse. Req. Simple Page - OnAfterActionEvent
+      ShowRegPickRqstLines(Rec);
+    END;
+
+    [EventSubscriber(Page,14099027,OnAfterActionEvent,"Show Registered Document")]
+    [External]
+    PROCEDURE "RegPickRqstLines-OnAfterActionEvent-ShowRegisteredDoc"@1240020054(VAR Rec@1240020000 : Record 14099023);
+    VAR
+      RegPickRqstHeader@1240020001 : Record 14099022;
+    BEGIN
+      // <P14099027 - Show Registered Document Action> Reg. Pick Rqst. Lines - OnAfterActionEvent
+      WITH Rec DO BEGIN
+        IF CheckIfCreatePickRqst("Location Code") THEN BEGIN
+          RegPickRqstHeader.RESET;
+          IF RegPickRqstHeader.GET("Pick Request No.") THEN
+            PAGE.RUNMODAL(PAGE::"Reg. Pick Request Header",RegPickRqstHeader);
+        END;
+      END;
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE DeletePickRqstEvent@1240020017(PickRqstNo@1240020000 : Code[20];LocationCode@1240020001 : Code[10];SourceNo@1240020002 : Code[20];SourceType@1240020003 : Integer;SourceSubType@1240020004 : Integer;VAR CustomDeletionProcess@1240020005 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE PrintCustomPickRqstEvent@1240020005(VAR PickRqstHeader@1240020001 : Record 14099020;ShowUseRequest@1240020000 : Boolean;VAR CustomPrintComplete@1240020002 : Boolean);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnAfterCreatePickRqstEvent@1240020021(PickRqstNo@1240020000 : Code[20]);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnBeforeInsertOrderPickRqstLines@1240020024(VAR PickRqstLineTmp@1240020000 : TEMPORARY Record 14099021;PickRqstNo@1240020001 : Code[20]);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnAfterInsertOrderPickRqstLines@1240020025(PickRqstNo@1240020000 : Code[20]);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

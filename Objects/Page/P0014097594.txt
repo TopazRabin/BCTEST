@@ -1,0 +1,343 @@
+OBJECT Page 14097594 Surplus Calculation Review
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    Editable=No;
+    SourceTable=Table14000555;
+    PageType=List;
+    CardPageID=Procurement Unit Card;
+    OnOpenPage=BEGIN
+                 InvMgtSetup.GET;
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       //LTHDays := UBP.CalcLeadTimeDays(Rec);
+                       DateToUse := UBP.GetLeadTimeHoriz(Rec);
+                       Location.GET(Rec."Location Code");
+                       CASE Rec."Replenishment Source Type" OF
+                         Rec."Replenishment Source Type"::Location: SurplusDays := Location."Loc. Surplus Calc. Add Days"
+                         ELSE BEGIN
+                           SurplusDays := Location."Vend. Surplus Calc. Add Days";
+                         END;
+                       END;
+                       SurplusDate := CALCDATE('<+' + FORMAT(SurplusDays) + 'D>', DateToUse);
+
+                       IF InvMgtSetup."Calculate Excess Inventory" THEN
+                         ExcessDate := GetExcessDate(Rec, SurplusDate);
+
+                       ExcessDiff := FALSE;
+                       SurplusDiff := FALSE;
+                       ExcessDaysDiff := 0;
+                       SurplusDaysDiff := 0;
+                       SurpInvValue.SETRANGE("Location Code", Rec."Location Code");
+                       SurpInvValue.SETRANGE("Item No.", Rec."Item No.");
+                       SurpInvValue.SETRANGE("Variant Code", Rec."Variant Code");
+                       IF SurpInvValue.FINDFIRST THEN BEGIN
+                         IF SurplusDate <> SurpInvValue."Surplus Date" THEN BEGIN
+                           SurplusDiff := TRUE;
+                           IF SurpInvValue."Surplus Date" <> 0D THEN
+                             SurplusDaysDiff := SurpInvValue."Surplus Date" - SurplusDate;
+                         END;
+
+                         IF InvMgtSetup."Calculate Excess Inventory" THEN BEGIN
+                           IF ExcessDate <> SurpInvValue."Excess Date" THEN BEGIN
+                             ExcessDiff := TRUE;
+                             IF SurpInvValue."Excess Date" <> 0D THEN
+                               ExcessDaysDiff := SurpInvValue."Excess Date" - ExcessDate;
+                           END;
+                         END;
+                       END;
+
+                       SurpInvValue.CALCFIELDS("Outstanding Surplus Qty (Base)");
+                       IF SurpInvValue."Outstanding Surplus Qty (Base)" > SurpInvValue."On Hand Qty. (Base)" THEN
+                           SurplusDiff := TRUE;
+                     END;
+
+    OnAfterGetCurrRecord=BEGIN
+                           ExcessDays := InvMgtSetup."Default Excess Calc. Days";
+                         END;
+
+    ActionList=ACTIONS
+    {
+      { 1240020002;  ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 1240020026;1 ;Action    ;
+                      Name=ReCalculateSurplus;
+                      CaptionML=ENU=Calculate for Procurement Unit;
+                      Image=AdjustVATExemption;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 CalcSurplus@1240020000 : Codeunit 14000577;
+                               BEGIN
+                                 CalcSurplus.ByPUC(Rec);
+
+                                 CurrPage.UPDATE(FALSE);
+                               END;
+                                }
+      { 1240020016;1 ;Action    ;
+                      CaptionML=ENU=Location Inventory Roll Up;
+                      Image=BOMVersions;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 UBP.DisplayLocInvRollup(Rec);
+                               END;
+                                }
+      { 1240020010;1 ;Action    ;
+                      ShortCutKey=Shift+F11;
+                      CaptionML=ENU=View &Forecast;
+                      Image=CalculateRegenerativePlan;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 ForecastView@1240020000 : Page 14002661;
+                               BEGIN
+                                 CLEAR(ForecastView);
+                                 ForecastView.SetProcUnitandSourceNo(Rec,'');
+                                 ForecastView.RUN;
+                               END;
+                                }
+      { 1240020029;1 ;ActionGroup;
+                      CaptionML=ENU=Surplus }
+      { 1240020027;2 ;Action    ;
+                      CaptionML=ENU=(Surplus) Location Inventory Roll Up;
+                      Image=BOMVersions;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 LocInvRollUpRTC@1240020000 : Page 14097475;
+                                 HorizonDate@1240020001 : Date;
+                               BEGIN
+                                 CLEAR(LocInvRollUpRTC);
+                                 LocInvRollUpRTC.SetUseSurplusFactor(TRUE);
+                                 SurpInvValue.SETRANGE("Location Code", Rec."Location Code");
+                                 SurpInvValue.SETRANGE("Item No.", Rec."Item No.");
+                                 SurpInvValue.SETRANGE("Variant Code", Rec."Variant Code");
+                                 IF SurpInvValue.FINDFIRST THEN
+                                   HorizonDate := SurpInvValue."Surplus Date";
+                                 IF HorizonDate > 0D THEN
+                                   LocInvRollUpRTC.LoadRollUPLines(Rec, HorizonDate)
+                                 ELSE
+                                   LocInvRollUpRTC.LoadProcUnit(Rec);
+                                 LocInvRollUpRTC.RUN;
+                               END;
+                                }
+      { 1240020031;2 ;Action    ;
+                      ShortCutKey=Shift+F11;
+                      CaptionML=ENU=(Surplus) View &Forecast;
+                      Image=CalculateRegenerativePlan;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 ForecastView@1240020000 : Page 14002661;
+                               BEGIN
+                                 CLEAR(ForecastView);
+                                 ForecastView.SetUseSurplusFactor(TRUE);
+                                 ForecastView.SetProcUnitandSourceNo(Rec,'');
+                                 ForecastView.RUN;
+                               END;
+                                }
+      { 1240020030;1 ;ActionGroup;
+                      CaptionML=ENU=Excess }
+      { 1240020028;2 ;Action    ;
+                      CaptionML=ENU=(Excess) Location Inventory Roll Up;
+                      Image=BOMVersions;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 LocInvRollUpRTC@1240020000 : Page 14097475;
+                                 HorizonDate@1240020001 : Date;
+                               BEGIN
+                                 CLEAR(LocInvRollUpRTC);
+                                 LocInvRollUpRTC.SetUseExcessFactor(TRUE);
+                                 SurpInvValue.SETRANGE("Location Code", Rec."Location Code");
+                                 SurpInvValue.SETRANGE("Item No.", Rec."Item No.");
+                                 SurpInvValue.SETRANGE("Variant Code", Rec."Variant Code");
+                                 IF SurpInvValue.FINDFIRST THEN
+                                   HorizonDate := SurpInvValue."Excess Date";
+                                 IF HorizonDate > 0D THEN
+                                   LocInvRollUpRTC.LoadRollUPLines(Rec, HorizonDate)
+                                 ELSE
+                                   LocInvRollUpRTC.LoadProcUnit(Rec);
+                                 LocInvRollUpRTC.RUN;
+                               END;
+                                }
+      { 1240020032;2 ;Action    ;
+                      ShortCutKey=Shift+F11;
+                      CaptionML=ENU=(Excess) View &Forecast;
+                      Image=CalculateRegenerativePlan;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 ForecastView@1240020000 : Page 14002661;
+                               BEGIN
+                                 CLEAR(ForecastView);
+                                 ForecastView.SetUseExcessFactor(TRUE);
+                                 ForecastView.SetProcUnitandSourceNo(Rec,'');
+                                 ForecastView.RUN;
+                               END;
+                                }
+      { 1240020003;1 ;Action    ;
+                      CaptionML=ENU=&Surplus List;
+                      RunObject=Page 14000538;
+                      RunPageView=SORTING(Item No.,Variant Code,Surplus Available)
+                                  ORDER(Ascending);
+                      RunPageLink=Item No.=FIELD(Item No.),
+                                  Location Code=FIELD(Location Code),
+                                  Variant Code=FIELD(Variant Code);
+                      Image=ResourceCosts;
+                      PromotedCategory=Process }
+      { 1240020013;  ;ActionContainer;
+                      ActionContainerType=RelatedInformation }
+      { 1240020014;1 ;Action    ;
+                      Name=[Location ] }
+      { 1240020015;1 ;Action    ;
+                      Name=Inventory Management Setup }
+    }
+  }
+  CONTROLS
+  {
+    { 1240020000;0;Container;
+                ContainerType=ContentArea }
+
+    { 1240020001;1;Group  ;
+                Name=General;
+                GroupType=Repeater }
+
+    { 1240020005;2;Field  ;
+                SourceExpr="Location Code" }
+
+    { 1240020006;2;Field  ;
+                SourceExpr="Item No." }
+
+    { 1240020007;2;Field  ;
+                SourceExpr="Variant Code" }
+
+    { 1240020004;2;Field  ;
+                CaptionML=ENU=Horizon;
+                SourceExpr=DateToUse }
+
+    { 1240020018;2;Field  ;
+                SourceExpr="Nonstock Unit" }
+
+    { 1240020017;2;Field  ;
+                SourceExpr="Surplus Available" }
+
+    { 1240020008;2;Field  ;
+                CaptionML=ENU=Surplus Starts in;
+                SourceExpr=SurplusDays }
+
+    { 1240020009;2;Field  ;
+                CaptionML=ENU=Surplus Date;
+                SourceExpr=SurplusDate }
+
+    { 1240020023;2;Field  ;
+                CaptionML=ENU=Surplus Date Different;
+                SourceExpr=SurplusDiff }
+
+    { 1240020024;2;Field  ;
+                CaptionML=ENU=Surplus Days Diff;
+                BlankZero=Yes;
+                SourceExpr=SurplusDaysDiff }
+
+    { 1240020011;2;Field  ;
+                Name=ExcessDays;
+                CaptionML=ENU=Excess Starts in;
+                SourceExpr=ExcessDays }
+
+    { 1240020012;2;Field  ;
+                CaptionML=ENU=Excess Date;
+                SourceExpr=ExcessDate }
+
+    { 1240020022;2;Field  ;
+                CaptionML=ENU=Excess Date Different;
+                SourceExpr=ExcessDiff }
+
+    { 1240020025;2;Field  ;
+                CaptionML=ENU=Excess Days Diff;
+                BlankZero=Yes;
+                SourceExpr=ExcessDaysDiff }
+
+    { 1240020019;2;Field  ;
+                SourceExpr="Replenishment Source Type" }
+
+    { 1240020020;2;Field  ;
+                SourceExpr="Replenishment Source Code" }
+
+    { 1240020021;2;Field  ;
+                SourceExpr="Replenishment Model" }
+
+  }
+  CODE
+  {
+    VAR
+      DateToUse@1240020000 : Date;
+      LTHDays@1240020001 : Integer;
+      SurplusDays@1240020002 : Integer;
+      ExcessDays@1240020003 : Integer;
+      InvMgtSetup@1240020004 : Record 14000551;
+      Location@1240020005 : Record 14;
+      UBP@1240020007 : Codeunit 14000564;
+      SurplusDate@1240020006 : Date;
+      ExcessDate@1240020008 : Date;
+      SurpInvValue@1240020009 : Record 14000584;
+      ExcessDiff@1240020010 : Boolean;
+      ExcessDaysDiff@1240020013 : Integer;
+      SurplusDiff@1240020011 : Boolean;
+      SurplusDaysDiff@1240020014 : Integer;
+      Item@1240020012 : Record 27;
+
+    PROCEDURE GetExcessDate@1240030005(VAR CurrProcUnit@1240030000 : Record 14000555;CurrLTHDate@1240030004 : Date) ExcessCalcDate : Date;
+    VAR
+      InvPostGroup@1240030001 : Record 94;
+      ItemCategory@1240030002 : Record 5722;
+      locExcessDays@1240030003 : Integer;
+    BEGIN
+      locExcessDays := InvMgtSetup."Default Excess Calc. Days";
+      IF CurrProcUnit."Item No." <> Item."No." THEN
+        Item.GET(CurrProcUnit."Item No.");
+      CASE InvMgtSetup."Excess Definition" OF
+        DATABASE::"Inventory Posting Group":
+          BEGIN
+            IF Item."Inventory Posting Group" <> '' THEN
+              IF InvPostGroup.Code <> Item."Inventory Posting Group" THEN
+                IF InvPostGroup.GET(Item."Inventory Posting Group") THEN
+                  IF InvPostGroup."Excess Calc. Days" <> 0 THEN
+                    locExcessDays := InvPostGroup."Excess Calc. Days"
+                  ELSE BEGIN
+                    locExcessDays := CurrLTHDate - WORKDATE;
+                    locExcessDays :=
+                      locExcessDays + ROUND(locExcessDays * InvPostGroup."Excess Calc. Percent",1.0);
+                  END;
+          END;
+        DATABASE::"Item Category":
+          BEGIN
+            IF Item."Item Category Code" <> '' THEN
+              IF ItemCategory.Code <> Item."Item Category Code" THEN
+                IF ItemCategory.GET(Item."Item Category Code") THEN
+                  IF ItemCategory."Excess Calc. Days" <> 0 THEN
+                    locExcessDays := ItemCategory."Excess Calc. Days"
+                  ELSE BEGIN
+                    locExcessDays := CurrLTHDate - WORKDATE;
+                    locExcessDays :=
+                      locExcessDays + ROUND(locExcessDays * ItemCategory."Excess Calc. Percent",1.0);
+                  END;
+          END;
+      END;
+      CASE InvMgtSetup."Excess Calc. Method" OF
+        InvMgtSetup."Excess Calc. Method"::"Workdate + Days":
+            ExcessCalcDate := WORKDATE + locExcessDays;
+        InvMgtSetup."Excess Calc. Method"::"LTH Date + Days":
+            ExcessCalcDate := CurrLTHDate + locExcessDays;
+      END;
+      IF ExcessCalcDate = 0D THEN
+        ExcessCalcDate := WORKDATE;
+      ExcessDays := locExcessDays;
+      EXIT(ExcessCalcDate);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

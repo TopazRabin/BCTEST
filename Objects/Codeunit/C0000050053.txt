@@ -1,0 +1,433 @@
+OBJECT Codeunit 50053 AR Traffic Invoice
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/25/21;
+    Time=[ 9:35:43 AM];
+    Modified=Yes;
+    Version List=TPZ000.00.00,002;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            ADOConnection@1000000000 : Automation "{EF53050B-882E-4776-B643-EDA472E8E3F2} 2.7:{00000514-0000-0010-8000-00AA006D2EA4}:'Microsoft ActiveX Data Objects 2.7 Library'.Connection";
+            ADOSetRec@1000000001 : Automation "{EF53050B-882E-4776-B643-EDA472E8E3F2} 2.7:{00000535-0000-0010-8000-00AA006D2EA4}:'Microsoft ActiveX Data Objects 2.7 Library'.Recordset";
+            ARTraffInv@1000000003 : Record 50035;
+            StrPosition@1000000004 : Integer;
+            ReturnPosition@1000000002 : Integer;
+          BEGIN
+            // <TPZ2288>
+            ARTraffInv.RESET;
+            ARTraffInv.SETRANGE(ARTraffInv."Invoice Generated",FALSE);
+            IF ARTraffInv.FINDSET THEN REPEAT
+              StrPosition := STRPOS(ARTrafficInvNos, ARTraffInv."AR traffic Invoice No");
+              IF ARTrafficInvNos <> '' THEN
+                IF StrPosition = 0 THEN
+                  ARTrafficInvNos := ARTrafficInvNos + ',' + ARTraffInv."AR traffic Invoice No";
+              IF ARTrafficInvNos = '' THEN
+                ARTrafficInvNos := ARTraffInv."AR traffic Invoice No";
+            UNTIL ARTraffInv.NEXT = 0;
+            IF ARTrafficInvNos <> '' THEN REPEAT
+              ReturnPosition := STRPOS(ARTrafficInvNos,',');
+              IF ReturnPosition <> 0 THEN
+                UpdateARTraffic(COPYSTR(ARTrafficInvNos,1,ReturnPosition - 1))
+              ELSE
+                UpdateARTraffic(COPYSTR(ARTrafficInvNos,1));
+              IF ReturnPosition <> 0 THEN
+                ARTrafficInvNos := DELSTR(ARTrafficInvNos,1,ReturnPosition)
+              ELSE
+                ARTrafficInvNos := DELSTR(ARTrafficInvNos,1);
+            UNTIL ARTrafficInvNos = '';
+            // </TPZ2288>
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ContainerNo@1000000007 : Code[20];
+      VendorDocNo@1000000008 : Code[20];
+      VendorDocDate@1000000009 : Date;
+      NotReceived@1000000011 : Boolean;
+      ChargeItemAmt@1000000012 : ARRAY [7] OF Decimal;
+      LineNo@1000000014 : Integer;
+      ItemChargeT@1000000015 : Record 5805;
+      UnitCost@1000000016 : Decimal;
+      ItemChargeNew@1000000017 : Record 5805;
+      ItemChargeAssgntPurch2@1000000018 : Record 5805;
+      ItemChPurch@1000000019 : Codeunit 5805;
+      ARTrafficInv@1000000000 : Record 50035;
+      TopazPurchInv@1000000001 : Code[20];
+      text001@1000000002 : TextConst 'ENU=""""';
+      TextPos@1000000003 : Integer;
+      LocCode@1000000004 : Code[10];
+      DivCode@1000000005 : Code[10];
+      Dim1@1000000006 : Code[10];
+      Loc@1000000010 : Code[10];
+      NoContLine@1000000013 : Boolean;
+      ReleasePurchDoc@1000000020 : Codeunit 415;
+      GLS@1000000021 : Record 98;
+      Text50000@1000000022 : TextConst 'ENU=No Purchase Order Lines found.';
+      Text50001@1000000023 : TextConst 'ENU=Not all Purchase Order Lines were received.';
+      Text50002@1000000024 : TextConst 'ENU=Container No is blank.';
+      Text50003@1000000025 : TextConst 'ENU=Purchase Invoice with the Vendor Invoice No. %1 already exist.';
+      CreatedPONo@1000000026 : Code[20];
+      ARTrafficInv2@1000000027 : Record 50035;
+      ARTrafficInvNos@1000000028 : Text;
+
+    LOCAL PROCEDURE UpdatePurchaseRcpt@1000000000();
+    VAR
+      PurchRcptLine@1000000000 : Record 121;
+    BEGIN
+       PurchRcptLine.RESET;
+       PurchRcptLine.SETRANGE("Inbound Container Number",ARTrafficInv."Inbound Container Number");          // SHAIL
+       //For testing only PurchRcptLine.SETRANGE("Package Tracking No.",ARTrafficInv."Inbound Container Number");// for testing only
+       PurchRcptLine.SETRANGE("Invoice Generated",FALSE);
+       IF PurchRcptLine.FINDSET THEN
+           REPEAT
+              PurchRcptLine."Vendor Doc No." :=  VendorDocNo;
+              IF EVALUATE(PurchRcptLine."Vendor Doc Date", FORMAT(ARTrafficInv."Vendor Doc Date")) THEN
+                  PurchRcptLine."Vendor Doc Date" := ARTrafficInv."Vendor Doc Date";
+              IF PurchRcptLine."Inbound Container Number" = '' THEN
+                 PurchRcptLine."Inbound Container Number" := PurchRcptLine."Package Tracking No.";
+
+              PurchRcptLine.MODIFY;
+              Dim1 := PurchRcptLine."Shortcut Dimension 1 Code";
+              Loc := PurchRcptLine."Location Code";
+             UNTIL PurchRcptLine.NEXT =0;
+    END;
+
+    LOCAL PROCEDURE UpdatePurchasePo@1000000001();
+    VAR
+      PurchLine@1000000000 : Record 39;
+    BEGIN
+      NotReceived:=FALSE;
+      NoContLine :=FALSE;
+      PurchLine.RESET;
+      PurchLine.SETRANGE("Inbound Container Number",ARTrafficInv."Inbound Container Number");       // SHAIL
+      //For testing only PurchLine.SETRANGE("Package Tracking No.",ARTrafficInv."Inbound Container Number");// for testing only
+      PurchLine.SETRANGE("Invoice Generated",FALSE);
+      IF NOT PurchLine.FINDSET THEN
+        NoContLine :=TRUE
+        ELSE
+          REPEAT
+            PurchLine."Vendor Doc No." := VendorDocNo;
+            IF EVALUATE(PurchLine."Vendor Doc Date", FORMAT(ARTrafficInv."Vendor Doc Date")) THEN
+              PurchLine."Vendor Doc Date" := ARTrafficInv."Vendor Doc Date";
+            IF PurchLine."Inbound Container Number" = '' THEN
+              PurchLine."Inbound Container Number" := PurchLine."Package Tracking No.";
+            PurchLine.MODIFY;
+            IF PurchLine."Quantity Received" - PurchLine.Quantity <> 0 THEN
+              BEGIN
+                IF NotReceived = FALSE THEN
+                  NotReceived := TRUE;
+              END;
+            Dim1 := PurchLine."Shortcut Dimension 1 Code";
+            Loc := PurchLine."Location Code";
+          UNTIL PurchLine.NEXT =0;
+    END;
+
+    LOCAL PROCEDURE CreatePI@1000000003();
+    VAR
+      PHdr@1000000000 : Record 38;
+      PLine@1000000001 : Record 39;
+      i@1000000002 : Integer;
+      ItemCharge@1000000003 : Record 5800;
+      PRctLine@1000000004 : Record 121;
+      ItemChPurch@1000000005 : Codeunit 5805;
+      NextLineNo@1000000007 : Integer;
+      PurchHeader@1000000006 : Record 38;
+      VendLedgEntry@1000000008 : Record 25;
+      PurchLine@1000000009 : Record 39;
+      PHeader@1000000010 : Record 38;
+      PurchCommentLine@1000000011 : Record 43;
+      Vendor@1000000012 : Record 23;
+      Location@1000000013 : Record 14;
+      PurchInvHeader@1000000014 : Record 122;
+      PurchInvHeader2@1000000015 : Record 122;
+    BEGIN
+      // Create New Purchase Invoice
+      GLS.RESET;
+      GLS.GET;
+      IF CreatedPONo = '' THEN BEGIN
+        // <TPZ2288>
+        // Check for invoice already created but not posted.
+       PurchHeader.RESET;//EB
+        PurchHeader.SETRANGE("Document Type",PurchHeader."Document Type"::Invoice);
+        PurchHeader.SETRANGE("Vendor Invoice No.",ARTrafficInv."AR traffic Invoice No");
+        IF PurchHeader.FINDFIRST THEN BEGIN
+          ARTrafficInv."Error Message" := TRUE;
+          ARTrafficInv."Error Message Comments" := Text50003;//001 TPZ3129 - Uncommented
+          ARTrafficInv."Invoice Generated" := TRUE;
+          ARTrafficInv."Duplicate Invoice" := TRUE;
+          ARTrafficInv.MODIFY;
+          COMMIT;
+          EXIT;
+        END;
+        //>>001 TPZ3129 - For Posted Orders
+        {
+        PurchInvHeader.RESET;
+        PurchInvHeader.SETRANGE("Vendor Invoice No.",ARTrafficInv."AR traffic Invoice No");
+        IF PurchInvHeader.FINDFIRST THEN BEGIN
+          ARTrafficInv."Error Message" := TRUE;
+          ARTrafficInv."Error Message Comments" := Text50003;
+          ARTrafficInv."Invoice Generated" := TRUE;
+          ARTrafficInv."Duplicate Invoice" := TRUE;
+          ARTrafficInv.MODIFY;
+          COMMIT;
+          EXIT;
+        END;
+        }
+        //>>001 TPZ3129 - For Posted Orders
+        PurchInvHeader.RESET;
+        PurchInvHeader.SETRANGE("Vendor Invoice No.",ARTrafficInv."Vendor Doc No.");
+        IF PurchInvHeader.FINDFIRST THEN BEGIN
+          ARTrafficInv."Error Message" := TRUE;
+          ARTrafficInv."Error Message Comments" := Text50003;
+          ARTrafficInv."Invoice Generated" := TRUE;
+          ARTrafficInv."Duplicate Invoice" := TRUE;
+          ARTrafficInv.MODIFY;
+          COMMIT;
+          EXIT;
+        END;
+
+        //<<001 TPZ3129
+
+
+        // Check that invoice has been created and posted.
+        VendLedgEntry.RESET;
+        VendLedgEntry.SETCURRENTKEY("External Document No.");
+        VendLedgEntry.SETRANGE("Document Type",2);
+        VendLedgEntry.SETRANGE("External Document No.",ARTrafficInv."AR traffic Invoice No");
+        VendLedgEntry.SETRANGE("Vendor No.",GLS."AR Traffic Vendor No.");
+        VendLedgEntry.SETRANGE(Reversed,FALSE);
+        IF VendLedgEntry.FINDFIRST THEN BEGIN
+          ARTrafficInv."Error Message" := TRUE;
+          ARTrafficInv."Invoice Generated" := TRUE;
+          ARTrafficInv."Duplicate Invoice" := TRUE;
+          ARTrafficInv.MODIFY;
+          COMMIT;
+          EXIT;
+        END;
+        // </TPZ2288>
+
+        PHdr.INIT;
+        PHdr."Document Type" := PHdr."Document Type"::Invoice;
+        PHdr."No.":='';
+        PHdr."No. Printed" := 0;
+        PHdr.Status := PHdr.Status::Open;
+        PHdr.VALIDATE("Buy-from Vendor No.",GLS."AR Traffic Vendor No.");
+        PHdr.VALIDATE("Posting Date",WORKDATE);
+        PHdr.INSERT(TRUE);
+        //PHdr.VALIDATE("Vendor Invoice No.", VendorDocNo);
+        PHdr.VALIDATE("Vendor Invoice No.", ARTrafficInv."AR traffic Invoice No");
+        PHdr.VALIDATE("Document Date",ARTrafficInv."Vendor Doc Date");
+        PHdr.VALIDATE("Shortcut Dimension 1 Code",Dim1);
+        // <TPZ2288>
+        Vendor.GET(GLS."AR Traffic Vendor No.");
+        //PHdr.VALIDATE("Location Code",Loc);
+        PHdr.VALIDATE("Location Code",Vendor."Location Code");
+        // </TPZ2288>
+        PHdr.MODIFY;
+        LineNo:=0;
+        TopazPurchInv:= PHdr."No.";
+        CreatedPONo := PHdr."No.";
+      END ELSE
+        TopazPurchInv := CreatedPONo;
+
+      PurchLine.RESET;
+      PurchLine.SETRANGE("Document No.",CreatedPONo);
+      IF PurchLine.FINDLAST THEN
+        LineNo := PurchLine."Line No.";
+      //create Purchase Lines
+        FOR i := 1 TO 7 DO
+          BEGIN
+            LineNo:=LineNo+10000;
+            IF ChargeItemAmt[i] <> 0 THEN
+              BEGIN
+
+                PLine.INIT;
+                PLine.VALIDATE("Document Type",PLine."Document Type"::Invoice);
+                PLine.VALIDATE("Document No.",CreatedPONo);
+                PLine."Line No." :=LineNo;
+                // <TPZ2288>
+                //PLine."Location Code" := PHdr."Location Code";
+                // </TPZ2288>
+                PLine.INSERT(TRUE);
+                PLine.Type := PLine.Type::"Charge (Item)";
+
+                ItemCharge.RESET;
+                ItemCharge.SETRANGE("AR TRafic Index",i);
+                IF ItemCharge.FINDFIRST THEN
+                  BEGIN
+
+                      PLine.VALIDATE("No.",ItemCharge."No.");
+
+                      PLine.VALIDATE(Quantity, 1);
+                      PLine.VALIDATE("Direct Unit Cost",ChargeItemAmt[i]);
+
+                      // <TPZ2288>
+                      Location.RESET;
+                      Location.GET(ARTrafficInv."Location Code");
+                      //>>002 TPZ3330
+                      //IF Location."Directed Put-away and Pick" THEN
+                      IF (Location."Directed Put-away and Pick") AND (Location.Type= Location.Type::"Distribution Center") THEN
+                      //<<002 TPZ3330
+                        PLine.VALIDATE("Shortcut Dimension 2 Code",ARTrafficInv."Location Code")   //EB
+                      ELSE
+                        PLine.VALIDATE("Shortcut Dimension 2 Code",'99');
+                      // </TPZ2288>
+                      PLine."Inbound Container Number" := ARTrafficInv."Inbound Container Number";
+                      // <TPZ2288>
+                      PurchCommentLine.INIT;
+                      PurchCommentLine."Document Type" := PLine."Document Type";
+                      PurchCommentLine."No." := PLine."Document No.";
+                      PurchCommentLine."Line No." := PLine."Line No.";
+                      PurchCommentLine."Document Line No." := PLine."Line No.";
+                      PurchCommentLine.INSERT(TRUE);
+                      PurchCommentLine.Date := WORKDATE;
+                      PurchCommentLine.Comment := VendorDocNo ;
+                      PurchCommentLine.MODIFY(TRUE);
+                      // </TPZ2288>
+                      PLine.MODIFY;
+
+
+                     // Assign PrchRcpts
+                       NextLineNo := 0;
+                       PRctLine.RESET;
+                       PRctLine.SETRANGE("Inbound Container Number",ARTrafficInv."Inbound Container Number");       //110118
+                       PRctLine.SETRANGE(Type,PRctLine.Type::Item);
+                       PRctLine.SETFILTER(Quantity,'<>0');
+                       IF PRctLine.FINDSET THEN
+                          REPEAT
+                            NextLineNo := NextLineNo +10000;
+
+
+                              ItemChargeAssgntPurch2.INIT;
+                              ItemChargeAssgntPurch2."Document Type" := PLine."Document Type";
+                              ItemChargeAssgntPurch2."Document No." := PLine."Document No.";
+                              ItemChargeAssgntPurch2."Document Line No." := PLine."Line No.";
+                              ItemChargeAssgntPurch2."Line No." := NextLineNo;
+                              ItemChargeAssgntPurch2."Item Charge No." := PLine."No.";
+                              ItemChargeAssgntPurch2."Applies-to Doc. Type" := ItemChargeAssgntPurch2."Applies-to Doc. Type"::Receipt;
+                              ItemChargeAssgntPurch2."Applies-to Doc. No." := PRctLine."Document No.";
+                              ItemChargeAssgntPurch2."Applies-to Doc. Line No." :=  PRctLine."Line No.";
+                              ItemChargeAssgntPurch2."Item No." := PRctLine."No.";
+                              ItemChargeAssgntPurch2.Description := PRctLine.Description;
+                              ItemChargeAssgntPurch2."Unit Cost" := PLine."Direct Unit Cost";
+                              ItemChargeAssgntPurch2.INSERT;
+                              NextLineNo := NextLineNo +10000;
+                          UNTIL PRctLine.NEXT = 0;
+
+                      //Assigne Amounts
+                       ItemChPurch.SuggestAssgnt2(PLine,PLine.Quantity,PLine."Line Amount",2);
+
+                       END;
+             END;
+         END;
+       //ReleasePurchDoc.PerformManualRelease(PHdr);  // <TPZ2288>
+    END;
+
+    LOCAL PROCEDURE UpdatePackingNo@1000000002();
+    VAR
+      PurchRcptLine@1000000000 : Record 121;
+      PurchLine@1000000001 : Record 39;
+    BEGIN
+       PurchRcptLine.RESET;
+       PurchRcptLine.SETRANGE("Package Tracking No.", ContainerNo);// for testing only
+       PurchRcptLine.SETRANGE("Invoice Generated",FALSE);
+       IF PurchRcptLine.FINDSET THEN
+           REPEAT
+              IF PurchRcptLine."Inbound Container Number" = '' THEN
+                 PurchRcptLine."Inbound Container Number" := PurchRcptLine."Package Tracking No.";
+              PurchRcptLine.MODIFY;
+             UNTIL PurchRcptLine.NEXT =0;
+
+       PurchLine.RESET;
+       PurchLine.SETRANGE("Package Tracking No.",ContainerNo);// for testing only
+       PurchLine.SETRANGE("Invoice Generated",FALSE);
+       IF PurchLine.FINDSET THEN
+           REPEAT
+              IF PurchLine."Inbound Container Number" = '' THEN
+                 PurchLine."Inbound Container Number" := PurchLine."Package Tracking No.";
+              PurchLine.MODIFY;
+             UNTIL PurchLine.NEXT =0
+    END;
+
+    LOCAL PROCEDURE UpdateARTraffic@1000000007(TraffivInvNo@1000000001 : Text);
+    VAR
+      PHeader@1000000000 : Record 38;
+    BEGIN
+      CreatedPONo := '';
+      ARTrafficInv.RESET;
+      ARTrafficInv.SETRANGE(ARTrafficInv."Invoice Generated",FALSE);
+      ARTrafficInv.SETRANGE("AR traffic Invoice No",TraffivInvNo);
+      IF ARTrafficInv.FINDSET THEN REPEAT
+        //Update PurchaseRcpt
+        IF ARTrafficInv."Inbound Container Number" <> '' THEN BEGIN
+          UpdatePurchaseRcpt;
+          UpdatePurchasePo;
+          //TEST
+          NotReceived := FALSE;
+          IF NotReceived = FALSE THEN BEGIN
+            TopazPurchInv := '';
+            TextPos := STRPOS(ARTrafficInv."Vendor Doc No.",text001);
+            IF TextPos <> 0 THEN
+              VendorDocNo := COPYSTR(ARTrafficInv."Vendor Doc No.",2,STRLEN(ARTrafficInv."Vendor Doc No.")-1)
+            ELSE
+              VendorDocNo := ARTrafficInv."Vendor Doc No.";
+            //Assign Amounts to ChargeItemAmt[i]
+            ChargeItemAmt[1] := ARTrafficInv.Amount1;
+            ChargeItemAmt[2] := ARTrafficInv.Amount2;
+            ChargeItemAmt[3] := ARTrafficInv.Amount3;
+            ChargeItemAmt[4] := ARTrafficInv.Amount4;
+            ChargeItemAmt[5] := ARTrafficInv.Amount5;
+            ChargeItemAmt[6] := ARTrafficInv.Amount6;
+            ChargeItemAmt[7] := ARTrafficInv.Amount7;
+
+            CreatePI;
+
+            IF TopazPurchInv <> '' THEN BEGIN
+              ARTrafficInv."Invoice Generated":=TRUE;
+              ARTrafficInv."Invoice Processed Date" := TODAY;
+              ARTrafficInv."Line Status" := ARTrafficInv."Line Status"::Processed;
+              IF NoContLine = TRUE THEN BEGIN
+                ARTrafficInv."Error Message" := TRUE;
+                ARTrafficInv."Error Message Comments" := Text50000;
+              END;
+              ARTrafficInv.MODIFY;
+            END ELSE BEGIN
+              ARTrafficInv."Line Status" := ARTrafficInv."Line Status"::Skipped;
+              ARTrafficInv."Error Message" := TRUE;
+              //ARTrafficInv."Error Message Comments" := Text50001;
+              ARTrafficInv."Error Message Comments" := Text50003;
+              ARTrafficInv.MODIFY;
+            END;
+          END;
+        END ELSE BEGIN
+          ARTrafficInv."Line Status" := ARTrafficInv."Line Status"::Skipped;
+          ARTrafficInv."Error Message" := TRUE;
+          ARTrafficInv."Error Message Comments" := Text50002;
+          ARTrafficInv.MODIFY;
+        END;
+        NotReceived := FALSE;
+      UNTIL ARTrafficInv.NEXT = 0;
+
+      // <TPZ2288>
+      IF PHeader.GET(PHeader."Document Type"::Invoice,CreatedPONo) THEN BEGIN
+        ReleasePurchDoc.PerformManualRelease(PHeader);
+      END;
+      // </TPZ2288>
+    END;
+
+    BEGIN
+    {
+      072718  TPZ2288 SNAGPAL
+        New codeunit created. Recording the duplicate invoice data based on Vendor Invoice No..
+      001 TPZ3129 RPS 03162021- AR Traffic Duplicate Invoice Issue
+      002 TPZ3330 RPS 08252021 - Bypass Stocking Reps from SiteCode Validation on AR Traffic Processing.
+    }
+    END.
+  }
+}
+

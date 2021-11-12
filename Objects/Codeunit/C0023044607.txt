@@ -1,0 +1,415 @@
+OBJECT Codeunit 23044607 DSHIP Shipment Manifest Mgmt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/15/19;
+    Time=[ 3:49:07 PM];
+    Version List=DSHIP2.2.2;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      tcAlreadyManifested@1000000000 : TextConst 'ENU=A manifest that is carrier generated cannot be reopened.\ScanForm ID: %1';
+
+    PROCEDURE getShipments@1000000005(VAR precManifestHeader@1000000000 : Record 23044618);
+    VAR
+      ltrecManifestBuffer@1000000001 : TEMPORARY Record 23044620;
+      lpgShipmentManifestWorksheet@1000000004 : Page 23044636;
+      lcodManifestNo@1000000003 : Code[20];
+      lcodLocation@1000000002 : Code[20];
+    BEGIN
+      ///<FUNC>
+      //  Description: Displays the possible shipments to manifest
+      //  Called From: PAGE "DSHIP Shipment Manifest Card" (P23044633)
+      //  Side Effect: None
+      //</FUNC>
+
+      generateBuffer(ltrecManifestBuffer, precManifestHeader);
+      lpgShipmentManifestWorksheet.LOOKUPMODE(TRUE);
+      lpgShipmentManifestWorksheet.initPage(ltrecManifestBuffer);
+      IF ( lpgShipmentManifestWorksheet.RUNMODAL <> ACTION::LookupOK ) THEN
+        EXIT;
+      lpgShipmentManifestWorksheet.getSelection(ltrecManifestBuffer);
+
+      createManifestLines(ltrecManifestBuffer, precManifestHeader);
+    END;
+
+    LOCAL PROCEDURE generateBuffer@1000000001(VAR ptrecManifestBuffer@1000000000 : TEMPORARY Record 23044620;precManifestHeader@1000000010 : Record 23044618);
+    VAR
+      lrecLPHeader@1000000008 : Record 23044505;
+      lrecSalesShipHeader@1000000007 : Record 110;
+      lrecPostedWhseShipHeader@1000000006 : Record 7322;
+      lrecTransferShipHeader@1000000005 : Record 5744;
+      lrecMiscShip@1000000016 : Record 23044621;
+      lrecManifestLine@1000000009 : Record 23044619;
+      lrecSalesLine@1000000013 : Record 37;
+      lrecSalesShipmentLine@1000000015 : Record 111;
+      lrecDShipSetup@1000000014 : Record 23044600;
+      lcuWMSMgmt@1000000004 : Codeunit 7302;
+      lcodLocationCode@1000000003 : Code[20];
+      lcodShippingAgent@1000000002 : Code[20];
+      lcodShippingAgentService@1000000001 : Code[20];
+      lsLPFilter@1000000011 : Text;
+      lbFoundOrder@1000000012 : Boolean;
+      lbMiscShip@1000000017 : Boolean;
+      ldFreightCost@1000000018 : Decimal;
+    BEGIN
+      //<FUNC>
+      //  Description: Fills the buffer with appropriate LPs
+      //  Called From: Page DSHIP Manifest Worksheet (P23044636)
+      //  Side Effect: Buffer will be cleared
+      //</FUNC>
+
+      CLEAR(ptrecManifestBuffer);
+      ptrecManifestBuffer.RESET;
+      ptrecManifestBuffer.DELETEALL;
+
+      lrecManifestLine.SETRANGE("Manifest No.", precManifestHeader."No.");
+      IF ( lrecManifestLine.FINDSET(FALSE) ) THEN
+        REPEAT
+          lsLPFilter += '<>' + lrecManifestLine."License Plate No." + '&';
+        UNTIL(lrecManifestLine.NEXT=0);
+
+      IF ( lsLPFilter <> '' ) THEN BEGIN
+        lsLPFilter := COPYSTR(lsLPFilter, 1, STRLEN(lsLPFilter) - 1);
+        lrecLPHeader.SETFILTER("No.", lsLPFilter);
+      END;
+
+      //FOREACH LP HEADER
+      lrecLPHeader.SETRANGE(Status, lrecLPHeader.Status::Shipped);
+      lrecLPHeader.SETFILTER("Manifest No.", '%1', '');
+      lrecLPHeader.SETFILTER("Shipment Gross Weight", '>%1', 0);
+      lrecLPHeader.SETFILTER("Weight Unit of Measure", '<>%1', '');
+      lrecLPHeader.SETFILTER("Shipment Height", '>%1', 0);
+      lrecLPHeader.SETFILTER("Shipment Length", '>%1', 0);
+      lrecLPHeader.SETFILTER("Shipment Width", '>%1', 0);
+      lrecLPHeader.SETFILTER("Shpt. Dim. Unit of Measure", '<>%1', '');
+
+      IF ( lrecLPHeader.FINDSET(FALSE) ) THEN BEGIN
+        lrecDShipSetup.GET;
+        REPEAT
+          lbFoundOrder := FALSE;
+          lbMiscShip := FALSE;
+
+          CASE lrecLPHeader."Shipped Source Document" OF
+            lrecLPHeader."Shipped Source Document"::"Sales Order":
+              BEGIN
+                lbFoundOrder := lrecSalesShipHeader.GET(lrecLPHeader."Shipment No.");
+                IF ( lbFoundOrder ) THEN BEGIN
+                  lcodLocationCode := lrecSalesShipHeader."Location Code";
+                  lcodShippingAgent := lrecSalesShipHeader."Shipping Agent Code";
+                  lcodShippingAgentService := lrecSalesShipHeader."Shipping Agent Service Code";
+                END;
+              END;
+            lrecLPHeader."Shipped Source Document"::"Outbound Transfer":
+              BEGIN
+                lbFoundOrder := lrecTransferShipHeader.GET(lrecLPHeader."Shipment No.");
+                IF ( lbFoundOrder ) THEN BEGIN
+                  lcodLocationCode := lrecTransferShipHeader."Transfer-from Code";
+                  lcodShippingAgent := lrecTransferShipHeader."Shipping Agent Code";
+                  lcodShippingAgentService := lrecTransferShipHeader."Shipping Agent Service Code";
+                END;
+              END;
+            lrecLPHeader."Shipped Source Document"::Shipment:
+              BEGIN
+                lbFoundOrder := lrecPostedWhseShipHeader.GET(lrecLPHeader."Shipment No.");
+                IF ( lbFoundOrder ) THEN BEGIN
+                  lcodLocationCode := lrecPostedWhseShipHeader."Location Code";
+                  lcodShippingAgent := lrecPostedWhseShipHeader."Shipping Agent Code";
+                  lcodShippingAgentService := lrecPostedWhseShipHeader."Shipping Agent Service Code";
+                END;
+              END;
+            lrecLPHeader."Shipped Source Document"::"Misc. Shipment":
+              BEGIN
+                lbFoundOrder := lrecMiscShip.GET(lrecLPHeader."Shipped Source No.");
+                IF ( lbFoundOrder ) THEN BEGIN
+                  lbMiscShip := TRUE;
+                  lcodLocationCode := lrecMiscShip."Location Code";
+                  lcodShippingAgent := lrecMiscShip."Shipping Agent Code";
+                  lcodShippingAgentService := lrecMiscShip."Shipping Agent Service Code";
+                  ldFreightCost := lrecMiscShip."Shipping Cost";
+                END;
+              END;
+          END; // case lreclpheader."shipped source document"
+
+          IF ( lbFoundOrder ) THEN
+            IF ( lcodLocationCode = precManifestHeader."Location Code" ) THEN
+              IF ( (precManifestHeader."Shipping Agent Code" = lcodShippingAgent) OR
+                   (precManifestHeader."Shipping Agent Code" = '') ) THEN
+                IF ( lcuWMSMgmt.LocationIsAllowed(lcodLocationCode) ) THEN BEGIN
+                  IF ( NOT lbMiscShip ) THEN BEGIN
+                    lrecSalesShipmentLine.RESET;
+                    CASE lrecDShipSetup."Freight Billing Type" OF
+                      lrecDShipSetup."Freight Billing Type"::Resource:
+                        BEGIN
+                          lrecSalesShipmentLine.SETRANGE(Type, lrecSalesLine.Type::Resource);
+                        END;
+                      lrecDShipSetup."Freight Billing Type"::"G/L":
+                        BEGIN
+                          lrecSalesShipmentLine.SETRANGE(Type, lrecSalesLine.Type::"G/L Account");
+                        END;
+                    END;
+                    lrecSalesShipmentLine.SETRANGE("No.", lrecDShipSetup."Freight Billing No.");
+                    lrecSalesShipmentLine.SETRANGE("Package Tracking No.", COPYSTR(lrecLPHeader."Package Tracking Number", 1, 30));
+                    IF ( lrecSalesShipmentLine.FINDFIRST ) THEN
+                      ldFreightCost := lrecSalesShipmentLine."Unit Cost (LCY)"
+                    ELSE
+                      ldFreightCost := 0;
+                  END; // if not lbmiscship
+
+                  ptrecManifestBuffer.RESET;
+                  ptrecManifestBuffer.TRANSFERFIELDS(lrecLPHeader, TRUE);
+                  ptrecManifestBuffer."Location Code" := lcodLocationCode;
+                  ptrecManifestBuffer."Shipping Agent" := lcodShippingAgent;
+                  ptrecManifestBuffer."Shipping Agent Service" := lcodShippingAgentService;
+                  ptrecManifestBuffer."Freight Cost" := ldFreightCost;
+                  ptrecManifestBuffer.INSERT(FALSE);
+                END; // if locationisallowed
+        UNTIL(lrecLPHeader.NEXT=0);
+      END;
+    END;
+
+    LOCAL PROCEDURE createManifestLines@1000000009(VAR ptrecManifestBuffer@1000000000 : Record 23044620;VAR precManifestHeader@1000000001 : Record 23044618);
+    VAR
+      lrecManifestLine@1000000002 : Record 23044619;
+      lrecLPSetup@1000000003 : Record 23044523;
+      lrecUOMFrom@1000000005 : Record 23044525;
+      lrecUOMTo@1000000004 : Record 23044525;
+      lrecLPHeader@1000000007 : Record 23044505;
+      lcuCommonBase@1000000006 : Codeunit 23044519;
+      ldTotalWeight@1000000008 : Decimal;
+      ldTotalFreight@1000000009 : Decimal;
+    BEGIN
+      //<FUNC>
+      //  Description: Uses the buffer to create manifest lines
+      //  Called From: This codeunit (CU23044607)
+      //  Side Effect: LPs will change status to "Manifested"
+      //</FUNC>
+
+      lrecLPSetup.GET;
+
+      IF ( ptrecManifestBuffer.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lrecManifestLine.INIT;
+          lrecManifestLine."Manifest No." := precManifestHeader."No.";
+          lrecManifestLine."License Plate No." := ptrecManifestBuffer."License Plate No.";
+          lrecManifestLine."Location Code" := ptrecManifestBuffer."Location Code";
+          lrecManifestLine."Shipping Agent Code" := ptrecManifestBuffer."Shipping Agent";
+          lrecManifestLine."Shipping Agent Service Code" := ptrecManifestBuffer."Shipping Agent Service";
+          lrecManifestLine.Value := calcValue(ptrecManifestBuffer."License Plate No.");
+          lrecManifestLine."Freight Cost" := ptrecManifestBuffer."Freight Cost";
+          lrecManifestLine.INSERT(TRUE);
+
+          IF ( precManifestHeader."Weight Unit of Measure" = '' ) THEN BEGIN
+            precManifestHeader."Weight Unit of Measure" := ptrecManifestBuffer."Weight Unit of Measure";
+            precManifestHeader.MODIFY;
+          END;
+
+          IF ( ptrecManifestBuffer."Weight Unit of Measure" <> '' ) THEN BEGIN
+            IF ( ptrecManifestBuffer."Weight Unit of Measure" <> precManifestHeader."Weight Unit of Measure" ) THEN BEGIN
+              lrecUOMTo.GET(precManifestHeader."Weight Unit of Measure");
+              lrecUOMFrom.GET(ptrecManifestBuffer."Weight Unit of Measure");
+              ldTotalWeight += lcuCommonBase.ConvertUOMGeneric(ptrecManifestBuffer."Shipment Gross Weight", lrecUOMFrom."Qty. per Unit of Measure", lrecUOMTo."Qty. per Unit of Measure");
+            END ELSE BEGIN
+              ldTotalWeight += ptrecManifestBuffer."Shipment Gross Weight";
+            END; // if weight uom <>
+          END;
+
+          ldTotalFreight += ptrecManifestBuffer."Freight Cost";
+
+          IF ( lrecLPHeader.GET(ptrecManifestBuffer."License Plate No.") ) THEN BEGIN
+            lrecLPHeader."Manifest No." := precManifestHeader."No.";
+            lrecLPHeader.MODIFY;
+          END;
+
+        UNTIL(ptrecManifestBuffer.NEXT=0);
+
+        precManifestHeader."Total Weight" += ldTotalWeight;
+        precManifestHeader.MODIFY(TRUE);
+      END; // if ptrecManifestBuffer.FINDSET
+    END;
+
+    LOCAL PROCEDURE calcValue@1000000000(VAR pcodLPNo@1000000000 : Code[20]) dValOfLP : Decimal;
+    VAR
+      lrecLPLine@1000000001 : Record 23044506;
+      lrecItem@1000000002 : Record 27;
+    BEGIN
+      //<FUNC>
+      //  Description: Calculates the value per LP
+      //  Called From: This codeunit (CU23044607)
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecLPLine.SETRANGE("License Plate No.", pcodLPNo);
+      IF ( lrecLPLine.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          IF ( lrecItem.GET(lrecLPLine."Item No.") ) THEN
+            dValOfLP += lrecItem."Unit Cost";
+        UNTIL(lrecLPLine.NEXT=0);
+      END; // if lreclpline.findset
+
+      EXIT(dValOfLP);
+    END;
+
+    LOCAL PROCEDURE runReport@1000000002(pcodManifestNo@1000000000 : Code[20];pbShowRequestPage@1000000001 : Boolean);
+    VAR
+      lrecManifestHeader@1000000002 : Record 23044618;
+    BEGIN
+      //<FUNC>
+      //  Description: Runs the manifest report
+      //  Called From: This codeunit (CU23044607)
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecManifestHeader.GET(pcodManifestNo);
+      setManifestUrl(lrecManifestHeader);
+
+      IF (lrecManifestHeader."Carrier Manifest URL" <> '') THEN BEGIN
+        HYPERLINK(lrecManifestHeader."Carrier Manifest URL");
+        EXIT;
+      END;
+      lrecManifestHeader.SETRECFILTER;
+      REPORT.RUN(REPORT::"DSHIP Shipment Manifest", pbShowRequestPage, FALSE, lrecManifestHeader);
+    END;
+
+    PROCEDURE changeStatus@1000000011(VAR precManifestHeader@1000000003 : Record 23044618;poptStatus@1000000000 : Option);
+    VAR
+      lrecManifestLine@1000000001 : Record 23044619;
+      lsScanFormId@1000000004 : Text[100];
+      lcodShipAgent@1000000005 : Code[50];
+      lbShipAgentEqual@1000000002 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Gets the related manifest lines
+      //  Called From: P23044633, P23044634
+      //  Side Effect: None
+      //</FUNC>
+
+      IF (precManifestHeader.Status = poptStatus) THEN
+        EXIT;
+
+      // cannot release if there are no associated shipments or already released
+      lrecManifestLine.SETRANGE("Manifest No.", precManifestHeader."No.");
+      IF (NOT lrecManifestLine.FINDSET(TRUE)) THEN
+        EXIT;
+
+      // do not allow reopen of a carrier manifest
+      // shipment ids can only belong to one scanform
+      IF ((precManifestHeader.Status = precManifestHeader.Status::Released) AND
+          (precManifestHeader."ScanForm ID" <> '')) THEN
+        ERROR(tcAlreadyManifested, precManifestHeader."ScanForm ID");
+
+      // preset ship agent based on header to avoid line iteration
+      lcodShipAgent := precManifestHeader."Shipping Agent Code"; // this value will not be altered if <> ''
+      lbShipAgentEqual := requestScanForm(lrecManifestLine, lsScanFormId, lcodShipAgent);
+
+      // reget avoids old record error on line changes
+      precManifestHeader.GET(precManifestHeader."No.");
+      IF (lbShipAgentEqual) THEN BEGIN
+        precManifestHeader."Shipping Agent Code" := lcodShipAgent;
+        precManifestHeader."ScanForm ID" := lsScanFormId;
+      END;
+      precManifestHeader.Status := poptStatus;
+      precManifestHeader.MODIFY(TRUE);
+
+      COMMIT;
+    END;
+
+    PROCEDURE runManifestReport@1000000004(VAR precManifestHeader@1000000001 : Record 23044618);
+    VAR
+      ltcWarnRelease@1000000000 : TextConst 'ENU=This will release the manifest. Continue?';
+    BEGIN
+      //<FUNC>
+      //  Description: Function for acManifest event
+      //  Called From: P23044633, P23044634
+      //  Side Effect: Releases the manifest
+      //</FUNC>
+
+      IF (precManifestHeader.Status <> precManifestHeader.Status::Released) THEN
+        IF ( NOT DIALOG.CONFIRM(ltcWarnRelease, TRUE) ) THEN
+          EXIT;
+      // does nothing if already released
+      changeStatus(precManifestHeader, precManifestHeader.Status::Released);
+      runReport(precManifestHeader."No.", TRUE);
+    END;
+
+    LOCAL PROCEDURE requestScanForm@1000000007(precManifestLine@1000000000 : Record 23044619;VAR psScanFormId@1000000001 : Text[100];VAR pcodShipAgent@1000000002 : Code[50]) rbShipAgentEqual : Boolean;
+    VAR
+      ltrecAPIParam@1000000003 : TEMPORARY Record 23044623;
+      lrecCarrier@1000000006 : Record 23044607;
+      lcuEasyPostMgmt@1000000004 : Codeunit 23044609;
+      lcuRateMgmt@1000000005 : Codeunit 23044602;
+    BEGIN
+      //<FUNC>
+      //  Description: Initiates a scanform API request if valid
+      //  Called From: This codeunit (CU23044607)
+      //  Side Effect: None
+      //</FUNC>
+
+      // for carrier manifest: all shipments must be the same carrier
+      // if the passed var does not have it set, we retrieve it from the lines.
+      IF (pcodShipAgent = '') THEN BEGIN
+        IF (precManifestLine."Shipping Agent Code" <> '') THEN
+          pcodShipAgent := precManifestLine."Shipping Agent Code";
+        REPEAT
+          rbShipAgentEqual := (pcodShipAgent = precManifestLine."Shipping Agent Code") AND (precManifestLine."Shipping Agent Code" <> '');
+        UNTIL ((precManifestLine.NEXT() = 0) OR (NOT rbShipAgentEqual));
+      END ELSE BEGIN
+        rbShipAgentEqual := TRUE;
+      END;
+
+      // if ship agent is constant and we want to manifest
+      IF (rbShipAgentEqual) THEN BEGIN
+        lrecCarrier.SETRANGE(Code, pcodShipAgent);
+        // currently not setting freight int (api) filter - if multiple are used for same carrier
+        // then this will become troublesome to configure
+        // either use diff ship agent (recommended), or we add more config later
+        // for now, it uses the first found entry and makes assumptions (bad bad)
+        lrecCarrier.SETFILTER("Manifest Report Handling", '<>%1', lrecCarrier."Manifest Report Handling"::System);
+        IF (lrecCarrier.FINDFIRST()) THEN BEGIN
+          lcuRateMgmt.buildAPIParam(ltrecAPIParam, ltrecAPIParam.Action::CreateManifest, ltrecAPIParam."Document Type"::"Shipment Manifest", precManifestLine."Manifest No.");
+          lcuRateMgmt.callFreightIntegration(ltrecAPIParam);
+          psScanFormId := ltrecAPIParam."Object ID";
+        END; //if
+      END; //if
+    END;
+
+    LOCAL PROCEDURE setManifestUrl@1000000017(VAR precManifestHeader@1000000000 : Record 23044618);
+    VAR
+      ltrecAPIParam@1000000003 : TEMPORARY Record 23044623;
+      lcuRateMgmt@1000000002 : Codeunit 23044602;
+      lcuEasyPostMgmt@1000000001 : Codeunit 23044609;
+    BEGIN
+      //<FUNC>
+      //  Description: Sets the url on the mani header (if necessary)
+      //  Called From: This codeunit (CU23044607)
+      //  Side Effect: None
+      //</FUNC>
+
+      // if we don't have a url, but we do have an id, we retrieve url
+      IF ((precManifestHeader."Carrier Manifest URL" = '') AND (precManifestHeader."ScanForm ID" <> '')) THEN BEGIN
+        lcuRateMgmt.buildAPIParam(ltrecAPIParam, ltrecAPIParam.Action::GetManifest, ltrecAPIParam."Document Type"::"Shipment Manifest", precManifestHeader."No.");
+        lcuRateMgmt.callFreightIntegration(ltrecAPIParam);
+        precManifestHeader."Carrier Manifest URL" := ltrecAPIParam."Object URL";
+        precManifestHeader.MODIFY(FALSE);
+      END;
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+    }
+    END.
+  }
+}
+

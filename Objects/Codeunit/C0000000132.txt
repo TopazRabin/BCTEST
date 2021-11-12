@@ -1,0 +1,162 @@
+OBJECT Codeunit 132 Release Incoming Document
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/31/20;
+    Time=12:00:00 PM;
+    Version List=NAVW111.00.00.44345;
+  }
+  PROPERTIES
+  {
+    TableNo=130;
+    Permissions=TableData 130=rm;
+    OnRun=BEGIN
+            IF Status = Status::Released THEN
+              EXIT;
+            IF Status IN [Status::Created,Status::Posted] THEN
+              ERROR(STRSUBSTNO(CanReleasedIfStatusErr,Status::"Pending Approval",Status::New,Status::Failed));
+
+            OnCheckIncomingDocReleaseRestrictions;
+
+            TESTFIELD(Posted,FALSE);
+
+            IF NOT IsADocumentAttached THEN
+              ERROR(NothingToReleaseErr,"Entry No.");
+
+            Status := Status::Released;
+            Released := TRUE;
+            "Released Date-Time" := CURRENTDATETIME;
+            "Released By User ID" := USERSECURITYID;
+
+            MODIFY(TRUE);
+
+            OnAfterReleaseIncomingDoc(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      NothingToReleaseErr@1001 : TextConst '@@@="%1 = Incoming Document Entry No";ENU=There is nothing to release for the incoming document number %1.;ESM=No hay nada que lanzar para el n£mero de documento entrante %1.;FRC=Il n''y a rien … lib‚rer pour le document entrant num‚ro %1.;ENC=There is nothing to release for the incoming document number %1.';
+      DocReleasedWhenApprovedErr@1005 : TextConst 'ENU=This document can only be released when the approval process is complete.;ESM=Este documento s¢lo se puede lanzar una vez completado el proceso de aprobaci¢n.;FRC=Ce document ne peut ˆtre lib‚r‚ qu''… la fin du processus d''approbation.;ENC=This document can only be released when the approval process is complete.';
+      CancelOrCompleteToReopenDocErr@1003 : TextConst 'ENU=The approval process must be canceled or completed to reopen this document.;ESM=El proceso de aprobaci¢n se debe cancelar o completar para volver a abrir este documento.;FRC=On doit annuler ou terminer le processus d''approbation avant de rouvrir ce document.;ENC=The approval process must be cancelled or completed to reopen this document.';
+      CanReleasedIfStatusErr@1000 : TextConst '@@@="%1 = status released, %2 = status pending approval";ENU=It is only possible to release the document when the status is %1, %2 or %3.;ESM=Solo es posible lanzar el documento si el estado es %1, %2 o %3.;FRC=Il n''est possible de lib‚rer le document que lorsque l''‚tat est %1, %2 ou %3.;ENC=It is only possible to release the document when the status is %1, %2 or %3.';
+
+    [External]
+    PROCEDURE Reopen@1(VAR IncomingDocument@1000 : Record 130);
+    BEGIN
+      WITH IncomingDocument DO BEGIN
+        IF Status = Status::New THEN
+          EXIT;
+        ClearReleaseFields(IncomingDocument);
+        Status := Status::New;
+
+        MODIFY(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE Reject@8(VAR IncomingDocument@1000 : Record 130);
+    BEGIN
+      WITH IncomingDocument DO BEGIN
+        TESTFIELD(Posted,FALSE);
+
+        ClearReleaseFields(IncomingDocument);
+        Status := Status::Rejected;
+
+        MODIFY(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE Fail@6(VAR IncomingDocument@1000 : Record 130);
+    BEGIN
+      WITH IncomingDocument DO BEGIN
+        IF Status = Status::Failed THEN
+          EXIT;
+
+        Status := Status::Failed;
+
+        MODIFY(TRUE);
+        COMMIT;
+
+        OnAfterCreateDocFromIncomingDocFail(IncomingDocument);
+      END;
+    END;
+
+    [External]
+    PROCEDURE Create@7(VAR IncomingDocument@1000 : Record 130);
+    BEGIN
+      WITH IncomingDocument DO BEGIN
+        IF Status = Status::Created THEN
+          EXIT;
+
+        Status := Status::Created;
+
+        MODIFY(TRUE);
+        COMMIT;
+        OnAfterCreateDocFromIncomingDocSuccess(IncomingDocument);
+      END;
+    END;
+
+    [Internal]
+    PROCEDURE PerformManualRelease@2(VAR IncomingDocument@1002 : Record 130);
+    VAR
+      ApprovalsMgmt@1000 : Codeunit 1535;
+    BEGIN
+      IF ApprovalsMgmt.IsIncomingDocApprovalsWorkflowEnabled(IncomingDocument) AND
+         (IncomingDocument.Status = IncomingDocument.Status::New)
+      THEN
+        ERROR(DocReleasedWhenApprovedErr);
+
+      CODEUNIT.RUN(CODEUNIT::"Release Incoming Document",IncomingDocument);
+    END;
+
+    [External]
+    PROCEDURE PerformManualReopen@3(VAR IncomingDocument@1002 : Record 130);
+    BEGIN
+      IF IncomingDocument.Status = IncomingDocument.Status::"Pending Approval" THEN
+        ERROR(CancelOrCompleteToReopenDocErr);
+
+      Reopen(IncomingDocument);
+    END;
+
+    [External]
+    PROCEDURE PerformManualReject@5(VAR IncomingDocument@1000 : Record 130);
+    BEGIN
+      IF IncomingDocument.Status = IncomingDocument.Status::"Pending Approval" THEN
+        ERROR(CancelOrCompleteToReopenDocErr);
+
+      Reject(IncomingDocument);
+    END;
+
+    LOCAL PROCEDURE ClearReleaseFields@22(VAR IncomingDocument@1000 : Record 130);
+    BEGIN
+      IncomingDocument.Released := FALSE;
+      IncomingDocument."Released Date-Time" := 0DT;
+      CLEAR(IncomingDocument."Released By User ID");
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnAfterReleaseIncomingDoc@4(VAR IncomingDocument@1000 : Record 130);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnAfterCreateDocFromIncomingDocSuccess@9(VAR IncomingDocument@1000 : Record 130);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnAfterCreateDocFromIncomingDocFail@10(VAR IncomingDocument@1000 : Record 130);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

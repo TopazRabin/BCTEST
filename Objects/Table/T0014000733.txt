@@ -1,0 +1,171 @@
+OBJECT Table 14000733 Barcode Conversion
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/28/17;
+    Time=12:00:00 PM;
+    Version List=SE0.50.32;
+  }
+  PROPERTIES
+  {
+    OnInsert=BEGIN
+               BarcodeConv.RESET;
+               BarcodeConv.SETCURRENTKEY("Bar Code");
+               BarcodeConv.SETRANGE("Bar Code","Bar Code");
+               IF BarcodeConv.FIND('-') THEN
+                 ERROR(
+                   Text001,
+                   BarcodeConv."Item No.",BarcodeConv."Variant Code");
+             END;
+
+    OnRename=BEGIN
+               BarcodeConv.RESET;
+               BarcodeConv.SETCURRENTKEY("Bar Code");
+               BarcodeConv.SETRANGE("Bar Code","Bar Code");
+               IF BarcodeConv.FIND('-') THEN
+                 ERROR(
+                   Text001,
+                   BarcodeConv."Item No.",BarcodeConv."Variant Code");
+             END;
+
+    CaptionML=ENU=Barcode Conversion;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Item No.            ;Code20        ;TableRelation=IF (Type=CONST(Item)) Item
+                                                                 ELSE IF (Type=CONST(Resource)) Resource;
+                                                   CaptionML=ENU=Item No.;
+                                                   NotBlank=Yes }
+    { 2   ;   ;Variant Code        ;Code10        ;TableRelation="Item Variant".Code WHERE (Item No.=FIELD(Item No.));
+                                                   CaptionML=ENU=Variant Code }
+    { 3   ;   ;Bar Code            ;Code20        ;CaptionML=ENU=Bar Code;
+                                                   NotBlank=Yes }
+    { 4   ;   ;Type                ;Option        ;CaptionML=ENU=Type;
+                                                   OptionCaptionML=ENU=Item,Resource;
+                                                   OptionString=Item,Resource }
+    { 5   ;   ;Unit of Measure Code;Code10        ;TableRelation=IF (Type=CONST(Item)) "Item Unit of Measure".Code WHERE (Item No.=FIELD(Item No.))
+                                                                 ELSE IF (Type=FILTER(<>Item)) "Unit of Measure";
+                                                   CaptionML=ENU=Unit of Measure Code }
+    { 11  ;   ;Description         ;Text30        ;CaptionML=ENU=Description }
+  }
+  KEYS
+  {
+    {    ;Bar Code                                ;Clustered=Yes }
+    {    ;Type,Item No.,Variant Code,Unit of Measure Code }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      BarcodeConv@1000000000 : Record 14000733;
+      Text001@1001 : TextConst 'ENU=Barcode already exist for Item %1 Variant %2';
+
+    PROCEDURE FindItem@1(VAR Item@1000000000 : Record 27;SearchBarcode@1000000001 : Text[30]) : Boolean;
+    BEGIN
+      BarcodeConv.RESET;
+      BarcodeConv.SETCURRENTKEY("Bar Code");
+      BarcodeConv.SETRANGE("Bar Code",SearchBarcode);
+      IF BarcodeConv.FIND('-') THEN
+        EXIT(Item.GET(BarcodeConv."Item No."));
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE FindItemVariant@2(VAR ItemVariant@1000000000 : Record 5401;SearchBarcode@1000000001 : Text[30]) : Boolean;
+    BEGIN
+      BarcodeConv.RESET;
+      BarcodeConv.SETCURRENTKEY("Bar Code");
+      BarcodeConv.SETRANGE("Bar Code",SearchBarcode);
+      IF BarcodeConv.FIND('-') THEN
+        IF BarcodeConv."Variant Code" <> '' THEN
+          EXIT(ItemVariant.GET(BarcodeConv."Item No.",BarcodeConv."Variant Code"));
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE CreateUPC@1000000000("ItemNo."@1000000000 : Code[20]);
+    VAR
+      BarcodeBuffer@1000000001 : Record 50028;
+      BarcodeConv@1000000002 : Record 14000733;
+      InventorySetup@1000000003 : Record 313;
+      BaseCode@1000000004 : Code[20];
+      TEXT1@1000000005 : TextConst 'ENU=Item %1 already have a Barcode setup - Please Delete the records for Auto Generation';
+      TEXT2@1000000006 : TextConst 'ENU=UPC Codes Created  - Please Check The Barcode Conversion table';
+      Item@1000000007 : Record 27;
+    BEGIN
+      //<TPZ82>
+      BarcodeConv.SETRANGE("Item No.","ItemNo.");
+      IF BarcodeConv.FINDFIRST THEN
+        ERROR(TEXT1,"ItemNo.");
+
+
+      InventorySetup.GET(' ');
+
+
+      BarcodeConv.RESET();
+      BarcodeConv.SETFILTER("Item No.",'%1','');
+
+      BarcodeConv.SETRANGE(Type,BarcodeConv.Type::Item);
+      BarcodeConv.SETRANGE("Unit of Measure Code",InventorySetup."Base UOM");
+      IF BarcodeConv.FINDFIRST THEN BEGIN
+         BarcodeConv."Item No.":="ItemNo.";
+         BarcodeConv.MODIFY();
+         BaseCode:=COPYSTR(BarcodeConv."Bar Code",1,11);
+         Item.GET("ItemNo.");
+         Item."Item UPC/EAN Number":=BarcodeConv."Bar Code";
+         Item.MODIFY();
+      END;
+
+      BarcodeConv.RESET();
+      BarcodeConv.SETFILTER("Item No.",'%1','');
+      BarcodeConv.SETRANGE(Type,BarcodeConv.Type::Item);
+      BarcodeConv.SETRANGE("Unit of Measure Code",InventorySetup."Master on Carton Code");
+      BarcodeConv.SETFILTER("Bar Code",'%1','*'+BaseCode+'*');
+      IF BarcodeConv.FINDFIRST THEN
+      BEGIN
+            BarcodeConv."Item No.":="ItemNo.";
+            BarcodeConv.MODIFY();
+          END ELSE BEGIN
+              BarcodeConv.RESET();
+              BarcodeConv.SETFILTER("Item No.",'%1','');
+              BarcodeConv.SETRANGE(Type,BarcodeConv.Type::Item);
+              BarcodeConv.SETRANGE("Unit of Measure Code",InventorySetup."Master on Carton Code");
+              IF BarcodeConv.FINDFIRST THEN BEGIN
+                BarcodeConv."Item No.":="ItemNo.";
+                BarcodeConv.MODIFY();
+              END;
+           END;
+
+      BarcodeConv.RESET();
+      BarcodeConv.SETFILTER("Item No.",'%1','');
+      BarcodeConv.SETRANGE(Type,BarcodeConv.Type::Item);
+      BarcodeConv.SETRANGE("Unit of Measure Code",InventorySetup."Inner on Carton Code");
+      BarcodeConv.SETFILTER("Bar Code",'%1','*'+BaseCode+'*');
+      IF BarcodeConv.FINDFIRST THEN BEGIN
+         BarcodeConv."Item No.":="ItemNo.";
+         BarcodeConv.MODIFY();
+      END ELSE BEGIN
+          BarcodeConv.RESET();
+          BarcodeConv.SETFILTER("Item No.",'%1','');
+          BarcodeConv.SETRANGE(Type,BarcodeConv.Type::Item);
+          BarcodeConv.SETRANGE("Unit of Measure Code",InventorySetup."Inner on Carton Code");
+          IF BarcodeConv.FINDFIRST THEN BEGIN
+             BarcodeConv."Item No.":="ItemNo.";
+             BarcodeConv.MODIFY();
+          END;
+       END;
+      MESSAGE(TEXT2);
+      //<TPZ82>
+    END;
+
+    BEGIN
+    {
+      2015-10-09 TPZ82 EBAGIM
+       CreateUPC Function Added
+    }
+    END.
+  }
+}
+

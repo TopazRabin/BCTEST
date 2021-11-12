@@ -1,0 +1,214 @@
+OBJECT Report 51003 Import Sales Line Discount
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=TPZ000.00.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Import Sales Line Multiplier;
+    ProcessingOnly=Yes;
+    OnPostReport=BEGIN
+                   ExcelBuff.LOCKTABLE;
+                   ExcelBuff.OpenBook(ServerFileName,SheetName);
+                   ExcelBuff.ReadSheet;
+
+                   AnalyzeData;
+
+                   ExcelBuff.DELETEALL;
+                 END;
+
+  }
+  DATASET
+  {
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+      OnQueryClosePage=VAR
+                         FileMgt@1000000000 : Codeunit 419;
+                       BEGIN
+                         IF CloseAction = ACTION::OK THEN BEGIN
+                           ServerFileName := FileMgt.UploadFile(Text51000,ExcelExtensionTok);
+                           IF ServerFileName = '' THEN
+                             EXIT(FALSE);
+
+                           SheetName := ExcelBuff.SelectSheetsName(ServerFileName);
+                           IF SheetName = '' THEN
+                             EXIT(FALSE);
+                         END;
+                       END;
+
+    }
+    CONTROLS
+    {
+      { 1000000001;;Container;
+                  ContainerType=ContentArea }
+
+      { 1000000002;1;Group  ;
+                  CaptionML=ENU=Options;
+                  GroupType=Group }
+
+      { 1000000000;2;Field  ;
+                  CaptionML=ENU=Action Type;
+                  SourceExpr=ActionType }
+
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      Customer@1000000009 : Record 18;
+      ItemDiscGroup@1000000008 : Record 341;
+      SalesLineDisc@1000000014 : Record 7004;
+      SalesLineDisc2@1000000012 : Record 7004;
+      ExcelBuff@1000000000 : Record 370;
+      ActionType@1000000015 : 'Import,Delete';
+      Window@1000000006 : Dialog;
+      ServerFileName@1000000002 : Text;
+      SheetName@1000000001 : Text[250];
+      Text51000@1000000004 : TextConst 'ENU=Import Excel File;ESM=Importar fich. Excel;FRC=Importer fichier Excel;ENC=Import Excel File';
+      Text51001@1000000005 : TextConst 'ENU=Importing Data...\\;ESM=Analizar Datos...\\;FRC=Analyse des donn‚es...\\;ENC=Analysing Data...\\';
+      ExcelExtensionTok@1000000003 : TextConst '@@@={Locked};ENU=.xlsx;ESM=.xlsx;FRC=.xlsx;ENC=.xlsx';
+      RecNo@1000000007 : Integer;
+      TotalRecNo@1000000010 : Integer;
+      RowNo@1000000011 : Integer;
+
+    LOCAL PROCEDURE AnalyzeData@2();
+    VAR
+      ItemDiscGroupFound@1000000005 : Boolean;
+      CustomerFound@1000000008 : Boolean;
+      CustomerNo@1000000006 : Code[20];
+      ItemDiscGroupCode@1000000000 : Code[20];
+      Multiplier@1000000002 : Decimal;
+      StartingDate@1000000003 : Date;
+    BEGIN
+      Window.OPEN(Text51000 + '@1@@@@@@@@@@@@@@@@@@@@@@@@@\');
+      TotalRecNo := ExcelBuff.COUNT;
+
+      IF ExcelBuff.FIND('-') THEN
+        REPEAT
+          RecNo := RecNo + 1;
+          Window.UPDATE(1,ROUND(RecNo / TotalRecNo * 10000,1));
+
+          IF ExcelBuff."Row No." <> RowNo THEN BEGIN
+            RowNo := ExcelBuff."Row No.";
+            CustomerFound := FALSE;
+            ItemDiscGroupFound := FALSE;
+          END;
+
+          IF ExcelBuff."Row No." <> 1 THEN
+            CASE ExcelBuff."Column No." OF
+              1:
+                BEGIN
+                  ItemDiscGroupCode := DELCHR(ExcelBuff."Cell Value as Text",'=',',');
+                  ItemDiscGroupFound := ItemDiscGroup.GET(ItemDiscGroupCode);
+                  IF ItemDiscGroupFound THEN BEGIN
+                    SalesLineDisc.INIT;
+                    SalesLineDisc.VALIDATE(Type,SalesLineDisc.Type::"Item Disc. Group");
+                    SalesLineDisc.VALIDATE(Code,ItemDiscGroupCode);
+                  END;
+                END;
+              2:
+                BEGIN
+                  CustomerNo := DELCHR(ExcelBuff."Cell Value as Text",'=',',');
+                  CustomerFound := Customer.GET(CustomerNo);
+                  IF CustomerFound THEN BEGIN
+                    SalesLineDisc.VALIDATE("Sales Type",SalesLineDisc."Sales Type"::Customer);
+                    SalesLineDisc.VALIDATE("Sales Code",CustomerNo);
+                  END;
+                END;
+              3:
+                BEGIN
+                  EVALUATE(Multiplier,DELCHR(ExcelBuff."Cell Value as Text",'=',','));
+                  IF (ExcelBuff."Row No." = RowNo) AND
+                     (Multiplier <> 0)
+                  THEN
+                    SalesLineDisc.VALIDATE(Multiplier,Multiplier);
+                END;
+              4:
+                BEGIN
+                  EVALUATE(StartingDate,ExcelBuff."Cell Value as Text");
+                  IF (ExcelBuff."Row No." = RowNo) AND
+                     (StartingDate <> 0D)
+                  THEN BEGIN
+                    SalesLineDisc.VALIDATE("Starting Date",StartingDate);
+                    CASE ActionType OF
+                      ActionType::Import:
+                        BEGIN
+                          SalesLineDisc.INSERT(TRUE);
+                          UpdateEndDate;
+                        END;
+                      ActionType::Delete:
+                        DeleteSalesPrice;
+                    END;
+                  END;
+                END;
+            END;
+        UNTIL ExcelBuff.NEXT = 0;
+      Window.CLOSE;
+    END;
+
+    PROCEDURE UpdateEndDate@1000000000();
+    BEGIN
+      SalesLineDisc2.RESET;
+      SalesLineDisc2.SETRANGE(Type,SalesLineDisc2.Type::"Item Disc. Group");
+      SalesLineDisc2.SETRANGE(Code,SalesLineDisc.Code);
+      SalesLineDisc2.SETRANGE("Sales Type",SalesLineDisc2."Sales Type"::Customer);
+      SalesLineDisc2.SETRANGE("Sales Code",SalesLineDisc."Sales Code");
+      SalesLineDisc2.SETFILTER("Starting Date",'<>%1',SalesLineDisc."Starting Date");
+      CASE ActionType OF
+        ActionType::Import:
+          BEGIN
+            SalesLineDisc2.SETRANGE("Ending Date",0D);
+            IF SalesLineDisc2.FINDLAST THEN BEGIN
+              SalesLineDisc2."Ending Date" := CALCDATE('-1D',SalesLineDisc."Starting Date");
+              SalesLineDisc2.MODIFY;
+            END;
+          END;
+        ActionType::Delete:
+          BEGIN
+            SalesLineDisc2.SETFILTER("Ending Date",'<>%1',0D);
+            IF SalesLineDisc2.FINDLAST THEN BEGIN
+              SalesLineDisc2."Ending Date" := 0D;
+              SalesLineDisc2.MODIFY;
+            END;
+          END;
+      END;
+    END;
+
+    PROCEDURE DeleteSalesPrice@1000000002();
+    BEGIN
+      SalesLineDisc2.RESET;
+      SalesLineDisc2.SETRANGE(Type,SalesLineDisc2.Type::"Item Disc. Group");
+      SalesLineDisc2.SETRANGE(Code,SalesLineDisc.Code);
+      SalesLineDisc2.SETRANGE("Sales Type",SalesLineDisc2."Sales Type"::Customer);
+      SalesLineDisc2.SETRANGE("Sales Code",SalesLineDisc."Sales Code");
+      SalesLineDisc2.SETRANGE(Multiplier,SalesLineDisc.Multiplier);
+      SalesLineDisc2.SETRANGE("Starting Date",SalesLineDisc."Starting Date");
+      SalesLineDisc2.SETRANGE("Ending Date",0D);
+      IF SalesLineDisc2.FINDFIRST THEN
+        SalesLineDisc2.DELETE;
+
+      UpdateEndDate;
+    END;
+
+    BEGIN
+    {
+      2015-07-06 TPZ578 TAKHIR
+        Report has been created
+    }
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

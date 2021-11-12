@@ -1,0 +1,410 @@
+OBJECT Codeunit 23044513 WHI Scratchpad Mgmt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/28/19;
+    Time=[ 9:45:51 AM];
+    Version List=WHI2.4.7684.0;
+  }
+  PROPERTIES
+  {
+    TableNo=23044511;
+    OnRun=VAR
+            liEventID@1000000000 : Integer;
+            ltxtOutputText@1000000001 : BigText;
+            losReturnMessage@1000000002 : OutStream;
+          BEGIN
+            codRegionCode := Rec.getValue('device_culture'); //<IW author="R.Trudeau" date="10/17/18" issue="TFS3495" />
+
+            liEventID := Rec.getEvent();
+            executeEvent(liEventID, Rec, ltxtOutputText);
+            "Extensibility Blob".CREATEOUTSTREAM( losReturnMessage );
+            ltxtOutputText.WRITE(losReturnMessage);
+            MODIFY();
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      recWHISetup@1000000010 : Record 23044502;
+      cuCommonFuncs@1000000002 : Codeunit 23044501;
+      cuDataBroker@1000000000 : Codeunit 23044500;
+      cuDocs@1000000001 : Codeunit 23044529;
+      cuBarcodeRules@1000000005 : Codeunit 23044517;
+      cuActivityLogMgt@1000000008 : Codeunit 23044537;
+      cuTranslationMgmt@1000000012 : Codeunit 23044526;
+      codRegionCode@1000000011 : Code[10];
+
+    PROCEDURE executeEvent@1000000005(piEventID@1000000000 : Integer;VAR ptrecEventParams@1000000001 : TEMPORARY Record 23044511;VAR pbsOutput@1000000002 : BigText);
+    BEGIN
+      CASE piEventID OF
+         1000: scratchpadSend(ptrecEventParams, pbsOutput);
+      END;
+    END;
+
+    PROCEDURE scratchpadSend@1000000024(VAR ptrecEventParams@1000000011 : TEMPORARY Record 23044511;VAR pbsOutput@1000000010 : BigText);
+    VAR
+      lrecScratchEntry@1000000000 : Record 23044500;
+      lcodLocation@1000000001 : Code[10];
+      liCount@1000000002 : Integer;
+      liIndex@1000000003 : Integer;
+      lcodUserName@1000000009 : Code[50];
+    BEGIN
+      //////////////////////////////////////////////
+      //<Summary>
+      // Processes the incoming scratchpad xml document and populates
+      // the scratchpad entries table.
+      //</Summary>
+      //<Author>R.Trudeau</Author>
+      //<Date>5/20/2011</Date>
+      //<Issue></Issue>
+      //<Version>IW1.0</Version>
+      //////////////////////////////////////////////
+
+      lcodLocation := ptrecEventParams.getValue('location');
+      liCount := ptrecEventParams.getValueAsInt('count');
+      lcodUserName := ptrecEventParams.getValue('user_name');
+
+      FOR liIndex:=0 TO (liCount-1) DO BEGIN
+        CLEAR(lrecScratchEntry);
+        lrecScratchEntry.RESET;
+
+        lrecScratchEntry.VALIDATE(Category,  ptrecEventParams.getValueAsInt(STRSUBSTNO('entry_%1_%2',liIndex,'Category')));
+        lrecScratchEntry.VALIDATE("Job ID", ptrecEventParams.getValue(STRSUBSTNO('entry_%1_%2',liIndex,'Document')));
+        lrecScratchEntry.VALIDATE("Location Code", lcodLocation);
+        lrecScratchEntry.VALIDATE("Creation Date", TODAY);
+
+        IF( lcodUserName = '' ) THEN
+          lrecScratchEntry.VALIDATE("User ID", USERID)
+        ELSE
+          lrecScratchEntry.VALIDATE("User ID", lcodUserName);
+
+        lrecScratchEntry.VALIDATE(Bin,ptrecEventParams.getValue(STRSUBSTNO('entry_%1_%2',liIndex,'BinCode')));
+        lrecScratchEntry.VALIDATE(Barcode, ptrecEventParams.getValue(STRSUBSTNO('entry_%1_%2',liIndex,'ItemBarcode')));
+        lrecScratchEntry.VALIDATE(Quantity, ptrecEventParams.getValueAsDecimal(STRSUBSTNO('entry_%1_%2',liIndex,'Quantity')));
+        lrecScratchEntry.VALIDATE(Comment, ptrecEventParams.getValue(STRSUBSTNO('entry_%1_%2',liIndex,'Comment')));
+
+        lrecScratchEntry.INSERT(TRUE);
+      END;
+
+      cuCommonFuncs.generateSuccessReturn(1, pbsOutput);
+
+      ptrecEventParams.setValue('Document Type', FORMAT(DATABASE::"WMDM Scratchpad Entry"));
+      ptrecEventParams.setValue('Document Line No.', FORMAT(lrecScratchEntry."Line No."));
+      ptrecEventParams.setValue('New Quantity', FORMAT(lrecScratchEntry.Quantity));
+      cuActivityLogMgt.logActivity(ptrecEventParams);
+    END;
+
+    PROCEDURE ProcessAllEntries@1000000017(VAR precScratchFilterRecord@1000000001 : Record 23044500);
+    VAR
+      lrecScratchEntries@1000000000 : Record 23044500;
+      liChoice@1000000002 : Integer;
+      lbErrored@1000000003 : Boolean;
+    BEGIN
+      //
+      // Processes all entries.
+      //
+
+      recWHISetup.GET;  //<IW author="R.Trudeau" date="04/19/17" issue="TFS3046" />
+
+      lrecScratchEntries.RESET();
+      lrecScratchEntries.COPYFILTERS( precScratchFilterRecord );
+      IF ( lrecScratchEntries.FIND('-') ) THEN BEGIN
+        REPEAT
+          lbErrored := FALSE;
+          IF ( NOT ProcessEntry( lrecScratchEntries ) ) THEN BEGIN
+            IF ( NOT GUIALLOWED ) THEN BEGIN
+              ERROR( cuTranslationMgmt.getTranslatedString('ERR_SCRATCH_NO_MATCH', codRegionCode), lrecScratchEntries."Line No." );
+            END ELSE BEGIN
+              MESSAGE( cuTranslationMgmt.getTranslatedString('ERR_SCRATCH_NO_MATCH', codRegionCode), lrecScratchEntries."Line No." );
+              liChoice := DIALOG.STRMENU( cuTranslationMgmt.getTranslatedString('MSG_SCRATCH_CONTINUE_OPTIONS', codRegionCode), 1 );
+              CASE ( liChoice ) OF
+                1:  // keep going.
+                BEGIN
+                  // do nothing, keep going.
+                  lrecScratchEntries.State := lrecScratchEntries.State::Ignore;
+                  lrecScratchEntries.MODIFY(FALSE);
+                  COMMIT();
+                END;
+                2:
+                  ERROR(''); // an error was already shown, so bubble up
+              END; // end case
+
+            END; // if interactive or automated
+
+          END; // if it worked
+        UNTIL( lrecScratchEntries.NEXT() = 0 );
+      END; // if we have scratch entries
+    END;
+
+    PROCEDURE ProcessEntry@1000000000(VAR precScratchpad@1000000000 : Record 23044500) pbOutFound : Boolean;
+    VAR
+      lbFound@1000000001 : Boolean;
+      lrrefRecord@1000000003 : RecordRef;
+      lfrefQuantityToAdjustField@1000000004 : FieldRef;
+      liPage@1000000005 : Integer;
+      ltrecNotUsed@1000000006 : TEMPORARY Record 23044511;
+      lrecSearchRule@1000000007 : Record 23044529;
+    BEGIN
+      //
+      // Processes a single scratchpad entry.
+      //
+      precScratchpad."Processing Result" := precScratchpad."Processing Result"::" ";
+      IF recWHISetup."Scratch Process Codeunit" <> 0 THEN BEGIN
+        precScratchpad."Processing Action" := precScratchpad."Processing Action"::Decode;
+        CODEUNIT.RUN(recWHISetup."Scratch Process Codeunit", precScratchpad);
+      END;
+      IF (precScratchpad."Processing Result" <> precScratchpad."Processing Result"::Handled) AND (precScratchpad."Item No." = '') THEN
+        DecodeScratchpad( precScratchpad );
+
+      precScratchpad."Processing Result" := precScratchpad."Processing Result"::" ";
+      IF recWHISetup."Scratch Process Codeunit" <> 0 THEN BEGIN
+        precScratchpad."Processing Action" := precScratchpad."Processing Action"::Process;
+        CODEUNIT.RUN(recWHISetup."Scratch Process Codeunit", precScratchpad);
+        pbOutFound := precScratchpad."Processing Result" = precScratchpad."Processing Result"::Handled;
+      END;
+
+      IF precScratchpad."Processing Result" <> precScratchpad."Processing Result"::Handled THEN BEGIN
+        processCountEntry(precScratchpad);
+        pbOutFound := precScratchpad."Processing Result" = precScratchpad."Processing Result"::Handled;
+      END;
+
+      IF precScratchpad."Processing Result" <> precScratchpad."Processing Result"::Handled THEN BEGIN
+        pbOutFound := cuDocs.GetRecordRefKeys(
+          precScratchpad."Location Code", // pcodLoc,
+          precScratchpad.Bin, // pcodBin,
+          precScratchpad."Job ID", // pcodDoc,
+          0,// piLine,
+          precScratchpad."Item No.", // pcodItem,
+          TRUE, // only look for records that have some sort of quantity to adjust field.
+          ltrecNotUsed, // not used for scratchpad.
+          lrrefRecord,
+          lrecSearchRule  );
+
+        IF ( pbOutFound ) THEN BEGIN
+          IF ( lrecSearchRule."Qty. Adjust Field No." = 0 ) THEN BEGIN
+            ERROR( cuTranslationMgmt.getTranslatedString('ERR_SCRATCH_NO_QTY_FIELD', codRegionCode), precScratchpad."Line No.",  lrrefRecord.NAME, lrrefRecord.GETVIEW() );
+          END;
+          lfrefQuantityToAdjustField := lrrefRecord.FIELD( lrecSearchRule."Qty. Adjust Field No." );
+          ASSERTERROR BEGIN // using ASSERTERROR as a try catch
+            // we're doing this because we'll need to add more usefull information
+            // in the event of an error.
+            lfrefQuantityToAdjustField.VALIDATE( precScratchpad.Quantity );
+            ERROR('trycatch');
+          END; // end asserterror / trycatch usage
+          IF ( GETLASTERRORTEXT() = 'trycatch' ) THEN BEGIN
+            // expected, so actually make the change.
+            lfrefQuantityToAdjustField.VALIDATE( precScratchpad.Quantity );
+          END ELSE BEGIN
+            precScratchpad.State := precScratchpad.State::Errored;
+            precScratchpad.MODIFY(FALSE); // if we got this far, then mark ourself as processed
+            COMMIT(); // Commit the change prior to error
+            // unexpected, so an actual error condition.
+            ERROR( STRSUBSTNO('%1 on %2.   Scratchpad line %3',
+              GETLASTERRORTEXT(),
+              lrrefRecord.GETFILTERS(),
+              precScratchpad."Line No."
+               ) );
+          END;
+          lrrefRecord.MODIFY(TRUE);
+          precScratchpad.State := precScratchpad.State::Processed;
+          precScratchpad.MODIFY(FALSE); // if we got this far, then mark ourself as processed
+        END;
+      END;
+    END;
+
+    PROCEDURE DecodeScratchpad@1000000003(VAR precScratchpad@1000000000 : Record 23044500);
+    VAR
+      lrecMatchingBarcode@1000000002 : Record 23044509;
+      lrecMatchingItem@1000000001 : Record 27;
+    BEGIN
+      //
+      // Decodes a specific scratchpad entry only if the item no. is not yet filled in
+      // which is the indicator that something was already supplied.
+      //
+      IF ( precScratchpad."Item No." = '' ) THEN BEGIN
+        IF ( cuBarcodeRules.decodeItemBarcode(
+               precScratchpad.Barcode, // ptxtBarcode,
+               lrecMatchingBarcode, // precBarcodeRule,
+               lrecMatchingItem, // precItem,
+               0, // piMenuContext,
+               '', // pcodOptionalItem,
+               '' )  // pcodOptionalVariant)
+            ) THEN
+        BEGIN
+          precScratchpad."Item No." := lrecMatchingItem."No.";
+          precScratchpad."Lot No." := lrecMatchingBarcode."Lot No. Result";
+          precScratchpad."Serial No." := lrecMatchingBarcode."Serial No. Result";
+          IF ( precScratchpad.Quantity = 0 ) AND ( lrecMatchingBarcode."Quantity Result" <> 0 ) THEN BEGIN
+            // if there is a quantity in the barcode, and we have a quantity, then use
+            // it instead.
+            precScratchpad.Quantity := lrecMatchingBarcode."Quantity Result";
+          END;
+          precScratchpad.MODIFY(FALSE);
+        END;
+      END; // if no item number is yet on the scratchpad entry
+    END;
+
+    PROCEDURE FindAndOpenPage@1000000002(VAR precScratchpad@1000000000 : Record 23044500);
+    VAR
+      lbOutFound@1000000001 : Boolean;
+      lrrefRecord@1000000002 : RecordRef;
+      liIgnoredQtyAdjustField@1000000003 : Integer;
+      liPage@1000000004 : Integer;
+      lvarRecRef@1000000005 : Variant;
+      ltrecNotUsed@1000000006 : TEMPORARY Record 23044511;
+      lrecSearchRule@1000000007 : Record 23044529;
+    BEGIN
+      recWHISetup.GET;
+      precScratchpad."Processing Result" := precScratchpad."Processing Result"::" ";
+      IF recWHISetup."Scratch Process Codeunit" <> 0 THEN BEGIN
+        precScratchpad."Processing Action" := precScratchpad."Processing Action"::Decode;
+        CODEUNIT.RUN(recWHISetup."Scratch Process Codeunit", precScratchpad);
+      END;
+      IF (precScratchpad."Processing Result" <> precScratchpad."Processing Result"::Handled) AND (precScratchpad."Item No." ='') THEN BEGIN
+        DecodeScratchpad( precScratchpad );
+      END;
+
+      precScratchpad."Processing Result" := precScratchpad."Processing Result"::" ";
+      IF recWHISetup."Scratch Process Codeunit" <> 0 THEN BEGIN
+        precScratchpad."Processing Action" := precScratchpad."Processing Action"::"Show Document";
+        CODEUNIT.RUN(recWHISetup."Scratch Process Codeunit", precScratchpad);
+      END;
+
+      IF precScratchpad."Processing Result" <> precScratchpad."Processing Result"::Handled THEN BEGIN
+        showCountDocument(precScratchpad);
+      END;
+
+      IF precScratchpad."Processing Result" <> precScratchpad."Processing Result"::Handled THEN BEGIN
+        lbOutFound := cuDocs.GetRecordRefKeys(
+          precScratchpad."Location Code", // pcodLoc,
+          precScratchpad.Bin, // pcodBin,
+          precScratchpad."Job ID", // pcodDoc,
+          0,// piLine,
+          precScratchpad."Item No.", // pcodItem
+          FALSE, // any matching records
+          ltrecNotUsed,
+          lrrefRecord,
+          lrecSearchRule );
+
+        IF ( NOT lbOutFound ) THEN BEGIN
+          ERROR( cuTranslationMgmt.getTranslatedString('ERR_SCRATCH_NO_MATCH', codRegionCode), precScratchpad."Line No." );
+        END;
+
+        lvarRecRef := lrrefRecord; // this is a variant trick used to open a page.
+        //
+        //
+        // EVEN IF the page is 0 at this point, if it's 0 NAV will use the
+        // default lookup list for the record.
+
+        //
+        // A variant is used to work around passing a recordref into page::run
+        PAGE.RUN( liPage, lvarRecRef );
+      END;
+    END;
+
+    LOCAL PROCEDURE processCountEntry@1000000008(VAR precScratchEntry@1000000000 : Record 23044500);
+    VAR
+      lrecScratchEntry@1000000006 : Record 23044500;
+      lrecCountSheet@1000000005 : Record 23044300;
+      lrecCountSheetLine@1000000004 : Record 23044301;
+      lrecLocation@1000000003 : Record 14;
+      lcuPhyInvtMgmt@1000000002 : Codeunit 23044507;
+      lcodCountNo@1000000001 : Code[20];
+    BEGIN
+      //<FUNC>
+      //  Description: Attempts to process the count sheet entry if the job id matches a count sheet.
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+      lrecScratchEntry := precScratchEntry;
+
+      IF((lrecScratchEntry.Category = lrecScratchEntry.Category::Other) OR (lrecScratchEntry.Category = lrecScratchEntry.Category::"Inventory Count") ) THEN BEGIN
+
+
+        lcodCountNo := lcuPhyInvtMgmt.getActiveCountBySheet(lrecScratchEntry."Job ID",lrecScratchEntry."Location Code");
+        IF lrecCountSheet.GET(lcodCountNo, lrecScratchEntry."Job ID") THEN BEGIN
+          lrecLocation.GET(lrecScratchEntry."Location Code");
+
+          // try to find a matching line
+          lrecCountSheetLine.SETRANGE("Count No.", lrecCountSheet."Count No.");
+          lrecCountSheetLine.SETRANGE("Sheet Name", lrecCountSheet."Sheet Name");
+          lrecCountSheetLine.SETRANGE("Item No.", lrecScratchEntry."Item No.");
+          lrecCountSheetLine.SETRANGE("Lot No.", lrecScratchEntry."Lot No.");
+          lrecCountSheetLine.SETRANGE("Serial No.", lrecScratchEntry."Serial No.");
+
+          IF lrecLocation."Bin Mandatory" THEN
+            lrecCountSheetLine.SETRANGE("Bin Code", lrecScratchEntry.Bin)
+          ELSE
+            lrecCountSheetLine.SETRANGE("Shelf No.", lrecScratchEntry.Bin);
+
+          IF lrecCountSheetLine.FINDFIRST THEN BEGIN
+            lrecCountSheetLine.VALIDATE("Quantity (Base)", lrecCountSheetLine."Quantity (Base)" + lrecScratchEntry.Quantity);
+            lrecCountSheetLine.MODIFY(TRUE);
+          END ELSE BEGIN
+            lrecCountSheetLine.RESET;
+            lrecCountSheetLine.INIT;
+            lrecCountSheetLine.VALIDATE("Count No.",lrecCountSheet."Count No.");
+            lrecCountSheetLine.VALIDATE("Sheet Name",lrecCountSheet."Sheet Name");
+            lrecCountSheetLine.VALIDATE("Item No.", lrecScratchEntry."Item No.");
+            lrecCountSheetLine.VALIDATE("Location Code", lrecScratchEntry."Location Code");
+            lrecCountSheetLine.VALIDATE("Serial No.", lrecScratchEntry."Serial No.");
+            lrecCountSheetLine.VALIDATE("Lot No.", lrecScratchEntry."Lot No.");
+            IF lrecLocation."Bin Mandatory" THEN
+              lrecCountSheetLine.VALIDATE("Bin Code", lrecScratchEntry.Bin)
+            ELSE
+              lrecCountSheetLine.VALIDATE("Shelf No.", lrecScratchEntry.Bin);
+            //lrecCountSheetLine."Scanned DateTime" := lrecScratchEntry."Creation Date";
+            lrecCountSheetLine."User ID" := lrecScratchEntry."User ID";
+            lrecCountSheetLine.VALIDATE("Quantity (Base)", lrecScratchEntry.Quantity);
+            lrecCountSheetLine.INSERT(TRUE);
+          END;
+
+          lrecScratchEntry."Processing Result" := lrecScratchEntry."Processing Result"::Handled;
+          lrecScratchEntry.State := lrecScratchEntry.State::Processed;
+          lrecScratchEntry.MODIFY(FALSE);
+          precScratchEntry := lrecScratchEntry;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE showCountDocument@1000000009(VAR precScratchEntry@1000000000 : Record 23044500);
+    VAR
+      lrecCountHeader@1000000003 : Record 23044304;
+      lcuPhyInvtMgmt@1000000002 : Codeunit 23044507;
+      lcodCountNo@1000000001 : Code[20];
+    BEGIN
+      IF((precScratchEntry.Category = precScratchEntry.Category::Other) OR (precScratchEntry.Category = precScratchEntry.Category::"Inventory Count") ) THEN BEGIN
+        lcodCountNo := lcuPhyInvtMgmt.getActiveCountBySheet(precScratchEntry."Job ID",precScratchEntry."Location Code");
+        IF lrecCountHeader.GET(lcodCountNo) THEN BEGIN
+          precScratchEntry."Processing Result" := precScratchEntry."Processing Result"::Handled;
+          PAGE.RUN( 0, lrecCountHeader );
+        END;
+      END;
+    END;
+
+    PROCEDURE decodeAllEntries@1000000001();
+    VAR
+      lrecScratchEntry@1000000000 : Record 23044500;
+    BEGIN
+      lrecScratchEntry.SETFILTER(State,'<>%1',lrecScratchEntry.State::Processed);
+      IF ( lrecScratchEntry.FIND('-') ) THEN BEGIN
+        REPEAT
+          DecodeScratchpad( lrecScratchEntry );
+        UNTIL( lrecScratchEntry.NEXT() = 0 );
+      END; // if we have scratch entries
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+    }
+    END.
+  }
+}
+

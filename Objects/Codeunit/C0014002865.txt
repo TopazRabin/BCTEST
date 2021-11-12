@@ -1,0 +1,2075 @@
+OBJECT Codeunit 14002865 OWR Replenishment Mgt.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/23/18;
+    Time=12:00:00 PM;
+    Version List=RF1.50.14;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      LotNoByBinCodeBuffer@1240020002 : TEMPORARY Record 14002866;
+      TempWhseWkshLine@1240020012 : TEMPORARY Record 7326;
+      TempWhseItemTrackingLine@1240020000 : TEMPORARY Record 6550;
+      TempInternalMovementLine@1240020015 : TEMPORARY Record 7347;
+      WhseWkshTemplateName@1240020009 : Code[10];
+      WhseWkshName@1240020008 : Code[10];
+      InternalMoveNo@1240020016 : Code[20];
+      RemainQtyToReplenishBase@1240020006 : Decimal;
+      EntryNo@1240020007 : Integer;
+      NextLineNo@1240020005 : Integer;
+      DoNotFillQtytoHandle@1240020004 : Boolean;
+      Text001@1240020003 : TextConst 'ENU=From Bin Content record not found.';
+      Text002@1240020010 : TextConst 'ENU=Location not found.';
+      Text003@1240020011 : TextConst 'ENU=Location is not enabled with Directed Put-away and Pick.';
+      Text004@1240020013 : TextConst 'ENU=Warehouse Worksheet Template not found.';
+      Text005@1240020014 : TextConst 'ENU=Warehouse Worksheet Name not found.';
+      Text006@1240020001 : TextConst 'ENU=Would you like to also remove the Replenishment Rule from all associated Bin Content records, Bin Code records, and Zone Code records?';
+      Text007@1240020017 : TextConst 'ENU=No replenishment was created.';
+
+    [External]
+    PROCEDURE CreateReplenUsingFilters@1240020009(LocationCode@1240020000 : Code[10];SetWhseWkshTemplateName@1240020012 : Code[10];SetWhseWkshName@1240020011 : Code[10];SetInternalMoveNo@1240020013 : Code[20];ToZoneFilter@1240020001 : Code[250];ToBinFilter@1240020002 : Code[250];ToItemFilter@1240020003 : Code[250];ToVariantFilter@1240020004 : Code[250];ToUOMFilter@1240020005 : Code[250];IncludeQtyBase@1240020009 : Decimal;ExcludeQtyBase@1240020006 : Decimal;TopOffReplenishment@1240020007 : Boolean;AutoCreateMovement@1240020010 : Boolean);
+    VAR
+      ToBinContent@1240020008 : Record 7302;
+    BEGIN
+      ToBinContent.SETRANGE("Location Code",LocationCode);
+      ToBinContent.SETRANGE(Fixed,TRUE);
+      ToBinContent.SETFILTER("Block Movement",'<>%1&<>%2',
+        ToBinContent."Block Movement"::All,ToBinContent."Block Movement"::Inbound);
+      IF ToZoneFilter <> '' THEN
+        ToBinContent.SETFILTER("Zone Code",ToZoneFilter);
+      IF ToBinFilter <> '' THEN
+        ToBinContent.SETFILTER("Bin Code",ToBinFilter);
+      IF ToItemFilter <> '' THEN
+        ToBinContent.SETFILTER("Item No.",ToItemFilter);
+      IF ToVariantFilter <> '' THEN
+        ToBinContent.SETFILTER("Variant Code",ToVariantFilter);
+      IF ToUOMFilter <> '' THEN
+        ToBinContent.SETFILTER("Unit of Measure Code",ToUOMFilter);
+      IF ToBinContent.FINDSET(FALSE) THEN
+        CreateOWRReplenishment(ToBinContent,SetWhseWkshTemplateName,SetWhseWkshName,SetInternalMoveNo,
+          IncludeQtyBase,ExcludeQtyBase,TopOffReplenishment,AutoCreateMovement);
+    END;
+
+    [External]
+    PROCEDURE CreateOWRReplenishment@1240020001(VAR ToBinContent@1240020000 : Record 7302;SetWhseWkshTemplateName@1240020007 : Code[10];SetWhseWkshName@1240020008 : Code[10];VAR SetInternalMoveNo@1240020012 : Code[20];IncludeQtyBase@1240020010 : Decimal;ExcludeQtyBase@1240020006 : Decimal;TopOff@1240020001 : Boolean;AutoCreateMovement@1240020009 : Boolean);
+    VAR
+      BinContent@1240020004 : Record 7302;
+      ReplenishmentRule@1240020003 : Record 14002867;
+      Location@1240020002 : Record 14;
+      RFSetup@1240020011 : Record 14002801;
+      AllowBreakBulk@1240020005 : Boolean;
+    BEGIN
+      WITH ToBinContent DO BEGIN
+        Location.GET(ToBinContent."Location Code");
+
+        IF Location."Directed Put-away and Pick" THEN BEGIN
+          IF (SetWhseWkshTemplateName <> '') AND (SetWhseWkshName <> '') THEN BEGIN
+            WhseWkshTemplateName := SetWhseWkshTemplateName;
+            WhseWkshName := SetWhseWkshName;
+          END ELSE
+            GetDefaultWhseWorksheet(Location.Code);
+
+          GetCurrentWhseWorksheetLines(Location.Code);
+
+          REPEAT
+            CLEAR(RemainQtyToReplenishBase);
+            IF ToBinContent.Fixed THEN BEGIN
+              GetReplenishmentRule(ToBinContent,ReplenishmentRule);
+
+              IF Location."Allow Breakbulk" OR ReplenishmentRule."Allow BreakBulk during Replen." THEN
+                AllowBreakBulk := TRUE;
+
+              RemainQtyToReplenishBase :=
+                CalculateQtyToReplenish(ToBinContent,ReplenishmentRule,IncludeQtyBase,ExcludeQtyBase,TopOff);
+
+              IF RemainQtyToReplenishBase > 0 THEN BEGIN
+                OnBeforeFindReplenBin(ToBinContent);
+                InitiateReplenishment(ToBinContent,ReplenishmentRule);
+              END;
+            END;
+          UNTIL ToBinContent.NEXT = 0;
+        END ELSE BEGIN
+          IF Location."Bin Mandatory" THEN BEGIN
+            IF SetInternalMoveNo <> '' THEN
+              InternalMoveNo := SetInternalMoveNo
+            ELSE
+              InternalMoveNo := '';
+
+            GetCurrentInternalMovementLines(Location.Code);
+
+            REPEAT
+              CLEAR(RemainQtyToReplenishBase);
+              IF ToBinContent.Fixed THEN BEGIN
+                GetReplenishmentRule(ToBinContent,ReplenishmentRule);
+
+                RemainQtyToReplenishBase :=
+                  CalculateQtyToReplenish(ToBinContent,ReplenishmentRule,IncludeQtyBase,ExcludeQtyBase,TopOff);
+
+                IF RemainQtyToReplenishBase > 0 THEN BEGIN
+                  OnBeforeFindReplenBin(ToBinContent);
+                  InitiateBWReplenishment(ToBinContent,ReplenishmentRule);
+                END;
+              END;
+            UNTIL ToBinContent.NEXT = 0;
+          END;
+        END;
+      END;
+
+      RFSetup.GET;
+      IF Location."Directed Put-away and Pick" THEN BEGIN
+        OnBeforeInsertWhseWkshLine(Location,WhseWkshTemplateName,WhseWkshName);
+        IF InsertWhseWkshLine(Location.Code) THEN BEGIN
+          COMMIT;
+          OnAfterInsertWhseWkshLine(Location,WhseWkshTemplateName,WhseWkshName);
+          IF GUIALLOWED AND RFSetup."Review OWR Replenishments" AND AutoCreateMovement THEN BEGIN
+            ShowMovementWorksheet(WhseWkshTemplateName,WhseWkshName,Location.Code);
+          END;
+
+          IF AutoCreateMovement AND
+             (((NOT RFSetup."Review OWR Replenishments") AND GUIALLOWED) OR
+              (NOT GUIALLOWED))
+          THEN
+            CreateMovementDocument(WhseWkshTemplateName,WhseWkshName,Location.Code,AllowBreakBulk);
+        END;
+      END ELSE BEGIN
+        OnBeforeInsertIntMoveLine(InternalMoveNo);
+        IF InsertIntMoveLine THEN BEGIN
+          COMMIT;
+          OnAfterInsertIntMoveLine(InternalMoveNo);
+          IF GUIALLOWED AND RFSetup."Review OWR Replenishments" AND AutoCreateMovement THEN BEGIN
+            ShowInternalMovement(InternalMoveNo,Location.Code);
+            AutoCreateMovement := FALSE;
+          END;
+
+          IF AutoCreateMovement AND
+             (((NOT RFSetup."Review OWR Replenishments") AND GUIALLOWED) OR
+              (NOT GUIALLOWED))
+          THEN
+            CreateInventoryMovementDocument(InternalMoveNo,Location.Code);
+        END;
+      END;
+
+      LotNoByBinCodeBuffer.RESET;
+      LotNoByBinCodeBuffer.DELETEALL;
+      TempWhseWkshLine.RESET;
+      TempWhseWkshLine.DELETEALL;
+      TempWhseItemTrackingLine.RESET;
+      TempWhseItemTrackingLine.DELETEALL;
+      TempInternalMovementLine.RESET;
+      TempInternalMovementLine.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE InitiateReplenishment@1240020004(ToBinContent@1240020001 : Record 7302;ReplenishmentRule@1240020017 : Record 14002867);
+    VAR
+      Location@1240020011 : Record 14;
+      RFLocationSetup@1240020002 : Record 14099031;
+      ItemTrackingMgt@1240020000 : Codeunit 6500;
+      QtyAvailToTakeBase@1240020006 : Decimal;
+      ReplenQtyBase@1240020005 : Decimal;
+      CurrentLotNo@1240020004 : Code[20];
+      ReplenHandled@1240020016 : Boolean;
+      SNRequired@1240020010 : Boolean;
+      LNRequired@1240020018 : Boolean;
+      UseLicensePlating@1240020003 : Boolean;
+    BEGIN
+      WITH ToBinContent DO BEGIN
+        ReplenHandled := FALSE;
+
+        ItemTrackingMgt.CheckWhseItemTrkgSetup("Item No.",SNRequired,LNRequired,FALSE);
+
+        Location.GET("Location Code");
+        UseLicensePlating := FALSE;
+        IF RFLocationSetup.GET("Location Code") THEN
+          IF RFLocationSetup."Use License Plating" THEN
+            UseLicensePlating := TRUE;
+        IF LNRequired THEN BEGIN
+          IF ReplenishmentRule."FEFO Replenishment" THEN BEGIN
+            CLEAR(CurrentLotNo);
+            FindLotNoByBinCode(ToBinContent,'','');
+            GetCurrentBinContentLotNo(ToBinContent,CurrentLotNo);
+
+            IF ReplenishmentRule."Prevent Lot Mixing" AND (CurrentLotNo <> '') THEN BEGIN
+              LotNoByBinCodeBuffer.RESET;
+              LotNoByBinCodeBuffer.SETCURRENTKEY("Expiration Date");
+              IF LotNoByBinCodeBuffer.FINDFIRST THEN
+                IF CurrentLotNo <> LotNoByBinCodeBuffer."Lot No." THEN
+                  EXIT;
+            END;
+
+            IF ReplenishmentRule."Strict Lot Replenishment" AND (CurrentLotNo <> '') THEN BEGIN
+              LotNoByBinCodeBuffer.RESET;
+              LotNoByBinCodeBuffer.SETCURRENTKEY("Expiration Date");
+              IF LotNoByBinCodeBuffer.FINDFIRST THEN
+                IF CurrentLotNo = LotNoByBinCodeBuffer."Lot No." THEN
+                  LotReplenishment(ToBinContent,ReplenishmentRule,Location.Code,CurrentLotNo,ReplenHandled);
+
+              IF (NOT ReplenHandled) AND ReplenishmentRule."Prevent Lot Mixing" THEN
+                EXIT;
+
+              IF UseLicensePlating AND ReplenHandled THEN
+                EXIT;
+            END;
+
+            IF RemainQtyToReplenishBase > 0 THEN BEGIN
+              IF ReplenHandled AND ReplenishmentRule."Prevent Lot Mixing" THEN
+                EXIT;
+
+              LotReplenishment(ToBinContent,ReplenishmentRule,Location.Code,'',ReplenHandled);
+            END;
+
+            EXIT;
+          END;
+
+          IF ReplenishmentRule."Strict Lot Replenishment" AND (NOT ReplenHandled) THEN BEGIN
+            CLEAR(CurrentLotNo);
+            FindLotNoByBinCode(ToBinContent,'','');
+            GetCurrentBinContentLotNo(ToBinContent,CurrentLotNo);
+            IF ReplenishmentRule."Prevent Lot Mixing" AND (CurrentLotNo <> '') THEN
+              FindLotNoByBinCode(ToBinContent,'',CurrentLotNo);
+
+            IF CurrentLotNo <> '' THEN BEGIN
+              LotReplenishment(ToBinContent,ReplenishmentRule,Location.Code,CurrentLotNo,ReplenHandled);
+
+              IF (NOT ReplenHandled) AND ReplenishmentRule."Prevent Lot Mixing" THEN
+                EXIT;
+
+              IF UseLicensePlating AND ReplenHandled THEN
+                EXIT;
+            END;
+
+            IF RemainQtyToReplenishBase > 0 THEN BEGIN
+              IF ReplenHandled AND ReplenishmentRule."Prevent Lot Mixing" THEN
+                EXIT;
+
+              LotReplenishment(ToBinContent,ReplenishmentRule,Location.Code,'',ReplenHandled);
+            END;
+
+            EXIT;
+          END;
+
+          IF ReplenishmentRule."Prevent Lot Mixing" AND (NOT ReplenHandled) THEN BEGIN
+            CLEAR(CurrentLotNo);
+            FindLotNoByBinCode(ToBinContent,'','');
+            GetCurrentBinContentLotNo(ToBinContent,CurrentLotNo);
+            IF CurrentLotNo <> '' THEN
+              FindLotNoByBinCode(ToBinContent,'',CurrentLotNo);
+
+            IF CurrentLotNo <> '' THEN
+              LotReplenishment(ToBinContent,ReplenishmentRule,Location.Code,CurrentLotNo,ReplenHandled)
+            ELSE
+              LotReplenishment(ToBinContent,ReplenishmentRule,Location.Code,'',ReplenHandled);
+
+            EXIT;
+          END;
+
+          IF NOT ReplenHandled THEN BEGIN
+            FindLotNoByBinCode(ToBinContent,'','');
+            LotReplenishment(ToBinContent,ReplenishmentRule,Location.Code,'',ReplenHandled);
+            EXIT;
+          END;
+        END ELSE BEGIN
+          NormalReplenishment(ToBinContent,ReplenishmentRule,Location.Code,ReplenHandled);
+          EXIT;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE NormalReplenishment@1240020006(ToBinContent@1240020005 : Record 7302;ReplenishmentRule@1240020003 : Record 14002867;LocationCode@1240020002 : Code[10];VAR ReplenHandled@1240020000 : Boolean);
+    VAR
+      FromBinContent@1240020019 : Record 7302;
+      Location@1240020006 : Record 14;
+      QtyToReplenBase@1240020010 : Decimal;
+      ReplenQtyBase@1240020009 : Decimal;
+      AllowBreakBulk@1240020001 : Boolean;
+      ReplenLotNo@1240020007 : Code[20];
+    BEGIN
+      CLEAR(QtyToReplenBase);
+      CLEAR(ReplenLotNo);
+      QtyToReplenBase := RemainQtyToReplenishBase;
+      ReplenHandled := FALSE;
+
+      Location.GET(LocationCode);
+
+      // Match Current UOM:
+      FromBinContent.RESET;
+      FromBinContent.SETRANGE("Location Code",LocationCode);
+      FromBinContent.SETRANGE("Item No.",ToBinContent."Item No.");
+      FromBinContent.SETRANGE("Variant Code",ToBinContent."Variant Code");
+      IF ReplenishmentRule."Replen-from Zone Filter" <> '' THEN
+        FromBinContent.SETFILTER("Zone Code",ReplenishmentRule."Replen-from Zone Filter");
+      IF ReplenishmentRule."Replen-from Bin Filter" <> '' THEN
+        FromBinContent.SETFILTER("Bin Code",ReplenishmentRule."Replen-from Bin Filter");
+      FromBinContent.SETFILTER("Bin Ranking",'<%1',ToBinContent."Bin Ranking");
+      FromBinContent.SETFILTER("Block Movement",'<>%1&<>%2',
+        FromBinContent."Block Movement"::All,FromBinContent."Block Movement"::Outbound);
+
+      IF (ToBinContent."Replenishment Rule" <> '') AND
+          ReplenishmentRule."Allow BreakBulk during Replen." AND
+          (ReplenishmentRule."Replen-from UOM Filter" <> '')
+      THEN
+        FromBinContent.SETFILTER("Unit of Measure Code",ReplenishmentRule."Replen-from UOM Filter")
+      ELSE
+        FromBinContent.SETRANGE("Unit of Measure Code",ToBinContent."Unit of Measure Code");
+
+      IF FromBinContent.FINDSET(FALSE) THEN
+        REPEAT
+          EvaluateFromBinContent(ToBinContent,FromBinContent,ReplenishmentRule,ReplenLotNo,ReplenHandled);
+        UNTIL (FromBinContent.NEXT = 0) OR (ReplenHandled);
+
+      // Other UOMs:
+      IF ((ToBinContent."Replenishment Rule" <> '') AND (ReplenishmentRule."Allow BreakBulk during Replen.")) OR
+          ((ToBinContent."Replenishment Rule" = '') AND (Location."Allow Breakbulk"))
+      THEN
+        IF (NOT ReplenHandled) AND (RemainQtyToReplenishBase > 0) THEN BEGIN
+          FromBinContent.RESET;
+          FromBinContent.SETRANGE("Location Code",LocationCode);
+          FromBinContent.SETRANGE("Item No.",ToBinContent."Item No.");
+          FromBinContent.SETRANGE("Variant Code",ToBinContent."Variant Code");
+          IF ReplenishmentRule."Replen-from Zone Filter" <> '' THEN
+            FromBinContent.SETFILTER("Zone Code",ReplenishmentRule."Replen-from Zone Filter");
+          IF ReplenishmentRule."Replen-from Bin Filter" <> '' THEN
+            FromBinContent.SETFILTER("Bin Code",ReplenishmentRule."Replen-from Bin Filter");
+          FromBinContent.SETFILTER("Bin Ranking",'<%1',ToBinContent."Bin Ranking");
+          FromBinContent.SETFILTER("Block Movement",'<>%1&<>%2',
+            FromBinContent."Block Movement"::All,FromBinContent."Block Movement"::Outbound);
+          IF (ToBinContent."Replenishment Rule" <> '') AND
+              ReplenishmentRule."Allow BreakBulk during Replen." AND
+              (ReplenishmentRule."Replen-from UOM Filter" <> '')
+          THEN
+            FromBinContent.SETFILTER("Unit of Measure Code",ReplenishmentRule."Replen-from UOM Filter");
+
+          IF FromBinContent.FINDSET(FALSE) THEN
+            REPEAT
+              EvaluateFromBinContent(ToBinContent,FromBinContent,ReplenishmentRule,ReplenLotNo,ReplenHandled);
+            UNTIL (FromBinContent.NEXT = 0) OR (ReplenHandled);
+        END;
+
+      IF (QtyToReplenBase > 0) AND (QtyToReplenBase <> RemainQtyToReplenishBase) THEN
+        ReplenHandled := TRUE;
+    END;
+
+    LOCAL PROCEDURE LotReplenishment@1240020010(ToBinContent@1240020001 : Record 7302;ReplenishmentRule@1240020007 : Record 14002867;LocationCode@1240020002 : Code[10];CurrentLotNo@1240020006 : Code[20];VAR ReplenHandled@1240020000 : Boolean);
+    VAR
+      FromBinContent@1240020022 : Record 7302;
+      Location@1240020008 : Record 14;
+      QtyToReplenBase@1240020003 : Decimal;
+      ReplenQtyBase@1240020013 : Decimal;
+      ReplenLotNo@1240020010 : Code[20];
+      AllowBreakBulk@1240020004 : Boolean;
+    BEGIN
+      CLEAR(QtyToReplenBase);
+      CLEAR(ReplenLotNo);
+      QtyToReplenBase := RemainQtyToReplenishBase;
+      ReplenHandled := FALSE;
+
+      Location.GET(LocationCode);
+
+      LotNoByBinCodeBuffer.RESET;
+      IF ReplenishmentRule."FEFO Replenishment" THEN
+        LotNoByBinCodeBuffer.SETCURRENTKEY("Expiration Date");
+      LotNoByBinCodeBuffer.SETRANGE("Location Code",LocationCode);
+      LotNoByBinCodeBuffer.SETRANGE("Item No.",ToBinContent."Item No.");
+      LotNoByBinCodeBuffer.SETRANGE("Variant Code",ToBinContent."Variant Code");
+      IF CurrentLotNo <> '' THEN
+        LotNoByBinCodeBuffer.SETRANGE("Lot No.",CurrentLotNo);
+      IF ReplenishmentRule."Replen-from Zone Filter" <> '' THEN
+        LotNoByBinCodeBuffer.SETFILTER("Zone Code",ReplenishmentRule."Replen-from Zone Filter");
+      IF ReplenishmentRule."Replen-from Bin Filter" <> '' THEN
+        LotNoByBinCodeBuffer.SETFILTER("Bin Code",ReplenishmentRule."Replen-from Bin Filter");
+      IF LotNoByBinCodeBuffer.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          IF (NOT ReplenishmentRule."Prevent Lot Mixing") OR
+              (ReplenLotNo = '') OR
+              (ReplenishmentRule."Prevent Lot Mixing" AND (ReplenLotNo = LotNoByBinCodeBuffer."Lot No."))
+          THEN BEGIN
+            ReplenLotNo := LotNoByBinCodeBuffer."Lot No.";
+
+            // Match Current UOM:
+            FromBinContent.RESET;
+            FromBinContent.SETRANGE("Location Code",LocationCode);
+            FromBinContent.SETRANGE("Bin Code",LotNoByBinCodeBuffer."Bin Code");
+            FromBinContent.SETRANGE("Item No.",LotNoByBinCodeBuffer."Item No.");
+            FromBinContent.SETRANGE("Variant Code",LotNoByBinCodeBuffer."Variant Code");
+            IF ReplenishmentRule."Replen-from Zone Filter" <> '' THEN
+              FromBinContent.SETFILTER("Zone Code",ReplenishmentRule."Replen-from Zone Filter");
+            IF ReplenishmentRule."Replen-from Bin Filter" <> '' THEN
+              FromBinContent.SETFILTER("Bin Code",ReplenishmentRule."Replen-from Bin Filter");
+            FromBinContent.SETRANGE("Lot No. Filter",LotNoByBinCodeBuffer."Lot No.");
+            FromBinContent.SETFILTER("Bin Ranking",'<%1',ToBinContent."Bin Ranking");
+            FromBinContent.SETFILTER("Block Movement",'<>%1&<>%2',
+              FromBinContent."Block Movement"::All,FromBinContent."Block Movement"::Outbound);
+
+            IF (ToBinContent."Replenishment Rule" <> '') AND
+                ReplenishmentRule."Allow BreakBulk during Replen." AND
+                (ReplenishmentRule."Replen-from UOM Filter" <> '')
+            THEN
+              FromBinContent.SETFILTER("Unit of Measure Code",ReplenishmentRule."Replen-from UOM Filter")
+            ELSE
+              FromBinContent.SETRANGE("Unit of Measure Code",ToBinContent."Unit of Measure Code");
+
+            IF FromBinContent.FINDSET(FALSE) THEN
+              REPEAT
+                IF CheckExpirationDateIsAcceptable(ReplenishmentRule,LotNoByBinCodeBuffer."Expiration Date") THEN BEGIN
+                  EvaluateFromBinContent(ToBinContent,FromBinContent,ReplenishmentRule,ReplenLotNo,ReplenHandled);
+                END;
+              UNTIL (FromBinContent.NEXT = 0) OR (ReplenHandled);
+
+            // Other UOMs:
+            IF ((ToBinContent."Replenishment Rule" <> '') AND (ReplenishmentRule."Allow BreakBulk during Replen.")) OR
+                ((ToBinContent."Replenishment Rule" = '') AND (Location."Allow Breakbulk"))
+            THEN
+              IF (NOT ReplenHandled) AND (RemainQtyToReplenishBase > 0) THEN BEGIN
+                FromBinContent.RESET;
+                FromBinContent.SETRANGE("Location Code",LocationCode);
+                FromBinContent.SETRANGE("Bin Code",LotNoByBinCodeBuffer."Bin Code");
+                FromBinContent.SETRANGE("Item No.",LotNoByBinCodeBuffer."Item No.");
+                FromBinContent.SETRANGE("Variant Code",LotNoByBinCodeBuffer."Variant Code");
+                IF ReplenishmentRule."Replen-from Zone Filter" <> '' THEN
+                  FromBinContent.SETFILTER("Zone Code",ReplenishmentRule."Replen-from Zone Filter");
+                IF ReplenishmentRule."Replen-from Bin Filter" <> '' THEN
+                  FromBinContent.SETFILTER("Bin Code",ReplenishmentRule."Replen-from Bin Filter");
+                FromBinContent.SETRANGE("Lot No. Filter",LotNoByBinCodeBuffer."Lot No.");
+                FromBinContent.SETFILTER("Bin Ranking",'<%1',ToBinContent."Bin Ranking");
+                FromBinContent.SETFILTER("Block Movement",'<>%1&<>%2',
+                  FromBinContent."Block Movement"::All,FromBinContent."Block Movement"::Outbound);
+                IF (ToBinContent."Replenishment Rule" <> '') AND
+                    ReplenishmentRule."Allow BreakBulk during Replen." AND
+                    (ReplenishmentRule."Replen-from UOM Filter" <> '')
+                THEN
+                  FromBinContent.SETFILTER("Unit of Measure Code",ReplenishmentRule."Replen-from UOM Filter");
+
+                IF FromBinContent.FINDSET(FALSE) THEN
+                  REPEAT
+                    IF CheckExpirationDateIsAcceptable(ReplenishmentRule,LotNoByBinCodeBuffer."Expiration Date") THEN BEGIN
+                      EvaluateFromBinContent(ToBinContent,FromBinContent,ReplenishmentRule,ReplenLotNo,ReplenHandled);
+                    END;
+                  UNTIL (FromBinContent.NEXT = 0) OR (ReplenHandled);
+              END;
+          END ELSE
+            ReplenHandled := TRUE;
+        UNTIL (LotNoByBinCodeBuffer.NEXT = 0) OR (ReplenHandled);
+      END;
+
+      IF (QtyToReplenBase > 0) AND (QtyToReplenBase <> RemainQtyToReplenishBase) THEN
+        ReplenHandled := TRUE;
+    END;
+
+    LOCAL PROCEDURE CreateReplenishment@1240020013(ToBinContent@1240020014 : Record 7302;ReplenishmentRule@1240020011 : Record 14002867;LocationCode@1240020007 : Code[10];ZoneCode@1240020012 : Code[10];BinCode@1240020001 : Code[20];UnitOfMeasureCode@1240020010 : Code[10];FromLotNo@1240020013 : Code[20];PalletNo@1240020005 : Code[20];QtyPerUnitOfMeasure@1240020003 : Decimal;ReplenQtyBase@1240020006 : Decimal) : Boolean;
+    VAR
+      WhseWkshLine2@1240020004 : Record 7326;
+      FromBinContent@1240020002 : Record 7302;
+      Location@1240020000 : Record 14;
+    BEGIN
+      FromBinContent.RESET;
+      IF NOT FromBinContent.GET(LocationCode,BinCode,ToBinContent."Item No.",ToBinContent."Variant Code",UnitOfMeasureCode) THEN BEGIN
+        ERROR(Text001);
+        EXIT(FALSE);
+      END;
+
+      OnBeforeCreateReplenishment(ToBinContent,FromBinContent,TempWhseWkshLine,
+        TempWhseItemTrackingLine,TempInternalMovementLine,FromLotNo,ReplenQtyBase);
+
+      Location.GET(LocationCode);
+      IF Location."Directed Put-away and Pick" THEN BEGIN
+        IF NOT UseForReplenishment(FromBinContent) THEN
+          EXIT(FALSE);
+
+        WhseWkshLine2.COPY(TempWhseWkshLine);
+        TempWhseWkshLine.SETCURRENTKEY(
+          "Item No.","From Bin Code","Location Code","Variant Code","From Unit of Measure Code");
+        TempWhseWkshLine.SETRANGE("Location Code",LocationCode);
+        TempWhseWkshLine.SETRANGE("Item No.",ToBinContent."Item No.");
+        TempWhseWkshLine.SETRANGE("Variant Code",ToBinContent."Variant Code");
+        TempWhseWkshLine.SETRANGE("From Unit of Measure Code",UnitOfMeasureCode);
+        TempWhseWkshLine.SETRANGE("From Bin Code",BinCode);
+        TempWhseWkshLine.SETRANGE("To Bin Code",ToBinContent."Bin Code");
+        TempWhseWkshLine.SETRANGE("Pallet Code",PalletNo);
+        IF NOT TempWhseWkshLine.FINDSET(FALSE) THEN BEGIN
+          TempWhseWkshLine.INIT;
+          TempWhseWkshLine."Worksheet Template Name" := WhseWkshTemplateName;
+          TempWhseWkshLine.Name := WhseWkshName;
+          TempWhseWkshLine."Location Code" := LocationCode;
+          TempWhseWkshLine."Line No." := NextLineNo;
+          TempWhseWkshLine."From Bin Code" := BinCode;
+          TempWhseWkshLine."From Zone Code" := ZoneCode;
+          TempWhseWkshLine."From Unit of Measure Code" := UnitOfMeasureCode;
+          TempWhseWkshLine."Qty. per From Unit of Measure" := QtyPerUnitOfMeasure;
+          TempWhseWkshLine."To Bin Code" := ToBinContent."Bin Code";
+          TempWhseWkshLine."To Zone Code" := ToBinContent."Zone Code";
+          TempWhseWkshLine."Unit of Measure Code" := ToBinContent."Unit of Measure Code";
+          TempWhseWkshLine."Qty. per Unit of Measure" := ToBinContent."Qty. per Unit of Measure";
+          TempWhseWkshLine."Item No." := ToBinContent."Item No.";
+          TempWhseWkshLine.VALIDATE("Variant Code",ToBinContent."Variant Code");
+          TempWhseWkshLine.VALIDATE(Quantity,ROUND(ReplenQtyBase / ToBinContent."Qty. per Unit of Measure",0.00001));
+
+          TempWhseWkshLine."Qty. (Base)" := ReplenQtyBase;
+          TempWhseWkshLine."Qty. Outstanding (Base)" := ReplenQtyBase;
+          TempWhseWkshLine."Qty. to Handle (Base)" := ReplenQtyBase;
+
+          TempWhseWkshLine."Whse. Document Type" := TempWhseWkshLine."Whse. Document Type"::"Whse. Mov.-Worksheet";
+          TempWhseWkshLine."Whse. Document No." := WhseWkshName;
+          TempWhseWkshLine."Whse. Document Line No." := TempWhseWkshLine."Line No.";
+
+          IF PalletNo <> '' THEN BEGIN
+            TempWhseWkshLine."Pallet Code" := PalletNo;
+            TempWhseWkshLine."Pallet Action" := TempWhseWkshLine."Pallet Action"::Move;
+          END;
+
+          TempWhseWkshLine.INSERT;
+
+          IF FromLotNo <> '' THEN BEGIN
+            TempWhseItemTrackingLine.RESET;
+            TempWhseItemTrackingLine.SETCURRENTKEY(
+              "Source ID","Source Type","Source Subtype","Source Batch Name",
+              "Source Prod. Order Line","Source Ref. No.","Location Code");
+            TempWhseItemTrackingLine.SETRANGE("Source Type",7326);
+            TempWhseItemTrackingLine.SETRANGE("Source ID",TempWhseWkshLine.Name);
+            TempWhseItemTrackingLine.SETRANGE("Source Batch Name",TempWhseWkshLine."Worksheet Template Name");
+            TempWhseItemTrackingLine.SETRANGE("Source Ref. No.",NextLineNo);
+            TempWhseItemTrackingLine.SETRANGE("Location Code",LocationCode);
+            IF FromLotNo <> '' THEN
+              TempWhseItemTrackingLine.SETRANGE("Lot No.",FromLotNo);
+            IF NOT TempWhseItemTrackingLine.FINDSET(FALSE) THEN BEGIN
+              TempWhseItemTrackingLine.INIT;
+              TempWhseItemTrackingLine."Entry No." := EntryNo;
+              TempWhseItemTrackingLine."Source Type" := 7326;
+              TempWhseItemTrackingLine."Source Subtype" := 0;
+              TempWhseItemTrackingLine."Source ID" := TempWhseWkshLine.Name;
+              TempWhseItemTrackingLine."Source Batch Name" := TempWhseWkshLine."Worksheet Template Name";
+              TempWhseItemTrackingLine."Source Ref. No." := NextLineNo;
+              TempWhseItemTrackingLine."Location Code" := LocationCode;
+              TempWhseItemTrackingLine."Item No." := ToBinContent."Item No.";
+              TempWhseItemTrackingLine."Variant Code" := ToBinContent."Variant Code";
+              TempWhseItemTrackingLine."Qty. per Unit of Measure" := ToBinContent."Qty. per Unit of Measure";
+              TempWhseItemTrackingLine."Lot No." := FromLotNo;
+              TempWhseItemTrackingLine."Quantity (Base)" := ReplenQtyBase;
+              TempWhseItemTrackingLine.VALIDATE("Qty. to Handle",ROUND(ReplenQtyBase / ToBinContent."Qty. per Unit of Measure",0.00001));
+              TempWhseItemTrackingLine."Qty. to Handle (Base)" := ReplenQtyBase;
+              TempWhseItemTrackingLine.INSERT;
+
+              EntryNo := EntryNo + 1;
+            END;
+          END;
+
+          NextLineNo := NextLineNo + 10000;
+
+        END ELSE BEGIN
+          TempWhseWkshLine."Qty. (Base)" += ReplenQtyBase;
+          TempWhseWkshLine.VALIDATE(
+            Quantity,ROUND(TempWhseWkshLine."Qty. (Base)" / ToBinContent."Qty. per Unit of Measure",0.00001));
+          TempWhseWkshLine."Qty. Outstanding (Base)" := TempWhseWkshLine."Qty. (Base)";
+          TempWhseWkshLine."Qty. to Handle (Base)" := TempWhseWkshLine."Qty. (Base)";
+
+          TempWhseWkshLine.MODIFY;
+
+          IF FromLotNo <> '' THEN BEGIN
+            TempWhseItemTrackingLine.RESET;
+            TempWhseItemTrackingLine.SETCURRENTKEY(
+              "Source ID","Source Type","Source Subtype","Source Batch Name",
+              "Source Prod. Order Line","Source Ref. No.","Location Code");
+            TempWhseItemTrackingLine.SETRANGE("Source Type",7326);
+            TempWhseItemTrackingLine.SETRANGE("Source ID",TempWhseWkshLine.Name);
+            TempWhseItemTrackingLine.SETRANGE("Source Batch Name",TempWhseWkshLine."Worksheet Template Name");
+            TempWhseItemTrackingLine.SETRANGE("Source Ref. No.",NextLineNo);
+            TempWhseItemTrackingLine.SETRANGE("Location Code",LocationCode);
+            IF FromLotNo <> '' THEN
+              TempWhseItemTrackingLine.SETRANGE("Lot No.",FromLotNo);
+            IF NOT TempWhseItemTrackingLine.FINDSET(FALSE) THEN BEGIN
+              TempWhseItemTrackingLine.INIT;
+              TempWhseItemTrackingLine."Entry No." := EntryNo;
+              TempWhseItemTrackingLine."Source Type" := 7326;
+              TempWhseItemTrackingLine."Source Subtype" := 0;
+              TempWhseItemTrackingLine."Source ID" := TempWhseWkshLine.Name;
+              TempWhseItemTrackingLine."Source Batch Name" := TempWhseWkshLine."Worksheet Template Name";
+              TempWhseItemTrackingLine."Source Ref. No." := TempWhseWkshLine."Line No.";
+              TempWhseItemTrackingLine."Location Code" := LocationCode;
+              TempWhseItemTrackingLine."Item No." := ToBinContent."Item No.";
+              TempWhseItemTrackingLine."Variant Code" := ToBinContent."Variant Code";
+              TempWhseItemTrackingLine."Qty. per Unit of Measure" := ToBinContent."Qty. per Unit of Measure";
+              TempWhseItemTrackingLine."Lot No." := FromLotNo;
+              TempWhseItemTrackingLine."Quantity (Base)" := ReplenQtyBase;
+              TempWhseItemTrackingLine.VALIDATE("Qty. to Handle",ROUND(ReplenQtyBase / ToBinContent."Qty. per Unit of Measure",0.00001));
+              TempWhseItemTrackingLine."Qty. to Handle (Base)" := ReplenQtyBase;
+              TempWhseItemTrackingLine.INSERT;
+
+              EntryNo := EntryNo + 1;
+            END;
+          END;
+        END;
+
+        TempWhseWkshLine.COPY(WhseWkshLine2);
+
+        OnAfterCreateReplenishment(ToBinContent,FromBinContent,TempWhseWkshLine,
+          TempWhseItemTrackingLine,TempInternalMovementLine,FromLotNo,ReplenQtyBase);
+
+        EXIT(TRUE);
+      END;
+    END;
+
+    [External]
+    PROCEDURE InsertWhseWkshLine@8(LocationCode@1240020001 : Code[10]) : Boolean;
+    VAR
+      WhseWkshLine@1000 : Record 7326;
+      WhseItemTrackingLine@1240020000 : Record 6550;
+    BEGIN
+      TempWhseWkshLine.RESET;
+      TempWhseWkshLine.SETFILTER(Quantity,'>0');
+      IF TempWhseWkshLine.FIND('-') THEN BEGIN
+        REPEAT
+          WhseWkshLine.INIT;
+          WhseWkshLine := TempWhseWkshLine;
+          IF DoNotFillQtytoHandle THEN BEGIN
+            WhseWkshLine."Qty. to Handle" := 0;
+            WhseWkshLine."Qty. to Handle (Base)" := 0;
+          END;
+          IF PickAccordingToFEFO(TempWhseWkshLine."Item No.",TempWhseWkshLine."Variant Code",LocationCode) THEN BEGIN
+            WhseWkshLine."From Zone Code" := '';
+            WhseWkshLine."From Bin Code" := '';
+          END;
+          WhseWkshLine.INSERT;
+
+          TempWhseItemTrackingLine.RESET;
+          TempWhseItemTrackingLine.SETRANGE("Source Ref. No.",TempWhseWkshLine."Line No.");
+          IF TempWhseItemTrackingLine.FIND('-') THEN
+            REPEAT
+              WhseItemTrackingLine.INIT;
+              WhseItemTrackingLine := TempWhseItemTrackingLine;
+              WhseItemTrackingLine.INSERT;
+            UNTIL TempWhseItemTrackingLine.NEXT = 0;
+
+        UNTIL TempWhseWkshLine.NEXT = 0;
+        EXIT(TRUE);
+      END;
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE CreateMovementDocument@1240020039(WkshTemplate@1240020002 : Code[10];WkshName@1240020003 : Code[10];LocationCode@1240020004 : Code[10];AllowBreakbulk@1240020005 : Boolean);
+    VAR
+      WhseWkshLine@1240020000 : Record 7326;
+      CreateMoveFromWhseSource@1240020001 : Report 7305;
+    BEGIN
+      WhseWkshLine.RESET;
+      WhseWkshLine.SETRANGE("Worksheet Template Name",WkshTemplate);
+      WhseWkshLine.SETRANGE(Name,WkshName);
+      WhseWkshLine.SETRANGE("Location Code",LocationCode);
+      IF WhseWkshLine.FIND('-') THEN BEGIN
+        CreateMoveFromWhseSource.SetWhseWkshLine(WhseWkshLine);
+        CreateMoveFromWhseSource.SetHideValidationDialog(TRUE);
+        CreateMoveFromWhseSource.USEREQUESTPAGE(FALSE);
+        CreateMoveFromWhseSource.SETTABLEVIEW(WhseWkshLine);
+        CreateMoveFromWhseSource.Initialize(
+            '',0,FALSE,TRUE,AllowBreakbulk);
+        CreateMoveFromWhseSource.RUNMODAL;
+        CreateMoveFromWhseSource.GetResultMessage(3);
+        CLEAR(CreateMoveFromWhseSource);
+      END;
+    END;
+
+    LOCAL PROCEDURE InitiateBWReplenishment@1240020014(ToBinContent@1240020001 : Record 7302;ReplenishmentRule@1240020017 : Record 14002867);
+    VAR
+      Location@1240020011 : Record 14;
+      ItemTrackingMgt@1240020000 : Codeunit 6500;
+      QtyAvailToTakeBase@1240020006 : Decimal;
+      ReplenQtyBase@1240020005 : Decimal;
+      CurrentLotNo@1240020004 : Code[20];
+      ReplenHandled@1240020016 : Boolean;
+      SNRequired@1240020010 : Boolean;
+      LNRequired@1240020018 : Boolean;
+    BEGIN
+      WITH ToBinContent DO BEGIN
+        ReplenHandled := FALSE;
+
+        ItemTrackingMgt.CheckWhseItemTrkgSetup("Item No.",SNRequired,LNRequired,FALSE);
+
+        Location.GET("Location Code");
+        IF LNRequired THEN BEGIN
+          IF ReplenishmentRule."FEFO Replenishment" THEN BEGIN
+            CLEAR(CurrentLotNo);
+            FindLotNoByBinCode(ToBinContent,'','');
+            GetCurrentBinContentLotNo(ToBinContent,CurrentLotNo);
+
+            IF ReplenishmentRule."Prevent Lot Mixing" AND (CurrentLotNo <> '') THEN BEGIN
+              LotNoByBinCodeBuffer.RESET;
+              LotNoByBinCodeBuffer.SETCURRENTKEY("Expiration Date");
+              IF LotNoByBinCodeBuffer.FINDFIRST THEN
+                IF CurrentLotNo <> LotNoByBinCodeBuffer."Lot No." THEN
+                  EXIT;
+            END;
+
+            IF ReplenishmentRule."Strict Lot Replenishment" AND (CurrentLotNo <> '') THEN BEGIN
+              LotNoByBinCodeBuffer.RESET;
+              LotNoByBinCodeBuffer.SETCURRENTKEY("Expiration Date");
+              IF LotNoByBinCodeBuffer.FINDFIRST THEN
+                IF CurrentLotNo = LotNoByBinCodeBuffer."Lot No." THEN
+                  LotBWReplenishment(ToBinContent,ReplenishmentRule,Location.Code,CurrentLotNo,ReplenHandled);
+
+              IF (NOT ReplenHandled) AND ReplenishmentRule."Prevent Lot Mixing" THEN
+                EXIT;
+            END;
+
+            IF RemainQtyToReplenishBase > 0 THEN BEGIN
+              IF ReplenHandled AND ReplenishmentRule."Prevent Lot Mixing" THEN
+                EXIT;
+
+              LotBWReplenishment(ToBinContent,ReplenishmentRule,Location.Code,'',ReplenHandled);
+            END;
+
+            EXIT;
+          END;
+
+          IF ReplenishmentRule."Strict Lot Replenishment" AND (NOT ReplenHandled) THEN BEGIN
+            CLEAR(CurrentLotNo);
+            FindLotNoByBinCode(ToBinContent,'','');
+            GetCurrentBinContentLotNo(ToBinContent,CurrentLotNo);
+            IF ReplenishmentRule."Prevent Lot Mixing" AND (CurrentLotNo <> '') THEN
+              FindLotNoByBinCode(ToBinContent,'',CurrentLotNo);
+
+            IF CurrentLotNo <> '' THEN BEGIN
+              LotBWReplenishment(ToBinContent,ReplenishmentRule,Location.Code,CurrentLotNo,ReplenHandled);
+
+              IF (NOT ReplenHandled) AND ReplenishmentRule."Prevent Lot Mixing" THEN
+                EXIT;
+            END;
+
+            IF RemainQtyToReplenishBase > 0 THEN BEGIN
+              IF ReplenHandled AND ReplenishmentRule."Prevent Lot Mixing" THEN
+                EXIT;
+
+              LotBWReplenishment(ToBinContent,ReplenishmentRule,Location.Code,'',ReplenHandled);
+            END;
+
+            EXIT;
+          END;
+
+          IF ReplenishmentRule."Prevent Lot Mixing" AND (NOT ReplenHandled) THEN BEGIN
+            CLEAR(CurrentLotNo);
+            FindLotNoByBinCode(ToBinContent,'','');
+            GetCurrentBinContentLotNo(ToBinContent,CurrentLotNo);
+            IF CurrentLotNo <> '' THEN
+              FindLotNoByBinCode(ToBinContent,'',CurrentLotNo);
+
+            IF CurrentLotNo <> '' THEN
+              LotBWReplenishment(ToBinContent,ReplenishmentRule,Location.Code,CurrentLotNo,ReplenHandled)
+            ELSE
+              LotBWReplenishment(ToBinContent,ReplenishmentRule,Location.Code,'',ReplenHandled);
+
+            EXIT;
+          END;
+
+          IF NOT ReplenHandled THEN BEGIN
+            FindLotNoByBinCode(ToBinContent,'','');
+            LotBWReplenishment(ToBinContent,ReplenishmentRule,Location.Code,'',ReplenHandled);
+            EXIT;
+          END;
+        END ELSE BEGIN
+          NormalBWReplenishment(ToBinContent,ReplenishmentRule,Location.Code,ReplenHandled);
+          EXIT;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE NormalBWReplenishment@1240020028(ToBinContent@1240020005 : Record 7302;ReplenishmentRule@1240020003 : Record 14002867;LocationCode@1240020002 : Code[10];VAR ReplenHandled@1240020000 : Boolean);
+    VAR
+      FromBinContent@1240020019 : Record 7302;
+      Location@1240020006 : Record 14;
+      QtyToReplenBase@1240020010 : Decimal;
+      ReplenQtyBase@1240020009 : Decimal;
+      AllowBreakBulk@1240020001 : Boolean;
+      ReplenLotNo@1240020007 : Code[20];
+    BEGIN
+      CLEAR(QtyToReplenBase);
+      CLEAR(ReplenLotNo);
+      QtyToReplenBase := RemainQtyToReplenishBase;
+      ReplenHandled := FALSE;
+
+      Location.GET(LocationCode);
+
+      FromBinContent.RESET;
+      FromBinContent.SETRANGE("Location Code",LocationCode);
+      FromBinContent.SETRANGE("Item No.",ToBinContent."Item No.");
+      FromBinContent.SETRANGE("Variant Code",ToBinContent."Variant Code");
+      IF ToBinContent.Default THEN
+        FromBinContent.SETRANGE(Default,FALSE)
+      ELSE
+        FromBinContent.SETRANGE(Fixed,FALSE);
+      IF ReplenishmentRule."Replen-from Zone Filter" <> '' THEN
+        FromBinContent.SETFILTER("Zone Code",ReplenishmentRule."Replen-from Zone Filter");
+      IF ReplenishmentRule."Replen-from Bin Filter" <> '' THEN
+        FromBinContent.SETFILTER("Bin Code",ReplenishmentRule."Replen-from Bin Filter");
+      FromBinContent.SETFILTER("Block Movement",'<>%1&<>%2',
+        FromBinContent."Block Movement"::All,FromBinContent."Block Movement"::Outbound);
+
+      IF FromBinContent.FINDSET(FALSE) THEN
+        REPEAT
+          EvaluateFromBinContent(ToBinContent,FromBinContent,ReplenishmentRule,ReplenLotNo,ReplenHandled);
+        UNTIL (FromBinContent.NEXT = 0) OR (ReplenHandled);
+
+      IF (QtyToReplenBase > 0) AND (QtyToReplenBase <> RemainQtyToReplenishBase) THEN
+        ReplenHandled := TRUE;
+    END;
+
+    LOCAL PROCEDURE LotBWReplenishment@1240020026(ToBinContent@1240020001 : Record 7302;ReplenishmentRule@1240020007 : Record 14002867;LocationCode@1240020002 : Code[10];CurrentLotNo@1240020006 : Code[20];VAR ReplenHandled@1240020000 : Boolean);
+    VAR
+      FromBinContent@1240020022 : Record 7302;
+      Location@1240020008 : Record 14;
+      QtyToReplenBase@1240020003 : Decimal;
+      ReplenQtyBase@1240020013 : Decimal;
+      ReplenLotNo@1240020010 : Code[20];
+      AllowBreakBulk@1240020004 : Boolean;
+    BEGIN
+      CLEAR(QtyToReplenBase);
+      CLEAR(ReplenLotNo);
+      QtyToReplenBase := RemainQtyToReplenishBase;
+      ReplenHandled := FALSE;
+
+      Location.GET(LocationCode);
+
+      LotNoByBinCodeBuffer.RESET;
+      IF ReplenishmentRule."FEFO Replenishment" THEN
+        LotNoByBinCodeBuffer.SETCURRENTKEY("Expiration Date");
+      LotNoByBinCodeBuffer.SETRANGE("Location Code",LocationCode);
+      LotNoByBinCodeBuffer.SETRANGE("Item No.",ToBinContent."Item No.");
+      LotNoByBinCodeBuffer.SETRANGE("Variant Code",ToBinContent."Variant Code");
+      IF CurrentLotNo <> '' THEN
+        LotNoByBinCodeBuffer.SETRANGE("Lot No.",CurrentLotNo);
+      IF ReplenishmentRule."Replen-from Zone Filter" <> '' THEN
+        LotNoByBinCodeBuffer.SETFILTER("Zone Code",ReplenishmentRule."Replen-from Zone Filter");
+      IF ReplenishmentRule."Replen-from Bin Filter" <> '' THEN
+        LotNoByBinCodeBuffer.SETFILTER("Bin Code",ReplenishmentRule."Replen-from Bin Filter");
+      IF LotNoByBinCodeBuffer.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          IF (NOT ReplenishmentRule."Prevent Lot Mixing") OR
+              (ReplenLotNo = '') OR
+              (ReplenishmentRule."Prevent Lot Mixing" AND (ReplenLotNo = LotNoByBinCodeBuffer."Lot No."))
+          THEN BEGIN
+            ReplenLotNo := LotNoByBinCodeBuffer."Lot No.";
+
+            FromBinContent.RESET;
+            FromBinContent.SETRANGE("Location Code",LocationCode);
+            FromBinContent.SETRANGE("Bin Code",LotNoByBinCodeBuffer."Bin Code");
+            FromBinContent.SETRANGE("Item No.",LotNoByBinCodeBuffer."Item No.");
+            FromBinContent.SETRANGE("Variant Code",LotNoByBinCodeBuffer."Variant Code");
+            IF ToBinContent.Default THEN
+              FromBinContent.SETRANGE(Default,FALSE)
+            ELSE
+              FromBinContent.SETRANGE(Fixed,FALSE);
+            IF ReplenishmentRule."Replen-from Zone Filter" <> '' THEN
+              FromBinContent.SETFILTER("Zone Code",ReplenishmentRule."Replen-from Zone Filter");
+            IF ReplenishmentRule."Replen-from Bin Filter" <> '' THEN
+              FromBinContent.SETFILTER("Bin Code",ReplenishmentRule."Replen-from Bin Filter");
+            FromBinContent.SETRANGE("Lot No. Filter",LotNoByBinCodeBuffer."Lot No.");
+            FromBinContent.SETFILTER("Block Movement",'<>%1&<>%2',
+              FromBinContent."Block Movement"::All,FromBinContent."Block Movement"::Outbound);
+
+            IF FromBinContent.FINDSET(FALSE) THEN
+              REPEAT
+                IF CheckExpirationDateIsAcceptable(ReplenishmentRule,LotNoByBinCodeBuffer."Expiration Date") THEN BEGIN
+                  EvaluateFromBinContent(ToBinContent,FromBinContent,ReplenishmentRule,ReplenLotNo,ReplenHandled);
+                END;
+              UNTIL (FromBinContent.NEXT = 0) OR (ReplenHandled);
+          END ELSE
+            ReplenHandled := TRUE;
+        UNTIL (LotNoByBinCodeBuffer.NEXT = 0) OR (ReplenHandled);
+      END;
+
+      IF (QtyToReplenBase > 0) AND (QtyToReplenBase <> RemainQtyToReplenishBase) THEN
+        ReplenHandled := TRUE;
+    END;
+
+    LOCAL PROCEDURE CreateBWReplenishment@1240020022(ToBinContent@1240020014 : Record 7302;ReplenishmentRule@1240020011 : Record 14002867;LocationCode@1240020007 : Code[10];ZoneCode@1240020012 : Code[10];BinCode@1240020001 : Code[20];UnitOfMeasureCode@1240020010 : Code[10];FromLotNo@1240020004 : Code[20];QtyPerUnitOfMeasure@1240020013 : Decimal;ReplenQtyBase@1240020006 : Decimal) : Boolean;
+    VAR
+      FromBinContent@1240020002 : Record 7302;
+      Location@1240020000 : Record 14;
+      InternalMovementLine@1240020003 : Record 7347;
+    BEGIN
+      FromBinContent.RESET;
+      IF NOT FromBinContent.GET(LocationCode,BinCode,ToBinContent."Item No.",ToBinContent."Variant Code",UnitOfMeasureCode) THEN BEGIN
+        ERROR(Text001);
+        EXIT(FALSE);
+      END;
+
+      OnBeforeCreateReplenishment(ToBinContent,FromBinContent,TempWhseWkshLine,
+        TempWhseItemTrackingLine,TempInternalMovementLine,FromLotNo,ReplenQtyBase);
+
+      Location.GET(LocationCode);
+      IF (NOT Location."Directed Put-away and Pick") AND (Location."Bin Mandatory") THEN BEGIN
+        IF InternalMoveNo = '' THEN BEGIN
+          TempInternalMovementLine.RESET;
+          TempInternalMovementLine.DELETEALL;
+          CreateInternalMovement(LocationCode);
+        END;
+
+        InternalMovementLine.COPY(TempInternalMovementLine);
+        TempInternalMovementLine.SETCURRENTKEY(
+          "Item No.","From Bin Code","Location Code","Unit of Measure Code","Variant Code");
+        TempInternalMovementLine.SETRANGE("No.",InternalMoveNo);
+        TempInternalMovementLine.SETRANGE("Location Code",LocationCode);
+        TempInternalMovementLine.SETRANGE("Item No.",ToBinContent."Item No.");
+        TempInternalMovementLine.SETRANGE("Variant Code",ToBinContent."Variant Code");
+        TempInternalMovementLine.SETRANGE("Unit of Measure Code",ToBinContent."Unit of Measure Code");
+        TempInternalMovementLine.SETRANGE("From Bin Code",BinCode);
+        TempInternalMovementLine.SETRANGE("To Bin Code",ToBinContent."Bin Code");
+        IF NOT TempInternalMovementLine.FINDSET(FALSE) THEN BEGIN
+          TempInternalMovementLine.INIT;
+          TempInternalMovementLine."No." := InternalMoveNo;
+          TempInternalMovementLine."Line No." := NextLineNo;
+          TempInternalMovementLine."Location Code" := LocationCode;
+          TempInternalMovementLine."From Bin Code" := BinCode;
+          TempInternalMovementLine."To Bin Code" := ToBinContent."Bin Code";
+          TempInternalMovementLine.VALIDATE("Item No.",ToBinContent."Item No.");
+          TempInternalMovementLine.VALIDATE("Variant Code",ToBinContent."Variant Code");
+          TempInternalMovementLine.VALIDATE("Unit of Measure Code",ToBinContent."Unit of Measure Code");
+          TempInternalMovementLine.Description := GetItemDescription(ToBinContent."Item No.",ToBinContent."Variant Code");
+          TempInternalMovementLine.VALIDATE(Quantity,ROUND(ReplenQtyBase / ToBinContent."Qty. per Unit of Measure",0.00001));
+          TempInternalMovementLine.INSERT;
+
+          IF FromLotNo <> '' THEN BEGIN
+            TempWhseItemTrackingLine.RESET;
+            TempWhseItemTrackingLine.SETCURRENTKEY(
+              "Source ID","Source Type","Source Subtype","Source Batch Name",
+              "Source Prod. Order Line","Source Ref. No.","Location Code");
+            TempWhseItemTrackingLine.SETRANGE("Source Type",7347);
+            TempWhseItemTrackingLine.SETRANGE("Source ID",InternalMoveNo);
+            TempWhseItemTrackingLine.SETRANGE("Source Ref. No.",NextLineNo);
+            TempWhseItemTrackingLine.SETRANGE("Location Code",LocationCode);
+            IF FromLotNo <> '' THEN
+              TempWhseItemTrackingLine.SETRANGE("Lot No.",FromLotNo);
+            IF NOT TempWhseItemTrackingLine.FINDSET(FALSE) THEN BEGIN
+              TempWhseItemTrackingLine.INIT;
+              TempWhseItemTrackingLine."Entry No." := EntryNo;
+              TempWhseItemTrackingLine."Source Type" := 7347;
+              TempWhseItemTrackingLine."Source Subtype" := 0;
+              TempWhseItemTrackingLine."Source ID" := InternalMoveNo;
+              TempWhseItemTrackingLine."Source Ref. No." := NextLineNo;
+              TempWhseItemTrackingLine."Location Code" := LocationCode;
+              TempWhseItemTrackingLine."Item No." := ToBinContent."Item No.";
+              TempWhseItemTrackingLine."Variant Code" := ToBinContent."Variant Code";
+              TempWhseItemTrackingLine."Qty. per Unit of Measure" := ToBinContent."Qty. per Unit of Measure";
+              TempWhseItemTrackingLine."Lot No." := FromLotNo;
+              TempWhseItemTrackingLine."Quantity (Base)" := ReplenQtyBase;
+              TempWhseItemTrackingLine.VALIDATE("Qty. to Handle",ROUND(ReplenQtyBase / ToBinContent."Qty. per Unit of Measure",0.00001));
+              TempWhseItemTrackingLine."Qty. to Handle (Base)" := ReplenQtyBase;
+              TempWhseItemTrackingLine.INSERT;
+
+              EntryNo := EntryNo + 1;
+            END;
+          END;
+
+          NextLineNo := NextLineNo + 10000;
+        END ELSE BEGIN
+          TempInternalMovementLine."Qty. (Base)" += ReplenQtyBase;
+          TempInternalMovementLine.VALIDATE(
+            Quantity,ROUND(TempInternalMovementLine."Qty. (Base)" / ToBinContent."Qty. per Unit of Measure",0.00001));
+
+          TempInternalMovementLine.MODIFY;
+
+          IF FromLotNo <> '' THEN BEGIN
+            TempWhseItemTrackingLine.RESET;
+            TempWhseItemTrackingLine.SETCURRENTKEY(
+              "Source ID","Source Type","Source Subtype","Source Batch Name",
+              "Source Prod. Order Line","Source Ref. No.","Location Code");
+            TempWhseItemTrackingLine.SETRANGE("Source Type",7347);
+            TempWhseItemTrackingLine.SETRANGE("Source ID",InternalMoveNo);
+            TempWhseItemTrackingLine.SETRANGE("Source Ref. No.",NextLineNo);
+            TempWhseItemTrackingLine.SETRANGE("Location Code",LocationCode);
+            IF FromLotNo <> '' THEN
+              TempWhseItemTrackingLine.SETRANGE("Lot No.",FromLotNo);
+            IF NOT TempWhseItemTrackingLine.FINDSET(FALSE) THEN BEGIN
+              TempWhseItemTrackingLine.INIT;
+              TempWhseItemTrackingLine."Entry No." := EntryNo;
+              TempWhseItemTrackingLine."Source Type" := 7347;
+              TempWhseItemTrackingLine."Source Subtype" := 0;
+              TempWhseItemTrackingLine."Source ID" := InternalMoveNo;
+              TempWhseItemTrackingLine."Source Ref. No." := NextLineNo;
+              TempWhseItemTrackingLine."Location Code" := LocationCode;
+              TempWhseItemTrackingLine."Item No." := ToBinContent."Item No.";
+              TempWhseItemTrackingLine."Variant Code" := ToBinContent."Variant Code";
+              TempWhseItemTrackingLine."Qty. per Unit of Measure" := ToBinContent."Qty. per Unit of Measure";
+              TempWhseItemTrackingLine."Lot No." := FromLotNo;
+              TempWhseItemTrackingLine."Quantity (Base)" := ReplenQtyBase;
+              TempWhseItemTrackingLine.VALIDATE("Qty. to Handle",ROUND(ReplenQtyBase / ToBinContent."Qty. per Unit of Measure",0.00001));
+              TempWhseItemTrackingLine."Qty. to Handle (Base)" := ReplenQtyBase;
+              TempWhseItemTrackingLine.INSERT;
+
+              EntryNo := EntryNo + 1;
+            END;
+          END;
+        END;
+
+        TempInternalMovementLine.COPY(InternalMovementLine);
+
+        OnAfterCreateReplenishment(ToBinContent,FromBinContent,TempWhseWkshLine,
+          TempWhseItemTrackingLine,TempInternalMovementLine,FromLotNo,ReplenQtyBase);
+
+        EXIT(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateInternalMovement@1240020032(LocationCode@1240020000 : Code[10]);
+    VAR
+      InternalMovementHeader@1240020001 : Record 7346;
+      InvtSetup@1240020002 : Record 313;
+      NoSeriesMgt@1240020003 : Codeunit 396;
+      DocNo@1240020004 : Code[20];
+    BEGIN
+      CLEAR(DocNo);
+      CLEAR(InternalMoveNo);
+      InvtSetup.GET;
+      InvtSetup.TESTFIELD("Internal Movement Nos.");
+
+      DocNo := NoSeriesMgt.GetNextNo(InvtSetup."Internal Movement Nos.",WORKDATE,TRUE);
+
+      InternalMovementHeader.INIT;
+      InternalMovementHeader.VALIDATE("No.",DocNo);
+      InternalMovementHeader.INSERT;
+
+      IF InternalMovementHeader.GET(DocNo) THEN BEGIN
+        InternalMovementHeader."Location Code" := LocationCode;
+        IF InternalMovementHeader."No. Series" = '' THEN BEGIN
+          InvtSetup.GET;
+          InternalMovementHeader."No. Series" := InvtSetup."Internal Movement Nos.";
+        END;
+        InternalMovementHeader.MODIFY;
+        InternalMoveNo := DocNo;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateInventoryMovementDocument@1240020031(DocNo@1240020001 : Code[20];LocationCode@1240020000 : Code[10]);
+    VAR
+      InternalMovementHeader@1240020002 : Record 7346;
+      CreateInvPickMovement@1240020003 : Codeunit 7322;
+    BEGIN
+      InternalMovementHeader.RESET;
+      InternalMovementHeader.SETRANGE("No.",DocNo);
+      InternalMovementHeader.SETRANGE("Location Code",LocationCode);
+      IF InternalMovementHeader.FIND('-') THEN
+        CreateInvPickMovement.CreateInvtMvntWithoutSource(InternalMovementHeader);
+    END;
+
+    LOCAL PROCEDURE InsertIntMoveLine@1240020037() : Boolean;
+    VAR
+      InternalMovementLine@1240020001 : Record 7347;
+      WhseItemTrackingLine@1240020002 : Record 6550;
+    BEGIN
+      TempInternalMovementLine.RESET;
+      TempInternalMovementLine.SETFILTER(Quantity,'>0');
+      IF TempInternalMovementLine.FIND('-') THEN BEGIN
+        REPEAT
+          InternalMovementLine.INIT;
+          InternalMovementLine := TempInternalMovementLine;
+          InternalMovementLine.INSERT;
+
+          TempWhseItemTrackingLine.RESET;
+          TempWhseItemTrackingLine.SETRANGE("Source Ref. No.",TempInternalMovementLine."Line No.");
+          IF TempWhseItemTrackingLine.FIND('-') THEN
+            REPEAT
+              WhseItemTrackingLine.INIT;
+              WhseItemTrackingLine := TempWhseItemTrackingLine;
+              WhseItemTrackingLine.INSERT;
+            UNTIL TempWhseItemTrackingLine.NEXT = 0;
+
+        UNTIL TempInternalMovementLine.NEXT = 0;
+
+        EXIT(TRUE);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE EvaluateFromBinContent@1240020035(ToBinContent@1240020000 : Record 7302;FromBinContent@1240020001 : Record 7302;ReplenishmentRule@1240020002 : Record 14002867;VAR ReplenLotNo@1240020003 : Code[20];VAR ReplenHandled@1240020004 : Boolean);
+    VAR
+      Location@1240020007 : Record 14;
+      RFLocationSetup@1240020009 : Record 14099031;
+      PalletNo@1240020008 : Code[20];
+      QtyAvailToTakeBase@1240020006 : Decimal;
+      ReplenQtyBase@1240020005 : Decimal;
+      UseLicensePlating@1240020010 : Boolean;
+    BEGIN
+      CLEAR(ReplenQtyBase);
+      Location.GET(ToBinContent."Location Code");
+      RFLocationSetup.GET(ToBinContent."Location Code");
+
+      QtyAvailToTakeBase :=
+        CalcAvailBinQtyToTake(
+          FromBinContent."Location Code",FromBinContent."Bin Code",
+          FromBinContent."Item No.",FromBinContent."Variant Code",
+          FromBinContent."Unit of Measure Code",ReplenLotNo);
+      IF QtyAvailToTakeBase > 0 THEN BEGIN
+        IF RFLocationSetup."Use License Plating" THEN
+          ReplenQtyBase := CalcPalletReplenQtyToHandle(
+            ToBinContent,FromBinContent,ReplenishmentRule,ReplenLotNo,PalletNo,QtyAvailToTakeBase)
+        ELSE
+          ReplenQtyBase := CalcReplenQtyToHandle(
+            ToBinContent,FromBinContent,ReplenishmentRule,ReplenLotNo,QtyAvailToTakeBase);
+
+        IF (ReplenQtyBase > 0) AND (RemainQtyToReplenishBase > 0) THEN BEGIN
+          IF Location."Directed Put-away and Pick" THEN BEGIN
+            IF CreateReplenishment(
+              ToBinContent,ReplenishmentRule,FromBinContent."Location Code",
+              FromBinContent."Zone Code",FromBinContent."Bin Code",FromBinContent."Unit of Measure Code",
+              ReplenLotNo,PalletNo,FromBinContent."Qty. per Unit of Measure",ReplenQtyBase)
+            THEN
+              RemainQtyToReplenishBase := RemainQtyToReplenishBase - ReplenQtyBase
+            ELSE
+              ReplenHandled := FALSE;
+          END ELSE BEGIN
+            IF CreateBWReplenishment(
+              ToBinContent,ReplenishmentRule,FromBinContent."Location Code",
+              FromBinContent."Zone Code",FromBinContent."Bin Code",FromBinContent."Unit of Measure Code",
+              ReplenLotNo,FromBinContent."Qty. per Unit of Measure",ReplenQtyBase)
+            THEN
+              RemainQtyToReplenishBase := RemainQtyToReplenishBase - ReplenQtyBase
+            ELSE
+              ReplenHandled := FALSE;
+          END;
+
+          IF PalletNo <> '' THEN
+            ReplenHandled := TRUE;
+
+          IF RemainQtyToReplenishBase <= 0 THEN
+            ReplenHandled := TRUE;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE UseForReplenishment@2(FromBinContent@1000 : Record 7302) : Boolean;
+    VAR
+      BinType@1240020000 : Record 7303;
+    BEGIN
+      IF FromBinContent."Block Movement" IN
+         [FromBinContent."Block Movement"::Outbound,
+          FromBinContent."Block Movement"::All]
+      THEN
+        EXIT(FALSE);
+
+      IF BinType.GET(FromBinContent."Bin Type Code") THEN
+        EXIT(NOT (BinType.Receive OR BinType.Ship));
+    END;
+
+    LOCAL PROCEDURE GetDefaultWhseWorksheet@1240020002(LocationCode@1240020000 : Code[10]);
+    VAR
+      Location@1240020003 : Record 14;
+      RFSetup@1240020004 : Record 14002801;
+      WhseWorksheetTemplate@1240020002 : Record 7328;
+      WhseWorksheetName@1240020001 : Record 7327;
+    BEGIN
+      Location.RESET;
+      IF NOT Location.GET(LocationCode) THEN
+        ERROR(Text002);
+
+      IF NOT Location."Directed Put-away and Pick" THEN
+        ERROR(Text003);
+
+      RFSetup.GET;
+      WhseWkshTemplateName := RFSetup."Movement Worksheet Template";
+      WhseWkshName := RFSetup."Replen Worksheet Name";
+
+      WhseWorksheetTemplate.RESET;
+      WhseWorksheetTemplate.SETRANGE(Name,WhseWkshTemplateName);
+      WhseWorksheetTemplate.SETRANGE(Type,WhseWorksheetTemplate.Type::Movement);
+      IF NOT WhseWorksheetTemplate.FIND('-') THEN
+        ERROR(Text004);
+
+      WhseWorksheetName.RESET;
+      WhseWorksheetName.SETRANGE("Worksheet Template Name",WhseWorksheetTemplate.Name);
+      WhseWorksheetName.SETRANGE(Name,WhseWkshName);
+      IF NOT WhseWorksheetName.FIND('-') THEN
+        ERROR(Text005);
+    END;
+
+    LOCAL PROCEDURE GetCurrentWhseWorksheetLines@1240020017(LocationCode@1240020000 : Code[10]);
+    VAR
+      WhseWkshLine@1240020001 : Record 7326;
+      WhseItemTrackingLine@1240020002 : Record 6550;
+    BEGIN
+      CLEAR(NextLineNo);
+      CLEAR(EntryNo);
+
+      WhseWkshLine.RESET;
+      WhseWkshLine.SETCURRENTKEY("Worksheet Template Name",Name,"Location Code","Line No.");
+      WhseWkshLine.SETRANGE("Worksheet Template Name",WhseWkshTemplateName);
+      WhseWkshLine.SETRANGE(Name,WhseWkshName);
+      WhseWkshLine.SETRANGE("Location Code",LocationCode);
+      IF WhseWkshLine.FINDLAST THEN
+        NextLineNo := WhseWkshLine."Line No." + 10000
+      ELSE
+        NextLineNo := 10000;
+
+      WhseItemTrackingLine.RESET;
+      WhseItemTrackingLine.SETCURRENTKEY("Entry No.");
+      IF WhseItemTrackingLine.FINDLAST THEN
+        EntryNo := WhseItemTrackingLine."Entry No." + 1
+      ELSE
+        EntryNo := 1;
+    END;
+
+    LOCAL PROCEDURE GetCurrentBinContentLotNo@1240020007(BinContent@1240020000 : Record 7302;VAR CurrentLotNo@1240020001 : Code[20]);
+    VAR
+      Location@1240020006 : Record 14;
+      WhseEntry@1240020002 : Record 7312;
+      SourceCodeSetup@1240020004 : Record 242;
+      LastEntryDate@1240020003 : Date;
+      LastEntryNo@1240020005 : Integer;
+    BEGIN
+      CLEAR(CurrentLotNo);
+      CLEAR(LastEntryNo);
+      LastEntryDate := 0D;
+      SourceCodeSetup.RESET;
+      SourceCodeSetup.GET;
+      IF BinContent."Location Code" <> '' THEN
+        Location.GET(BinContent."Location Code");
+
+      LotNoByBinCodeBuffer.RESET;
+      IF LotNoByBinCodeBuffer.FIND('-') THEN BEGIN
+        REPEAT
+          WhseEntry.RESET;
+          WhseEntry.SETCURRENTKEY("Reference No.","Registering Date");
+          WhseEntry.SETRANGE("Location Code",BinContent."Location Code");
+          WhseEntry.SETRANGE("Bin Code",BinContent."Bin Code");
+          WhseEntry.SETRANGE("Item No.",BinContent."Item No.");
+          WhseEntry.SETRANGE("Variant Code",BinContent."Variant Code");
+          WhseEntry.SETRANGE("Unit of Measure Code",BinContent."Unit of Measure Code");
+          WhseEntry.SETRANGE("Lot No.",LotNoByBinCodeBuffer."Lot No.");
+          IF (Location."Require Pick") AND (Location."Require Shipment") THEN
+            WhseEntry.SETFILTER("Source Code",'<>%1',SourceCodeSetup."Whse. Pick");
+          IF (Location."Require Pick") AND (NOT Location."Require Shipment") THEN
+            WhseEntry.SETFILTER("Source Type",'<>%1|<>%2|<>%3|<>%4',110,5744,5990,6650);
+          WhseEntry.ASCENDING(TRUE);
+          IF WhseEntry.FINDLAST THEN BEGIN
+            IF LastEntryDate = 0D THEN BEGIN
+              LastEntryDate := WhseEntry."Registering Date";
+              CurrentLotNo := WhseEntry."Lot No.";
+              LastEntryNo := WhseEntry."Entry No.";
+            END ELSE BEGIN
+              IF (LastEntryDate < WhseEntry."Registering Date") OR
+                 ((LastEntryDate = WhseEntry."Registering Date") AND
+                  (WhseEntry."Entry No." > LastEntryNo))
+              THEN BEGIN
+                LastEntryDate := WhseEntry."Registering Date";
+                CurrentLotNo := WhseEntry."Lot No.";
+                LastEntryNo := WhseEntry."Entry No.";
+              END;
+            END;
+          END;
+        UNTIL LotNoByBinCodeBuffer.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetCurrentInternalMovementLines@1240020038(LocationCode@1240020000 : Code[10]);
+    VAR
+      InternalMovementLine@1240020001 : Record 7347;
+      WhseItemTrackingLine@1240020002 : Record 6550;
+    BEGIN
+      CLEAR(NextLineNo);
+      CLEAR(EntryNo);
+
+      InternalMovementLine.RESET;
+      InternalMovementLine.SETCURRENTKEY("No.","Line No.");
+      InternalMovementLine.SETRANGE("No.",InternalMoveNo);
+      InternalMovementLine.SETRANGE("Location Code",LocationCode);
+      IF InternalMovementLine.FINDLAST THEN
+        NextLineNo := InternalMovementLine."Line No." + 10000
+      ELSE
+        NextLineNo := 10000;
+
+      WhseItemTrackingLine.RESET;
+      WhseItemTrackingLine.SETCURRENTKEY("Entry No.");
+      IF WhseItemTrackingLine.FINDLAST THEN
+        EntryNo := WhseItemTrackingLine."Entry No." + 1
+      ELSE
+        EntryNo := 1;
+    END;
+
+    LOCAL PROCEDURE GetReplenishmentRule@1240020018(ToBinContent@1240020000 : Record 7302;VAR ReplenishmentRule@1240020001 : Record 14002867);
+    VAR
+      Bin@1240020002 : Record 7354;
+      Zone@1240020003 : Record 7300;
+    BEGIN
+      IF ToBinContent."Replenishment Rule" <> '' THEN
+        IF ReplenishmentRule.GET(ToBinContent."Replenishment Rule") THEN
+          EXIT;
+
+      IF Bin.GET(ToBinContent."Location Code",ToBinContent."Bin Code") THEN
+        IF Bin."Default Replenishment Rule" <> '' THEN
+          IF ReplenishmentRule.GET(Bin."Default Replenishment Rule") THEN
+            EXIT;
+
+      IF Zone.GET(ToBinContent."Location Code",ToBinContent."Zone Code") THEN
+        IF Zone."Default Replenishment Rule" <> '' THEN
+          IF ReplenishmentRule.GET(Zone."Default Replenishment Rule") THEN
+            EXIT;
+    END;
+
+    LOCAL PROCEDURE GetItemDescription@1240020033(ItemNo@1240020000 : Code[20];VariantCode@1240020001 : Code[10]) : Text[50];
+    VAR
+      Item@1240020002 : Record 27;
+      ItemVariant@1240020003 : Record 5401;
+    BEGIN
+      IF VariantCode <> '' THEN BEGIN
+        ItemVariant.GET(ItemNo,VariantCode);
+        EXIT(ItemVariant.Description);
+      END ELSE BEGIN
+        Item.GET(ItemNo);
+        EXIT(Item.Description);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetQtyPerUnitOfMeasure@1240020023(ItemNo@1240020000 : Code[20];UnitOfMeasure@1240020001 : Code[10]) : Decimal;
+    VAR
+      Item@1240020002 : Record 27;
+      ItemUOM@1240020003 : Record 5404;
+    BEGIN
+      IF Item.GET(ItemNo) THEN BEGIN
+        IF ItemUOM.GET(Item."No.",UnitOfMeasure) THEN
+          EXIT(ItemUOM."Qty. per Unit of Measure")
+        ELSE BEGIN
+          IF ItemUOM.GET(Item."No.",Item."Base Unit of Measure") THEN
+            EXIT(ItemUOM."Qty. per Unit of Measure");
+        END;
+      END;
+
+      EXIT(1);
+    END;
+
+    LOCAL PROCEDURE FindLotNoByBinCode@1240020005(BinContent@1240020001 : Record 7302;BinCode@1240020004 : Code[20];CurrentLotNo@1240020003 : Code[20]);
+    VAR
+      LotNoByBinCode@1240020000 : Query 7300;
+      ExpDate@1240020002 : Date;
+    BEGIN
+      LotNoByBinCode.SETRANGE(Item_No,BinContent."Item No.");
+      IF BinCode <> '' THEN
+        LotNoByBinCode.SETRANGE(Bin_Code,BinCode);
+      IF CurrentLotNo <> '' THEN
+        LotNoByBinCode.SETRANGE(Lot_No,CurrentLotNo);
+      IF BinContent."Variant Code" <> '' THEN
+        LotNoByBinCode.SETRANGE(Variant_Code,BinContent."Variant Code");
+      IF BinContent."Location Code" <> '' THEN
+        LotNoByBinCode.SETRANGE(Location_Code,BinContent."Location Code");
+      LotNoByBinCode.OPEN;
+
+      LotNoByBinCodeBuffer.RESET;
+      LotNoByBinCodeBuffer.DELETEALL;
+
+      WHILE LotNoByBinCode.READ DO BEGIN
+        LotNoByBinCodeBuffer.INIT;
+        LotNoByBinCodeBuffer."Item No." := LotNoByBinCode.Item_No;
+        LotNoByBinCodeBuffer."Variant Code" := LotNoByBinCode.Variant_Code;
+        LotNoByBinCodeBuffer."Zone Code" := LotNoByBinCode.Zone_Code;
+        LotNoByBinCodeBuffer."Bin Code" := LotNoByBinCode.Bin_Code;
+        LotNoByBinCodeBuffer."Location Code" := LotNoByBinCode.Location_Code;
+        LotNoByBinCodeBuffer."Lot No." := LotNoByBinCode.Lot_No;
+        IF RetrieveExpirationDate(LotNoByBinCode.Item_No,LotNoByBinCode.Variant_Code,LotNoByBinCode.Lot_No,ExpDate) THEN
+          LotNoByBinCodeBuffer."Expiration Date" := ExpDate;
+        LotNoByBinCodeBuffer."Qty. (Base)" := LotNoByBinCode.Sum_Qty_Base;
+        LotNoByBinCodeBuffer.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE CalculateQtyToReplenish@1240020019(ToBinContent@1240020000 : Record 7302;ReplenishmentRule@1240020001 : Record 14002867;IncludeQtyBase@1240020011 : Decimal;ExcludeQtyBase@1240020004 : Decimal;TopOff@1240020009 : Boolean) : Decimal;
+    VAR
+      ReplenMaxQtyBase@1240020002 : Decimal;
+      TotalReplenMaxQtyBase@1240020005 : Decimal;
+      MaxReplenTolerance@1240020003 : Decimal;
+      QtyOnHandBase@1240020008 : Decimal;
+      MinQtyBase@1240020010 : Decimal;
+    BEGIN
+      CLEAR(QtyOnHandBase);
+      CLEAR(MinQtyBase);
+      CLEAR(ReplenMaxQtyBase);
+      CLEAR(TotalReplenMaxQtyBase);
+      CLEAR(MaxReplenTolerance);
+
+      ToBinContent.CALCFIELDS("Quantity (Base)","Put-away Quantity (Base)","Positive Adjmt. Qty. (Base)");
+
+      QtyOnHandBase := (ToBinContent."Quantity (Base)" + ToBinContent."Put-away Quantity (Base)" -
+        ExcludeQtyBase + ToBinContent."Positive Adjmt. Qty. (Base)");
+
+      MinQtyBase := ROUND(ToBinContent."Min. Qty." * ToBinContent."Qty. per Unit of Measure",0.00001);
+
+      IF NOT TopOff THEN BEGIN
+        IF MinQtyBase >= QtyOnHandBase THEN
+          ReplenMaxQtyBase := CalcMaxBinQtyToReplenish(ToBinContent,ReplenishmentRule,IncludeQtyBase);
+      END ELSE
+        ReplenMaxQtyBase := CalcMaxBinQtyToReplenish(ToBinContent,ReplenishmentRule,IncludeQtyBase);
+
+      IF ReplenMaxQtyBase > 0 THEN
+        TotalReplenMaxQtyBase := ReplenMaxQtyBase - QtyOnHandBase;
+
+      EXIT(TotalReplenMaxQtyBase);
+    END;
+
+    LOCAL PROCEDURE CalcMaxBinQtyToReplenish@1240020020(ToBinContent@1240020002 : Record 7302;ReplenishmentRule@1240020001 : Record 14002867;IncludeQtyBase@1240020007 : Decimal) : Decimal;
+    VAR
+      Item@1240020004 : Record 27;
+      ItemUOM@1240020003 : Record 5404;
+      MaxBinQtyBase@1240020000 : Decimal;
+      MaxReplenTolerance@1240020005 : Decimal;
+      TotalMaxBinQtyBase@1240020006 : Decimal;
+      QtyToReplenBase@1240020008 : Decimal;
+    BEGIN
+      CLEAR(MaxBinQtyBase);
+      CLEAR(MaxReplenTolerance);
+      CLEAR(QtyToReplenBase);
+
+      IF ReplenishmentRule."Permit Exceeding Max. Qty." THEN
+        IF ReplenishmentRule."Max. Replenishment Tolerance" <> 0 THEN
+          MaxReplenTolerance := (ReplenishmentRule."Max. Replenishment Tolerance"/100);
+
+      MaxBinQtyBase := ROUND((ToBinContent."Max. Qty." * ToBinContent."Qty. per Unit of Measure"),0.00001,'<');
+
+      IF (MaxReplenTolerance <> 0) AND (IncludeQtyBase > 0) THEN BEGIN
+        Item.GET(ToBinContent."Item No.");
+        IF ItemUOM.GET(Item."No.",Item."Base Unit of Measure") THEN
+          TotalMaxBinQtyBase :=
+            ROUND((MaxBinQtyBase * MaxReplenTolerance) + MaxBinQtyBase,ItemUOM."Qty. per Unit of Measure",'<')
+        ELSE
+          TotalMaxBinQtyBase := ROUND((MaxBinQtyBase * MaxReplenTolerance) + MaxBinQtyBase,1,'<');
+
+        IF (MaxBinQtyBase + IncludeQtyBase) < TotalMaxBinQtyBase THEN
+          QtyToReplenBase := MaxBinQtyBase + IncludeQtyBase
+        ELSE
+          QtyToReplenBase := TotalMaxBinQtyBase;
+      END ELSE
+        QtyToReplenBase := MaxBinQtyBase;
+
+      EXIT(QtyToReplenBase);
+    END;
+
+    LOCAL PROCEDURE CalcAvailBinQtyToTake@1240020008(LocationCode@1240020000 : Code[10];BinCode@1240020005 : Code[20];ItemNo@1240020006 : Code[20];VariantCode@1240020007 : Code[10];UnitOfMeasureCode@1240020008 : Code[10];LotNoFilter@1240020001 : Code[20]) : Decimal;
+    VAR
+      BinContent@1240020004 : Record 7302;
+      Location@1240020003 : Record 14;
+      PendingQtyBase@1240020009 : Decimal;
+      AvailBinQtyToTakeBase@1240020002 : Decimal;
+    BEGIN
+      CLEAR(AvailBinQtyToTakeBase);
+      CLEAR(PendingQtyBase);
+
+      Location.GET(LocationCode);
+
+      BinContent.RESET;
+      BinContent.SETRANGE("Location Code",LocationCode);
+      BinContent.SETRANGE("Bin Code",BinCode);
+      BinContent.SETRANGE("Item No.",ItemNo);
+      IF VariantCode <> '' THEN
+        BinContent.SETRANGE("Variant Code",VariantCode);
+      IF UnitOfMeasureCode <> '' THEN
+        BinContent.SETRANGE("Unit of Measure Code",UnitOfMeasureCode);
+      IF LotNoFilter <> '' THEN
+        BinContent.SETRANGE("Lot No. Filter",LotNoFilter);
+      IF BinContent.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          IF Location."Directed Put-away and Pick" THEN
+            CalcQtyOnPendingWhseWkshLine(BinContent."Location Code",BinContent."Bin Code",
+              BinContent."Item No.",BinContent."Variant Code",BinContent."Unit of Measure Code",
+              LotNoFilter,PendingQtyBase)
+          ELSE
+            CalcQtyOnPendingInternalMoveLine(BinContent."Location Code",BinContent."Bin Code",
+              BinContent."Item No.",BinContent."Variant Code",BinContent."Unit of Measure Code",
+              LotNoFilter,PendingQtyBase);
+
+          AvailBinQtyToTakeBase := BinContent.CalcQtyAvailToTake(0) - PendingQtyBase;
+        UNTIL BinContent.NEXT = 0;
+      END;
+
+      EXIT(AvailBinQtyToTakeBase);
+    END;
+
+    LOCAL PROCEDURE CalcQtyOnPendingWhseWkshLine@1240020011(LocationCode@1240020009 : Code[10];BinCode@1240020008 : Code[20];ItemNo@1240020007 : Code[20];VariantCode@1240020006 : Code[10];UnitOfMeasureCode@1240020005 : Code[10];LotNoFilter@1240020004 : Code[20];VAR PendingWhseWkshLineQtyBase@1240020000 : Decimal);
+    VAR
+      WhseWkshLine@1240020001 : Record 7326;
+      WhseItemTrackingLine@1240020002 : Record 6550;
+    BEGIN
+      CLEAR(PendingWhseWkshLineQtyBase);
+
+      TempWhseWkshLine.RESET;
+      TempWhseWkshLine.SETRANGE("Location Code",LocationCode);
+      TempWhseWkshLine.SETRANGE("Item No.",ItemNo);
+      TempWhseWkshLine.SETRANGE("Variant Code",VariantCode);
+      IF UnitOfMeasureCode <> '' THEN
+        TempWhseWkshLine.SETRANGE("From Unit of Measure Code",UnitOfMeasureCode);
+      TempWhseWkshLine.SETRANGE("From Bin Code",BinCode);
+      IF TempWhseWkshLine.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          IF LotNoFilter <> '' THEN BEGIN
+            TempWhseItemTrackingLine.RESET;
+            TempWhseItemTrackingLine.SETCURRENTKEY(
+              "Source ID","Source Type","Source Subtype","Source Batch Name",
+              "Source Prod. Order Line","Source Ref. No.","Location Code");
+            TempWhseItemTrackingLine.SETRANGE("Source Type",7326);
+            TempWhseItemTrackingLine.SETRANGE("Source ID",TempWhseWkshLine.Name);
+            TempWhseItemTrackingLine.SETRANGE("Source Batch Name",TempWhseWkshLine."Worksheet Template Name");
+            TempWhseItemTrackingLine.SETRANGE("Source Ref. No.",TempWhseWkshLine."Line No.");
+            TempWhseItemTrackingLine.SETRANGE("Location Code",LocationCode);
+            TempWhseItemTrackingLine.SETRANGE("Lot No.",LotNoFilter);
+            IF TempWhseItemTrackingLine.FINDSET(FALSE) THEN
+              REPEAT
+                PendingWhseWkshLineQtyBase += TempWhseItemTrackingLine."Qty. to Handle (Base)";
+              UNTIL TempWhseItemTrackingLine.NEXT = 0;
+          END ELSE
+            PendingWhseWkshLineQtyBase += TempWhseWkshLine."Qty. to Handle (Base)";
+        UNTIL TempWhseWkshLine.NEXT = 0;
+      END;
+
+      WhseWkshLine.RESET;
+      WhseWkshLine.SETRANGE("Worksheet Template Name",WhseWkshTemplateName);
+      WhseWkshLine.SETRANGE(Name,WhseWkshName);
+      WhseWkshLine.SETRANGE("Location Code",LocationCode);
+      WhseWkshLine.SETRANGE("Item No.",ItemNo);
+      WhseWkshLine.SETRANGE("Variant Code",VariantCode);
+      IF UnitOfMeasureCode <> '' THEN
+        WhseWkshLine.SETRANGE("Unit of Measure Code",UnitOfMeasureCode);
+      WhseWkshLine.SETRANGE("From Bin Code",BinCode);
+      IF WhseWkshLine.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          IF LotNoFilter <> '' THEN BEGIN
+            WhseItemTrackingLine.RESET;
+            WhseItemTrackingLine.SETCURRENTKEY(
+              "Source ID","Source Type","Source Subtype","Source Batch Name",
+              "Source Prod. Order Line","Source Ref. No.","Location Code");
+            WhseItemTrackingLine.SETRANGE("Source Type",7326);
+            WhseItemTrackingLine.SETRANGE("Source ID",WhseWkshLine.Name);
+            WhseItemTrackingLine.SETRANGE("Source Batch Name",WhseWkshLine."Worksheet Template Name");
+            WhseItemTrackingLine.SETRANGE("Source Ref. No.",WhseWkshLine."Line No.");
+            WhseItemTrackingLine.SETRANGE("Location Code",LocationCode);
+            WhseItemTrackingLine.SETRANGE("Lot No.",LotNoFilter);
+            IF WhseItemTrackingLine.FINDSET(FALSE) THEN
+              REPEAT
+                PendingWhseWkshLineQtyBase += WhseItemTrackingLine."Qty. to Handle (Base)";
+              UNTIL WhseItemTrackingLine.NEXT = 0;
+          END ELSE
+            PendingWhseWkshLineQtyBase += WhseWkshLine."Qty. to Handle (Base)";
+        UNTIL WhseWkshLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CalcQtyOnPendingInternalMoveLine@1240020034(LocationCode@1240020009 : Code[10];BinCode@1240020008 : Code[20];ItemNo@1240020007 : Code[20];VariantCode@1240020006 : Code[10];UnitOfMeasureCode@1240020005 : Code[10];LotNoFilter@1240020004 : Code[20];VAR PendingQtyBase@1240020000 : Decimal);
+    VAR
+      InternalMovementLine@1240020001 : Record 7347;
+      WhseItemTrackingLine@1240020002 : Record 6550;
+    BEGIN
+      CLEAR(PendingQtyBase);
+
+      TempInternalMovementLine.RESET;
+      TempInternalMovementLine.SETRANGE("No.",InternalMoveNo);
+      TempInternalMovementLine.SETRANGE("Location Code",LocationCode);
+      TempInternalMovementLine.SETRANGE("Item No.",ItemNo);
+      TempInternalMovementLine.SETRANGE("Variant Code",VariantCode);
+      IF UnitOfMeasureCode <> '' THEN
+        TempInternalMovementLine.SETRANGE("Unit of Measure Code",UnitOfMeasureCode);
+      TempInternalMovementLine.SETRANGE("From Bin Code",BinCode);
+      IF TempInternalMovementLine.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          IF LotNoFilter <> '' THEN BEGIN
+            TempWhseItemTrackingLine.RESET;
+            TempWhseItemTrackingLine.SETCURRENTKEY(
+              "Source ID","Source Type","Source Subtype","Source Batch Name",
+              "Source Prod. Order Line","Source Ref. No.","Location Code");
+            TempWhseItemTrackingLine.SETRANGE("Source Type",7347);
+            TempWhseItemTrackingLine.SETRANGE("Source ID",TempInternalMovementLine."No.");
+            TempWhseItemTrackingLine.SETRANGE("Source Ref. No.",TempInternalMovementLine."Line No.");
+            TempWhseItemTrackingLine.SETRANGE("Location Code",LocationCode);
+            TempWhseItemTrackingLine.SETRANGE("Lot No.",LotNoFilter);
+            IF TempWhseItemTrackingLine.FINDSET(FALSE) THEN
+              REPEAT
+                PendingQtyBase += TempWhseItemTrackingLine."Qty. to Handle (Base)";
+              UNTIL TempWhseItemTrackingLine.NEXT = 0;
+          END ELSE
+            PendingQtyBase += TempInternalMovementLine."Qty. (Base)";
+        UNTIL TempInternalMovementLine.NEXT = 0;
+      END;
+
+      InternalMovementLine.RESET;
+      InternalMovementLine.SETRANGE("No.",InternalMoveNo);
+      InternalMovementLine.SETRANGE("Location Code",LocationCode);
+      InternalMovementLine.SETRANGE("Item No.",ItemNo);
+      InternalMovementLine.SETRANGE("Variant Code",VariantCode);
+      IF UnitOfMeasureCode <> '' THEN
+        InternalMovementLine.SETRANGE("Unit of Measure Code",UnitOfMeasureCode);
+      InternalMovementLine.SETRANGE("From Bin Code",BinCode);
+      IF InternalMovementLine.FINDSET(FALSE) THEN BEGIN
+        REPEAT
+          IF LotNoFilter <> '' THEN BEGIN
+            WhseItemTrackingLine.RESET;
+            WhseItemTrackingLine.SETCURRENTKEY(
+              "Source ID","Source Type","Source Subtype","Source Batch Name",
+              "Source Prod. Order Line","Source Ref. No.","Location Code");
+            WhseItemTrackingLine.SETRANGE("Source Type",7347);
+            WhseItemTrackingLine.SETRANGE("Source ID",InternalMovementLine."No.");
+            WhseItemTrackingLine.SETRANGE("Source Ref. No.",InternalMovementLine."Line No.");
+            WhseItemTrackingLine.SETRANGE("Location Code",LocationCode);
+            WhseItemTrackingLine.SETRANGE("Lot No.",LotNoFilter);
+            IF WhseItemTrackingLine.FINDSET(FALSE) THEN
+              REPEAT
+                PendingQtyBase += WhseItemTrackingLine."Qty. to Handle (Base)";
+              UNTIL WhseItemTrackingLine.NEXT = 0;
+          END ELSE
+            PendingQtyBase += InternalMovementLine."Qty. (Base)";
+        UNTIL InternalMovementLine.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CalcReplenQtyToHandle@1240020003(ToBinContent@1240020000 : Record 7302;FromBinContent@1240020001 : Record 7302;ReplenishmentRule@1240020002 : Record 14002867;ReplenLotNo@1240020011 : Code[20];QtyAvailToTakeBase@1240020003 : Decimal) : Decimal;
+    VAR
+      Location@1240020007 : Record 14;
+      BulkUnits@1240020004 : Decimal;
+      ReplenQtyBase@1240020005 : Decimal;
+      LeastCommonMultiple@1240020009 : Decimal;
+      IncludeQtyBase@1240020006 : Decimal;
+      BulkHandling@1240020008 : Boolean;
+    BEGIN
+      BulkHandling := FALSE;
+      IF FromBinContent."Unit of Measure Code" <> ToBinContent."Unit of Measure Code" THEN
+        BulkHandling := TRUE;
+
+      Location.GET(ToBinContent."Location Code");
+      IF (NOT Location."Directed Put-away and Pick") AND (ReplenishmentRule."Replen. in Unit Increments" <> '') THEN
+        BulkHandling := TRUE;
+
+      IF BulkHandling THEN BEGIN
+        IF Location."Directed Put-away and Pick" THEN
+          LeastCommonMultiple :=
+            CalcLeastCommonMultiple(
+              ToBinContent."Qty. per Unit of Measure",FromBinContent."Qty. per Unit of Measure")
+        ELSE
+          LeastCommonMultiple :=
+            GetQtyPerUnitOfMeasure(ToBinContent."Item No.",ReplenishmentRule."Replen. in Unit Increments");
+
+        IF LeastCommonMultiple = 0 THEN BEGIN
+          ReplenQtyBase := 0;
+          EXIT(ReplenQtyBase);
+        END;
+      END;
+
+      IF QtyAvailToTakeBase > RemainQtyToReplenishBase THEN BEGIN
+        IF BulkHandling THEN BEGIN
+          IF FromBinContent."Qty. per Unit of Measure" >= ToBinContent."Qty. per Unit of Measure" THEN BEGIN
+            BulkUnits :=
+                ROUND(RemainQtyToReplenishBase / LeastCommonMultiple,1,'>');
+
+            IF (BulkUnits * LeastCommonMultiple) <= QtyAvailToTakeBase THEN BEGIN
+              IF BulkUnits > 0 THEN BEGIN
+
+                IF NOT RoundUpBulkUnit(ToBinContent,ReplenishmentRule,BulkUnits,LeastCommonMultiple) THEN
+                  BulkUnits :=
+                      ROUND(RemainQtyToReplenishBase / LeastCommonMultiple,1,'<');
+
+                ReplenQtyBase := ROUND(BulkUnits * LeastCommonMultiple,0.00001,'<')
+              END ELSE
+                ReplenQtyBase := 0;
+            END ELSE BEGIN
+              BulkUnits :=
+                ROUND(RemainQtyToReplenishBase / LeastCommonMultiple,1,'<');
+              ReplenQtyBase := ROUND(BulkUnits * LeastCommonMultiple,0.00001,'<');
+            END;
+          END ELSE BEGIN
+            IF ToBinContent."Qty. per Unit of Measure" > RemainQtyToReplenishBase THEN BEGIN
+              ReplenQtyBase := 0;
+              EXIT(ReplenQtyBase);
+            END;
+
+            BulkUnits := ROUND(RemainQtyToReplenishBase / LeastCommonMultiple,1,'>');
+
+            IF (BulkUnits * LeastCommonMultiple) <= QtyAvailToTakeBase THEN BEGIN
+              IF BulkUnits > 0 THEN BEGIN
+
+                IF NOT RoundUpBulkUnit(ToBinContent,ReplenishmentRule,BulkUnits,LeastCommonMultiple) THEN
+                  BulkUnits :=
+                      ROUND(RemainQtyToReplenishBase / LeastCommonMultiple,1,'<');
+
+                ReplenQtyBase := ROUND(BulkUnits * LeastCommonMultiple,0.00001,'<')
+              END ELSE
+                ReplenQtyBase := 0;
+            END ELSE BEGIN
+              BulkUnits :=
+                ROUND(RemainQtyToReplenishBase / LeastCommonMultiple,1,'<');
+              ReplenQtyBase := ROUND(BulkUnits * LeastCommonMultiple,0.00001,'<');
+            END;
+          END;
+        END ELSE
+          ReplenQtyBase := RemainQtyToReplenishBase;
+      END ELSE BEGIN
+        IF BulkHandling THEN BEGIN
+          IF FromBinContent."Qty. per Unit of Measure" >= ToBinContent."Qty. per Unit of Measure" THEN BEGIN
+            BulkUnits :=
+              ROUND(QtyAvailToTakeBase / LeastCommonMultiple,1,'<');
+
+            IF (BulkUnits * LeastCommonMultiple) <= QtyAvailToTakeBase THEN BEGIN
+              IF BulkUnits > 0 THEN
+                ReplenQtyBase := ROUND(BulkUnits * LeastCommonMultiple,0.00001,'<')
+              ELSE
+                ReplenQtyBase := 0;
+            END;
+          END ELSE BEGIN
+            IF ToBinContent."Qty. per Unit of Measure" > QtyAvailToTakeBase THEN BEGIN
+              ReplenQtyBase := 0;
+              EXIT(ReplenQtyBase);
+            END;
+
+            BulkUnits := ROUND(QtyAvailToTakeBase / LeastCommonMultiple,1,'<');
+
+            IF (BulkUnits * LeastCommonMultiple) <= QtyAvailToTakeBase THEN BEGIN
+              IF BulkUnits > 0 THEN
+                ReplenQtyBase := ROUND(BulkUnits * LeastCommonMultiple,0.00001,'<')
+              ELSE
+                ReplenQtyBase := 0;
+            END;
+          END;
+        END ELSE
+          ReplenQtyBase := QtyAvailToTakeBase;
+      END;
+
+      EXIT(ReplenQtyBase);
+    END;
+
+    LOCAL PROCEDURE CalcPalletReplenQtyToHandle@1240020045(ToBinContent@1240020005 : Record 7302;FromBinContent@1240020004 : Record 7302;ReplenishmentRule@1240020003 : Record 14002867;ReplenLotNo@1240020002 : Code[20];VAR PalletNo@1240020001 : Code[20];QtyAvailToTakeBase@1240020000 : Decimal) : Decimal;
+    VAR
+      Location@1240020008 : Record 14;
+      PalletBinContent@1240020007 : Record 14002963;
+      PalletBinContent2@1240020006 : Record 14002963;
+      ReplenQtyBase@1240020009 : Decimal;
+      ReplenHandled@1240020010 : Boolean;
+    BEGIN
+      CLEAR(PalletNo);
+      ReplenHandled := FALSE;
+
+      IF ReplenishmentRule."Replenish Whole LP" THEN BEGIN
+        IF ToBinContent."Unit of Measure Code" = FromBinContent."Unit of Measure Code" THEN BEGIN
+          PalletBinContent.RESET;
+          PalletBinContent.SETRANGE(Location,FromBinContent."Location Code");
+          PalletBinContent.SETRANGE(Bin,FromBinContent."Bin Code");
+          PalletBinContent.SETRANGE("Item No.",FromBinContent."Item No.");
+          PalletBinContent.SETRANGE("Variant No.",FromBinContent."Variant Code");
+          PalletBinContent.SETRANGE("Unit of Measure",FromBinContent."Unit of Measure Code");
+          IF ReplenLotNo <> '' THEN
+            PalletBinContent.SETRANGE("Lot No.",ReplenLotNo);
+          IF PalletBinContent.FINDSET(FALSE) THEN
+            REPEAT
+              IF CheckIfPalletIsAvailable(FromBinContent."Location Code",PalletBinContent."Pallet No.") THEN BEGIN
+                PalletBinContent2.RESET;
+                PalletBinContent2.SETRANGE("Pallet No.",PalletBinContent."Pallet No.");
+                IF PalletBinContent2.FIND('-') AND (PalletBinContent2.NEXT = 0) THEN
+                  IF (PalletBinContent."Quantity (Base)" <= QtyAvailToTakeBase) AND
+                     (PalletBinContent."Quantity (Base)" <= RemainQtyToReplenishBase) AND
+                     (PalletBinContent."Quantity (Base)" <> 0)
+                  THEN
+                    PalletNo := PalletBinContent."Pallet No.";
+                    ReplenQtyBase := PalletBinContent."Quantity (Base)";
+                    ReplenHandled := TRUE;
+              END;
+            UNTIL ReplenHandled OR (PalletBinContent.NEXT = 0);
+        END;
+      END ELSE
+        ReplenQtyBase := CalcReplenQtyToHandle(
+          ToBinContent,FromBinContent,ReplenishmentRule,ReplenLotNo,QtyAvailToTakeBase);
+
+      EXIT(ReplenQtyBase);
+    END;
+
+    LOCAL PROCEDURE CalcLeastCommonMultiple@1240020025(Var1@1240020000 : Decimal;Var2@1240020001 : Decimal) : Decimal;
+    VAR
+      CommonMultiple@1240020002 : Decimal;
+      LeastCommonMultiple@1240020003 : Decimal;
+      GreatestCommonDivisor@1240020004 : Decimal;
+    BEGIN
+      CLEAR(GreatestCommonDivisor);
+      CLEAR(CommonMultiple);
+      CLEAR(LeastCommonMultiple);
+
+      GreatestCommonDivisor := CalcGreatestCommonDivisor(Var1,Var2);
+
+      CommonMultiple := Var1 * Var2;
+
+      LeastCommonMultiple := CommonMultiple / GreatestCommonDivisor;
+
+      EXIT(LeastCommonMultiple);
+    END;
+
+    LOCAL PROCEDURE CalcGreatestCommonDivisor@1240020024(Var1@1240020009 : Decimal;Var2@1240020010 : Decimal) : Decimal;
+    VAR
+      ModResult@1240020004 : Decimal;
+      GreatestCommonDivisor@1240020001 : Decimal;
+      ExitLoop@1240020000 : Boolean;
+    BEGIN
+      CLEAR(GreatestCommonDivisor);
+      ExitLoop := FALSE;
+
+      IF (Var1 < 0) OR (Var2 < 0) THEN
+        EXIT(1);
+
+      IF (Var1 = 0) OR (Var2 = 0) THEN
+        EXIT(1);
+
+      REPEAT
+        ModResult := Var1 MOD Var2;
+        Var1 := Var2;
+        Var2 := ModResult;
+
+        IF (Var1 = 0) OR (Var2 = 0) THEN
+          ExitLoop := TRUE;
+      UNTIL ExitLoop;
+
+      IF Var2 = 0 THEN
+        GreatestCommonDivisor := Var1
+      ELSE
+        GreatestCommonDivisor := Var2;
+
+      IF GreatestCommonDivisor <> 0 THEN
+        EXIT(GreatestCommonDivisor)
+      ELSE
+        EXIT(1);
+    END;
+
+    [External]
+    PROCEDURE RetrieveExpirationDate@1240020016(ItemNo@1240020000 : Code[20];VariantCode@1240020001 : Code[10];LotNo@1240020002 : Code[20];VAR ExpirationDate@1240020003 : Date) : Boolean;
+    VAR
+      ItemLedgerEntry@1240020004 : Record 32;
+    BEGIN
+      CLEAR(ExpirationDate);
+      ItemLedgerEntry.RESET;
+      ItemLedgerEntry.SETCURRENTKEY("Item No.",Open,"Variant Code",Positive,"Location Code",
+                                    "Posting Date","Expiration Date","Lot No.","Serial No.");
+      ItemLedgerEntry.SETRANGE("Item No.",ItemNo);
+      ItemLedgerEntry.SETRANGE("Variant Code",VariantCode);
+      ItemLedgerEntry.SETRANGE("Lot No.",LotNo);
+      ItemLedgerEntry.SETRANGE(Open,TRUE);
+      ItemLedgerEntry.SETFILTER("Expiration Date",'<>%1',0D);
+      IF ItemLedgerEntry.FINDFIRST THEN BEGIN
+        ExpirationDate := ItemLedgerEntry."Expiration Date";
+        IF ExpirationDate <> 0D THEN
+          EXIT(TRUE);
+      END ELSE
+        EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE CheckExpirationDateIsAcceptable@1240020015(ReplenishmentRule@1240020000 : Record 14002867;ExpirationDate@1240020001 : Date) : Boolean;
+    VAR
+      ShelfLifeToleranceDate@1240020002 : Date;
+    BEGIN
+      IF ExpirationDate = 0D THEN
+        EXIT(TRUE);
+
+      IF ReplenishmentRule."Replenishment Rule" <> '' THEN
+        ShelfLifeToleranceDate := CALCDATE(ReplenishmentRule."Shelf Life Tolerance",ExpirationDate)
+      ELSE
+        ShelfLifeToleranceDate := ExpirationDate;
+
+      IF WORKDATE >= ShelfLifeToleranceDate THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CheckIfPalletIsAvailable@1240020050(LocationCode@1240020001 : Code[10];PalletNo@1240020000 : Code[20]) : Boolean;
+    VAR
+      RFLocationSetup@1240020005 : Record 14099031;
+      WhseWkshLine@1240020002 : Record 7326;
+      WhseActLine@1240020003 : Record 5767;
+      WhseJnlLine@1240020004 : Record 7311;
+    BEGIN
+      RFLocationSetup.GET(LocationCode);
+      IF NOT RFLocationSetup."Use License Plating" THEN
+        EXIT(FALSE);
+
+      TempWhseWkshLine.RESET;
+      TempWhseWkshLine.SETRANGE("Location Code",LocationCode);
+      TempWhseWkshLine.SETRANGE("Pallet Code",PalletNo);
+      IF NOT TempWhseWkshLine.ISEMPTY THEN
+        EXIT(FALSE);
+
+      WhseWkshLine.RESET;
+      WhseWkshLine.SETRANGE("Location Code",LocationCode);
+      WhseWkshLine.SETRANGE("Pallet Code",PalletNo);
+      IF NOT WhseWkshLine.ISEMPTY THEN
+        EXIT(FALSE);
+
+      WhseActLine.RESET;
+      WhseActLine.SETRANGE("Location Code",LocationCode);
+      WhseActLine.SETRANGE("Pallet Code",PalletNo);
+      IF NOT WhseActLine.ISEMPTY THEN
+        EXIT(FALSE);
+
+      WhseJnlLine.RESET;
+      WhseJnlLine.SETRANGE("Location Code",LocationCode);
+      WhseJnlLine.SETRANGE("Pallet Code",PalletNo);
+      IF NOT WhseJnlLine.ISEMPTY THEN
+        EXIT(FALSE);
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE RoundUpBulkUnit@1240020021(ToBinContent@1240020002 : Record 7302;ReplenishmentRule@1240020000 : Record 14002867;BulkUnits@1240020001 : Decimal;LeastCommonMultiple@1240020004 : Decimal) : Boolean;
+    VAR
+      MaxToleranceQtyBase@1240020003 : Decimal;
+      IncludeQtyBase@1240020005 : Decimal;
+      MaxBinQtyBase@1240020006 : Decimal;
+    BEGIN
+      CLEAR(MaxBinQtyBase);
+      CLEAR(MaxToleranceQtyBase);
+      CLEAR(IncludeQtyBase);
+
+      IF ReplenishmentRule."Permit Exceeding Max. Qty." THEN BEGIN
+        ToBinContent.CALCFIELDS("Quantity (Base)");
+
+        MaxBinQtyBase := ROUND((ToBinContent."Max. Qty." * ToBinContent."Qty. per Unit of Measure"),0.00001,'<');
+
+        IncludeQtyBase := (BulkUnits * LeastCommonMultiple) + ToBinContent."Quantity (Base)" - MaxBinQtyBase;
+
+        IF IncludeQtyBase <= 0 THEN
+          EXIT(FALSE);
+
+        MaxToleranceQtyBase := CalcMaxBinQtyToReplenish(ToBinContent,ReplenishmentRule,IncludeQtyBase);
+
+        IF MaxToleranceQtyBase >= ((BulkUnits * LeastCommonMultiple) + ToBinContent."Quantity (Base)") THEN
+          EXIT(TRUE)
+        ELSE
+          EXIT(FALSE);
+      END ELSE
+        EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE PickAccordingToFEFO@10(ItemNo@1003 : Code[20];VariantCode@1004 : Code[10];LocationCode@1240020000 : Code[10]) : Boolean;
+    VAR
+      Location@1240020001 : Record 14;
+      ItemTrackingMgt@1000 : Codeunit 6500;
+      LNRequired@1001 : Boolean;
+      SNRequired@1002 : Boolean;
+      EntriesExist@1005 : Boolean;
+    BEGIN
+      Location.GET(LocationCode);
+
+      IF NOT Location."Pick According to FEFO" THEN
+        EXIT(FALSE);
+
+      ItemTrackingMgt.CheckWhseItemTrkgSetup(ItemNo,SNRequired,LNRequired,FALSE);
+      IF NOT (SNRequired OR LNRequired) THEN
+        EXIT(FALSE);
+
+      IF ItemTrackingMgt.ExistingExpirationDate(ItemNo,VariantCode,'','',FALSE,EntriesExist) <> 0D THEN
+        EXIT(TRUE);
+
+      IF ItemTrackingMgt.WhseExistingExpirationDate(ItemNo,VariantCode,Location,'','',EntriesExist) <> 0D THEN
+        EXIT(TRUE);
+
+      EXIT(FALSE);
+    END;
+
+    [External]
+    PROCEDURE ShowMovementWorksheet@1240020027(WkshTemplate@1240020004 : Code[10];WkshName@1240020003 : Code[10];LocationCode@1240020002 : Code[10]);
+    VAR
+      WhseWkshLine@1240020001 : Record 7326;
+      MovementWorksheet@1240020000 : Page 7351;
+    BEGIN
+      WhseWkshLine.RESET;
+      WhseWkshLine.SETRANGE("Worksheet Template Name",WkshTemplate);
+      WhseWkshLine.SETRANGE(Name,WkshName);
+      WhseWkshLine.SETRANGE("Location Code",LocationCode);
+      IF WhseWkshLine.FIND('-') THEN BEGIN
+        CLEAR(MovementWorksheet);
+        MovementWorksheet.SETRECORD(WhseWkshLine);
+        MovementWorksheet.SETTABLEVIEW(WhseWkshLine);
+        MovementWorksheet.RUNMODAL;
+      END ELSE
+        MESSAGE(Text007);
+    END;
+
+    [External]
+    PROCEDURE ShowInternalMovement@1240020029(DocNo@1240020000 : Code[20];LocationCode@1240020003 : Code[10]);
+    VAR
+      InternalMovementHeader@1240020001 : Record 7346;
+      InternalMovementPage@1240020002 : Page 7399;
+    BEGIN
+      InternalMovementHeader.RESET;
+      InternalMovementHeader.SETRANGE("No.",DocNo);
+      InternalMovementHeader.SETRANGE("Location Code",LocationCode);
+      IF InternalMovementHeader.FIND('-') THEN BEGIN
+        CLEAR(InternalMovementPage);
+        InternalMovementPage.SETRECORD(InternalMovementHeader);
+        InternalMovementPage.SETTABLEVIEW(InternalMovementHeader);
+        InternalMovementPage.RUNMODAL;
+      END ELSE
+        MESSAGE(Text007);
+    END;
+
+    [External]
+    PROCEDURE DeleteReplenishmentRule@1240020012(ReplenRuleCode@1240020000 : Code[10]);
+    VAR
+      ReplenishmentRule@1240020001 : Record 14002867;
+      BinContent@1240020002 : Record 7302;
+      Bin@1240020003 : Record 7354;
+      Zone@1240020004 : Record 7300;
+    BEGIN
+      IF CONFIRM(Text006,FALSE) THEN BEGIN
+        BinContent.RESET;
+        BinContent.SETRANGE("Replenishment Rule",ReplenRuleCode);
+        IF BinContent.FINDSET(FALSE) THEN
+          BinContent.MODIFYALL("Replenishment Rule",'');
+
+        Bin.RESET;
+        Bin.SETRANGE("Default Replenishment Rule",ReplenRuleCode);
+        IF Bin.FINDSET(FALSE) THEN
+          Bin.MODIFYALL("Default Replenishment Rule",'');
+
+        Zone.RESET;
+        Zone.SETRANGE("Default Replenishment Rule",ReplenRuleCode);
+        IF Zone.FINDSET(FALSE) THEN
+          Zone.MODIFYALL("Default Replenishment Rule",'');
+      END;
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnBeforeFindReplenBin@1240020000(VAR ToBinContent@1240020000 : Record 7302);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnBeforeCreateReplenishment@1240020042(ToBinContent@1240020000 : Record 7302;FromBinContent@1240020001 : Record 7302;TempWhseWkshLine2@1240020003 : TEMPORARY Record 7326;TempWhseItemTrackingLine2@1240020004 : TEMPORARY Record 6550;TempInternalMovementLine2@1240020005 : TEMPORARY Record 7347;FromLotNo@1240020002 : Code[20];VAR ReplenQtyBase@1240020006 : Decimal);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnAfterCreateReplenishment@1240020043(ToBinContent@1240020006 : Record 7302;FromBinContent@1240020005 : Record 7302;VAR TempWhseWkshLine2@1240020004 : TEMPORARY Record 7326;VAR TempWhseItemTrackingLine2@1240020003 : TEMPORARY Record 6550;VAR TempInternalMovementLine2@1240020002 : TEMPORARY Record 7347;FromLotNo@1240020001 : Code[20];ReplenQtyBase@1240020000 : Decimal);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnBeforeInsertWhseWkshLine@1240020030(Location@1240020000 : Record 14;WhseWorksheetTemplate@1240020001 : Code[10];WhseWorksheetName@1240020002 : Code[10]);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnAfterInsertWhseWkshLine@1240020036(Location@1240020002 : Record 14;WhseWorksheetTemplate@1240020001 : Code[10];WhseWorksheetName@1240020000 : Code[10]);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnBeforeInsertIntMoveLine@1240020040(InternalMovementNo@1240020000 : Code[20]);
+    BEGIN
+    END;
+
+    [Integration]
+    [External]
+    PROCEDURE OnAfterInsertIntMoveLine@1240020041(InternalMovementNo@1240020000 : Code[20]);
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

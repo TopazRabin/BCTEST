@@ -1,0 +1,2743 @@
+OBJECT Codeunit 23044601 DSHIP Package Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/08/21;
+    Time=[ 7:57:28 AM];
+    Modified=Yes;
+    Version List=DSHIP2.2.3,001,TPZ3237,3290,3337,3345,3353,3187,3299;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      trecDocumentLines@1000000008 : TEMPORARY Record 23044602;
+      cuCommonBase@1000000000 : Codeunit 23044519;
+      tcUnknownDoc@1000000002 : TextConst 'ENU=Unknown source document for packaging.;ESM=Documento de origen desconocido de embalaje.;FRC=Document de source inconnu pour l''empaquetage.;ENC=Unknown source document for packaging.';
+      cuResMgmt@1000000009 : Codeunit 23044514;
+      tcRegister@1000000003 : TextConst 'ENU=Do you want to register the Picks?;ESM=®Confirma que desea registrar los picking?;FRC=Souhaitez-vous enregistrer les PrÇlävements?;ENC=Do you want to register the Picks?';
+      tcUpdateAssemblyLine@1000000005 : TextConst 'ENU=Do you want to update the Assembly Item quantity?;ESM=®Confirma que desea actualizar la cantidad del producto de ensamblado?;FRC=Souhaitez-vous mettre Ö jour de la quantitÇ de l''êlÇment d''Assemblage?;ENC=Do you want to update the Assembly Item quantity?';
+      cuLPCommon@1000000004 : Codeunit 23044541;
+      tcExceedQty@1000000006 : TextConst 'ENU=The maximum packing quantity is %1 %2, you are packing %3 %4.;ESM=La m†xima cantidad de la creaci¢n de kits es %1 %2, se embalaje %3 %4.;FRC=L''Çcart maximal emballage quantitÇ est %1 %2, vous sont emballage %3 %4.;ENC=The maximum packing quantity is %1 %2, you are packing %3 %4.';
+      tcExceedQtyWhseShip@1000000013 : TextConst 'ENU=You are attempting to pack %3 %4 which exceeds the picked quantity of %1 %2;ESM=Intentando empaquetado %3 %4 supera la cantidad el picking de %1 %2;FRC=Vous essayez de pack %3 %4 qui dÇpasse la quantitÇ de %%1 %2 de prÇlevÇe;ENC=The maximum packing quantity is %1 %2, you are packing %3 %4.';
+      tcNotInternational@1000000015 : TextConst 'ENU=Commercial Invoices are only provided for international shipments.;ESM=S¢lo se proporcionan facturas comerciales para realizar los env°os internacionales.;FRC=Factures commercial sont fourni uniquement pour les livraisons international.;ENC=Commercial Invoices are only provided for international shipments.';
+      tcCommInvNoLP@1000000011 : TextConst 'ENU=Line hasn''t been packed yet.;ESM=L°nea hasn''t ha embalado a£n.;FRC=Ligne hasn''t encore ÇtÇ emballÇ.;ENC=Line hasn''t been packed yet.';
+      tcCommInvNoCustoms@1000000010 : TextConst 'ENU=You must have a customs invoice.;ESM=Debe tener una factura de aduana.;FRC=Vous devez avoir une facture aupräs des administrations douaniäres.;ENC=You must have a customs invoice.';
+      tcCommInvNoLabel@1000000007 : TextConst 'ENU=You must label the shipment first.;ESM=Primero se debe etiqueta la remisi¢n de venta.;FRC=Vous devez d''abord Çtiquette la livraison.;ENC=You must label the shipment first.';
+      tcCommInvNoURL@1000000012 : TextConst 'ENU=The carrier didn''t return a commercial invoice for this order.;ESM=El soporte no ha funcionado una factura comercial para este pedido de devoluci¢n.;FRC=Le carrier didn''t retour une facture commercial pour cette commande.;ENC=The carrier didn''t return a commercial invoice for this order.';
+      IWXLicensePlateHeader@1000000001 : Record 23044505;
+      Text50003@1000000014 : TextConst 'ENU=BOL No. %1 already created for license plate %2';
+
+    PROCEDURE getPackageData@1000000011(VAR precrRecRef@1000000000 : RecordRef;VAR ptrecPkgLineBuffer@1000000001 : TEMPORARY Record 23044602);
+    VAR
+      lrecWhseShipHeader@1000000002 : Record 7320;
+      lrecSalesHeader@1000000005 : Record 36;
+      lrecTransferHeader@1000000003 : Record 5740;
+      lrecLPLineUsage@1000000004 : Record 23044507;
+      lcuWMSManagement@1000000006 : Codeunit 7302;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up the packaging lines (document lines + lp assignments) for the order
+      //  Called From: Page: "DynamicShip Package Worksheet" (ID:23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      trecDocumentLines.RESET;
+      trecDocumentLines.DELETEALL;
+
+      CASE precrRecRef.NUMBER OF
+        DATABASE::"Warehouse Shipment Header":
+          BEGIN
+            precrRecRef.SETTABLE(lrecWhseShipHeader);
+            IF ( NOT lcuWMSManagement.LocationIsAllowed(lrecWhseShipHeader."Location Code") ) THEN
+               ERROR('You are not allowed to use location code %1.', lrecWhseShipHeader."Location Code");
+            getWhseShipDocLines(lrecWhseShipHeader);
+            getDocPackaging(ptrecPkgLineBuffer, lrecLPLineUsage."Source Document"::Shipment, lrecWhseShipHeader."No.");
+          END;
+        DATABASE::"Transfer Header":
+          BEGIN
+            precrRecRef.SETTABLE(lrecTransferHeader);
+            getTransferOrderDocLines(lrecTransferHeader);
+            getDocPackaging(ptrecPkgLineBuffer, lrecLPLineUsage."Source Document"::"Outbound Transfer", lrecTransferHeader."No.");
+          END;
+        DATABASE::"Sales Header":
+          BEGIN
+            precrRecRef.SETTABLE(lrecSalesHeader);
+            getSalesOrderDocLines(lrecSalesHeader);
+            getDocPackaging(ptrecPkgLineBuffer, lrecLPLineUsage."Source Document"::"Sales Order", lrecSalesHeader."No.");
+          END;
+        ELSE
+          ERROR(tcUnknownDoc);
+      END;
+
+      ptrecPkgLineBuffer.RESET;
+    END;
+
+    LOCAL PROCEDURE getWhseShipDocLines@1000000017(precWhseShipHeader@1000000000 : Record 7320);
+    VAR
+      lrecWhseShipLine@1000000001 : Record 7321;
+      lrecAssemblyLine@1000000004 : Record 901;
+      liLineNumber@1000000002 : Integer;
+      lcodAssemblyOrderNo@1000000003 : Code[20];
+      lbPickedOnly@1000000010 : Boolean;
+      lbShowAssemblyItem@1000000005 : Boolean;
+      lrecDShipSetup@1000000006 : Record 23044600;
+      ldQtyPicked@1000000007 : Decimal;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up the document lines for the warehouse shipment
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+      //-->New code from Dship
+      liLineNumber := 10000;
+      lrecWhseShipLine.SETRANGE("No.", precWhseShipHeader."No.");
+      IF ( lrecWhseShipLine.FINDSET(FALSE) ) THEN BEGIN
+        lrecDShipSetup.GET();
+        lbShowAssemblyItem := lrecDShipSetup."Assembly Order Behaviour" = lrecDShipSetup."Assembly Order Behaviour"::"Show Item";
+        lbPickedOnly := checkPickedLinesOnly(lrecWhseShipLine."Location Code");
+        REPEAT
+          lcodAssemblyOrderNo := getAssembleToOrderNo(1, lrecWhseShipLine."Source No.", lrecWhseShipLine."Source Line No.");
+          IF (lcodAssemblyOrderNo = '') OR (lbShowAssemblyItem) THEN BEGIN
+            IF (lbShowAssemblyItem AND (lcodAssemblyOrderNo <> '')) THEN BEGIN
+              ldQtyPicked := GetPickedAssemblyQty(lrecWhseShipLine, lcodAssemblyOrderNo);
+            END ELSE BEGIN
+              ldQtyPicked := lrecWhseShipLine."Qty. Picked" - lrecWhseShipLine."Qty. Shipped";
+            END;
+            IF (NOT lbPickedOnly) OR (ldQtyPicked > 0) THEN BEGIN
+              trecDocumentLines.INIT();
+              trecDocumentLines."Line No." := liLineNumber;
+              trecDocumentLines."Document Type" := trecDocumentLines."Document Type"::"Warehouse Shipment";
+              trecDocumentLines."Document No." := lrecWhseShipLine."No.";
+              trecDocumentLines."Document Line No." := lrecWhseShipLine."Line No.";
+              trecDocumentLines."Item No." := lrecWhseShipLine."Item No.";
+              trecDocumentLines."Variant Code" := lrecWhseShipLine."Variant Code";
+              trecDocumentLines.Description := lrecWhseShipLine.Description;
+              trecDocumentLines."Description 2" := lrecWhseShipLine."Description 2";
+              trecDocumentLines.Quantity := lrecWhseShipLine."Qty. Outstanding";
+              trecDocumentLines."Qty. Picked" := ldQtyPicked;
+              trecDocumentLines."Unit of Measure Code" := lrecWhseShipLine."Unit of Measure Code";
+              trecDocumentLines."Location Code" := lrecWhseShipLine."Location Code";
+              trecDocumentLines."Source Type" := lrecWhseShipLine."Source Type";
+              trecDocumentLines."Source Subtype" := lrecWhseShipLine."Source Subtype";
+              trecDocumentLines."Source ID" := lrecWhseShipLine."Source No.";
+              trecDocumentLines."Source Ref. No." := lrecWhseShipLine."Source Line No.";
+              trecDocumentLines.INSERT;
+              liLineNumber := liLineNumber + 10000;
+            END;
+          END ELSE BEGIN
+            lrecAssemblyLine.SETRANGE("Document Type", lrecAssemblyLine."Document Type"::Order);
+            lrecAssemblyLine.SETRANGE("Document No.", lcodAssemblyOrderNo);
+            lrecAssemblyLine.SETRANGE(Type, lrecAssemblyLine.Type::Item);
+            IF ( lrecAssemblyLine.FINDSET(FALSE) ) THEN BEGIN
+              REPEAT
+                IF ( (NOT lbPickedOnly) OR (lrecAssemblyLine."Qty. Picked" - lrecAssemblyLine."Consumed Quantity" > 0) ) THEN BEGIN
+                  trecDocumentLines.INIT;
+                  trecDocumentLines."Line No." := liLineNumber;
+                  trecDocumentLines."Document Type" := trecDocumentLines."Document Type"::"Warehouse Shipment";
+                  trecDocumentLines."Document No." := lrecWhseShipLine."No.";
+                  trecDocumentLines."Document Line No." := lrecWhseShipLine."Line No.";
+                  trecDocumentLines."Item No." := lrecAssemblyLine."No.";
+                  trecDocumentLines."Variant Code" := lrecAssemblyLine."Variant Code";
+                  trecDocumentLines.Description := lrecAssemblyLine.Description;
+                  trecDocumentLines."Description 2" := lrecAssemblyLine."Description 2";
+                  trecDocumentLines.Quantity := lrecAssemblyLine."Remaining Quantity";
+                  trecDocumentLines."Qty. Picked" := lrecAssemblyLine."Qty. Picked";
+                  trecDocumentLines."Unit of Measure Code" := lrecAssemblyLine."Unit of Measure Code";
+                  trecDocumentLines."Location Code" := lrecWhseShipLine."Location Code";
+                  trecDocumentLines."Assembly Item No." := lrecWhseShipLine."Item No.";
+                  trecDocumentLines.INSERT;
+                  liLineNumber := liLineNumber + 10000;
+                END;
+              UNTIL( lrecAssemblyLine.NEXT=0 );
+            END;
+          END;
+        UNTIL( lrecWhseShipLine.NEXT=0 );
+      END;
+      //<--
+      {Old Code
+      liLineNumber := 10000;
+      lrecWhseShipLine.SETRANGE("No.", precWhseShipHeader."No.");
+      IF ( lrecWhseShipLine.FINDSET(FALSE) ) THEN BEGIN
+        lbPickedOnly := checkPickedLinesOnly(lrecWhseShipLine."Location Code");
+        REPEAT
+          lcodAssemblyOrderNo := getAssembleToOrderNo(1, lrecWhseShipLine."Source No.", lrecWhseShipLine."Source Line No.");
+          IF ( lcodAssemblyOrderNo = ''  ) THEN BEGIN
+            IF ( (NOT lbPickedOnly) OR (lrecWhseShipLine."Qty. Picked" - lrecWhseShipLine."Qty. Shipped" > 0) ) THEN BEGIN
+              trecDocumentLines.INIT;
+              trecDocumentLines."Line No." := liLineNumber;
+              trecDocumentLines."Document Type" := trecDocumentLines."Document Type"::"Warehouse Shipment";
+              trecDocumentLines."Document No." := lrecWhseShipLine."No.";
+              trecDocumentLines."Document Line No." := lrecWhseShipLine."Line No.";
+              trecDocumentLines."Item No." := lrecWhseShipLine."Item No.";
+              trecDocumentLines."Variant Code" := lrecWhseShipLine."Variant Code";
+              trecDocumentLines.Description := lrecWhseShipLine.Description;
+              trecDocumentLines."Description 2" := lrecWhseShipLine."Description 2";
+              trecDocumentLines.Quantity := lrecWhseShipLine."Qty. Outstanding";
+              //-->TPZ3337
+              trecDocumentLines."Qty. Picked" := lrecWhseShipLine."Qty. Picked";
+              //trecDocumentLines."Qty. Picked" := lrecWhseShipLine."Qty. Picked" - lrecWhseShipLine."Qty. Shipped";
+              //<--TPZ3337
+
+              trecDocumentLines."Unit of Measure Code" := lrecWhseShipLine."Unit of Measure Code";
+              trecDocumentLines."Location Code" := lrecWhseShipLine."Location Code";
+              trecDocumentLines."Source Type" := lrecWhseShipLine."Source Type";
+              trecDocumentLines."Source Subtype" := lrecWhseShipLine."Source Subtype";
+              trecDocumentLines."Source ID" := lrecWhseShipLine."Source No.";
+              trecDocumentLines."Source Ref. No." := lrecWhseShipLine."Source Line No.";
+              trecDocumentLines.INSERT;
+              liLineNumber := liLineNumber + 10000;
+            END;
+          END ELSE BEGIN
+            lrecAssemblyLine.SETRANGE("Document Type", lrecAssemblyLine."Document Type"::Order);
+            lrecAssemblyLine.SETRANGE("Document No.", lcodAssemblyOrderNo);
+            lrecAssemblyLine.SETRANGE(Type, lrecAssemblyLine.Type::Item);
+            IF ( lrecAssemblyLine.FINDSET(FALSE) ) THEN BEGIN
+              REPEAT
+                IF ( (NOT lbPickedOnly) OR (lrecAssemblyLine."Qty. Picked" - lrecAssemblyLine."Consumed Quantity" > 0) ) THEN BEGIN
+                  trecDocumentLines.INIT;
+                  trecDocumentLines."Line No." := liLineNumber;
+                  trecDocumentLines."Document Type" := trecDocumentLines."Document Type"::"Warehouse Shipment";
+                  trecDocumentLines."Document No." := lrecWhseShipLine."No.";
+                  trecDocumentLines."Document Line No." := lrecWhseShipLine."Line No.";
+                  trecDocumentLines."Item No." := lrecAssemblyLine."No.";
+                  trecDocumentLines."Variant Code" := lrecAssemblyLine."Variant Code";
+                  trecDocumentLines.Description := lrecAssemblyLine.Description;
+                  trecDocumentLines."Description 2" := lrecAssemblyLine."Description 2";
+                  trecDocumentLines.Quantity := lrecAssemblyLine."Remaining Quantity";
+                  trecDocumentLines."Qty. Picked" := lrecAssemblyLine."Qty. Picked";
+                  trecDocumentLines."Unit of Measure Code" := lrecAssemblyLine."Unit of Measure Code";
+                  trecDocumentLines."Location Code" := lrecWhseShipLine."Location Code";
+                  trecDocumentLines."Assembly Item No." := lrecWhseShipLine."Item No.";
+                  trecDocumentLines.INSERT;
+                  liLineNumber := liLineNumber + 10000;
+                END;
+              UNTIL( lrecAssemblyLine.NEXT=0 );
+            END;
+          END;
+        UNTIL( lrecWhseShipLine.NEXT=0 );
+      END;
+      }
+    END;
+
+    LOCAL PROCEDURE getSalesOrderDocLines@1000000012(precSalesHeader@1000000000 : Record 36);
+    VAR
+      lrecSalesLine@1000000001 : Record 37;
+      lrecAssemblyLine@1000000004 : Record 901;
+      liLineNumber@1000000002 : Integer;
+      lcodAssemblyOrderNo@1000000003 : Code[20];
+      RegisteredWhseActivityLine@1000000005 : Record 5773;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up the document lines for the sales order
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+      ValidateifAlreadyPackedUsingWS(precSalesHeader);//TPZ3345
+      liLineNumber := 10000;
+      lrecSalesLine.SETRANGE("Document Type", precSalesHeader."Document Type");
+      lrecSalesLine.SETRANGE("Document No.", precSalesHeader."No.");
+      lrecSalesLine.SETRANGE(Type, lrecSalesLine.Type::Item);
+      lrecSalesLine.SETRANGE("Drop Shipment", FALSE);
+      lrecSalesLine.SETFILTER("No.",'<>%1','');
+
+      IF ( lrecSalesLine.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          //<vaseem> // only regisred pick items should be inserted in case of Sales Order
+          RegisteredWhseActivityLine.RESET;
+          RegisteredWhseActivityLine.SETRANGE("Source Document",RegisteredWhseActivityLine."Source Document"::"Sales Order");
+          RegisteredWhseActivityLine.SETRANGE("Source No.",lrecSalesLine."Document No.");
+          RegisteredWhseActivityLine.SETRANGE("Source Line No.",lrecSalesLine."Line No.");
+          RegisteredWhseActivityLine.SETRANGE("Whse. Document No.",GetWHseNo(lrecSalesLine)); //TPZ3353
+          //IF RegisteredWhseActivityLine.FINDFIRST THEN BEGIN
+          IF RegisteredWhseActivityLine.FINDLAST THEN BEGIN
+          //</vaseem>
+            lcodAssemblyOrderNo := getAssembleToOrderNo(1, lrecSalesLine."Document No.", lrecSalesLine."Line No.");
+            IF ( lcodAssemblyOrderNo = ''  ) THEN BEGIN
+              trecDocumentLines.INIT;
+              trecDocumentLines."Line No." := liLineNumber;
+              trecDocumentLines."Document Type" := trecDocumentLines."Document Type"::"Sales Order";
+              trecDocumentLines."Document Subtype":= lrecSalesLine."Document Type";
+              trecDocumentLines."Document No." := lrecSalesLine."Document No.";
+              trecDocumentLines."Document Line No." := lrecSalesLine."Line No.";
+              trecDocumentLines."Item No." := lrecSalesLine."No.";
+              trecDocumentLines."Variant Code" := lrecSalesLine."Variant Code";
+              trecDocumentLines.Description := lrecSalesLine.Description;
+              trecDocumentLines."Description 2" := lrecSalesLine."Description 2";
+              //trecDocumentLines.Quantity := lrecSalesLine.Quantity - lrecSalesLine."Quantity Shipped"; //vaseem
+              trecDocumentLines.Quantity := RegisteredWhseActivityLine.Quantity;//vaseem
+              trecDocumentLines."Unit of Measure Code" := lrecSalesLine."Unit of Measure Code";
+              trecDocumentLines."Location Code" := lrecSalesLine."Location Code";
+              trecDocumentLines."Source Type" := DATABASE::"Sales Line";
+              trecDocumentLines."Source Subtype" := lrecSalesLine."Document Type";
+              trecDocumentLines."Source ID" := lrecSalesLine."Document No.";
+              trecDocumentLines."Source Ref. No." := lrecSalesLine."Line No.";
+              trecDocumentLines.INSERT;
+              liLineNumber := liLineNumber + 10000;
+            END ELSE BEGIN
+              lrecAssemblyLine.SETRANGE("Document Type", lrecAssemblyLine."Document Type"::Order);
+              lrecAssemblyLine.SETRANGE("Document No.", lcodAssemblyOrderNo);
+              lrecAssemblyLine.SETRANGE(Type, lrecAssemblyLine.Type::Item);
+              IF ( lrecAssemblyLine.FINDSET(FALSE) ) THEN BEGIN
+                REPEAT
+                  trecDocumentLines.INIT;
+                  trecDocumentLines."Line No." := liLineNumber;
+                  trecDocumentLines."Document Type" := trecDocumentLines."Document Type"::"Sales Order";
+                  trecDocumentLines."Document Subtype":= lrecSalesLine."Document Type";
+                  trecDocumentLines."Document No." := lrecSalesLine."Document No.";
+                  trecDocumentLines."Document Line No." := lrecSalesLine."Line No.";
+                  trecDocumentLines."Item No." := lrecAssemblyLine."No.";
+                  trecDocumentLines."Variant Code" := lrecAssemblyLine."Variant Code";
+                  trecDocumentLines.Description := lrecAssemblyLine.Description;
+                  trecDocumentLines."Description 2" := lrecAssemblyLine."Description 2";
+                  trecDocumentLines.Quantity := lrecAssemblyLine."Remaining Quantity";
+                  trecDocumentLines."Unit of Measure Code" := lrecAssemblyLine."Unit of Measure Code";
+                  trecDocumentLines."Location Code" := lrecSalesLine."Location Code";
+                  trecDocumentLines."Assembly Item No." := lrecSalesLine."No.";
+
+                  trecDocumentLines.INSERT;
+                  liLineNumber := liLineNumber + 10000;
+                UNTIL( lrecAssemblyLine.NEXT=0 );
+              END;
+            END;
+          END;
+        UNTIL( lrecSalesLine.NEXT=0 );
+      END;
+    END;
+
+    LOCAL PROCEDURE getTransferOrderDocLines@1000000018(precTransferHeader@1000000000 : Record 5740);
+    VAR
+      lrecTransferLine@1000000001 : Record 5741;
+      liLineNumber@1000000002 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up the document lines for the transfer order
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      liLineNumber := 10000;
+      lrecTransferLine.SETRANGE("Document No.", precTransferHeader."No.");
+      lrecTransferLine.SETRANGE("Derived From Line No.", 0);
+      IF ( lrecTransferLine.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          trecDocumentLines.INIT;
+          trecDocumentLines."Line No." := liLineNumber;
+          trecDocumentLines."Document Type" := trecDocumentLines."Document Type"::"Outbound Transfer";
+          trecDocumentLines."Document No." := lrecTransferLine."Document No.";
+          trecDocumentLines."Document Line No." := lrecTransferLine."Line No.";
+          trecDocumentLines."Item No." := lrecTransferLine."Item No.";
+          trecDocumentLines."Variant Code" := lrecTransferLine."Variant Code";
+          trecDocumentLines.Description := lrecTransferLine.Description;
+          trecDocumentLines."Description 2" := lrecTransferLine."Description 2";
+          trecDocumentLines.Quantity := lrecTransferLine.Quantity - lrecTransferLine."Quantity Shipped";
+          trecDocumentLines."Unit of Measure Code" := lrecTransferLine."Unit of Measure Code";
+          trecDocumentLines."Location Code" := lrecTransferLine."Transfer-from Code";
+          trecDocumentLines."Source Type" := DATABASE::"Transfer Line";
+          trecDocumentLines."Source ID" := lrecTransferLine."Document No.";
+          trecDocumentLines."Source Ref. No." := lrecTransferLine."Line No.";
+          trecDocumentLines.INSERT;
+          liLineNumber := liLineNumber + 10000;
+        UNTIL( lrecTransferLine.NEXT=0 );
+      END;
+    END;
+
+    LOCAL PROCEDURE getDocPackaging@1000000042(VAR ptrecPkgLineBuffer@1000000002 : TEMPORARY Record 23044602;poptSourceDocType@1000000000 : Option;pcodSourceNo@1000000007 : Code[20]);
+    VAR
+      ltrecPkgLineBufferTemp@1000000005 : TEMPORARY Record 23044602;
+      lrecLPLineUsage@1000000004 : Record 23044507;
+      lrecLPLine@1000000010 : Record 23044506;
+      lrecItem@1000000009 : Record 27;
+      liLineNumber@1000000003 : Integer;
+      ldUsageQty@1000000006 : Decimal;
+      ldTotalQtyPacked@1000000012 : Decimal;
+      ldQuantity@1000000001 : Decimal;
+      lcodAssemblyItemNo@1000000008 : Code[20];
+      lbPickedOnly@1000000011 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Builds up the license plate/package assignments for the order
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      liLineNumber := 10000;
+
+      //
+      // determine what has been packaged already
+      //
+      lrecLPLineUsage.SETCURRENTKEY("Source Document","Source No.","Source Line No.");
+      lrecLPLineUsage.SETRANGE("Source Document", poptSourceDocType);
+      lrecLPLineUsage.SETRANGE("Source No.", pcodSourceNo);
+      lrecLPLineUsage.SETRANGE("Posting Date", 0D);
+      IF ( lrecLPLineUsage.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          lrecLPLine.GET(lrecLPLineUsage."License Plate No.", lrecLPLineUsage."License Plate Line No.");
+          trecDocumentLines.RESET;
+          trecDocumentLines.SETRANGE("Document No.", lrecLPLineUsage."Source No.");
+          trecDocumentLines.SETRANGE("Document Line No.", lrecLPLineUsage."Source Line No.");
+          trecDocumentLines.SETRANGE("Item No.", lrecLPLine."Item No.");
+          trecDocumentLines.SETRANGE("Variant Code", lrecLPLine."Variant Code");
+
+          IF ( trecDocumentLines.FINDFIRST ) THEN BEGIN // just in case lp usage becomes 'messed'
+            ldUsageQty := cuCommonBase.ConvertUnitOfMeasure(lrecItem, lrecLPLineUsage.Quantity,
+                                                            lrecLPLine."Unit of Measure Code",
+                                                            trecDocumentLines."Unit of Measure Code");
+
+            ptrecPkgLineBuffer.RESET;
+            ptrecPkgLineBuffer.SETRANGE("Document Line No.", lrecLPLineUsage."Source Line No.");
+            ptrecPkgLineBuffer.SETRANGE("License Plate No.", lrecLPLineUsage."License Plate No.");
+            ptrecPkgLineBuffer.SETRANGE("Item No.", lrecLPLine."Item No.");  // for assembly items
+            ptrecPkgLineBuffer.SETRANGE("Lot No.", lrecLPLine."Lot No.");
+            ptrecPkgLineBuffer.SETRANGE("Serial No.", lrecLPLine."Serial No.");
+
+            IF ( ptrecPkgLineBuffer.FINDFIRST ) THEN BEGIN
+              ptrecPkgLineBuffer.VALIDATE("Packed Qty.", ptrecPkgLineBuffer."Packed Qty." + ldUsageQty);
+              ptrecPkgLineBuffer.VALIDATE(Quantity, ptrecPkgLineBuffer."Packed Qty.");
+              ptrecPkgLineBuffer.MODIFY(TRUE);
+            END
+            ELSE BEGIN
+
+              createPackageLine(
+                ptrecPkgLineBuffer,
+                trecDocumentLines,
+                liLineNumber,
+                trecDocumentLines.Quantity,
+                ldUsageQty,   // quantity
+                lrecLPLineUsage."License Plate No.",
+                0,
+                lrecLPLine."Lot No.",
+                lrecLPLine."Serial No.",
+                ldUsageQty  // packed quantity
+              );
+              ptrecPkgLineBuffer."Assembly Item No." := trecDocumentLines."Assembly Item No.";
+              ptrecPkgLineBuffer.MODIFY;
+
+              liLineNumber += 10000;
+
+            END;
+          END;
+        UNTIL( lrecLPLineUsage.NEXT=0);
+      END;
+
+      //
+      // now account for anything not assigned...
+      //
+      ptrecPkgLineBuffer.RESET;
+      trecDocumentLines.RESET;
+      IF ( trecDocumentLines.FINDSET(FALSE) ) THEN BEGIN
+        IF ( trecDocumentLines."Document Type" = trecDocumentLines."Document Type"::"Warehouse Shipment" ) THEN
+          lbPickedOnly := checkPickedLinesOnly(trecDocumentLines."Location Code");
+        REPEAT
+          // has the line been fully packed
+          ldTotalQtyPacked := 0;
+          ptrecPkgLineBuffer.RESET;
+          ptrecPkgLineBuffer.SETRANGE("Document Line No.", trecDocumentLines."Document Line No.");
+          ptrecPkgLineBuffer.SETRANGE("Item No.", trecDocumentLines."Item No.");
+          ptrecPkgLineBuffer.SETRANGE("Variant Code", trecDocumentLines."Variant Code");
+          IF ( ptrecPkgLineBuffer.FIND('-') ) THEN BEGIN
+            REPEAT
+              ldTotalQtyPacked := ldTotalQtyPacked + ptrecPkgLineBuffer."Packed Qty.";
+            UNTIL(ptrecPkgLineBuffer.NEXT=0);
+
+          END;
+
+          ldQuantity := trecDocumentLines.Quantity;
+          IF (lbPickedOnly) THEN BEGIN
+            IF (trecDocumentLines.Quantity > trecDocumentLines."Qty. Picked") THEN
+              ldQuantity := trecDocumentLines."Qty. Picked";
+          END; //if lbpicked
+          IF ( ldTotalQtyPacked < ldQuantity ) THEN BEGIN
+            createPackLinesFromDocLine(ptrecPkgLineBuffer, trecDocumentLines, ldQuantity - ldTotalQtyPacked, liLineNumber);
+          END;
+
+          ptrecPkgLineBuffer.RESET;
+          ptrecPkgLineBuffer.SETRANGE("Document Line No.", trecDocumentLines."Document Line No.");
+          ptrecPkgLineBuffer.SETRANGE("Item No.", trecDocumentLines."Item No.");
+          ptrecPkgLineBuffer.SETRANGE("Variant Code", trecDocumentLines."Variant Code");
+          ptrecPkgLineBuffer.MODIFYALL("Total Packed Qty.", ldTotalQtyPacked);
+        UNTIL( trecDocumentLines.NEXT=0 );
+      END;
+    END;
+
+    LOCAL PROCEDURE createPackLinesFromDocLine@1000000043(VAR ptrecPkgLineBuffer@1000000000 : TEMPORARY Record 23044602;ptrecDocLine@1000000002 : TEMPORARY Record 23044602;pdRemainingQty@1000000008 : Decimal;VAR piLineNumber@1000000001 : Integer);
+    VAR
+      lrecItem@1000000005 : Record 27;
+      lrecResEntry@1000000004 : Record 337;
+      lrecLPLineUsage@1000000003 : Record 23044507;
+      ldReservationQty@1000000006 : Decimal;
+      lcodAssemblyOrderNo@1000000007 : Code[20];
+    BEGIN
+      //<FUNC>
+      //  Description: Creates the package lines based on the document lines
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecItem.GET(ptrecDocLine."Item No.");
+
+      IF ( ptrecDocLine."Assembly Item No." = '' ) THEN BEGIN
+        // try and find any assigned item tracking and break out by that
+        lrecResEntry.SETRANGE("Source Type", ptrecDocLine."Source Type");
+        lrecResEntry.SETRANGE("Source Subtype", ptrecDocLine."Source Subtype");
+        lrecResEntry.SETRANGE("Source ID", ptrecDocLine."Source ID");
+        lrecResEntry.SETRANGE("Source Ref. No.", ptrecDocLine."Source Ref. No.");
+        // filter on all res entries that have item tracking and split on those regardless of status
+        // later on, where I already have the serial number check code, handle the status differences
+        lrecResEntry.SETFILTER("Item Tracking", '<>%1', lrecResEntry."Item Tracking"::None);
+        //lrecResEntry.SETRANGE("Reservation Status", lrecResEntry."Reservation Status"::Surplus);
+        IF ( lrecResEntry.FINDSET(FALSE) ) THEN BEGIN
+          REPEAT
+              ldReservationQty := ABS(lrecResEntry.Quantity);
+      //      ldReservationQty := ABS(cuCommonBase.ConvertUnitOfMeasure(lrecItem,
+      //                                                                lrecResEntry.Quantity,
+      //                                                                lrecItem."Base Unit of Measure",
+      //                                                                ptrecDocLine."Unit of Measure Code"));
+            ptrecPkgLineBuffer.RESET;
+            ptrecPkgLineBuffer.SETRANGE("Document Line No.", ptrecDocLine."Document Line No.");
+            ptrecPkgLineBuffer.SETRANGE("Serial No.", lrecResEntry."Serial No.");
+            ptrecPkgLineBuffer.SETRANGE("Lot No.", lrecResEntry."Lot No.");
+            IF ( ptrecPkgLineBuffer.FINDSET(FALSE) ) THEN BEGIN
+              REPEAT
+                ldReservationQty := ldReservationQty - ptrecPkgLineBuffer."Packed Qty.";
+              UNTIL( ptrecPkgLineBuffer.NEXT=0 );
+              IF ( ldReservationQty < 0 ) THEN
+                ldReservationQty := 0;
+            END;
+
+            IF ( ldReservationQty > 0 ) THEN BEGIN
+              IF ( (pdRemainingQty - ldReservationQty) < 0 ) THEN
+                ldReservationQty := pdRemainingQty;
+
+              createPackageLine(
+                ptrecPkgLineBuffer,
+                ptrecDocLine,
+                piLineNumber,
+                ptrecDocLine.Quantity,
+                ldReservationQty,
+                '',
+                0,
+                lrecResEntry."Lot No.",
+                lrecResEntry."Serial No.",
+                0
+              );
+
+              piLineNumber += 10000;
+
+              pdRemainingQty -= ldReservationQty;
+            END;
+          UNTIL((lrecResEntry.NEXT=0) OR (pdRemainingQty<=0));
+        END;
+      END;
+
+      IF ( pdRemainingQty > 0 ) THEN BEGIN
+        createPackageLine(
+          ptrecPkgLineBuffer,
+          ptrecDocLine,
+          piLineNumber,
+          ptrecDocLine."Qty. to Ship",
+          pdRemainingQty,
+          '',  // license plate no
+          0,   // total packed qty.
+          '',  // lot no.
+          '',   // serial no.
+          0
+        );
+        ptrecPkgLineBuffer."Assembly Item No." := ptrecDocLine."Assembly Item No.";
+        ptrecPkgLineBuffer.MODIFY;
+
+        piLineNumber += 10000;
+      END;
+    END;
+
+    LOCAL PROCEDURE createPackageLine@1000000004(VAR ptrecPkgLineBuffer@1000000030 : TEMPORARY Record 23044602;ptrecDocLine@1000000029 : TEMPORARY Record 23044602;piLineNumber@1000000028 : Integer;pdQtyToShip@1000000027 : Decimal;pdQuantity@1000000026 : Decimal;pcodLicensePlateNo@1000000025 : Code[20];pdTotalPackedQty@1000000024 : Decimal;pcodLotNo@1000000023 : Code[20];pcodSerialNo@1000000022 : Code[20];pdPackedQty@1000000021 : Decimal);
+    VAR
+      lrecLPHeader@1000000017 : Record 23044505;
+    BEGIN
+      //<FUNC>
+      //  Description: Creates a package line
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      ptrecPkgLineBuffer.INIT;
+      ptrecPkgLineBuffer."Line No." := piLineNumber;
+      ptrecPkgLineBuffer."Document Type" := ptrecDocLine."Document Type";
+      ptrecPkgLineBuffer."Document Subtype" := ptrecDocLine."Document Subtype";
+      ptrecPkgLineBuffer."Document No." := ptrecDocLine."Document No.";
+      ptrecPkgLineBuffer."Document Line No." := ptrecDocLine."Document Line No.";
+      ptrecPkgLineBuffer."Item No." := ptrecDocLine."Item No.";
+      ptrecPkgLineBuffer."Variant Code" := ptrecDocLine."Variant Code";
+      ptrecPkgLineBuffer.Description := ptrecDocLine.Description;
+      ptrecPkgLineBuffer."Description 2" := ptrecDocLine."Description 2";
+      ptrecPkgLineBuffer."Unit of Measure Code" := ptrecDocLine."Unit of Measure Code";
+      ptrecPkgLineBuffer."Location Code" := ptrecDocLine."Location Code";
+      ptrecPkgLineBuffer."Qty. Picked" := ptrecDocLine."Qty. Picked";
+      ptrecPkgLineBuffer."Qty. to Ship" := pdQtyToShip;
+      ptrecPkgLineBuffer.Quantity := pdQuantity;
+      ptrecPkgLineBuffer."License Plate No." := pcodLicensePlateNo;
+      ptrecPkgLineBuffer."Total Packed Qty." := pdTotalPackedQty;
+      ptrecPkgLineBuffer."Lot No." := pcodLotNo;
+      ptrecPkgLineBuffer."Serial No." := pcodSerialNo;
+      ptrecPkgLineBuffer."Packed Qty." := pdPackedQty;
+      IF ( lrecLPHeader.GET(pcodLicensePlateNo) ) THEN BEGIN
+        lrecLPHeader.CALCFIELDS("Package Carrier Label");
+        ptrecPkgLineBuffer."Has Shipment Label" := lrecLPHeader."Package Carrier Label".HASVALUE;
+      END;
+      //>>TPZ2895 PKS
+      ptrecPkgLineBuffer."Source ID" := ptrecDocLine."Source ID";
+      ptrecPkgLineBuffer."Source Ref. No." := ptrecDocLine."Source Ref. No.";
+      //<<
+      ptrecPkgLineBuffer.INSERT(TRUE);
+    END;
+
+    PROCEDURE createLicensePlate@1000000005(pcodLocationCode@1000000000 : Code[10];pcodBinCode@1000000001 : Code[20];pcodTemplate@1000000003 : Code[20]) : Code[20];
+    VAR
+      lrecLPHeader@1000000002 : Record 23044505;
+      lrecLPTemplate@1000000004 : Record 23044536;
+    BEGIN
+      //<FUNC>
+      //  Description: Creates a License Plate header
+      //  Called From: Page: "DynamicShip Package Worksheet" (ID:23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecLPHeader.INIT;
+      lrecLPHeader."Location Code" := pcodLocationCode;
+      lrecLPHeader."Bin Code" := pcodBinCode;
+      lrecLPHeader."Permission Required" := lrecLPHeader."Permission Required"::No;
+      lrecLPHeader.INSERT(TRUE);
+
+      cuLPCommon.updateLPFromTemplate(lrecLPHeader, pcodTemplate);
+      lrecLPHeader.MODIFY;
+
+      EXIT(lrecLPHeader."No.");
+    END;
+
+    LOCAL PROCEDURE createLPUsage@1000000008(precLPLine@1000000000 : Record 23044506;poptDocType@1000000002 : Option;pcodDocNo@1000000003 : Code[20];piDocLineNo@1000000004 : Integer;pdQuantity@1000000005 : Decimal);
+    VAR
+      lrecLPLineUsage@1000000001 : Record 23044507;
+    BEGIN
+      //<FUNC>
+      //  Description: Creates LP Usage for the document line
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecLPLineUsage.SETRANGE("License Plate No.", precLPLine."License Plate No.");
+      lrecLPLineUsage.SETRANGE("License Plate Line No.", precLPLine."Line No.");
+      lrecLPLineUsage.SETRANGE("Source Company Name",COMPANYNAME);
+      lrecLPLineUsage.SETRANGE("Source Document", poptDocType);
+      lrecLPLineUsage.SETRANGE("Source No.", pcodDocNo);
+      lrecLPLineUsage.SETRANGE("Source Line No.", piDocLineNo);
+      IF ( NOT lrecLPLineUsage.FINDFIRST ) THEN BEGIN
+        lrecLPLineUsage.RESET;
+        lrecLPLineUsage.INIT;
+        lrecLPLineUsage.VALIDATE("License Plate No.", precLPLine."License Plate No.");
+        lrecLPLineUsage.VALIDATE("License Plate Line No.", precLPLine."Line No.");
+        lrecLPLineUsage.VALIDATE("Source Company Name",COMPANYNAME);
+        lrecLPLineUsage."Source Document" := poptDocType;
+        lrecLPLineUsage."Source No." := pcodDocNo;
+        lrecLPLineUsage."Source Line No." := piDocLineNo;
+        lrecLPLineUsage.VALIDATE(Quantity, pdQuantity);
+        UpdateSourceNoInLP(lrecLPLineUsage,precLPLine."License Plate No.");//3237 VAH
+        lrecLPLineUsage.INSERT(TRUE);
+      END ELSE BEGIN
+        lrecLPLineUsage.VALIDATE(Quantity, lrecLPLineUsage.Quantity + pdQuantity);
+        lrecLPLineUsage.MODIFY(TRUE);
+      END;
+    END;
+
+    LOCAL PROCEDURE removeLPUsage@1000000020(ptrecPackLineBuffer@1000000002 : TEMPORARY Record 23044602;piDocLineNumber@1000000001 : Integer);
+    VAR
+      lrecLPLineUsage@1000000000 : Record 23044507;
+      lrecLPLine@1000000006 : Record 23044506;
+      lrecItem@1000000007 : Record 27;
+      ldQtyToMove@1000000005 : Decimal;
+      ldUsageQty@1000000004 : Decimal;
+      ldNewUsageQty@1000000003 : Decimal;
+      lbCorrectLineFound@1000000008 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Removes LP Usage for the document line
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecItem.GET(ptrecPackLineBuffer."Item No.");
+
+      ldQtyToMove := ptrecPackLineBuffer."Qty. to Move";
+
+      lrecLPLine.SETRANGE("License Plate No.", ptrecPackLineBuffer."License Plate No.");
+      lrecLPLine.SETRANGE("Lot No.", ptrecPackLineBuffer."Lot No.");
+      lrecLPLine.SETRANGE("Serial No.", ptrecPackLineBuffer."Serial No.");
+      lrecLPLine.SETRANGE("Item No.", ptrecPackLineBuffer."Item No.");
+
+      IF ( lrecLPLine.FINDSET ) THEN BEGIN
+        REPEAT
+          lrecLPLineUsage.SETRANGE("License Plate No.", ptrecPackLineBuffer."License Plate No.");
+          lrecLPLineUsage.SETRANGE("Lot No.", ptrecPackLineBuffer."Lot No.");
+          lrecLPLineUsage.SETRANGE("Serial No.", ptrecPackLineBuffer."Serial No.");
+          lrecLPLineUsage.SETRANGE("Source No.", ptrecPackLineBuffer."Document No.");
+          lrecLPLineUsage.SETRANGE("Source Line No.", piDocLineNumber);
+          lrecLPLineUsage.SETRANGE("License Plate Line No.", lrecLPLine."Line No.");
+          CASE ptrecPackLineBuffer."Document Type" OF
+            ptrecPackLineBuffer."Document Type"::"Sales Order":
+              BEGIN
+                lrecLPLineUsage.SETRANGE("Source Document", lrecLPLineUsage."Source Document"::"Sales Order");
+              END;
+            ptrecPackLineBuffer."Document Type"::"Warehouse Shipment":
+              BEGIN
+                lrecLPLineUsage.SETRANGE("Source Document", lrecLPLineUsage."Source Document"::Shipment);
+              END;
+            ptrecPackLineBuffer."Document Type"::"Outbound Transfer":
+              BEGIN
+                lrecLPLineUsage.SETRANGE("Source Document", lrecLPLineUsage."Source Document"::"Outbound Transfer");
+              END;
+          END;
+          lrecLPLineUsage.SETAUTOCALCFIELDS("Unit of Measure Code", "Assigned Quantity");
+
+          lbCorrectLineFound := lrecLPLineUsage.FIND('-');
+          IF ( NOT lbCorrectLineFound ) THEN
+            lbCorrectLineFound := lrecLPLine.NEXT=0;
+
+        UNTIL(lbCorrectLineFound);
+      END;
+
+      REPEAT
+        ldUsageQty := cuCommonBase.ConvertUnitOfMeasure(lrecItem, lrecLPLineUsage.Quantity,
+                            lrecLPLineUsage."Unit of Measure Code", ptrecPackLineBuffer."Unit of Measure Code"
+                        );
+
+        ldNewUsageQty := 0;
+
+        IF ( ldUsageQty > ldQtyToMove ) THEN BEGIN
+          ldNewUsageQty := cuCommonBase.ConvertUnitOfMeasure(lrecItem, ldUsageQty - ldQtyToMove,
+                            ptrecPackLineBuffer."Unit of Measure Code", lrecLPLineUsage."Unit of Measure Code"
+                        );
+        END;
+
+        lrecLPLineUsage.Quantity := ldNewUsageQty;
+        lrecLPLineUsage.MODIFY;
+        lrecLPLine.VALIDATE(Quantity, lrecLPLineUsage."Assigned Quantity" - (ldUsageQty - ldNewUsageQty));
+        lrecLPLine.MODIFY(TRUE);
+
+        ldQtyToMove := ldQtyToMove - ldUsageQty;
+      UNTIL((lrecLPLineUsage.NEXT=0) OR (ldQtyToMove<=0));
+    END;
+
+    PROCEDURE packLine@1000000006(ptrecPackLineBuffer@1000000015 : TEMPORARY Record 23044602);
+    VAR
+      lrecLPHeader@1000000001 : Record 23044505;
+      lrecLPLine@1000000008 : Record 23044506;
+      lrecActivityLine@1000000000 : Record 5767;
+      lrecActivityLineTake@1000000002 : Record 5767;
+      liNextLineNumber@1000000009 : Integer;
+      ltcAlreadyShipped@1000000003 : TextConst 'ENU=License Plate [%1] has already been shipped.;ESM=Ya se ha enviado la licencia placa [%1].;FRC=Contrat de Licence Plate [%1] n'' a dÇjÖ ÇtÇ livrÇ.;ENC=License Plate [%1] has already been shipped.';
+      ltcAlreadyUnbuilt@1000000004 : TextConst 'ENU=License Plate [%1] has already been unbuilt.;ESM=Ya se ha unbuilt licencia placa [%1].;FRC=Contrat de Licence Plate [%1] ne a dÇjÖ ÇtÇ unbuilt.;ENC=License Plate [%1] has already been unbuilt.';
+      lrecLPLineUsage@1000000005 : Record 23044507;
+      liDocType@1000000006 : Integer;
+      lbLineExists@1000000007 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Create a license plate line and usage
+      //  Called From: This codeunit, Page: "DynamicShip Package Worksheet" (ID:23044602)
+      //  Side Effect: Updates document quantity to ship
+      //</FUNC>
+
+      lrecLPHeader.GET(ptrecPackLineBuffer."New License Plate No.");
+      IF ( lrecLPHeader.Status = lrecLPHeader.Status::Shipped ) THEN
+        ERROR(ltcAlreadyShipped, lrecLPHeader."No.");
+      IF ( lrecLPHeader.Status = lrecLPHeader.Status::Unbuilt ) THEN
+        ERROR(ltcAlreadyUnbuilt, lrecLPHeader."No.");
+
+      liDocType := 0;
+      CASE ptrecPackLineBuffer."Document Type" OF
+        ptrecPackLineBuffer."Document Type"::"Warehouse Shipment":
+          BEGIN
+            liDocType := lrecLPLineUsage."Source Document"::Shipment;
+          END;
+        ptrecPackLineBuffer."Document Type"::"Sales Order":
+          BEGIN
+            liDocType := lrecLPLineUsage."Source Document"::"Sales Order";
+          END;
+        ptrecPackLineBuffer."Document Type"::"Outbound Transfer":
+          BEGIN
+            liDocType := lrecLPLineUsage."Source Document"::"Outbound Transfer";
+          END;
+      END;
+
+
+      lrecLPHeader."Processing State" := lrecLPHeader."Processing State"::Building;
+      lrecLPHeader.MODIFY;
+
+      lrecLPLine.RESET;
+      lrecLPLine.SETRANGE("License Plate No.", lrecLPHeader."No.");
+      lrecLPLine.SETRANGE("Item No.", ptrecPackLineBuffer."Item No.");
+      lrecLPLine.SETRANGE("Variant Code", ptrecPackLineBuffer."Variant Code");
+      lrecLPLine.SETRANGE("Unit of Measure Code", ptrecPackLineBuffer."Unit of Measure Code");
+      lrecLPLine.SETRANGE("Lot No.", ptrecPackLineBuffer."Lot No.");
+      lrecLPLine.SETRANGE("Serial No.", ptrecPackLineBuffer."Serial No.");
+
+      IF ( lrecLPLine.FINDFIRST ) THEN BEGIN
+        lrecLPLineUsage.SETRANGE("License Plate No.", lrecLPLine."License Plate No.");
+        lrecLPLineUsage.SETRANGE("License Plate Line No.", lrecLPLine."Line No.");
+        lrecLPLineUsage.SETRANGE("Source Document", liDocType);
+        lrecLPLineUsage.SETRANGE("Source No.", ptrecPackLineBuffer."Document No.");
+        lbLineExists := lrecLPLineUsage.FINDFIRST;
+      END;
+
+      IF ( NOT lbLineExists ) THEN BEGIN
+        lrecLPLine.RESET;
+        liNextLineNumber := 10000;
+        lrecLPLine.SETRANGE("License Plate No.", lrecLPHeader."No.");
+        IF ( lrecLPLine.FINDLAST ) THEN
+          liNextLineNumber := lrecLPLine."Line No." + 10000;
+
+        lrecLPLine.INIT;
+        lrecLPLine.VALIDATE("License Plate No.", lrecLPHeader."No.");
+        lrecLPLine.VALIDATE("Line No.", liNextLineNumber);
+        lrecLPLine.VALIDATE("Item No.", ptrecPackLineBuffer."Item No.");
+        lrecLPLine.VALIDATE("Variant Code", ptrecPackLineBuffer."Variant Code");
+        lrecLPLine.VALIDATE(Quantity, ptrecPackLineBuffer."Qty. to Move");
+        lrecLPLine.VALIDATE("Unit of Measure Code", ptrecPackLineBuffer."Unit of Measure Code");
+        lrecLPLine.VALIDATE("Lot No.", ptrecPackLineBuffer."Lot No.");
+        lrecLPLine.VALIDATE("Serial No.", ptrecPackLineBuffer."Serial No.");
+        lrecLPLine.INSERT(TRUE);
+
+      END ELSE BEGIN
+        lrecLPLine.VALIDATE(Quantity, lrecLPLine.Quantity + ptrecPackLineBuffer."Qty. to Move");
+        lrecLPLine.MODIFY(TRUE);
+      END;
+
+      createLPUsage(lrecLPLine, liDocType, ptrecPackLineBuffer."Document No.", ptrecPackLineBuffer."Document Line No.", ptrecPackLineBuffer."Qty. to Move");
+
+      updateSourceLineQty(ptrecPackLineBuffer, ptrecPackLineBuffer."Qty. to Move");
+
+      lrecLPHeader.GET(ptrecPackLineBuffer."New License Plate No.");
+      lrecLPHeader."Processing State" := lrecLPHeader."Processing State"::" ";
+      lrecLPHeader.MODIFY;
+    END;
+
+    PROCEDURE packAll@1000000000(VAR ptrecPackLineBuffer@1000000000 : TEMPORARY Record 23044602;pcodLPNumber@1000000001 : Code[20]);
+    BEGIN
+      //<FUNC>
+      //  Description: Packs all remaining lines
+      //  Called From: Page: "DynamicShip Package Worksheet" (ID:23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      // so if new license plate # is differemt
+      ptrecPackLineBuffer.RESET;
+      ptrecPackLineBuffer.SETFILTER("License Plate No.",'%1','');
+
+      IF ( ptrecPackLineBuffer.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          ptrecPackLineBuffer."Qty. to Move" := ptrecPackLineBuffer.Quantity;
+          ptrecPackLineBuffer."New License Plate No." := pcodLPNumber;
+          ptrecPackLineBuffer.MODIFY;
+          packLine(ptrecPackLineBuffer);
+        UNTIL(ptrecPackLineBuffer.NEXT=0);
+      END;
+    END;
+
+    PROCEDURE unpackAll@1000000041(VAR ptrecPackLineBuffer@1000000000 : TEMPORARY Record 23044602);
+    VAR
+      lrecLPLine@1000000001 : Record 23044506;
+      lrecLPLineUsage@1000000002 : Record 23044507;
+      SHLoc@1000000003 : Record 36;
+      PalletEntry@1001000004 : Record 50068;
+      IWXLicensePlateHeader@1000000004 : Record 23044505;
+      WarehouseRequestLoc@1000000005 : Record 5765;
+      OutboundWhseRequestMgt@1000000006 : Codeunit 14002863;
+    BEGIN
+      //<FUNC>
+      //  Description: Unpacks all lines
+      //  Called From: Page: "DSHIP Package Worksheet" (P23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      ptrecPackLineBuffer.RESET;
+      ptrecPackLineBuffer.SETFILTER("License Plate No.", '<>%1', '');
+
+      IF ( ptrecPackLineBuffer.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          //<TPZ3187>
+          IF IWXLicensePlateHeader.GET(ptrecPackLineBuffer."License Plate No.") AND (IWXLicensePlateHeader."BOL No." <> '' ) THEN
+            ERROR(Text50003,IWXLicensePlateHeader."BOL No.",IWXLicensePlateHeader."No.");
+          //</TPZ3187>
+          //-->>TPZ3290
+          IF IWXLicensePlateHeader.GET(ptrecPackLineBuffer."License Plate No.") THEN
+          IF SHLoc.GET(SHLoc."Document Type"::Order,ptrecPackLineBuffer."Source ID") THEN
+            DeleteJobQueue(SHLoc);//TPZ3290 Delete Job Queue
+          //<--TPZ3290
+          //-->TPZ3299 Delete Pallet Details
+          PalletEntry.SETRANGE("Order No.",ptrecPackLineBuffer."Source ID");
+          IF PalletEntry.FINDFIRST THEN
+            PalletEntry.DELETEALL;
+          //<--
+          lrecLPLineUsage.RESET;
+          lrecLPLineUsage.SETRANGE("License Plate No.", ptrecPackLineBuffer."License Plate No.");
+          lrecLPLineUsage.DELETEALL(FALSE);
+
+          lrecLPLine.RESET;
+          lrecLPLine.SETRANGE("License Plate No.", ptrecPackLineBuffer."License Plate No.");
+          lrecLPLine.DELETEALL(FALSE);
+
+          ptrecPackLineBuffer."Qty. to Move" := ptrecPackLineBuffer.Quantity;
+          ptrecPackLineBuffer."New License Plate No." := '';
+          ptrecPackLineBuffer.MODIFY;
+          updateSourceLineQty(ptrecPackLineBuffer, -ptrecPackLineBuffer."Qty. to Move");
+          //-->TPZ3345
+          WarehouseRequestLoc.RESET;
+          WarehouseRequestLoc.SETRANGE("Source No.",ptrecPackLineBuffer."Source ID");
+          IF WarehouseRequestLoc.FINDFIRST THEN BEGIN
+            OutboundWhseRequestMgt.SetWhseActivStatusToPickRegistered(WarehouseRequestLoc);
+            WarehouseRequestLoc.MODIFY;
+          END;
+          //<--TPZ3345
+          DeleteFreightLine(ptrecPackLineBuffer); //3353
+        UNTIL(ptrecPackLineBuffer.NEXT=0);
+      END;
+    END;
+
+    PROCEDURE unpackLine@1000000027(ptrecPackLineBuffer@1000000000 : TEMPORARY Record 23044602);
+    VAR
+      lrecLPLineUsage@1000000001 : Record 23044507;
+      lrecLPLine@1000000002 : Record 23044506;
+    BEGIN
+      //<FUNC>
+      //  Description: Unpacks a line
+      //  Called From: This codeunit, Page: "DynamicShip Package Worksheet" (ID:23044602)
+      //  Side Effect: Updates document quantity to ship
+      //</FUNC>
+
+      ptrecPackLineBuffer.TESTFIELD("New License Plate No.",'');
+      IF ( (ptrecPackLineBuffer."License Plate No." = '') OR (ptrecPackLineBuffer."Qty. to Move" <=0) ) THEN
+        EXIT;
+
+      removeLPUsage(ptrecPackLineBuffer, ptrecPackLineBuffer."Document Line No.");
+
+      updateSourceLineQty(ptrecPackLineBuffer, -ptrecPackLineBuffer."Qty. to Move");
+
+      lrecLPLineUsage.RESET;
+      lrecLPLineUsage.SETRANGE("License Plate No.", ptrecPackLineBuffer."License Plate No.");
+      lrecLPLineUsage.SETFILTER(Quantity,'=%1',0);
+      lrecLPLineUsage.DELETEALL;
+
+      lrecLPLine.RESET;
+      lrecLPLine.SETRANGE("License Plate No.", ptrecPackLineBuffer."License Plate No.");
+      //  Added to deal with Fast Ship, no impact otherwise
+      IF ( ptrecPackLineBuffer."Total Packed Qty." = 0 ) THEN
+        lrecLPLine.SETRANGE(Quantity, 0)
+      ELSE
+        lrecLPLine.SETFILTER("Usage Quantity",'=%1',0);
+      lrecLPLine.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE updateSourceLineQty@1000000036(ptrecPackLineBuffer@1000000000 : TEMPORARY Record 23044602;pdQtyToPack@1000000001 : Decimal);
+    BEGIN
+      //<FUNC>
+      //  Description: Updates the document quantity to ship and tracking lines
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      checkResEntries(ptrecPackLineBuffer, pdQtyToPack);
+
+      CASE ptrecPackLineBuffer."Document Type" OF
+        ptrecPackLineBuffer."Document Type"::"Warehouse Shipment": updateShipLineQty(ptrecPackLineBuffer, pdQtyToPack);
+        ptrecPackLineBuffer."Document Type"::"Sales Order": updateSalesLineQty(ptrecPackLineBuffer, pdQtyToPack);
+        ptrecPackLineBuffer."Document Type"::"Outbound Transfer": updateTransferLineQty(ptrecPackLineBuffer, pdQtyToPack);
+      END;
+    END;
+
+    LOCAL PROCEDURE updateWhseActivityLineQty@1000000037(ptrecPackLineBuffer@1000000001 : TEMPORARY Record 23044602;pdQtyToPack@1000000000 : Decimal);
+    VAR
+      ltrecCommentLine@1000000004 : TEMPORARY Record 97;
+      lrecActivityLine@1000000002 : Record 5767;
+      lbDecrease@1000000003 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Updates the pick quantity to handle and tracking lines
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      //IF ( ptrecPackLineBuffer."Document Type" = ptrecPackLineBuffer."Document Type"::Pick ) THEN
+      //  lrecActivityLine.GET(lrecActivityLine."Activity Type"::Pick, ptrecPackLineBuffer."Document No.", ptrecPackLineBuffer."Document Line No.");
+
+      //lbDecrease := pdQtyToPack < 0;
+      //lrecActivityLine.VALIDATE("Qty. to Handle", lrecActivityLine."Qty. to Handle" + pdQtyToPack);
+
+      //lcuWMDMWhseActivity.setItemTrackingLines(
+      //    lrecActivityLine,
+      //    ptrecPackLineBuffer."Lot No.",
+      //    ptrecPackLineBuffer."Serial No.",
+      //    0D,//ptrecPackLineBuffer."Expiration Date",
+      //    pdQtyToPack);
+
+
+      //lrecActivityLine.MODIFY(TRUE);
+    END;
+
+    LOCAL PROCEDURE updateShipLineQty@1000000030(ptrecPackLineBuffer@1000000001 : TEMPORARY Record 23044602;pdQtyToPack@1000000000 : Decimal);
+    VAR
+      lrecWhseShipLine@1000000002 : Record 7321;
+      lrecLocation@1000000003 : Record 14;
+      lrecAssemblyLine@1000000007 : Record 901;
+      lcodAssemblyOrderNo@1000000006 : Code[20];
+      lbRequirePick@1000000004 : Boolean;
+      ldQtyToShip@1000000005 : Decimal;
+    BEGIN
+      //<FUNC>
+      //  Description: Updates the shipment quantity to ship and tracking lines
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecWhseShipLine.GET(ptrecPackLineBuffer."Document No.", ptrecPackLineBuffer."Document Line No.");
+
+      IF ( ptrecPackLineBuffer."Assembly Item No." <> '' ) THEN BEGIN
+        ldQtyToShip := getAssembledQtyToShip(ptrecPackLineBuffer);
+      END ELSE BEGIN
+        ldQtyToShip := pdQtyToPack + lrecWhseShipLine."Qty. to Ship";
+      END;
+
+      IF ( lrecLocation.GET(ptrecPackLineBuffer."Location Code") ) THEN
+        lbRequirePick := lrecLocation."Require Pick";
+
+      IF ( (lbRequirePick) AND (NOT lrecWhseShipLine."Assemble to Order") ) THEN BEGIN
+        IF ( ldQtyToShip > lrecWhseShipLine."Qty. Picked" - lrecWhseShipLine."Qty. Shipped" ) THEN
+          ERROR(tcExceedQtyWhseShip, lrecWhseShipLine."Qty. Picked" - lrecWhseShipLine."Qty. Shipped",
+                                     lrecWhseShipLine."Unit of Measure Code",
+                                     ldQtyToShip,
+                                     lrecWhseShipLine."Unit of Measure Code");
+      END ELSE BEGIN
+        IF ( ldQtyToShip > lrecWhseShipLine.Quantity - lrecWhseShipLine."Qty. Shipped" ) THEN
+          ERROR(tcExceedQty, lrecWhseShipLine.Quantity - lrecWhseShipLine."Qty. Shipped",
+                                     lrecWhseShipLine."Unit of Measure Code",
+                                     ldQtyToShip,
+                                     lrecWhseShipLine."Unit of Measure Code");
+      END;
+
+      lrecWhseShipLine.VALIDATE("Qty. to Ship", ldQtyToShip);
+      lrecWhseShipLine.MODIFY(TRUE);
+
+      IF ( ( ptrecPackLineBuffer."Lot No." <> '') OR ( ptrecPackLineBuffer."Serial No." <> '') ) THEN BEGIN
+
+        IF ( ptrecPackLineBuffer."Assembly Item No." <> '' ) THEN
+          setAssemblyTracking(ptrecPackLineBuffer, lrecWhseShipLine."Source No.", lrecWhseShipLine."Source Line No.", pdQtyToPack)
+        ELSE
+          cuResMgmt.AddRemoveWhseShipTracking(lrecWhseShipLine, ptrecPackLineBuffer."Serial No.", ptrecPackLineBuffer."Lot No.", pdQtyToPack,
+            lrecWhseShipLine."Unit of Measure Code",0D);
+      END;
+    END;
+
+    LOCAL PROCEDURE updateSalesLineQty@1000000014(ptrecPackLineBuffer@1000000001 : TEMPORARY Record 23044602;pdQtyToPack@1000000000 : Decimal);
+    VAR
+      lrecSalesLine@1000000002 : Record 37;
+      lrecActivityLine@1000000003 : Record 5767;
+      lrecBOMComponent@1000000008 : Record 90;
+      ltrecDShipPackLineBuffer@1000000015 : TEMPORARY Record 23044602;
+      lrecLocation@1000000004 : Record 14;
+      lrecAssemblyLine@1000000009 : Record 901;
+      lqDShipPackedQty@1000000005 : Query 23044601;
+      ldQtyToShip@1000000007 : Decimal;
+      lcodAssemblyOrderNo@1000000006 : Code[20];
+      liLineNum@1000000016 : Integer;
+      liNewCount@1000000018 : Integer;
+      lrecWhseShipLine@1000000010 : Record 7321;
+    BEGIN
+      //<FUNC>
+      //  Description: Updates the sales order quantity to ship and tracking lines
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecSalesLine.GET(ptrecPackLineBuffer."Document Subtype", ptrecPackLineBuffer."Document No.", ptrecPackLineBuffer."Document Line No.");
+      IF ( ptrecPackLineBuffer."Assembly Item No." <> '' ) THEN BEGIN
+        ldQtyToShip := getAssembledQtyToShip(ptrecPackLineBuffer);
+        //EXIT;
+      END ELSE BEGIN // if assembly item no <> ''
+        IF ( lrecLocation.RequireShipment(ptrecPackLineBuffer."Location Code") ) THEN BEGIN
+          lqDShipPackedQty.SETRANGE(Source_Document, 2);
+          lqDShipPackedQty.SETRANGE(Source_No, ptrecPackLineBuffer."Document No.");
+          lqDShipPackedQty.SETRANGE(Source_Line_No, ptrecPackLineBuffer."Document Line No.");
+          lqDShipPackedQty.OPEN;
+          WHILE ( lqDShipPackedQty.READ ) DO BEGIN
+            ldQtyToShip += lqDShipPackedQty.Sum_Quantity
+          END; // while lqDShipPackedQty.read
+          lqDShipPackedQty.CLOSE;
+        END ELSE
+          ldQtyToShip := pdQtyToPack + lrecSalesLine."Qty. to Ship";
+      END; // if assembly item no = ''
+
+      //IF ( lrecSalesLine."Qty. to Ship" + pdQtyToPack > lrecSalesLine.Quantity ) THEN
+      IF ( ldQtyToShip > lrecSalesLine.Quantity ) THEN
+        ERROR(tcExceedQty, lrecSalesLine.Quantity,
+                           lrecSalesLine."Unit of Measure Code",
+                           ldQtyToShip,
+                           lrecSalesLine."Unit of Measure Code");
+
+      //lrecSalesLine.VALIDATE("Qty. to Ship", lrecSalesLine."Qty. to Ship" + pdQtyToPack);
+      lrecSalesLine.VALIDATE("Qty. to Ship", ldQtyToShip);
+      lrecSalesLine.MODIFY(TRUE);
+      //-->TPZ3257
+      lrecWhseShipLine.RESET;
+      lrecWhseShipLine.SETRANGE("Source No.",lrecSalesLine."Document No.");
+      lrecWhseShipLine.SETRANGE("Source Line No.",lrecSalesLine."Line No.");
+      IF lrecWhseShipLine.FINDFIRST THEN BEGIN
+        lrecWhseShipLine.VALIDATE("Qty. to Ship", ldQtyToShip);
+        lrecWhseShipLine.MODIFY(TRUE);
+      END;
+      //<--TPZ3257
+      IF ( (ptrecPackLineBuffer."Lot No." <> '') OR (ptrecPackLineBuffer."Serial No." <> '') ) THEN BEGIN
+        IF ( ptrecPackLineBuffer."Assembly Item No." <> '' ) THEN
+          setAssemblyTracking(ptrecPackLineBuffer, lrecSalesLine."Document No.", lrecSalesLine."Line No.", pdQtyToPack)
+        ELSE
+          cuResMgmt.AddRemoveSalesShipTracking(lrecSalesLine, ptrecPackLineBuffer."Serial No.",
+                                               ptrecPackLineBuffer."Lot No.",
+                                               pdQtyToPack,
+                                               lrecSalesLine."Unit of Measure Code",
+                                               0D,lrecActivityLine);
+      END; // if lot or serial tracked
+    END;
+
+    LOCAL PROCEDURE updateTransferLineQty@1000000015(ptrecPackLineBuffer@1000000001 : TEMPORARY Record 23044602;pdQtyToPack@1000000000 : Decimal);
+    VAR
+      lrecTransferLine@1000000002 : Record 5741;
+      lcuResMgmtOrig@1000000003 : Codeunit 23044504;
+    BEGIN
+      //<FUNC>
+      //  Description: Updates the transfer order quantity to ship and tracking lines
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecTransferLine.GET(ptrecPackLineBuffer."Document No.", ptrecPackLineBuffer."Document Line No.");
+
+      IF ( lrecTransferLine."Qty. to Ship" + pdQtyToPack > lrecTransferLine.Quantity ) THEN
+        ERROR(tcExceedQty, lrecTransferLine.Quantity,
+                           lrecTransferLine."Unit of Measure Code",
+                           lrecTransferLine."Qty. to Ship" + pdQtyToPack,
+                           lrecTransferLine."Unit of Measure Code");
+
+      lrecTransferLine.VALIDATE("Qty. to Ship", lrecTransferLine."Qty. to Ship" + pdQtyToPack);
+      lrecTransferLine.MODIFY(TRUE);
+
+      IF ( ( ptrecPackLineBuffer."Lot No." <> '') OR ( ptrecPackLineBuffer."Serial No." <> '') ) THEN BEGIN
+        lcuResMgmtOrig.AddRemoveTransferSerialNumber(lrecTransferLine, ptrecPackLineBuffer."Serial No.", ptrecPackLineBuffer."Lot No.",
+        (pdQtyToPack<0), TRUE, FALSE, pdQtyToPack);
+      END;
+    END;
+
+    PROCEDURE transferLine@1000000009(ptrecPackLineBuffer@1000000000 : TEMPORARY Record 23044602);
+    VAR
+      ltrecPackLineBufferTemp@1000000001 : TEMPORARY Record 23044602;
+    BEGIN
+      //<FUNC>
+      //  Description: Move the item from one package to another
+      //  Called From: Page: "DynamicShip Package Worksheet" (ID:23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      ltrecPackLineBufferTemp := ptrecPackLineBuffer;
+      ltrecPackLineBufferTemp."New License Plate No." := '';
+      unpackLine(ltrecPackLineBufferTemp);
+      packLine(ptrecPackLineBuffer);
+    END;
+
+    PROCEDURE showOrderPackages@1000000019(ptrecPackOrderBuffer@1000000001 : TEMPORARY Record 23044601);
+    VAR
+      lrecWhseShipHeader@1000000000 : Record 7320;
+      lrecSalesHeader@1000000004 : Record 36;
+      lrecTransferHeader@1000000005 : Record 5740;
+      lrecPackSetup@1000000008 : Record 23044600;
+      lrecrRecRef@1000000003 : RecordRef;
+      lpgPackWorksheet@1000000002 : Page 23044602;
+      lbIsAssembleToOrder@1000000006 : Boolean;
+      lbUpdate@1000000007 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Launches the packing page
+      //  Called From: Page "DynamicShip Order Packaging" (ID: 23044601)
+      //  Side Effect: Will update assembly order quantities is assemble to order
+      //</FUNC>
+
+      updateDocumentQtyToShip(ptrecPackOrderBuffer);
+
+      CASE ptrecPackOrderBuffer."Document Type" OF
+        ptrecPackOrderBuffer."Document Type"::"Warehouse Shipment":
+          BEGIN
+            lrecWhseShipHeader.GET(ptrecPackOrderBuffer."Document No.");
+            lrecrRecRef.GETTABLE(lrecWhseShipHeader);
+            lpgPackWorksheet.initPage(lrecrRecRef, lrecWhseShipHeader."Location Code", lrecWhseShipHeader."Bin Code");
+            lbIsAssembleToOrder := isWhseShipAssembleToOrder(lrecWhseShipHeader);
+          END;
+        ptrecPackOrderBuffer."Document Type"::"Sales Order":
+          BEGIN
+            lrecSalesHeader.GET(ptrecPackOrderBuffer."Document Subtype", ptrecPackOrderBuffer."Document No.");
+            lrecrRecRef.GETTABLE(lrecSalesHeader);
+            lpgPackWorksheet.initPage(lrecrRecRef, lrecSalesHeader."Location Code",'');
+            lbIsAssembleToOrder := isSalesOrderAssembleToOrder(lrecSalesHeader);
+          END;
+        ptrecPackOrderBuffer."Document Type"::"Outbound Transfer":
+          BEGIN
+            lrecTransferHeader.GET(ptrecPackOrderBuffer."Document No.");
+            lrecrRecRef.GETTABLE(lrecTransferHeader);
+            lpgPackWorksheet.initPage(lrecrRecRef, lrecTransferHeader."Transfer-from Code",'');
+            lbIsAssembleToOrder := FALSE;
+          END;
+      END;
+
+      lpgPackWorksheet.RUN;
+
+      IF ( lbIsAssembleToOrder ) THEN BEGIN
+        lbUpdate := FALSE;
+        lrecPackSetup.GET;
+        CASE lrecPackSetup."Assembly Quantity Behaviour" OF
+          lrecPackSetup."Assembly Quantity Behaviour"::"Don't Update": lbUpdate := FALSE;
+          lrecPackSetup."Assembly Quantity Behaviour"::"Auto Update": lbUpdate := TRUE;
+          lrecPackSetup."Assembly Quantity Behaviour"::Prompt: lbUpdate := CONFIRM(tcUpdateAssemblyLine);
+        END;
+
+        IF ( lbUpdate ) THEN BEGIN
+          IF ( ptrecPackOrderBuffer."Document Type" = ptrecPackOrderBuffer."Document Type"::"Warehouse Shipment" ) THEN BEGIN
+            // TFS4150
+            cuLPCommon.updateShipmentFromAssembly(lrecWhseShipHeader);
+          END ELSE IF ( ptrecPackOrderBuffer."Document Type" = ptrecPackOrderBuffer."Document Type"::"Sales Order" ) THEN BEGIN
+            //cuLPCommon.updateSalesOrderFromAssembly(lrecSalesHeader);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE updateAssemblyQty@1000000001(poptSourceDoc@1000000002 : Option;pcodSourceNo@1000000001 : Code[20]);
+    BEGIN
+      //<FUNC>
+      //  Description:
+      //  Called From:
+      //  Side Effect:
+      //</FUNC>
+
+      // determine if there is an assembly item
+    END;
+
+    PROCEDURE printPackageTag@1000000002(VAR precLPHeader@1000000000 : Record 23044505;pbShowRequestPage@1000000001 : Boolean;pbRunModal@1000000006 : Boolean);
+    VAR
+      lrecDShipSetup@1000000005 : Record 23044600;
+      lrecIWXReportSelection@1000000004 : Record 23044508;
+    BEGIN
+      //<FUNC>
+      //  Description:
+      //  Called From:
+      //  Side Effect:
+      //</FUNC>
+
+      lrecIWXReportSelection.SETRANGE(Usage, lrecIWXReportSelection.Usage::"LP Label");
+      IF ( lrecIWXReportSelection.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          IF ( pbRunModal ) THEN
+            REPORT.RUNMODAL(lrecIWXReportSelection."Report ID", pbShowRequestPage, FALSE, precLPHeader)
+          ELSE
+            REPORT.RUN(lrecIWXReportSelection."Report ID", pbShowRequestPage, FALSE, precLPHeader);
+        UNTIL(lrecIWXReportSelection.NEXT=0);
+      END;
+    END;
+
+    PROCEDURE printInternalPackageLabel@1000000053(VAR precLPHeader@1000000000 : Record 23044505;poptShowRequestPage@1000000001 : 'Determine,No,Yes');
+    VAR
+      lrecDShipSetup@1000000005 : Record 23044600;
+      lrecIWXReportSelection@1000000004 : Record 23044508;
+      lcuRateMgmt@1000000006 : Codeunit 23044602;
+      loptDShipDocType@1000000007 : Option;
+      loptPrintBehaviour@1000000003 : Option;
+      liReportID@1000000002 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Description: Prints the internal package label, per customer definition
+      //  Called From: P602
+      //  Side Effect:
+      //</FUNC>
+
+      lrecDShipSetup.GET;
+      IF (precLPHeader."Source Document" = precLPHeader."Source Document"::" ") THEN
+        EVALUATE(precLPHeader."Source Document", precLPHeader.GETFILTER("Source Document"));
+      IF (precLPHeader."Source No." = precLPHeader."Source No.") THEN
+        EVALUATE(precLPHeader."Source No.", precLPHeader.GETFILTER("Source No."));
+      getDShipDocTypeFromLPSrcType(precLPHeader."Source Document", loptDShipDocType);
+      IF ( lcuRateMgmt.callPrintIntPkgLabelExtension(lrecDShipSetup."Shipment Extension Codeunit", loptDShipDocType, precLPHeader.GETFILTER("Source No.")) ) THEN
+        EXIT;
+
+      getCustomerIntPkgLabel(precLPHeader, liReportID, loptPrintBehaviour);
+
+      IF ( liReportID = 0 ) THEN BEGIN
+        IF (poptShowRequestPage = poptShowRequestPage::Determine ) THEN BEGIN
+          IF ( lrecDShipSetup."Package LP Print Behaviour" = lrecDShipSetup."Package LP Print Behaviour"::Automatic ) THEN
+            poptShowRequestPage := poptShowRequestPage::No
+          ELSE IF ( lrecDShipSetup."Package LP Print Behaviour" = lrecDShipSetup."Package LP Print Behaviour"::"Automatic with prompt" ) THEN
+            poptShowRequestPage := poptShowRequestPage::Yes;
+        END;
+        lrecIWXReportSelection.SETRANGE(Usage, lrecIWXReportSelection.Usage::"Package Report");
+        IF ( lrecIWXReportSelection.FINDSET(FALSE) ) THEN BEGIN
+          REPEAT
+            IF ( poptShowRequestPage = poptShowRequestPage::Yes ) THEN
+              REPORT.RUNMODAL(lrecIWXReportSelection."Report ID", TRUE, FALSE, precLPHeader)
+            ELSE IF ( poptShowRequestPage = poptShowRequestPage::No ) THEN
+              REPORT.RUN(lrecIWXReportSelection."Report ID", FALSE, FALSE, precLPHeader);
+          UNTIL( lrecIWXReportSelection.NEXT=0 );
+        END;
+      END ELSE BEGIN
+        IF (poptShowRequestPage = poptShowRequestPage::Determine ) THEN BEGIN
+          IF ( loptPrintBehaviour = lrecDShipSetup."Package LP Print Behaviour"::Automatic ) THEN
+            poptShowRequestPage := poptShowRequestPage::No
+          ELSE IF ( loptPrintBehaviour = lrecDShipSetup."Package LP Print Behaviour"::"Automatic with prompt" ) THEN
+            poptShowRequestPage := poptShowRequestPage::Yes;
+        END;
+        IF ( poptShowRequestPage = poptShowRequestPage::Yes ) THEN
+          REPORT.RUNMODAL(liReportID, TRUE, FALSE, precLPHeader)
+        ELSE IF ( poptShowRequestPage = poptShowRequestPage::No ) THEN
+          REPORT.RUN(liReportID, FALSE, FALSE, precLPHeader);
+      END;
+    END;
+
+    LOCAL PROCEDURE getCustomerIntPkgLabel@1000000051(VAR precLPHeader@1000000001 : Record 23044505;VAR piReportID@1000000002 : Integer;VAR poptPrintBehaviour@1000000000 : Option);
+    VAR
+      lrecWhseShipLine@1000000006 : Record 7321;
+      lrecSalesHeader@1000000005 : Record 36;
+      lrecCustomerOptions@1000000004 : Record 23044614;
+      lcodSalesOrderNo@1000000003 : Code[20];
+    BEGIN
+      //<FUNC>
+      //  Description: Gets the appropriate report ID
+      //  Called From:
+      //  Side Effect:
+      //</FUNC>
+
+      precLPHeader.SETAUTOCALCFIELDS("Source Document", "Source No.");
+      IF ( NOT precLPHeader.FINDSET(FALSE) ) THEN
+        EXIT;
+
+      CASE precLPHeader."Source Document" OF
+        precLPHeader."Source Document"::Shipment:
+          BEGIN
+            lrecWhseShipLine.SETRANGE("No.", precLPHeader."Source No.");
+            IF ( lrecWhseShipLine.FINDSET(FALSE) ) THEN
+              IF ( lrecWhseShipLine."Source Document" = lrecWhseShipLine."Source Document"::"Sales Order") THEN
+                lcodSalesOrderNo := lrecWhseShipLine."Source No.";
+          END;
+        precLPHeader."Source Document"::"Sales Order":
+          lcodSalesOrderNo := precLPHeader."Source No.";
+      END;
+
+      IF ( lcodSalesOrderNo <> '' ) THEN BEGIN
+        IF ( lrecSalesHeader.GET(1, lcodSalesOrderNo) ) THEN
+          IF ( getCustomerOptions(lrecSalesHeader, lrecCustomerOptions) ) THEN BEGIN
+            piReportID := lrecCustomerOptions."Internal Package Report ID";
+            poptPrintBehaviour := lrecCustomerOptions."Internal Pkg. Print Behaviour";
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE hasOpenPicks@1000000023(poptWhseDocType@1000000003 : Option;pcodWhseDocNo@1000000002 : Code[20];poptSourceDoc@1000000001 : Option;pcodSourceNo@1000000000 : Code[20]) : Boolean;
+    VAR
+      lrecActivityLine@1000000004 : Record 5767;
+    BEGIN
+      //<FUNC>
+      //  Description:
+      //  Called From:
+      //  Side Effect:
+      //</FUNC>
+
+      //lrecActivityLine.SETFILTER("Activity Type",'%1|%2', lrecActivityLine."Activity Type"::Pick, lrecActivityLine."Activity Type"::"Invt. Pick");
+      lrecActivityLine.SETRANGE("Activity Type", lrecActivityLine."Activity Type"::"Invt. Pick");
+      IF ( pcodWhseDocNo<>'') THEN BEGIN
+        lrecActivityLine.SETRANGE("Whse. Document Type", poptWhseDocType);
+        lrecActivityLine.SETRANGE("Whse. Document No.", pcodWhseDocNo);
+      END ELSE BEGIN
+        lrecActivityLine.SETRANGE("Source Document", poptSourceDoc);
+        lrecActivityLine.SETRANGE("Source No.", pcodSourceNo);
+      END;
+
+      EXIT(lrecActivityLine.FINDFIRST);
+    END;
+
+    PROCEDURE getAssembleToOrderNo@1000000010(poptType@1000000000 : Option;pcodDocumentNo@1000000001 : Code[20];piDocumentLineNo@1000000002 : Integer) : Code[20];
+    VAR
+      lrecDShipSetup@1000000004 : Record 23044600;
+      lrecAssembleOrderLink@1000000003 : Record 904;
+    BEGIN
+      //<FUNC>
+      //  Description:
+      //  Called From:
+      //  Side Effect:
+      //</FUNC>
+
+      lrecDShipSetup.GET;
+      IF ( lrecDShipSetup."Assembly Order Behaviour" = lrecDShipSetup."Assembly Order Behaviour"::"Show Item" ) THEN
+        EXIT('');
+
+      lrecAssembleOrderLink.SETRANGE("Assembly Document Type", lrecAssembleOrderLink."Assembly Document Type"::Order);
+      lrecAssembleOrderLink.SETRANGE(Type, poptType);
+      lrecAssembleOrderLink.SETRANGE("Document No.", pcodDocumentNo);
+      IF ( piDocumentLineNo <> 0 ) THEN
+        lrecAssembleOrderLink.SETRANGE("Document Line No.", piDocumentLineNo);
+
+      IF ( lrecAssembleOrderLink.FINDFIRST ) THEN
+        EXIT(lrecAssembleOrderLink."Assembly Document No.");
+    END;
+
+    LOCAL PROCEDURE isWhseShipAssembleToOrder@1000000003(precWhseShipHeader@1000000000 : Record 7320) : Boolean;
+    VAR
+      lrecWhseShipLine@1000000001 : Record 7321;
+    BEGIN
+      //<FUNC>
+      //  Description:
+      //  Called From:
+      //  Side Effect:
+      //</FUNC>
+
+      lrecWhseShipLine.SETRANGE("No.", precWhseShipHeader."No.");
+      IF ( lrecWhseShipLine.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          IF ( lrecWhseShipLine."Qty. Outstanding">0 ) THEN BEGIN
+            IF ( getAssembleToOrderNo(1, lrecWhseShipLine."Source No.", lrecWhseShipLine."Source Line No.") <> '' ) THEN
+              EXIT(TRUE);
+          END;
+        UNTIL(lrecWhseShipLine.NEXT=0);
+      END;
+
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE isSalesOrderAssembleToOrder@1000000022(precSalesHeader@1000000000 : Record 36) : Boolean;
+    BEGIN
+
+      EXIT(getAssembleToOrderNo(1, precSalesHeader."No.",0) <> '');
+    END;
+
+    PROCEDURE getDShipDocTypeFromLPSrcType@1000000032(poptLPSourceType@1000000000 : Option;VAR poptDShipDocType@1000000001 : Option);
+    VAR
+      lrecLPHeader@1000000002 : Record 23044505;
+      lrecPkgOrderBuffer@1000000003 : Record 23044601;
+    BEGIN
+      //<FUNC>
+      //  Description: Interprets the DSHIP document type based on LP source type
+      //  Called From: Codeunit "DSHIP Package Rate Management" (ID: 23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      CASE poptLPSourceType OF
+        lrecLPHeader."Source Document"::"Sales Order": poptDShipDocType := lrecPkgOrderBuffer."Document Type"::"Sales Order";
+        lrecLPHeader."Source Document"::"Outbound Transfer": poptDShipDocType := lrecPkgOrderBuffer."Document Type"::"Outbound Transfer";
+        lrecLPHeader."Source Document"::Shipment: poptDShipDocType := lrecPkgOrderBuffer."Document Type"::"Warehouse Shipment";
+        lrecLPHeader."Source Document"::"Misc. Shipment": poptDShipDocType := lrecPkgOrderBuffer."Document Type"::"Misc. Shipment";
+        ELSE
+          ERROR(tcUnknownDoc);
+      END;
+    END;
+
+    PROCEDURE getLPSrcTypeFromDShipDocType@1000000026(poptDShipDocType@1000000001 : Option;VAR poptLPSourceType@1000000000 : Option);
+    VAR
+      lrecLPHeader@1000000002 : Record 23044505;
+      lrecPkgOrderBuffer@1000000003 : Record 23044601;
+    BEGIN
+      //<FUNC>
+      //  Description: Interprets the LP source type based on DSHIP document type
+      //  Called From: Codeunit "DSHIP Package Rate Management" (ID: 23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      CASE poptDShipDocType OF
+        lrecPkgOrderBuffer."Document Type"::"Sales Order": poptLPSourceType := lrecLPHeader."Source Document"::"Sales Order";
+        lrecPkgOrderBuffer."Document Type"::"Outbound Transfer": poptLPSourceType := lrecLPHeader."Source Document"::"Outbound Transfer";
+        lrecPkgOrderBuffer."Document Type"::"Warehouse Shipment": poptLPSourceType := lrecLPHeader."Source Document"::Shipment;
+        lrecPkgOrderBuffer."Document Type"::"Misc. Shipment": poptLPSourceType := lrecLPHeader."Source Document"::"Misc. Shipment";
+        ELSE
+          ERROR(tcUnknownDoc);
+      END;
+    END;
+
+    PROCEDURE showPostedDocumentLP@1000000045(precLPHeader@1000000000 : Record 23044505);
+    VAR
+      lrecPostedWhseShipLine@1000000001 : Record 7323;
+    BEGIN
+      //<FUNC>
+      //  Description: Open the related posted document of the underlying order
+      //  Called From: PAGE LPM License Plate List (P23044512)
+      //  Side Effect: OPTIONAL MERGE
+      //</FUNC>
+
+      IF ( precLPHeader."Shipped Source Document" = precLPHeader."Shipped Source Document"::Shipment ) THEN BEGIN
+        lrecPostedWhseShipLine.SETRANGE("No.", precLPHeader."Shipment No.");
+        IF ( NOT lrecPostedWhseShipLine.FINDFIRST ) THEN
+          EXIT;
+        CASE lrecPostedWhseShipLine."Source Document" OF
+          lrecPostedWhseShipLine."Source Document"::"Sales Order":
+              showPostedDocumentLPHelper(precLPHeader."Source Document"::"Sales Order",
+                                         lrecPostedWhseShipLine."Source No.",
+                                         precLPHeader."Last Modified On");
+          lrecPostedWhseShipLine."Source Document"::"Outbound Transfer":
+              showPostedDocumentLPHelper(precLPHeader."Source Document"::"Outbound Transfer",
+                                         lrecPostedWhseShipLine."Source No.",
+                                         precLPHeader."Last Modified On");
+          lrecPostedWhseShipLine."Source Document"::"Purchase Return Order":
+              showPostedDocumentLPHelper(precLPHeader."Source Document"::"Purchase Return Order",
+                                         lrecPostedWhseShipLine."Source No.",
+                                         precLPHeader."Last Modified On");
+        END;
+      END ELSE
+        showPostedDocumentLPHelper(precLPHeader."Shipped Source Document",
+                                   lrecPostedWhseShipLine."Source No.",
+                                   precLPHeader."Last Modified On");
+    END;
+
+    LOCAL PROCEDURE showPostedDocumentLPHelper@1000000044(poptSourceDoc@1000000000 : Option;pcodSourceNo@1000000001 : Code[20];pdtLastModified@1000000004 : Date);
+    VAR
+      lrecLPHeader@1000000003 : Record 23044505;
+      lrecSalesInvoiceHeader@1000000002 : Record 112;
+      lrecTransferShipHeader@1000000005 : Record 5744;
+      lrecPurchaseHeader@1000000006 : Record 38;
+    BEGIN
+      //<FUNC>
+      //  Description: Open the related posted document of the underlying order
+      //  Called From: PAGE LPM License Plate List (P23044512)
+      //  Side Effect: OPTIONAL MERGE
+      //</FUNC>
+
+      CASE poptSourceDoc OF
+        lrecLPHeader."Source Document"::"Sales Order":
+          BEGIN
+            lrecSalesInvoiceHeader.SETRANGE("Order No.", pcodSourceNo);
+            lrecSalesInvoiceHeader.SETRANGE("Shipment Date", pdtLastModified);
+            IF ( lrecSalesInvoiceHeader.FINDFIRST ) THEN
+              PAGE.RUN(PAGE::"Posted Sales Invoice", lrecSalesInvoiceHeader);
+          END;
+        lrecLPHeader."Source Document"::"Outbound Transfer":
+          BEGIN
+            lrecTransferShipHeader.SETRANGE("Transfer Order No.", pcodSourceNo);
+            lrecTransferShipHeader.SETRANGE("Shipment Date", pdtLastModified);
+            IF ( lrecTransferShipHeader.FINDFIRST ) THEN
+              PAGE.RUN(PAGE::"Posted Transfer Shipment", lrecTransferShipHeader);
+          END;
+        lrecLPHeader."Source Document"::"Purchase Return Order":
+          BEGIN
+            lrecPurchaseHeader.SETRANGE("Document Type", lrecPurchaseHeader."Document Type"::"Return Order");
+            lrecPurchaseHeader.SETRANGE("No.", pcodSourceNo);
+            IF ( lrecPurchaseHeader.FINDFIRST ) THEN
+              PAGE.RUN(PAGE::"Purchase Return Order", lrecPurchaseHeader);
+          END;
+        ELSE
+          EXIT;
+      END;
+    END;
+
+    PROCEDURE showOrderDocumentLP@1000000039(precLPHeader@1000000000 : Record 23044505);
+    VAR
+      lrecrRecRef@1000000006 : RecordRef;
+      lrecWhseShipHeader@1000000005 : Record 7320;
+      lrecSalesHeader@1000000004 : Record 36;
+      lrecTransferHeader@1000000003 : Record 5740;
+      lrecPurchaseHeader@1000000002 : Record 38;
+    BEGIN
+      //<FUNC>
+      //  Description: Shows the underlying order document of a LP
+      //  Called From: PAGE LPM License Plate List (P23044512)
+      //  Side Effect: OPTIONAL MERGE
+      //</FUNC>
+
+      CASE precLPHeader."Source Document" OF
+        precLPHeader."Source Document"::Shipment:
+        BEGIN
+          lrecWhseShipHeader.GET(precLPHeader."Source No.");
+          lrecrRecRef.GETTABLE(lrecWhseShipHeader);
+        END;
+        precLPHeader."Source Document"::"Sales Order":
+        BEGIN
+          lrecSalesHeader.GET(lrecSalesHeader."Document Type"::Order, precLPHeader."Source No.");
+          lrecrRecRef.GETTABLE(lrecSalesHeader);
+        END;
+        precLPHeader."Source Document"::"Outbound Transfer":
+        BEGIN
+          lrecTransferHeader.GET(precLPHeader."Source No.");
+          lrecrRecRef.GETTABLE(lrecTransferHeader);
+        END;
+        precLPHeader."Source Document"::"Purchase Return Order":
+        BEGIN
+          lrecPurchaseHeader.GET(lrecPurchaseHeader."Document Type"::"Return Order", precLPHeader."Source No.");
+          lrecrRecRef.GETTABLE(lrecPurchaseHeader);
+        END;
+        ELSE
+          EXIT;
+      END;
+
+      showOrderDocument(lrecrRecRef);
+    END;
+
+    PROCEDURE showOrderDocument@1000000038(VAR precrRecRef@1000000000 : RecordRef);
+    VAR
+      lrecrRecRef@1000000006 : RecordRef;
+      lrecWhseShipHeader@1000000003 : Record 7320;
+      lrecSalesHeader@1000000002 : Record 36;
+      lrecTransferHeader@1000000001 : Record 5740;
+      lrecPackOrderBuffer@1000000004 : Record 23044601;
+      lrecWhseShipLines@1000000005 : Record 7321;
+      lrecPurchaseHeader@1000000007 : Record 38;
+    BEGIN
+      //<FUNC>
+      //  Description: Shows the underlying order document of a whse shipment
+      //  Called From: PAGE DSHIP Order Packaging (P23044601)
+      //               PAGE DSHIP Package Worksheet (P23044602)
+      //  Side Effect:
+      //</FUNC>
+
+      IF ( precrRecRef.NUMBER = DATABASE::"DSHIP Package Order Buffer" ) THEN BEGIN
+
+        precrRecRef.SETTABLE(lrecPackOrderBuffer);
+
+        CASE lrecPackOrderBuffer."Document Type" OF
+          lrecPackOrderBuffer."Document Type"::"Warehouse Shipment":
+            BEGIN
+              lrecWhseShipHeader.GET(lrecPackOrderBuffer."Document No.");
+              lrecrRecRef.GETTABLE(lrecWhseShipHeader);
+            END;
+          lrecPackOrderBuffer."Document Type"::"Sales Order":
+            BEGIN
+              lrecSalesHeader.GET(lrecPackOrderBuffer."Document Subtype", lrecPackOrderBuffer."Document No.");
+              lrecrRecRef.GETTABLE(lrecSalesHeader);
+            END;
+          lrecPackOrderBuffer."Document Type"::"Outbound Transfer":
+            BEGIN
+              lrecTransferHeader.GET(lrecPackOrderBuffer."Document No.");
+              lrecrRecRef.GETTABLE(lrecTransferHeader);
+            END;
+        END;
+      END ELSE
+        lrecrRecRef := precrRecRef.DUPLICATE;
+
+      IF ( lrecrRecRef.NUMBER = DATABASE::"Warehouse Shipment Header" ) THEN BEGIN
+        lrecrRecRef.SETTABLE(lrecWhseShipHeader);
+        lrecWhseShipLines.SETRANGE("No.", lrecWhseShipHeader."No.");
+        IF ( lrecWhseShipLines.FINDFIRST ) THEN
+          CASE lrecWhseShipLines."Source Document" OF
+            lrecWhseShipLines."Source Document"::"Sales Order":
+              BEGIN
+                lrecSalesHeader.GET(1, lrecWhseShipLines."Source No.");
+                lrecrRecRef.GETTABLE(lrecSalesHeader);
+              END;
+            lrecWhseShipLines."Source Document"::"Outbound Transfer":
+              BEGIN
+                lrecTransferHeader.GET(lrecWhseShipLines."Source No.");
+                lrecrRecRef.GETTABLE(lrecTransferHeader);
+              END;
+            lrecWhseShipLines."Source Document"::"Purchase Return Order":
+              BEGIN
+                lrecPurchaseHeader.GET(lrecPurchaseHeader."Document Type"::"Return Order", lrecWhseShipLines."Source No.");
+                lrecrRecRef.GETTABLE(lrecPurchaseHeader);
+              END;
+          END;
+      END;
+
+      showSourceDocument(lrecrRecRef);
+    END;
+
+    PROCEDURE showSourceDocument@1000000007(VAR precrRecRef@1000000000 : RecordRef);
+    VAR
+      lrecWhseShipHeader@1000000003 : Record 7320;
+      lrecSalesHeader@1000000002 : Record 36;
+      lrecTransferHeader@1000000001 : Record 5740;
+      lrecPurchaseHeader@1000000004 : Record 38;
+    BEGIN
+      //<FUNC>
+      //  Description: Show source document
+      //  Called From: Page: 23044602 DynamicShip Package Worksheet
+      //  Side Effect: None
+      //</FUNC>
+
+      // fix issue where the following chain can cause NAV table lock error
+      // 1. pack/unpack lines (updated source qty to ship)
+      // 2. actions -> show source
+      // 3. actions -> lp -> show assigned
+      // 4. Error: teh following cal functions are limited during write transactions because...
+      COMMIT;
+
+      precrRecRef.SETRECFILTER;
+      CASE precrRecRef.NUMBER OF
+        DATABASE::"Warehouse Shipment Header":
+          BEGIN
+            lrecWhseShipHeader.SETVIEW(precrRecRef.GETVIEW);
+            lrecWhseShipHeader.FIND('-');
+            PAGE.RUN(PAGE::"Warehouse Shipment", lrecWhseShipHeader);
+          END;
+        DATABASE::"Sales Header":
+          BEGIN
+            lrecSalesHeader.SETVIEW(precrRecRef.GETVIEW);
+            lrecSalesHeader.FIND('-');
+            PAGE.RUN(PAGE::"Sales Order", lrecSalesHeader);
+          END;
+        DATABASE::"Transfer Header":
+          BEGIN
+            lrecTransferHeader.SETVIEW(precrRecRef.GETVIEW);
+            lrecTransferHeader.FIND('-');
+            PAGE.RUN(PAGE::"Transfer Order", lrecTransferHeader);
+          END;
+        DATABASE::"Purchase Header":
+          BEGIN
+            lrecPurchaseHeader.SETVIEW(precrRecRef.GETVIEW);
+            lrecPurchaseHeader.FIND('-');
+            PAGE.RUN(PAGE::"Purchase Return Order", lrecPurchaseHeader);
+          END;
+      END;
+    END;
+
+    PROCEDURE showSourceComments@1000000031(VAR precrRecRef@1000000000 : RecordRef);
+    VAR
+      lrecSalesCommentLine@1000000004 : Record 44;
+      lrecWhseCommentLine@1000000005 : Record 5770;
+      lrecInvCommentLine@1000000006 : Record 5748;
+      lrecWhseShipHeader@1000000003 : Record 7320;
+      lrecSalesHeader@1000000002 : Record 36;
+      lrecTransferHeader@1000000001 : Record 5740;
+    BEGIN
+      //<FUNC>
+      //  Description: Opens the specified documents comments
+      //  Called From: Page: 23044602 DynamicShip Package Worksheet
+      //  Side Effect: None
+      //</FUNC>
+
+      precrRecRef.SETRECFILTER;
+      CASE precrRecRef.NUMBER OF
+        DATABASE::"Warehouse Shipment Header":
+          BEGIN
+            lrecWhseShipHeader.SETVIEW(precrRecRef.GETVIEW);
+            lrecWhseShipHeader.FIND('-');
+            lrecWhseCommentLine.SETRANGE("Table Name", lrecWhseCommentLine."Table Name"::"Whse. Shipment");
+            lrecWhseCommentLine.SETRANGE(Type, lrecWhseCommentLine.Type::" ");
+            lrecWhseCommentLine.SETRANGE("No.", lrecWhseShipHeader."No.");
+            PAGE.RUN(PAGE::"Warehouse Comment Sheet", lrecWhseCommentLine);
+          END;
+        DATABASE::"Sales Header":
+          BEGIN
+            lrecSalesHeader.SETVIEW(precrRecRef.GETVIEW);
+            lrecSalesHeader.FIND('-');
+            lrecSalesCommentLine.SETRANGE("No.", lrecSalesHeader."No.");
+            lrecSalesCommentLine.SETRANGE("Document Line No.", 0);
+            PAGE.RUN(PAGE::"Sales Comment Sheet", lrecSalesCommentLine);
+          END;
+        DATABASE::"Transfer Header":
+          BEGIN
+            lrecTransferHeader.SETVIEW(precrRecRef.GETVIEW);
+            lrecTransferHeader.FIND('-');
+            lrecInvCommentLine.SETRANGE("Document Type", lrecInvCommentLine."Document Type"::"Transfer Order");
+            lrecInvCommentLine.SETRANGE("No.", lrecTransferHeader."No.");
+            PAGE.RUN(PAGE::"Inventory Comment Sheet", lrecInvCommentLine);
+          END;
+      END;
+    END;
+
+    PROCEDURE updateDocumentQtyToShip@1000000013(ptrecPackOrderBuffer@1000000000 : TEMPORARY Record 23044601);
+    VAR
+      lrecWhseShipLine@1000000001 : Record 7321;
+      lrecSalesLine@1000000002 : Record 37;
+      lrecTransferLine@1000000003 : Record 5741;
+      lrecLicensePlateUsage@1000000004 : Record 23044507;
+      ltrecPackLineBuffer@1000000006 : TEMPORARY Record 23044602;
+      ldQty@1000000005 : Decimal;
+      IWXLicensePlateHeaderLoc@1000000007 : Record 23044505;
+      RegisteredWhseActivityLine@1000000008 : Record 5773;
+      lrecItem@1000000009 : Record 27;
+    BEGIN
+      //<FUNC>
+      //  Description: Set document line qty to ship to 0 if no license plate assignment
+      //  Called From: This codeunit
+      //  Side Effect: None
+      //</FUNC>
+
+      CASE ptrecPackOrderBuffer."Document Type" OF
+        ptrecPackOrderBuffer."Document Type"::"Warehouse Shipment":
+          BEGIN
+            lrecWhseShipLine.SETRANGE("No.", ptrecPackOrderBuffer."Document No.");
+            IF ( lrecWhseShipLine.FINDSET(TRUE)) THEN BEGIN
+              REPEAT
+                ldQty := 0;
+                IF ( getAssembleToOrderNo(1, lrecWhseShipLine."Source No.", lrecWhseShipLine."Source Line No.") <> '' ) THEN BEGIN
+                  ltrecPackLineBuffer.RESET;
+                  ltrecPackLineBuffer.DELETEALL;
+                  ltrecPackLineBuffer.INIT;
+                  ltrecPackLineBuffer."Line No." := 10000;
+                  ltrecPackLineBuffer."Document Type" := ptrecPackOrderBuffer."Document Type";
+                  ltrecPackLineBuffer."Document No." := ptrecPackOrderBuffer."Document No.";
+                  ltrecPackLineBuffer."Document Line No." := lrecWhseShipLine."Line No.";
+                  ltrecPackLineBuffer."Assembly Item No." := lrecWhseShipLine."Item No.";
+                  ldQty := getAssembledQtyToShip(ltrecPackLineBuffer);
+                END ELSE BEGIN
+                  lrecLicensePlateUsage.RESET;
+                  lrecLicensePlateUsage.SETRANGE("Source Document", lrecLicensePlateUsage."Source Document"::Shipment);
+                  lrecLicensePlateUsage.SETRANGE("Source No.", lrecWhseShipLine."No.");
+                  lrecLicensePlateUsage.SETRANGE("Source Line No.", lrecWhseShipLine."Line No.");
+                  lrecLicensePlateUsage.SETRANGE("Posting Date", 0D);
+                  lrecLicensePlateUsage.SETAUTOCALCFIELDS("Unit of Measure Code");
+                  //  Catches an order that is partially posted from the same line
+                  IF (lrecLicensePlateUsage.FINDSET(FALSE)) THEN BEGIN
+                    REPEAT
+                      IF (lrecItem.GET(lrecWhseShipLine."Item No.")) THEN BEGIN
+                        ldQty += cuCommonBase.ConvertUnitOfMeasure(lrecItem,
+                                                          lrecLicensePlateUsage.Quantity,
+                                                          lrecLicensePlateUsage."Unit of Measure Code",
+                                                          lrecWhseShipLine."Unit of Measure Code");
+                      END ELSE BEGIN
+                        ldQty += lrecLicensePlateUsage.Quantity;
+                      END;
+                    UNTIL (lrecLicensePlateUsage.NEXT() = 0);
+                  END;
+                END;
+                lrecWhseShipLine.VALIDATE("Qty. to Ship", ldQty);
+                lrecWhseShipLine.MODIFY(TRUE);
+              UNTIL (lrecWhseShipLine.NEXT() = 0);
+            END;
+          END;
+                {Old Code
+                ldQty := 0;
+                IF ( getAssembleToOrderNo(1, lrecWhseShipLine."Source No.", lrecWhseShipLine."Source Line No.") <> '' ) THEN BEGIN
+                  ltrecPackLineBuffer.RESET;
+                  ltrecPackLineBuffer.DELETEALL;
+                  ltrecPackLineBuffer.INIT;
+                  ltrecPackLineBuffer."Line No." := 10000;
+                  ltrecPackLineBuffer."Document Type" := ptrecPackOrderBuffer."Document Type";
+                  ltrecPackLineBuffer."Document No." := ptrecPackOrderBuffer."Document No.";
+                  ltrecPackLineBuffer."Document Line No." := lrecWhseShipLine."Line No.";
+                  ltrecPackLineBuffer."Assembly Item No." := lrecWhseShipLine."Item No.";
+                  ldQty := getAssembledQtyToShip(ltrecPackLineBuffer);
+                END ELSE BEGIN
+                  //GetPackageQuantity(ldQty,lrecWhseShipLine); //TPZ3337
+                  lrecLicensePlateUsage.RESET;
+                  lrecLicensePlateUsage.SETRANGE("Source Document", lrecLicensePlateUsage."Source Document"::Shipment);
+                  lrecLicensePlateUsage.SETRANGE("Source No.", lrecWhseShipLine."No.");
+                  lrecLicensePlateUsage.SETRANGE("Source Line No.", lrecWhseShipLine."Line No.");
+                  IF ( lrecLicensePlateUsage.FINDSET(FALSE) ) THEN BEGIN
+                    REPEAT
+                      ldQty += lrecLicensePlateUsage.Quantity;
+                    UNTIL( lrecLicensePlateUsage.NEXT=0 );
+                  END; // lrecLicensePlateUsage.FINDSET
+                END;
+                IF ( ldQty = lrecWhseShipLine."Qty. Shipped" ) THEN BEGIN
+                  lrecWhseShipLine.VALIDATE("Qty. to Ship", 0);
+                  lrecWhseShipLine.MODIFY(TRUE);
+                END ELSE BEGIN // if ldqty = qty shipped
+                  lrecWhseShipLine.VALIDATE("Qty. to Ship", ldQty - lrecWhseShipLine."Qty. Shipped");
+                  lrecWhseShipLine.MODIFY(TRUE);
+                END;
+              UNTIL(lrecWhseShipLine.NEXT=0);
+            END;
+          END;}
+
+        ptrecPackOrderBuffer."Document Type"::"Sales Order":
+          BEGIN
+            lrecSalesLine.SETRANGE("Document No.", ptrecPackOrderBuffer."Document No.");
+            lrecSalesLine.SETRANGE(Type, lrecSalesLine.Type::Item);
+
+            IF ( lrecSalesLine.FINDSET(TRUE)) THEN BEGIN
+              REPEAT
+                //-->TPZ3353
+                RegisteredWhseActivityLine.RESET;
+                RegisteredWhseActivityLine.SETRANGE("Source Document",RegisteredWhseActivityLine."Source Document"::"Sales Order");
+                RegisteredWhseActivityLine.SETRANGE("Source No.",lrecSalesLine."Document No.");
+                RegisteredWhseActivityLine.SETRANGE("Source Line No.",lrecSalesLine."Line No.");
+                RegisteredWhseActivityLine.SETRANGE("Whse. Document No.",GetWHseNo(lrecSalesLine)); //TPZ3353
+                IF RegisteredWhseActivityLine.FINDFIRST THEN BEGIN
+                //<--TPZ3353
+                ldQty := 0;
+                IF ( getAssembleToOrderNo(1, ptrecPackOrderBuffer."Document No.", lrecSalesLine."Line No.") <> '' ) THEN BEGIN
+                  ltrecPackLineBuffer.RESET;
+                  ltrecPackLineBuffer.DELETEALL;
+                  ltrecPackLineBuffer.INIT;
+                  ltrecPackLineBuffer."Line No." := 10000;
+                  ltrecPackLineBuffer."Document Type" := ptrecPackOrderBuffer."Document Type";
+                  ltrecPackLineBuffer."Document No." := ptrecPackOrderBuffer."Document No.";
+                  ltrecPackLineBuffer."Document Line No." := lrecSalesLine."Line No.";
+                  ltrecPackLineBuffer."Assembly Item No." := lrecSalesLine."No.";
+                  ldQty := getAssembledQtyToShip(ltrecPackLineBuffer);
+                END ELSE BEGIN
+                  lrecLicensePlateUsage.RESET;
+                  lrecLicensePlateUsage.SETRANGE("Source Document", lrecLicensePlateUsage."Source Document"::"Sales Order");
+                  lrecLicensePlateUsage.SETRANGE("Source No.", lrecSalesLine."Document No.");
+                  lrecLicensePlateUsage.SETRANGE("Source Line No.", lrecSalesLine."Line No.");
+                  //  Catches an order that is partially posted from the same line
+                  IF ( lrecLicensePlateUsage.FINDSET(FALSE) ) THEN BEGIN
+                  //Old code commented
+      //              REPEAT
+      //                ldQty += lrecLicensePlateUsage.Quantity;
+      //              UNTIL( lrecLicensePlateUsage.NEXT=0 );
+      //            END; // lrecLicensePlateUsage.FINDSET
+      //          END;
+      //          IF ( ldQty = lrecSalesLine."Quantity Shipped" ) THEN BEGIN
+      //            lrecSalesLine.VALIDATE("Qty. to Ship", 0);
+      //            lrecSalesLine.MODIFY(TRUE);
+      //          END ELSE BEGIN // if ldqty = qty shipped
+      //            lrecSalesLine.VALIDATE("Qty. to Ship", ldQty - lrecSalesLine."Quantity Shipped");
+      //            lrecSalesLine.MODIFY(TRUE);
+      //          END;
+                    REPEAT
+                      IF (lrecItem.GET(lrecWhseShipLine."Item No.")) THEN BEGIN
+                        ldQty += cuCommonBase.ConvertUnitOfMeasure(lrecItem,
+                                                          lrecLicensePlateUsage.Quantity,
+                                                          lrecLicensePlateUsage."Unit of Measure Code",
+                                                          lrecSalesLine."Unit of Measure Code");
+                      END ELSE BEGIN
+                        ldQty += lrecLicensePlateUsage.Quantity;
+                      END;
+                    UNTIL (lrecLicensePlateUsage.NEXT() = 0);
+                  END;
+                END;
+                lrecSalesLine.VALIDATE("Qty. to Ship", ldQty);
+                lrecSalesLine.MODIFY(TRUE);
+                END;//TPZ3353
+              UNTIL(lrecSalesLine.NEXT=0);
+            END;
+          END;
+        ptrecPackOrderBuffer."Document Type"::"Outbound Transfer":
+          BEGIN
+            lrecTransferLine.SETRANGE("Document No.", ptrecPackOrderBuffer."Document No.");
+            IF ( lrecTransferLine.FINDSET(TRUE)) THEN BEGIN
+              REPEAT
+                lrecLicensePlateUsage.RESET;
+                lrecLicensePlateUsage.SETRANGE("Source Document", lrecLicensePlateUsage."Source Document"::"Outbound Transfer");
+                lrecLicensePlateUsage.SETRANGE("Source No.", lrecTransferLine."Document No.");
+                lrecLicensePlateUsage.SETRANGE("Source Line No.", lrecTransferLine."Line No.");
+                IF ( NOT lrecLicensePlateUsage.FINDFIRST ) THEN BEGIN
+                  lrecTransferLine.VALIDATE("Qty. to Ship", 0);
+                  lrecTransferLine.MODIFY(TRUE);
+                END;
+              UNTIL(lrecTransferLine.NEXT=0);
+            END;
+          END;
+      END;
+    END;
+
+    PROCEDURE printBillOfLading@1000000016(poptSourceDocument@1000000004 : 'Sales Order,Sales Return Order,Purchase Order,Purchase Return Order,Outbound Transfer,Service Order,Warehouse Shipment';pcodSourceNo@1000000003 : Code[20];pbShowRequestPage@1000000005 : Boolean);
+    VAR
+      lrecSalesHeader@1000000002 : Record 36;
+      lrecWarehouseShipmentLine@1000000001 : Record 7321;
+      lrecTransferheader@1000000000 : Record 5740;
+      lrptBillOfLadingSales@1000000006 : Report 23044602;
+      lrptBillOfLadingTransfer@1000000007 : Report 23044603;
+    BEGIN
+      //<FUNC>
+      //  Description: Prints the bill of lading
+      //  Called From: Page 23044601 23044602
+      //  Side Effect: None
+      //</FUNC>
+
+      CASE poptSourceDocument OF
+        poptSourceDocument::"Sales Order":
+          BEGIN
+            lrecSalesHeader.GET(lrecSalesHeader."Document Type"::Order, pcodSourceNo);
+            lrecSalesHeader.SETRECFILTER;
+            IF ( runBOLReportSelection(lrecSalesHeader) ) THEN
+              EXIT;
+            lrptBillOfLadingSales.USEREQUESTPAGE(pbShowRequestPage);
+            lrptBillOfLadingSales.setSourceDocument(poptSourceDocument, pcodSourceNo);
+            lrptBillOfLadingSales.SETTABLEVIEW(lrecSalesHeader);
+            lrptBillOfLadingSales.RUN;
+          END;
+        poptSourceDocument::"Warehouse Shipment":
+          BEGIN
+            lrecWarehouseShipmentLine.SETRANGE("No.", pcodSourceNo);
+            IF ( lrecWarehouseShipmentLine.FINDFIRST ) THEN BEGIN
+              IF ( lrecWarehouseShipmentLine."Source Document" = lrecWarehouseShipmentLine."Source Document"::"Sales Order") THEN BEGIN
+                lrecSalesHeader.GET(lrecSalesHeader."Document Type"::Order, lrecWarehouseShipmentLine."Source No.");
+                lrecSalesHeader.SETRECFILTER;
+                IF ( runBOLReportSelection(lrecSalesHeader) ) THEN
+                  EXIT;
+                lrptBillOfLadingSales.USEREQUESTPAGE(pbShowRequestPage);
+                lrptBillOfLadingSales.setSourceDocument(poptSourceDocument, pcodSourceNo);
+                lrptBillOfLadingSales.SETTABLEVIEW(lrecSalesHeader);
+                lrptBillOfLadingSales.RUN;
+              END ELSE IF ( lrecWarehouseShipmentLine."Source Document" = lrecWarehouseShipmentLine."Source Document"::"Outbound Transfer") THEN BEGIN
+                lrecTransferheader.GET(lrecWarehouseShipmentLine."Source No.");
+                lrecTransferheader.SETRECFILTER;
+                lrptBillOfLadingTransfer.USEREQUESTPAGE(pbShowRequestPage);
+                lrptBillOfLadingTransfer.setSourceDocument(poptSourceDocument, pcodSourceNo);
+                lrptBillOfLadingTransfer.SETTABLEVIEW(lrecTransferheader);
+                lrptBillOfLadingTransfer.RUN;
+              END;
+            END;
+          END;
+        poptSourceDocument::"Outbound Transfer":
+          BEGIN
+            lrecTransferheader.GET(pcodSourceNo);
+            lrecTransferheader.SETRECFILTER;
+            lrptBillOfLadingTransfer.USEREQUESTPAGE(pbShowRequestPage);
+            lrptBillOfLadingTransfer.setSourceDocument(poptSourceDocument, pcodSourceNo);
+            lrptBillOfLadingTransfer.SETTABLEVIEW(lrecTransferheader);
+            lrptBillOfLadingTransfer.RUN;
+          END;
+      END;
+    END;
+
+    PROCEDURE printCommercialInvoice@1000000056(poptDocType@1000000002 : Option;pcodDocNo@1000000004 : Code[20];pbShowRequestPage@1000000001 : Boolean);
+    VAR
+      lrecLPHeader@1000000003 : Record 23044505;
+      loptLPSource@1000000005 : Option;
+    BEGIN
+      //<FUNC>
+      //  Description: Prints the commercial invoice report
+      //  Called From: PAGE DSHIP Order Packaging (P23044601)
+      //               PAGE DSHIP Package Worksheet (P23044602)
+      //               PAGE DSHIP Shipment Customs Card (P23044605)
+      //               PAGE DSHIP Shipment Customs List (P23044606)
+      //  Side Effect: Whatever the effects of running the report are
+      //</FUNC>
+
+      lrecLPHeader.SETAUTOCALCFIELDS("Source No.", "Source Document");
+      lrecLPHeader.SETRANGE("No.", CreateLPNoFilterFirstWithDShipDocType(poptDocType, pcodDocNo));
+      IF ( NOT lrecLPHeader.FINDFIRST ) THEN BEGIN
+        lrecLPHeader.RESET;
+        lrecLPHeader.SETRANGE("Shipped Source No.", pcodDocNo);
+        lrecLPHeader.SETRANGE("Shipped Source Document", loptLPSource);
+      END;
+
+      printCommercialInvoiceByLP(lrecLPHeader, pbShowRequestPage);
+    END;
+
+    PROCEDURE printCommercialInvoiceByLP@1000000025(VAR precLPHeader@1000000000 : Record 23044505;pbShowRequestPage@1000000001 : Boolean);
+    VAR
+      lrecIWXReportSelection@1000000002 : Record 23044508;
+      lrecDShipSetup@1000000004 : Record 23044600;
+      lcuRateMgmt@1000000003 : Codeunit 23044602;
+    BEGIN
+      //<FUNC>
+      //  Description: Prints the commercial invoice
+      //  Called From: Thise codeunit (CU23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+
+      IF ( NOT precLPHeader.FINDFIRST ) THEN
+        EXIT;
+
+      lrecDShipSetup.GET;
+      IF ( lcuRateMgmt.callPrintCommInvExtension(lrecDShipSetup."Shipment Extension Codeunit", precLPHeader."No.") ) THEN
+        EXIT;
+
+      lrecIWXReportSelection.SETRANGE(Usage, lrecIWXReportSelection.Usage::"Commercial Invoice");
+      IF ( lrecIWXReportSelection.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          REPORT.RUN(lrecIWXReportSelection."Report ID", pbShowRequestPage, FALSE, precLPHeader);
+        UNTIL( lrecIWXReportSelection.NEXT=0 );
+      END ELSE BEGIN
+        REPORT.RUN(REPORT::"DSHIP Commercial Invoice", pbShowRequestPage, FALSE, precLPHeader);
+      END;
+    END;
+
+    LOCAL PROCEDURE getAssembledQtyToShip@1000000033(VAR ptrecPackLineBuffer@1000000000 : TEMPORARY Record 23044602) dQtyToShip : Decimal;
+    VAR
+      lrecBOMComponent@1000000006 : Record 90;
+      ltrecDShipPackLineBuffer@1000000005 : TEMPORARY Record 23044602;
+      lqDShipPackedQty@1000000004 : Query 23044601;
+      liLineNum@1000000002 : Integer;
+      liNewCount@1000000001 : Integer;
+      loptLPSourceDoc@1000000003 : Option;
+    BEGIN
+      //<FUNC>
+      //  Description: Figures out how many complete units of an assembly have been packed.
+      //               If the same assembly was on several lines, this may result in a bad return
+      //  Called From: This codeunit (23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+      liLineNum := 10000; // init
+      // determine how many of are packed of each item
+      getLPSrcTypeFromDShipDocType(ptrecPackLineBuffer."Document Type", loptLPSourceDoc);
+      lqDShipPackedQty.SETRANGE(Source_Document, loptLPSourceDoc);
+      lqDShipPackedQty.SETRANGE(Source_No, ptrecPackLineBuffer."Document No.");
+      lqDShipPackedQty.SETRANGE(Source_Line_No, ptrecPackLineBuffer."Document Line No.");
+      lqDShipPackedQty.OPEN;
+      WHILE ( lqDShipPackedQty.READ ) DO BEGIN
+        // store in a temp table to reduce sql calls
+        ltrecDShipPackLineBuffer."Line No." := liLineNum;
+        ltrecDShipPackLineBuffer."Item No." := lqDShipPackedQty.Item_No;
+        ltrecDShipPackLineBuffer.Quantity := lqDShipPackedQty.Sum_Quantity;
+        ltrecDShipPackLineBuffer.INSERT(FALSE);
+        liLineNum += 10000;
+      END; // while lqDShipPackedQty.read
+      lqDShipPackedQty.CLOSE;
+
+      ltrecDShipPackLineBuffer.RESET;
+
+      // compare result to BOM Component
+      lrecBOMComponent.SETRANGE("Parent Item No.", ptrecPackLineBuffer."Assembly Item No.");
+      IF ( lrecBOMComponent.FINDSET(FALSE) ) THEN BEGIN
+        dQtyToShip := 2147483647; // init
+        REPEAT
+          ltrecDShipPackLineBuffer.SETRANGE("Item No.", lrecBOMComponent."No.");
+          IF ( ltrecDShipPackLineBuffer.FINDSET(FALSE) ) THEN BEGIN
+            liNewCount := ltrecDShipPackLineBuffer.Quantity DIV lrecBOMComponent."Quantity per";
+            IF ( dQtyToShip > liNewCount ) THEN
+              dQtyToShip := liNewCount;
+          END ELSE BEGIN
+            dQtyToShip := 0;
+          END;
+        UNTIL ( (lrecBOMComponent.NEXT=0) OR (dQtyToShip=0) );
+      END; // if lrecbomcomponent.findset
+
+      EXIT(dQtyToShip);
+    END;
+
+    LOCAL PROCEDURE setAssemblyTracking@1000000046(ptrecPackLineBuffer@1000000000 : Record 23044602;pcodDocNo@1000000004 : Code[20];piDocLineNo@1000000005 : Integer;pdQty@1000000001 : Decimal);
+    VAR
+      lrecAssemblyLine@1000000002 : Record 901;
+      lcodAssemblyOrderNo@1000000003 : Code[20];
+    BEGIN
+      //<FUNC>
+      //  Description: Adds or removes assembly tracking
+      //  Called From: This codeunit (CU23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+      lcodAssemblyOrderNo := getAssembleToOrderNo(1, pcodDocNo, piDocLineNo);
+      lrecAssemblyLine.SETRANGE("Document Type", lrecAssemblyLine."Document Type"::Order);
+      lrecAssemblyLine.SETRANGE("Document No.", lcodAssemblyOrderNo);
+      lrecAssemblyLine.SETRANGE(Type, lrecAssemblyLine.Type::Item);
+      lrecAssemblyLine.SETRANGE("No.", ptrecPackLineBuffer."Item No.");
+      lrecAssemblyLine.SETRANGE("Variant Code", ptrecPackLineBuffer."Variant Code");
+      IF ( lrecAssemblyLine.FINDFIRST ) THEN
+        cuResMgmt.AddRemoveAssemblyTracking(lrecAssemblyLine,
+                                            ptrecPackLineBuffer."Serial No.",
+                                            ptrecPackLineBuffer."Lot No.",
+                                            pdQty,
+                                            ptrecPackLineBuffer."Unit of Measure Code");
+    END;
+
+    PROCEDURE createShipOptions@1000000021(poptSourceType@1000000002 : Option;pcodSourceNo@1000000001 : Code[20]);
+    VAR
+      lrecShipOptions@1000000004 : Record 23044616;
+      lrecDShipSetup@1000000000 : Record 23044600;
+      lcuRateMgmt@1000000003 : Codeunit 23044602;
+    BEGIN
+      //<FUNC>
+      //  Description: Creates the data entry for shipment options
+      //  Called From: Page DSHIP Package Worksheet (P23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( pcodSourceNo = '' ) THEN
+        EXIT;
+
+      IF ( NOT lrecShipOptions.GET(poptSourceType, pcodSourceNo) ) THEN BEGIN
+        lrecShipOptions.INIT;
+        lrecShipOptions."Document Type" := poptSourceType;
+        lrecShipOptions."Document No." := pcodSourceNo;
+        lrecShipOptions."Entry Type" := lrecShipOptions."Entry Type"::standard;
+        lrecShipOptions.INSERT(TRUE);
+        lrecDShipSetup.GET;
+        lcuRateMgmt.callPostBuildShipOptsExtension(lrecDShipSetup."Shipment Extension Codeunit", poptSourceType, pcodSourceNo);
+      END;
+    END;
+
+    PROCEDURE getSalesHeader@1000000028(poptSourceType@1000000002 : Option;pcodSourceNo@1000000001 : Code[20];VAR precSalesHeader@1000000003 : Record 36) : Boolean;
+    VAR
+      lrecPackOrderBuffer@1000000004 : Record 23044601;
+      lrecWhseShipLine@1000000005 : Record 7321;
+    BEGIN
+      //<FUNC>
+      //  Description: Gets the sales header
+      //  Called From: This codeunit (CU23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+      CASE poptSourceType OF
+        lrecPackOrderBuffer."Document Type"::"Sales Order":
+          BEGIN;
+            IF ( precSalesHeader.GET(1, pcodSourceNo) ) THEN EXIT(TRUE);
+          END;
+        lrecPackOrderBuffer."Document Type"::"Warehouse Shipment":
+          BEGIN
+            lrecWhseShipLine.SETRANGE("No.", pcodSourceNo);
+            IF ( lrecWhseShipLine.FINDFIRST ) THEN
+              IF ( precSalesHeader.GET(lrecWhseShipLine."Source Subtype", lrecWhseShipLine."Source No.") ) THEN EXIT(TRUE);
+          END;
+      END;
+    END;
+
+    PROCEDURE getCustomerOptions@1000000049(precSalesHeader@1000000000 : Record 36;VAR precCustomerOptions@1000000001 : Record 23044614) rbFound : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Finds the customer options record (T/F return)
+      //  Called From: This codeunit (CU23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+      precCustomerOptions.SETRANGE("Customer No.", precSalesHeader."Sell-to Customer No.");
+      precCustomerOptions.SETRANGE("Ship-To Code", precSalesHeader."Ship-to Code");
+      precCustomerOptions.SETRANGE("Shipping Agent Code", precSalesHeader."Shipping Agent Code");
+      precCustomerOptions.SETRANGE("Shipping Agent Service Code", precSalesHeader."Shipping Agent Service Code");
+
+      rbFound := precCustomerOptions.FINDFIRST;
+      IF ( NOT rbFound ) THEN
+        precCustomerOptions.SETRANGE("Shipping Agent Service Code", '');
+
+      rbFound := precCustomerOptions.FINDFIRST;
+      IF ( NOT rbFound ) THEN
+        precCustomerOptions.SETRANGE("Shipping Agent Code", '');
+
+      rbFound := precCustomerOptions.FINDFIRST;
+      IF ( NOT rbFound ) THEN BEGIN
+        precCustomerOptions.SETRANGE("Ship-To Code");
+        precCustomerOptions.SETRANGE("Shipping Agent Code");
+        precCustomerOptions.SETRANGE("Shipping Agent Service Code");
+        precCustomerOptions.SETRANGE("Use As Default", precCustomerOptions."Use As Default"::Yes);
+      END;
+
+      rbFound := precCustomerOptions.FINDFIRST;
+    END;
+
+    PROCEDURE createPackOptions@1000000024(pcodLPNo@1000000000 : Code[20];poptDocType@1000000004 : Option;pcodDocNo@1000000007 : Code[20]);
+    VAR
+      lrecPackOptions@1000000001 : Record 23044608;
+      lrecDShipSetup@1000000003 : Record 23044600;
+      lcuRateMgmt@1000000002 : Codeunit 23044602;
+    BEGIN
+      //<FUNC>
+      //  Description: Creates the package options if they don't exist with tmpl if found
+      //  Called From: PAGE Package Worksheet (P23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( NOT lrecPackOptions.GET(pcodLPNo) ) THEN BEGIN
+        lrecPackOptions.INIT;
+        lrecPackOptions.VALIDATE("License Plate No.", pcodLPNo);
+        lrecPackOptions."Entry Type" := lrecPackOptions."Entry Type"::standard;
+        lrecPackOptions.INSERT(TRUE);
+      END;  // if NOT lrecPackOptions.GET
+
+      lrecPackOptions.updateFromCustomerTemplate(poptDocType, pcodDocNo, FALSE);
+      lrecDShipSetup.GET;
+      lcuRateMgmt.callPostBuildPkgOptsExtension(lrecDShipSetup."Shipment Extension Codeunit", pcodLPNo, poptDocType, pcodDocNo);
+    END;
+
+    PROCEDURE setInsuranceHandling@1000000040(pcodLPNo@1000000002 : Code[20];poptSourceType@1000000001 : Option;pcodSourceNo@1000000000 : Code[20]);
+    VAR
+      lrecSalesHeader@1000000006 : Record 36;
+      lrecLPHeader@1000000005 : Record 23044505;
+      lrecDShipCxOpts@1000000004 : Record 23044614;
+      lrecDShipSetup@1000000007 : Record 23044600;
+      lbFound@1000000003 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Sets the customer specific or default insurance value handling
+      //  Called From: PAGE DSHIP Package Worksheet (P23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( NOT getSalesHeader(poptSourceType, pcodSourceNo, lrecSalesHeader) ) THEN EXIT;
+      IF ( NOT lrecLPHeader.GET(pcodLPNo) ) THEN EXIT;
+
+      IF ( getCustomerOptions(lrecSalesHeader, lrecDShipCxOpts) ) THEN BEGIN
+        lrecLPHeader."Insurance Value Handling" := lrecDShipCxOpts."Insurance Value Handling";
+      END ELSE BEGIN
+        lrecDShipSetup.GET;
+        lrecLPHeader."Insurance Value Handling" := lrecDShipSetup."Insurance Value Handling";
+      END;
+
+      lrecLPHeader.MODIFY;
+    END;
+
+    LOCAL PROCEDURE runBOLReportSelection@1000000034(precSalesHeader@1000000000 : Record 36) bReportFound : Boolean;
+    VAR
+      lrecIWXReportSelection@1000000001 : Record 23044508;
+    BEGIN
+      //<FUNC>
+      //  Description: Calls the custom selected report for BOL
+      //  Called From: This codeunit (CU23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecIWXReportSelection.SETRANGE(Usage, lrecIWXReportSelection.Usage::"Bill of Lading");
+      IF ( lrecIWXReportSelection.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          bReportFound := TRUE;
+          REPORT.RUNMODAL(lrecIWXReportSelection."Report ID", TRUE, FALSE, precSalesHeader);
+        UNTIL( lrecIWXReportSelection.NEXT=0 );
+      END;
+
+      EXIT(bReportFound);
+    END;
+
+    LOCAL PROCEDURE openCODReturnLabel@1000000035(VAR precLPHeader@1000000002 : Record 23044505);
+    VAR
+      lrecPackageOptions@1000000001 : Record 23044608;
+      lbFoundCOD@1000000000 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Opens the COD return label (if it exists)
+      //  Called From: PAGE DSHIP Package Worksheet (23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( precLPHeader.FINDSET(FALSE) ) THEN
+        REPEAT
+          IF ( lrecPackageOptions.GET(precLPHeader."No.") ) THEN
+            IF ( lrecPackageOptions."COD Label URL" <> '' ) THEN BEGIN
+              HYPERLINK(lrecPackageOptions."COD Label URL");
+              lbFoundCOD := TRUE;
+            END;
+        UNTIL( (precLPHeader.NEXT=0) OR lbFoundCOD);
+    END;
+
+    LOCAL PROCEDURE checkResEntries@1000000048(VAR ptrecPackLineBuffer@1000000001 : TEMPORARY Record 23044602;pdQtyToPack@1000000000 : Decimal);
+    VAR
+      lrecWhseShipLine@1000000003 : Record 7321;
+      lrecAssemblyLine@1000000002 : Record 901;
+      lrecResEntry@1000000008 : Record 337;
+      lcodItemNo@1000000007 : Code[20];
+      lcodSourceID@1000000004 : Code[20];
+      liSourceRefNo@1000000006 : Integer;
+      liSourceType@1000000005 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if the specific reservation entry already exists.
+      //               Removes sn/lot info if it does, as the source document has the tracking set.
+      //  Called From: This codeunit (CU23044601)
+      //  Side Effect: Blanks ptrecPackLineBuffer serial/lot no.
+      //</FUNC>
+
+      IF ( pdQtyToPack < 0 ) THEN
+        EXIT;
+
+      IF ( (ptrecPackLineBuffer."Serial No." = '') AND (ptrecPackLineBuffer."Lot No." = '') ) THEN
+        EXIT;
+
+      lcodItemNo := ptrecPackLineBuffer."Item No.";
+      IF ( ptrecPackLineBuffer."Document Type" = ptrecPackLineBuffer."Document Type"::"Warehouse Shipment") THEN BEGIN
+        lrecWhseShipLine.SETRANGE("No.", ptrecPackLineBuffer."Document No.");
+        lrecWhseShipLine.SETRANGE("Line No.", ptrecPackLineBuffer."Document Line No.");
+        lrecWhseShipLine.FINDFIRST;
+        lcodSourceID := lrecWhseShipLine."Source No.";
+        liSourceRefNo := lrecWhseShipLine."Source Line No.";
+        liSourceType := lrecWhseShipLine."Source Type";
+      END ELSE BEGIN
+        lcodSourceID := ptrecPackLineBuffer."Document No.";
+        liSourceRefNo := ptrecPackLineBuffer."Document Line No.";
+
+        CASE ptrecPackLineBuffer."Document Type" OF
+          ptrecPackLineBuffer."Document Type"::"Sales Order":
+              liSourceType := DATABASE::"Sales Line";
+          ptrecPackLineBuffer."Document Type"::"Purchase Return Order":
+              liSourceType := DATABASE::"Purchase Line";
+          ptrecPackLineBuffer."Document Type"::"Outbound Transfer":
+              liSourceType := DATABASE::"Transfer Line";
+        END;
+      END;
+
+      IF ( ptrecPackLineBuffer."Assembly Item No." <> '' ) THEN BEGIN
+        lcodItemNo := ptrecPackLineBuffer."Item No.";
+        lcodSourceID := getAssembleToOrderNo(1, lcodSourceID, liSourceRefNo);
+        lrecAssemblyLine.SETRANGE("Document Type", lrecAssemblyLine."Document Type"::Order);
+        lrecAssemblyLine.SETRANGE("Document No.", lcodSourceID);
+        lrecAssemblyLine.SETRANGE(Type, lrecAssemblyLine.Type::Item);
+        lrecAssemblyLine.SETRANGE("No.", ptrecPackLineBuffer."Item No.");
+        lrecAssemblyLine.SETRANGE("Variant Code", ptrecPackLineBuffer."Variant Code");
+        IF ( lrecAssemblyLine.FINDFIRST ) THEN
+          liSourceRefNo := lrecAssemblyLine."Line No.";
+        liSourceType := DATABASE::"Assembly Line";
+      END;
+
+      lrecResEntry.SETRANGE("Item No.", lcodItemNo);
+      lrecResEntry.SETRANGE("Source ID", lcodSourceID);
+      lrecResEntry.SETRANGE("Source Ref. No.", liSourceRefNo);
+      lrecResEntry.SETRANGE("Source Type", liSourceType);
+      lrecResEntry.SETRANGE("Serial No.", ptrecPackLineBuffer."Serial No.");
+      lrecResEntry.SETRANGE("Lot No.", ptrecPackLineBuffer."Lot No.");
+
+      IF ( lrecResEntry.FINDFIRST ) THEN BEGIN
+        ptrecPackLineBuffer."Serial No." := '';
+        ptrecPackLineBuffer."Lot No." := '';
+      END;
+    END;
+
+    LOCAL PROCEDURE checkPickedLinesOnly@1000000047(pcodLocation@1000000000 : Code[20]) : Boolean;
+    VAR
+      lrecDShipSetup@1000000001 : Record 23044600;
+      lrecLocation@1000000002 : Record 14;
+    BEGIN
+      //<FUNC>
+      //  Description: Checks if picked lines only is set, and whether the location uses picks
+      //  Called From: This codeunit (CU23044601)
+      //  Side Effect:
+      //</FUNC>
+
+      lrecDShipSetup.GET;
+      IF ( lrecDShipSetup."Shipment Line Visibility" = lrecDShipSetup."Shipment Line Visibility"::"Show Picked" ) THEN
+        IF ( lrecLocation.GET(pcodLocation) ) THEN
+          EXIT(lrecLocation."Require Pick");
+
+      EXIT(FALSE);
+    END;
+
+    PROCEDURE navOrderToPackageOrder@1000000029(VAR precrRecRef@1000000000 : RecordRef;VAR ptrecPackOrderBuffer@1000000001 : TEMPORARY Record 23044601);
+    VAR
+      lrecWhseShipHeader@1000000004 : Record 7320;
+      lrecSalesHeader@1000000003 : Record 36;
+      lrecTransferHeader@1000000002 : Record 5740;
+      lrecLPHeader@1000000005 : Record 23044505;
+    BEGIN
+      //<FUNC>
+      //  Description: Takes a single order and creates a package order buffer for it
+      //  Called From: This codeunit (CU23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+      CASE precrRecRef.NUMBER OF
+        DATABASE::"Warehouse Shipment Header":
+          BEGIN
+            precrRecRef.SETTABLE(lrecWhseShipHeader);
+            ptrecPackOrderBuffer.INIT;
+            ptrecPackOrderBuffer."Document Type" := ptrecPackOrderBuffer."Document Type"::"Warehouse Shipment";
+            ptrecPackOrderBuffer."Document No." := lrecWhseShipHeader."No.";
+            ptrecPackOrderBuffer."Location Code" := lrecWhseShipHeader."Location Code";
+            ptrecPackOrderBuffer."Document Status" := lrecWhseShipHeader.Status;
+            ptrecPackOrderBuffer."Warehouse Shipment Status" := lrecWhseShipHeader."Document Status";
+            ptrecPackOrderBuffer."Document Assigned User ID" := lrecWhseShipHeader."Assigned User ID";
+      //      these are in CU600 and probably unnecessary
+      //       setShipToDetailFromWhseShipment(ptrecPackOrderBuffer, lrecWhseShipHeader);
+      //       setStatusFields(ptrecPackOrderBuffer, precrRecRef, lrecLPHeader."Source Document"::Shipment, lrecWhseShipHeader."No.");
+            ptrecPackOrderBuffer.INSERT;
+          END;
+        DATABASE::"Transfer Header":
+          BEGIN
+            precrRecRef.SETTABLE(lrecTransferHeader);
+            ptrecPackOrderBuffer."Document Type" := ptrecPackOrderBuffer."Document Type"::"Outbound Transfer";
+            ptrecPackOrderBuffer."Document No." := lrecTransferHeader."No.";
+            ptrecPackOrderBuffer."Location Code" := lrecTransferHeader."Transfer-from Code";
+            ptrecPackOrderBuffer."Document Status" := lrecTransferHeader.Status;
+            ptrecPackOrderBuffer."Warehouse Shipment Status" := 0;
+            ptrecPackOrderBuffer."Document Assigned User ID" := lrecTransferHeader."Assigned User ID";
+      //       setShipToDetailFromTransferOrder(ptrecPackOrderBuffer, lrecTransferHeader);
+      //       setStatusFields(ptrecPackOrderBuffer, precrRecRef, lrecLPHeader."Source Document"::"Outbound Transfer", lrecTransferHeader."No.");
+            ptrecPackOrderBuffer.INSERT;
+          END;
+        DATABASE::"Sales Header":
+          BEGIN
+            precrRecRef.SETTABLE(lrecSalesHeader);
+            ptrecPackOrderBuffer."Document Type" := ptrecPackOrderBuffer."Document Type"::"Sales Order";
+            ptrecPackOrderBuffer."Document Subtype" := lrecSalesHeader."Document Type";
+            ptrecPackOrderBuffer."Document No." := lrecSalesHeader."No.";
+            ptrecPackOrderBuffer."Location Code" := lrecSalesHeader."Location Code";
+            ptrecPackOrderBuffer."Document Status" := lrecSalesHeader.Status;
+            ptrecPackOrderBuffer."Warehouse Shipment Status" := 0;
+            ptrecPackOrderBuffer."Document Assigned User ID" := lrecSalesHeader."Assigned User ID";
+      //       setShipToDetailFromSalesOrder(ptrecPackOrderBuffer, lrecSalesHeader);
+      //       setStatusFields(ptrecPackOrderBuffer, precrRecRef, lrecLPHeader."Source Document"::"Sales Order", lrecSalesHeader."No.");
+            ptrecPackOrderBuffer.INSERT;
+          END;
+        ELSE
+          BEGIN
+            ERROR(tcUnknownDoc);
+          END;
+      END;
+    END;
+
+    PROCEDURE openPackageWorksheet@1000000092(pvarRec@1000000000 : Variant);
+    VAR
+      lrecrRecRef@1000000006 : RecordRef;
+      ltrecPackOrderBuffer@1000000001 : TEMPORARY Record 23044601;
+      lcuPackListMgmt@1000000002 : Codeunit 23044600;
+    BEGIN
+      //<FUNC>
+      //  Description: Takes a variant that represents the supported document record
+      //  Called From: Potentially P42, P9305, P5740, P5742, P7335, P7339
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( NOT pvarRec.ISRECORD ) THEN
+        ERROR('This function only accepts Records in the variant');
+
+      lrecrRecRef.GETTABLE(pvarRec);
+      navOrderToPackageOrder(lrecrRecRef, ltrecPackOrderBuffer);
+      showOrderPackages(ltrecPackOrderBuffer);
+    END;
+
+    PROCEDURE CreateLPNoFilterWithDShipDocType@100000000(poptDocType@100000000 : Option;pcodDocNo@100000001 : Code[50]) rtLPNoFilter : Text;
+    VAR
+      loptSourceDoc@100000002 : Option;
+    BEGIN
+      getLPSrcTypeFromDShipDocType(poptDocType, loptSourceDoc);
+      EXIT(CreateLPNoFilterWithLPSourceDoc(loptSourceDoc, pcodDocNo));
+    END;
+
+    PROCEDURE CreateLPNoFilterWithLPSourceDoc@100000001(poptSourceDoc@100000000 : Option;pcodSourceNo@100000001 : Code[50]) rtLPNoFilter : Text;
+    VAR
+      lrecLPLineUsage@100000002 : Record 23044507;
+      lcodLastLPNo@100000003 : Code[50];
+      lbIsFirstLoop@100000004 : Boolean;
+    BEGIN
+      lrecLPLineUsage.SETCURRENTKEY("License Plate No.");
+      lrecLPLineUsage.SETRANGE("Source Document", poptSourceDoc);
+      lrecLPLineUsage.SETRANGE("Source No.", pcodSourceNo);
+      lrecLPLineUsage.SETRANGE("Posting Date", 0D);
+      IF (lrecLPLineUsage.FINDSET(FALSE)) THEN BEGIN
+        lbIsFirstLoop := TRUE;
+        REPEAT
+          IF (lrecLPLineUsage."License Plate No." <> lcodLastLPNo) THEN BEGIN
+            lcodLastLPNo := lrecLPLineUsage."License Plate No.";
+            IF (lbIsFirstLoop) THEN BEGIN
+              rtLPNoFilter := lcodLastLPNo;
+              lbIsFirstLoop := FALSE;
+            END ELSE BEGIN
+              rtLPNoFilter += '|' + lcodLastLPNo;
+            END;
+          END;
+        UNTIL (lrecLPLineUsage.NEXT() = 0);
+      END;
+    END;
+
+    PROCEDURE CreateLPNoFilterFirstWithDShipDocType@100000004(poptDocType@100000000 : Option;pcodDocNo@100000001 : Code[50]) rtLPNoFilter : Text;
+    VAR
+      loptSourceDoc@100000002 : Option;
+    BEGIN
+      getLPSrcTypeFromDShipDocType(poptDocType, loptSourceDoc);
+      EXIT(CreateLPNoFilterFirstWithLPSourceDoc(loptSourceDoc, pcodDocNo));
+    END;
+
+    PROCEDURE CreateLPNoFilterFirstWithLPSourceDoc@100000005(poptSourceDoc@100000000 : Option;pcodSourceNo@100000001 : Code[50]) rtLPNoFilter : Text;
+    VAR
+      lrecLPLineUsage@100000002 : Record 23044507;
+      lcodLastLPNo@100000003 : Code[50];
+      lbIsFirstLoop@100000004 : Boolean;
+    BEGIN
+      lrecLPLineUsage.SETCURRENTKEY("License Plate No.");
+      lrecLPLineUsage.SETRANGE("Source Document", poptSourceDoc);
+      lrecLPLineUsage.SETRANGE("Source No.", pcodSourceNo);
+      lrecLPLineUsage.SETRANGE("Posting Date", 0D);
+      IF (lrecLPLineUsage.FINDFIRST()) THEN BEGIN
+        rtLPNoFilter := lrecLPLineUsage."License Plate No.";
+      END;
+    END;
+
+    LOCAL PROCEDURE DeleteFreightLine@1000000050(DSHIPPackageLineBuffer@1000000000 : Record 23044602);
+    VAR
+      recDShipSetup@1000000001 : Record 23044600;
+      SalesLineFreight@1000000002 : Record 37;
+    BEGIN
+      recDShipSetup.GET;
+      SalesLineFreight.RESET;
+      SalesLineFreight.SETRANGE("Document No.",DSHIPPackageLineBuffer."Source ID");
+      SalesLineFreight.SETRANGE(Type, recDShipSetup."Freight Billing Type");
+      SalesLineFreight.SETRANGE("No.", recDShipSetup."Freight Billing No.");
+      SalesLineFreight.SETRANGE("Location Code", DSHIPPackageLineBuffer."Location Code");
+      SalesLineFreight.SETRANGE("Qty. to Ship", 1);
+      //SalesLineFreight.SETFILTER("Unit Price",'<0');
+      IF SalesLineFreight.FINDFIRST THEN
+        SalesLineFreight.DELETEALL;
+    END;
+
+    LOCAL PROCEDURE UpdateSourceNoInLP@1000000052(VAR precLPLineUsage@1000000000 : Record 23044507;LPNo@1000000001 : Code[20]);
+    VAR
+      WarehouseShipmentLine@1000000002 : Record 7321;
+      IWXLicensePlateHeader@1000000003 : Record 23044505;
+      RegisteredWhseActivityLine@1000000004 : Record 5773;
+      WarehouseActivityLine@1000000005 : Record 5767;
+      RegisteredWhseActivityHdr@1000000006 : Record 5772;
+    BEGIN
+      //>>3237
+      CASE precLPLineUsage."Source Document" OF
+        precLPLineUsage."Source Document"::Shipment :
+          BEGIN
+            IF WarehouseShipmentLine.GET(precLPLineUsage."Source No.",precLPLineUsage."Source Line No.") THEN
+              IF IWXLicensePlateHeader.GET(LPNo) THEN BEGIN
+                IWXLicensePlateHeader."Order No." := WarehouseShipmentLine."Source No.";
+                IWXLicensePlateHeader.MODIFY;
+              END;
+          END;
+        precLPLineUsage."Source Document"::"Sales Order":
+          BEGIN
+            IF IWXLicensePlateHeader.GET(LPNo) THEN BEGIN
+              IWXLicensePlateHeader."Order No." := precLPLineUsage."Source No.";
+              IWXLicensePlateHeader.MODIFY;
+            END;
+          END;
+        precLPLineUsage."Source Document"::Pick:
+          BEGIN
+            RegisteredWhseActivityHdr.RESET;
+            RegisteredWhseActivityHdr.SETRANGE("Whse. Activity No.",precLPLineUsage."Source No.");
+            IF RegisteredWhseActivityHdr.FINDFIRST THEN BEGIN
+              RegisteredWhseActivityLine.RESET;
+              RegisteredWhseActivityLine.SETRANGE("No.",RegisteredWhseActivityHdr."No.");
+              RegisteredWhseActivityLine.SETFILTER("Source No.",'<>%1','');
+              IF RegisteredWhseActivityLine.FINDFIRST THEN
+                IF IWXLicensePlateHeader.GET(LPNo) THEN BEGIN
+                  IWXLicensePlateHeader."Order No." := RegisteredWhseActivityLine."Source No.";
+                  IWXLicensePlateHeader.MODIFY;
+                END;
+            END ELSE BEGIN
+              WarehouseActivityLine.RESET;
+              WarehouseActivityLine.SETRANGE("No.",precLPLineUsage."Source No.");
+              WarehouseActivityLine.SETRANGE("Line No.",precLPLineUsage."Source Line No.");
+              IF WarehouseActivityLine.FINDFIRST THEN
+                IF IWXLicensePlateHeader.GET(LPNo) THEN BEGIN
+                  IWXLicensePlateHeader."Order No." := WarehouseActivityLine."Source No.";
+                  IWXLicensePlateHeader.MODIFY;
+                END;
+            END;
+          END;
+      END;
+      //<<3237
+    END;
+
+    LOCAL PROCEDURE DeleteJobQueue@1000000054(SHPara@1000000000 : Record 36);
+    VAR
+      JobQueueEntry@1000000001 : Record 472;
+      RecRef@1000000002 : RecordRef;
+    BEGIN
+      //TPZ3290
+      RecRef.GETTABLE(SHPara);
+      JobQueueEntry.SETRANGE(Status, JobQueueEntry.Status::Ready);
+      JobQueueEntry.SETRANGE("Object Type to Run", JobQueueEntry."Object Type to Run"::Codeunit);
+      JobQueueEntry.SETRANGE("Object ID to Run", CODEUNIT::"Whse. Sales Post via Job Queue");
+      JobQueueEntry.SETRANGE("Record ID to Process", RecRef.RECORDID);
+      IF NOT JobQueueEntry.ISEMPTY THEN BEGIN
+        JobQueueEntry.DELETEALL;
+        SHPara."Job Queue Status" := SHPara."Job Queue Status"::" ";
+        SHPara.MODIFY;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetPackageQuantity@1000000055(VAR LdQuantity@1000000000 : Decimal;lrecWhseShipLine@1000000001 : Record 7321);
+    VAR
+      PackageLine@1000000002 : Record 14000702;
+      PostedPackageLine@1000000003 : Record 14000705;
+    BEGIN
+      //TPZ3337
+      PackageLine.RESET;
+      PackageLine.SETRANGE("Source ID",lrecWhseShipLine."Source No.");
+      PackageLine.SETRANGE("No.",lrecWhseShipLine."Item No.");
+      IF PackageLine.FINDSET THEN
+        REPEAT
+          LdQuantity += PackageLine.Quantity;
+        UNTIL PackageLine.NEXT = 0;
+
+      PostedPackageLine.RESET;
+      PostedPackageLine.SETRANGE("Source ID",lrecWhseShipLine."Source No.");
+      PostedPackageLine.SETRANGE("No.",lrecWhseShipLine."Item No.");
+      IF PostedPackageLine.FINDSET THEN
+        REPEAT
+          LdQuantity += PostedPackageLine.Quantity;
+        UNTIL PostedPackageLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE GetWHseNo@1000000057(SalesLinePara@1000000000 : Record 37) : Code[20];
+    VAR
+      WarehouseShipmentLineLoc@1000000001 : Record 7321;
+    BEGIN
+      //TPZ3353
+      WarehouseShipmentLineLoc.RESET;
+      WarehouseShipmentLineLoc.SETRANGE("Source Type",37);
+      WarehouseShipmentLineLoc.SETRANGE("Source Subtype",1);
+      WarehouseShipmentLineLoc.SETRANGE("Source No.",SalesLinePara."Document No.");
+      IF WarehouseShipmentLineLoc.FINDFIRST THEN
+        EXIT(WarehouseShipmentLineLoc."No.")
+      ELSE
+        EXIT('');
+    END;
+
+    LOCAL PROCEDURE GetPackageQuantitySO@1000000063(VAR LdQuantity@1000000000 : Decimal;SalesLine@1000000001 : Record 37);
+    VAR
+      PackageLine@1000000002 : Record 14000702;
+      PostedPackageLine@1000000003 : Record 14000705;
+    BEGIN
+      //TPZ3353
+      PackageLine.RESET;
+      PackageLine.SETRANGE("Source ID",SalesLine."Document No.");
+      PackageLine.SETRANGE("No.",SalesLine."No.");
+      IF PackageLine.FINDSET THEN
+        REPEAT
+          LdQuantity += PackageLine.Quantity;
+        UNTIL PackageLine.NEXT = 0;
+      {
+      PostedPackageLine.RESET;
+      PostedPackageLine.SETRANGE("Source ID",SalesLine."Document No.");
+      PostedPackageLine.SETRANGE("No.",SalesLine."No.");
+      IF PostedPackageLine.FINDSET THEN
+        REPEAT
+          LdQuantity += PostedPackageLine.Quantity;
+        UNTIL PostedPackageLine.NEXT = 0;
+      }
+    END;
+
+    LOCAL PROCEDURE ValidateifAlreadyPackedUsingWS@1000000058(SHPara@1000000000 : Record 36);
+    VAR
+      WarehouseShipmentLineLoc@1000000001 : Record 7321;
+      IWXLicensePlateLineUsage@1000000002 : Record 23044507;
+    BEGIN
+      //TPZ3353
+      ERROR('Please Scan the PICK WPI Number to process.');
+      {WarehouseShipmentLineLoc.RESET;
+      WarehouseShipmentLineLoc.SETRANGE("Source Type",37);
+      WarehouseShipmentLineLoc.SETRANGE("Source Subtype",1);
+      WarehouseShipmentLineLoc.SETRANGE("Source No.",SHPara."No.");
+      IF WarehouseShipmentLineLoc.FINDFIRST THEN BEGIN
+        IWXLicensePlateLineUsage.RESET;
+        IWXLicensePlateLineUsage.SETRANGE("Source Document",IWXLicensePlateLineUsage."Source Document"::Shipment);
+        IWXLicensePlateLineUsage.SETRANGE("Source No.",WarehouseShipmentLineLoc."No.");
+        //IWXLicensePlateLineUsage.SETRANGE("Source Line No.",WhseShipLineLoc."Line No.");
+        IWXLicensePlateLineUsage.SETRANGE("Posting Date",0D);
+        IF IWXLicensePlateLineUsage.FINDFIRST THEN
+          ERROR('Sales Order already packed using warehouse shipment, please scan WPI/WS and process');
+      END;
+      }
+    END;
+
+    PROCEDURE GetPickedAssemblyQty@100000003(precWhseShipLine@100000000 : Record 7321;pcodAssemblyNo@100000001 : Code[50]) rdQtyPicked : Decimal;
+    VAR
+      lrecAssemblyLine@100000002 : Record 901;
+      liNewCount@100000003 : Integer;
+    BEGIN
+      //<FUNC author="M.Matthiesen" date="12/11/2019" issue="TFS4150">
+      //  Description: Calculates how many complete units have been picked
+      //  Called From: This codeunit (CU23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecAssemblyLine.SETRANGE("Document Type", lrecAssemblyLine."Document Type"::Order);
+      lrecAssemblyLine.SETRANGE("Document No.", pcodAssemblyNo);
+      lrecAssemblyLine.SETRANGE(Type, lrecAssemblyLine.Type::Item);
+      lrecAssemblyLine.SETFILTER("Quantity per", '>0');
+      IF (lrecAssemblyLine.FINDSET(FALSE)) THEN BEGIN
+        rdQtyPicked := 2147483647; // init at max for later compare
+        REPEAT
+          liNewCount := lrecAssemblyLine."Qty. Picked" DIV lrecAssemblyLine."Quantity per";
+          IF (rdQtyPicked > liNewCount) THEN
+            rdQtyPicked := liNewCount; // always use the lowest complete count for the assembly
+        UNTIL ((lrecAssemblyLine.NEXT() = 0) OR (rdQtyPicked <= 0));
+      END;
+
+      EXIT(rdQtyPicked);
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+      001 TPZ2895 PKS 07212020 Added code to flow source id and source sub type to DSHIP Package Line Buffer
+      002 TPZ3237 VAH 07162021 Added function UpdateSourceNoInLP
+      003 TPZ3290 PKS 07302021 Added code to delete job queue on unpack order
+      004 TPZ3299 PKS 08042021 Added code to delete pallet entry
+      005 TPZ3337 PKS 08302021 Added new function to calulate quantity including package.
+      006 TPZ3345 PKS 09032021 Added code to update OWR activity status when un pack
+      007 TPZ3353 PKS 09242021 Added code to stop SO scanning
+      008 TPZ3187 VAH 10052021 Added code in function unpackAll
+    }
+    END.
+  }
+}
+

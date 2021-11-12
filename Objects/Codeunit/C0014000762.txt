@@ -1,0 +1,2794 @@
+OBJECT Codeunit 14000762 UPS Manifest Management
+{
+  OBJECT-PROPERTIES
+  {
+    Date=06/28/17;
+    Time=12:00:00 PM;
+    Version List=SE0.54.18;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ShippingAgent@1240030000 : Record 291;
+      PackingStation@1240030001 : Record 14000709;
+      CarrierPackingStation@1240030009 : Record 14000729;
+      ShippingSetup@1240030002 : Record 14000707;
+      ShippingAgentAccount@1240030003 : Record 14000770;
+      ShippingAgentService@1240030004 : Record 14000708;
+      Shipping@1240030005 : Codeunit 14000701;
+      ShippingSetupRetrieved@1240030006 : Boolean;
+      ShipmentPackageTmp@1240030007 : TEMPORARY Record 14000701;
+      ShipmentOptionPageTmp@1240030008 : TEMPORARY Record 14000761;
+      Text001@1001 : TextConst 'ENU=Cannot create UPS Manifest entry for package number: %1.\';
+      Text002@1002 : TextConst 'ENU=It has already been sent.';
+      Text003@1003 : TextConst 'ENU=The maximum limit for hazardous materials in a package is 3.\';
+      Text004@1004 : TextConst 'ENU=Please check the contents of package: %1';
+      Text005@1005 : TextConst 'ENU=Please check the contents of packages: %1 and %2';
+
+    PROCEDURE BuildUPSManifest@1(CurrentPackage@1240030000 : Record 14000701;Posted@1240030001 : Boolean;CurrentManifestLine@1240030023 : Record 14000713) : Integer;
+    VAR
+      UPSOptionPage@1240030002 : Record 14000761;
+      UPSManifest@1240030003 : Record 14000768;
+      UPSManifest2@1240030004 : Record 14000768;
+      UPSManifestPart2@1240030005 : Record 14000771;
+      Package@1240030006 : Record 14000701;
+      PostedPackage@1240030007 : Record 14000704;
+      UPSPostedOptionPage@1240030009 : Record 14000762;
+      WeightText@1240030011 : Text[7];
+      FillText@1240030012 : Text[7];
+      CODText@1240030013 : Text[18];
+      CODFillText@1240030014 : Text[18];
+      DeclaredText@1240030015 : Text[18];
+      DeclaredFillText@1240030016 : Text[18];
+      LengthText@1240030017 : Text[8];
+      EntryNo@1240030018 : Integer;
+      FirstPackage@1240030019 : Boolean;
+      TotalValue@1240030020 : Decimal;
+      ActualWeight@1240030021 : Decimal;
+      Precision@1240030022 : Decimal;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        IF "Manual Shipment" THEN
+          EXIT;
+
+        UPSManifest.RESET;
+        UPSManifest.SETCURRENTKEY("Package No.","Record Type","Manifest Sent");
+        UPSManifest.SETRANGE("Package No.","No.");
+        UPSManifest.SETRANGE("Manifest Sent",TRUE);
+        IF UPSManifest.FIND('-') THEN
+          ERROR(
+            Text001 +
+            Text002,
+            "No.");
+        UPSManifest.SETRANGE("Manifest Sent");
+        IF UPSManifest.FIND('-') THEN
+          REPEAT
+            IF UPSManifestPart2.GET(UPSManifest."Entry No.") THEN
+              UPSManifestPart2.DELETE;
+            IF UPSManifest2.GET(UPSManifest."Entry No.") THEN
+              UPSManifest2.DELETE;
+          UNTIL UPSManifest.NEXT = 0;
+
+        GetShippingSetup;
+        GetShippingAgent("Shipping Agent Code");
+        IF ShippingAgent."Shipper Type" <> ShippingAgent."Shipper Type"::UPS THEN
+          EXIT;
+        GetShippingAgentService("Shipping Agent Code","Shipping Agent Service","World Wide Service");
+        GetShippingAgentAccount("Shipping Agent Account No.");
+
+        IF ("Package No." > 1) AND NOT Miscellaneous THEN BEGIN
+          FirstPackage := FALSE;
+          IF NOT Posted THEN BEGIN
+            Package.RESET;
+            Package.SETCURRENTKEY("Source Type","Source Subtype","Source ID");
+            Package.SETRANGE("Source Type","Source Type");
+            Package.SETRANGE("Source Subtype","Source Subtype");
+            Package.SETRANGE("Source ID","Source ID");
+            Package.SETRANGE("Package No.",1);
+            Package.SETRANGE("Total Packages","Total Packages");
+            Package.SETRANGE("Manifest No.",CurrentPackage."Manifest No.");
+            IF Package.FIND('-') THEN BEGIN
+              Package.TESTFIELD("External Tracking No.");
+              "First Package No." := Package."No.";
+            END ELSE BEGIN
+              "Package No." := 1;
+              "Total Packages" := 1;
+              "First Package No." := '';
+              FirstPackage := TRUE;
+            END;
+          END ELSE BEGIN
+            PostedPackage.RESET;
+            PostedPackage.SETCURRENTKEY("Source Type","Source Subtype","Source ID");
+            PostedPackage.SETRANGE("Source Type","Source Type");
+            PostedPackage.SETRANGE("Source Subtype","Source Subtype");
+            PostedPackage.SETRANGE("Source ID","Source ID");
+            PostedPackage.SETRANGE("Package No.",1);
+            PostedPackage.SETRANGE("Total Packages","Total Packages");
+            PostedPackage.SETRANGE("Manifest No.",CurrentPackage."Manifest No.");
+            IF PostedPackage.FIND('-') THEN BEGIN
+              PostedPackage.TESTFIELD("External Tracking No.");
+              "First Package No." := PostedPackage."No.";
+            END ELSE BEGIN
+              "Package No." := 1;
+              "Total Packages" := 1;
+              "First Package No." := '';
+              FirstPackage := TRUE;
+            END;
+          END;
+        END ELSE
+          FirstPackage := TRUE;
+
+          IF NOT "World Wide Service" AND NOT "UPS Canadian Service" AND NOT "UPS Puerto Rico Service"
+        THEN
+          IF CurrentManifestLine."UPS Shipment No." = "External Tracking No." THEN
+            FirstPackage := TRUE
+          ELSE
+            FirstPackage := FALSE;
+
+        IF Posted THEN BEGIN
+          UPSPostedOptionPage.GET("No.");
+          UPSOptionPage.Type := UPSOptionPage.Type::Package;
+          UPSOptionPage.TRANSFERFIELDS(UPSPostedOptionPage);
+        END ELSE
+          UPSOptionPage.GET(UPSOptionPage.Type::Package,"No.",0,0);
+        UPSManifest.RESET;
+        UPSManifest.LOCKTABLE;
+        IF UPSManifest.FIND('+') THEN
+          EntryNo := UPSManifest."Entry No." + 1
+        ELSE
+          EntryNo := 1;
+        UPSManifest.INIT;
+        UPSManifest."Entry No." := EntryNo;
+        IF ShippingAgentAccount."Manifest Version" >=
+           ShippingAgentAccount."Manifest Version"::"7.00"
+        THEN BEGIN
+          UPSManifestPart2.INIT;
+          UPSManifestPart2."Entry No." := EntryNo;
+        END;
+        IF "Packing Date" = 0D THEN
+          "Packing Date" := WORKDATE;
+        UPSManifest."Shipper Account Number" := "Shipping Agent Account No.";
+        UPSManifest."Book Number" := UPSOptionPage."UPS Book No.";
+        UPSManifest."Page Number" := UPSOptionPage."UPS Page No.";
+        IF NOT "World Wide Service" AND NOT "UPS Canadian Service" AND NOT "UPS Puerto Rico Service"
+        THEN
+          UPSManifest."Shipment Number" := CurrentManifestLine."UPS Shipment No."
+        ELSE
+          IF FirstPackage THEN
+            UPSManifest."Shipment Number" := "External Tracking No."
+          ELSE BEGIN
+            TESTFIELD("First Package No.");
+            IF NOT PostedPackage.GET("First Package No.") THEN
+              Package.GET("First Package No.")
+            ELSE
+              Package.TRANSFERFIELDS(PostedPackage);
+            UPSManifest."Shipment Number" := Package."External Tracking No.";
+          END;
+        UPSManifest."First Package" := FirstPackage;
+        UPSManifest."Total Packages" := "Total Packages";
+        UPSManifest."Package Tracking Number" := "External Tracking No.";
+        UPSManifest."Record Type" := '0100';
+
+        CASE ShippingAgentAccount."Manifest Version" OF
+          ShippingAgentAccount."Manifest Version"::"2.00":
+            UPSManifest."Puff Version" := '0002';
+          ShippingAgentAccount."Manifest Version"::"5.05":
+            BEGIN
+              UPSManifest."Puff Version" := '0505';
+              IF UPSOptionPage."UPS Packaging Type" <>
+                 UPSOptionPage."UPS Packaging Type"::"UPS Letter"
+              THEN
+                UPSManifest."Document Indicator" := '3'
+              ELSE
+                UPSManifest."Document Indicator" :='1';
+              UPSManifest."Source Type Code" := '93';
+              UPSManifest."Shipper Country" := 'US';
+            END;
+          ShippingAgentAccount."Manifest Version"::"7.00":
+            BEGIN
+              UPSManifest."Puff Version" := '0007';
+              IF UPSOptionPage."UPS Packaging Type" <>
+                 UPSOptionPage."UPS Packaging Type"::"UPS Letter"
+              THEN
+                UPSManifest."Document Indicator" := '3'
+              ELSE
+                UPSManifest."Document Indicator" :='1';
+              UPSManifest."Source Type Code" := '93';
+              UPSManifest."Shipper Country" := 'US';
+            END;
+          ShippingAgentAccount."Manifest Version"::"SPF 0200":
+            BEGIN
+              UPSManifest."Puff Version" := '0200';
+              IF UPSOptionPage."UPS Packaging Type" <>
+                 UPSOptionPage."UPS Packaging Type"::"UPS Letter"
+              THEN
+                UPSManifest."Document Indicator" := '3'
+              ELSE
+                UPSManifest."Document Indicator" :='1';
+              UPSManifest."Source Type Code" := '93';
+              UPSManifest."Shipper Country" := 'US';
+            END;
+        END;
+
+        IF "World Wide Service" OR "UPS Canadian Service" OR "UPS Puerto Rico Service" THEN BEGIN
+          IF "UPS Canadian Service" THEN
+            UPSManifest."Service Type" := UPSManifest."Service Type"::Canadian
+          ELSE
+            IF "World Wide Service" THEN
+              UPSManifest."Service Type" := UPSManifest."Service Type"::International
+            ELSE
+              UPSManifest."Service Type" := UPSManifest."Service Type"::"Puerto Rican";
+          CASE UPSOptionPage."International Billing" OF
+            UPSOptionPage."International Billing"::"Third Party":
+              IF "UPS Puerto Rico Service" THEN
+                UPSManifest."Shipment Chg Type" := 'TPB'
+              ELSE
+                UPSManifest."Shipment Chg Type" := 'PRE';
+            UPSOptionPage."International Billing"::"Free On Board":
+              BEGIN
+                UPSManifest."Shipment Chg Type" := 'FOB';
+                UPSManifest."Consigneee UPS Acct Number" := "Third Party Ship. Account No.";
+              END;
+            UPSOptionPage."International Billing"::FreightCollect:
+              BEGIN
+                UPSManifest."Shipment Chg Type" := 'COL';
+                UPSManifest."Consigneee UPS Acct Number" := "Third Party Ship. Account No.";
+              END;
+            UPSOptionPage."International Billing"::"Cost Freight":
+              BEGIN
+                UPSManifest."Shipment Chg Type" := 'C&F';
+                UPSManifest."Consigneee UPS Acct Number" := "Third Party Ship. Account No.";
+              END;
+            UPSOptionPage."International Billing"::"Delivery Duty Paid":
+              UPSManifest."Shipment Chg Type" := 'DDP';
+            UPSOptionPage."International Billing"::"Shipping Duty Tax":
+              UPSManifest."Shipment Chg Type" := 'SDT';
+            ELSE
+              UPSManifest."Shipment Chg Type" := 'PRE';
+          END;
+        END ELSE BEGIN
+          CASE "Shipping Payment Type" OF
+            "Shipping Payment Type"::"Third Party":
+              UPSManifest."Shipment Chg Type" := 'TPB';
+            "Shipping Payment Type"::"Freight Collect":
+              BEGIN
+                UPSManifest."Consigneee UPS Acct Number" := "Third Party Ship. Account No.";
+                UPSManifest."Shipment Chg Type" := 'COL';
+              END;
+            "Shipping Payment Type"::Consignee:
+              BEGIN
+                UPSManifest."Consigneee UPS Acct Number" := "Third Party Ship. Account No.";
+                UPSManifest."Shipment Chg Type" := 'CBS';
+              END;
+            ELSE
+              UPSManifest."Shipment Chg Type" := 'PRE';
+          END;
+        END;
+        UPSManifest."Consignee Company Name" := LeftString("Ship-to Name");
+        UPSManifest."Consignee Attention" := LeftString("Ship-to Contact");
+        UPSManifest."Consignee Address1" := LeftString("Ship-to Address");
+        UPSManifest."Consignee Address2" := LeftString("Ship-to Address 2");
+        UPSManifest."Consignee City" := LeftString("Ship-to City");
+        UPSManifest."Consignee State" := FixState("Ship-to State");
+        UPSManifest."Consignee Postal Code" := COPYSTR(FixZIPCode("Ship-to ZIP Code"),1,5);
+        UPSManifest."Consignee Phone" := FixPhoneNo("Ship-to Phone No.","World Wide Service");
+        UPSManifest."Consignee Country" := GetUPSCountryCode("Ship-to Country Code");
+        UPSManifestPart2."Consignee Tax ID" := LeftString(UPSOptionPage."Ship-to Tax ID");
+        IF (NOT "World Wide Service") AND
+           (NOT "UPS Canadian Service") AND
+           (NOT "UPS Puerto Rico Service") AND
+           "UPS Hundred Weight"
+        THEN BEGIN
+          IF UPSOptionPage."Hundred Wgt. Keep Mult. Value" AND
+             (ShippingAgentAccount."Manifest Version" > ShippingAgentAccount."Manifest Version"::"2.00")
+          THEN
+            UPSManifest."Hundred Weight Indicator" := '2'
+          ELSE
+            UPSManifest."Hundred Weight Indicator" := '1';
+        END ELSE
+          UPSManifest."Hundred Weight Indicator" := '0';
+        IF ShippingAgentService."Service Indicator" = '15' THEN
+          UPSManifest."UPS Service Type" := '14'
+        ELSE
+          IF ShippingAgentService."Service Indicator" = '04' THEN
+            UPSManifest."UPS Service Type" := '65'
+          ELSE
+            UPSManifest."UPS Service Type" := ShippingAgentService."Service Indicator";
+        UPSManifest."Packaging Type" := GetPackagingType(CurrentPackage,UPSOptionPage);
+        UPSManifest."Delivery Zone" := "UPS Zone";
+        IF ShippingAgentAccount."Manifest Version" >=
+           ShippingAgentAccount."Manifest Version"::"7.00"
+        THEN
+          Precision := 0.1
+        ELSE
+          Precision := 1;
+
+        ClearTotalValueFields;
+        IF ShippingSetup."Default Weight Units" = ShippingSetup."Default Weight Units"::KGS THEN BEGIN
+          IF Posted THEN
+            ActualWeight := ROUND(ShippingSetup.KiloToPound(GetPostedWeight),Precision,'>')
+          ELSE
+            ActualWeight := ROUND(ShippingSetup.KiloToPound(GetWeight),Precision,'>');
+        END ELSE BEGIN
+          IF Posted THEN
+            ActualWeight := ROUND(GetPostedWeight,Precision,'>')
+          ELSE
+            ActualWeight := ROUND(GetWeight,Precision,'>');
+        END;
+
+        UPSOptionPage.TESTFIELD("Oversized Package",FALSE);
+        UPSOptionPage.TESTFIELD("Oversized Package 2",FALSE);
+        UPSOptionPage.TESTFIELD("Oversized Package 3",FALSE);
+
+        IF ActualWeight > 0 THEN BEGIN
+          IF UPSOptionPage."Large Package" AND
+              ("Oversize Actual Weight" > 0)
+          THEN
+            WeightText := Integer2Text(ROUND("Oversize Actual Weight",0.1,'>') * 10)
+          ELSE
+            WeightText := Integer2Text(ROUND(ActualWeight,0.1,'>') * 10);
+          FillText := '';
+          UPSManifest."Package Actual Weight" :=
+            '+' + PADSTR(FillText,MAXSTRLEN(WeightText) - STRLEN(WeightText),'0') + WeightText;
+        END ELSE
+            IF UPSOptionPage."Large Package" THEN
+              UPSManifest."Package Actual Weight" := '+0000900'
+            ELSE
+              UPSManifest."Package Actual Weight" := '+0000000';
+        IF "Use Dim Weight" THEN BEGIN
+          WeightText := Integer2Text(ROUND("Calculation Weight (LBS)",0.1,'>') * 10);
+          FillText := '';
+          UPSManifest."Package Published Weight" :=
+            '+' + PADSTR(FillText,MAXSTRLEN(WeightText) - STRLEN(WeightText),'0') + WeightText;
+        END ELSE
+          UPSManifest."Package Published Weight" := '+0000000';
+        IF "Calculation Length" > 0 THEN BEGIN
+          LengthText := Integer2Text(ROUND("Calculation Length",0.1,'>') * 100);
+          FillText := '';
+          UPSManifest."Package Length" :=
+            '+' + PADSTR(FillText,MAXSTRLEN(LengthText) - STRLEN(LengthText),'0') + LengthText;
+        END;
+        IF "Calculation Width" > 0 THEN BEGIN
+          LengthText := Integer2Text(ROUND("Calculation Width",0.1,'>') * 100);
+          FillText := '';
+               UPSManifest."Package Width" :=
+            '+' + PADSTR(FillText,MAXSTRLEN(LengthText) - STRLEN(LengthText),'0') + LengthText;
+        END;
+        IF "Calculation Height" > 0 THEN BEGIN
+          LengthText := Integer2Text(ROUND("Calculation Height",0.1,'>') * 100);
+          FillText := '';
+          UPSManifest."Package Height" :=
+            '+' + PADSTR(FillText,MAXSTRLEN(LengthText) - STRLEN(LengthText),'0') + LengthText;
+        END;
+        UPSManifest."UOM Weight" := 'LBS';
+        UPSManifest."UOM Dim" := 'IN';
+        IF COD THEN BEGIN
+          IF UPSOptionPage."COD Control No." = '' THEN
+            UPSManifest."COD Control Number" := COPYSTR("Source ID",1,11)
+          ELSE
+            UPSManifest."COD Control Number" := UPSOptionPage."COD Control No.";
+          CODText := Decimal2Text(ROUND("COD Amount",0.01,'>') * 100,0);
+          CODFillText := '';
+          IF ShippingAgentAccount."Manifest Version" >=
+             ShippingAgentAccount."Manifest Version"::"7.00"
+          THEN
+            UPSManifest."COD Amount" :=
+              '+' + PADSTR(CODFillText,18 - STRLEN(CODText),'0') + CODText
+          ELSE
+            UPSManifest."COD Amount" :=
+              '+' + PADSTR(CODFillText,11 - STRLEN(CODText),'0') + CODText;
+          IF "COD Cashiers Check" THEN
+            UPSManifest."COD Cash Only Indicator" := '8'
+          ELSE
+            UPSManifest."COD Cash Only Indicator" := '9';
+          UPSManifest."COD Indicator" := '1';
+          IF UPSOptionPage."Tagless COD" THEN
+            UPSManifest."COD Indicator" := '3';
+        END ELSE
+          UPSManifest."COD Indicator" := '0';
+        IF "Currency Code" = '' THEN
+          UPSManifest."Currency Code" := 'USD'
+        ELSE
+          UPSManifest."Currency Code" := COPYSTR("Currency Code",1,3);
+        CASE UPSOptionPage."Call Tag Type" OF
+          UPSOptionPage."Call Tag Type"::None:
+            UPSManifest."Call Tag Indicator" := '0';
+          UPSOptionPage."Call Tag Type"::Standard:
+            UPSManifest."Call Tag Indicator" := '1';
+          UPSOptionPage."Call Tag Type"::"1 attempt":
+            UPSManifest."Call Tag Indicator" := '3';
+          UPSOptionPage."Call Tag Type"::"3 attempt":
+            UPSManifest."Call Tag Indicator" := '5';
+          UPSOptionPage."Call Tag Type"::"Print Return Label Only":
+            BEGIN
+              IF ShippingAgentAccount."UPS Prints Return Label" THEN
+                UPSManifest."Call Tag Indicator" := '2'
+              ELSE
+                UPSManifest."Call Tag Indicator" := '4';
+            END;
+        END;
+        IF ShippingAgentAccount."Manifest Version" >=
+           ShippingAgentAccount."Manifest Version"::"7.00"
+        THEN
+          UPSManifest."Call Tag Schedule Pick Date" := ''
+        ELSE
+          UPSManifest."Call Tag Schedule Pick Date" := Date2Text("Packing Date");
+        UPSManifest."Merchandise Description" := COPYSTR(Description,1,35);
+        IF UPSOptionPage."Saturday Delivery" THEN
+          UPSManifest."Saturday Delivery Indicator" := '1'
+        ELSE
+          UPSManifest."Saturday Delivery Indicator" := '0';
+        IF UPSOptionPage."Saturday Pickup" THEN
+          UPSManifest."Saturday Pickup Indicator" := '1'
+        ELSE
+          UPSManifest."Saturday Pickup Indicator" := '0';
+        IF UPSOptionPage."Large Package" THEN
+          UPSManifestPart2."Large Package" := TRUE;
+        UPSManifest."Oversize Package Indicator" := '0';
+        IF "Calculation Insured Value" > 0 THEN BEGIN
+          DeclaredText := Integer2Text(ROUND("Calculation Insured Value",0.01,'>') * 100);
+          DeclaredFillText := '';
+          UPSManifest."Declared Value Insurance" :=
+            '+' + PADSTR(DeclaredFillText,MAXSTRLEN(DeclaredText) - STRLEN(DeclaredText),'0') +
+            DeclaredText;
+        END ELSE
+          UPSManifest."Declared Value Insurance" := '+000000000000000000';
+
+        UPSManifestPart2."Shipper Pays Declared Value" := UPSOptionPage."Shipper Pays Declared Value";
+        IF "Residential Delivery" THEN
+          UPSManifest."Residence Type Indicator" := '1'
+        ELSE
+          UPSManifest."Residence Type Indicator" := '0';
+        CASE UPSOptionPage."Delivery Confirmation Type" OF
+          UPSOptionPage."Delivery Confirmation Type"::"Name Date":
+            UPSManifest."Delivery Confirmation Type" := '1';
+          UPSOptionPage."Delivery Confirmation Type"::"Signature Date":
+            UPSManifest."Delivery Confirmation Type" := '2';
+          UPSOptionPage."Delivery Confirmation Type"::"Adult Signature":
+            UPSManifest."Delivery Confirmation Type" := 'A';
+        END;
+        IF UPSOptionPage."Cust. Ref. Type 1" = UPSOptionPage."Cust. Ref. Type 1"::" " THEN BEGIN
+          UPSManifest."Customer Ref. No. Type1" := 'ON';
+          IF "Multi Document Package" THEN
+            UPSManifest."Customer Ref. No.1" := COPYSTR("Multi Document No.",1,35)
+          ELSE
+            UPSManifest."Customer Ref. No.1" := "Source ID";
+        END ELSE BEGIN
+          UPSManifest."Customer Ref. No. Type1" := GetReferenceTypeID(UPSOptionPage."Cust. Ref. Type 1");
+          UPSManifest."Customer Ref. No.1" := UPSOptionPage."Cust. Ref. No. 1";
+        END;
+        IF UPSOptionPage."Cust. Ref. Type 2" = UPSOptionPage."Cust. Ref. Type 2"::" " THEN BEGIN
+          UPSManifest."Customer Ref. No. Type2" := 'TN';
+          UPSManifest."Customer Ref. No.2" := "No.";
+        END ELSE BEGIN
+          UPSManifest."Customer Ref. No. Type2" := GetReferenceTypeID(UPSOptionPage."Cust. Ref. Type 2");
+          UPSManifest."Customer Ref. No.2" := UPSOptionPage."Cust. Ref. No. 2";
+        END;
+        IF UPSOptionPage."Ship. Ref. Type 1" <> UPSOptionPage."Ship. Ref. Type 1"::" " THEN BEGIN
+          UPSManifest."Shipment Ref. No.1 Type" := GetReferenceTypeID(UPSOptionPage."Ship. Ref. Type 1");
+          UPSManifest."Shipment Ref. No.1" := UPSOptionPage."Ship. Ref. No. 1";
+        END;
+        IF UPSOptionPage."Ship. Ref. Type 2" <> UPSOptionPage."Ship. Ref. Type 2"::" " THEN BEGIN
+          UPSManifest."Shipment Ref. No.2 Type" := GetReferenceTypeID(UPSOptionPage."Ship. Ref. Type 2");
+          UPSManifest."Shipment Ref. No.2" := UPSOptionPage."Ship. Ref. No. 2";
+        END;
+        IF ShippingAgentAccount."Manifest Version" >=
+           ShippingAgentAccount."Manifest Version"::"7.00"
+        THEN
+          UPSManifest."Call Tag Number" := ''
+        ELSE
+          UPSManifest."Call Tag Number" := UPSOptionPage."Call Tag No.";
+        UPSManifest."Shipping Agent Code" := "Shipping Agent Code";
+        UPSManifest."Shipping Agent Service" := "Shipping Agent Service";
+        UPSManifest."Package No." := "No.";
+        UPSManifest."Date Shipped" := "Packing Date";
+        IF UPSOptionPage."Additional Handling Required" THEN
+          UPSManifest."Additional Handling Req." := '1'
+        ELSE
+          UPSManifest."Additional Handling Req." := '0';
+        IF UPSOptionPage."Extended Area Surcharge" THEN
+          UPSManifest."Extended Area" := '1'
+        ELSE
+          UPSManifest."Extended Area" := '0';
+        IF ShippingAgentAccount."Manifest Version" >=
+           ShippingAgentAccount."Manifest Version"::"7.00"
+        THEN BEGIN
+          IF (UPSOptionPage."Special Instructions" <> '') AND
+             (NOT "World Wide Service") AND
+             (NOT "UPS Canadian Service")
+          THEN
+            UPSManifest."Special Instructions" := UPSOptionPage."Special Instructions";
+          IF "Total Packages" > 1 THEN BEGIN
+            IF UPSOptionPage."Package Weight Averaged" THEN
+              UPSManifestPart2."Avg. Package Wgt. Ind." := '1'
+            ELSE
+              UPSManifestPart2."Avg. Package Wgt. Ind." := '0';
+          END ELSE
+            UPSManifestPart2."Avg. Package Wgt. Ind." := '';
+          UPSManifestPart2."Receiver Location ID" := UPSOptionPage."Receiver Location ID";
+          IF UPSOptionPage."Later Delivery Time" THEN BEGIN
+            UPSManifestPart2."Later Delivery Time" := TRUE;
+            UPSManifestPart2."Delivery Time Override" :=
+              Time2Text(UPSOptionPage."Delivery Time Override");
+          END;
+          UPSManifestPart2.INSERT;
+        END;
+        UPSManifest.INSERT;
+        "UPS Manifest Entry No." := EntryNo;
+
+        IF (ShippingAgentAccount."Manifest Version" >
+            ShippingAgentAccount."Manifest Version"::"7.00") AND
+           (UPSOptionPage."Call Tag Type" >= UPSOptionPage."Call Tag Type"::Standard) AND
+           (UPSOptionPage."Call Tag Type" <> UPSOptionPage."Call Tag Type"::"Print Return Label Only")
+        THEN
+          CreateReturnServiceRecord(CurrentPackage,UPSOptionPage,UPSManifest);  // 110
+        IF (("Shipping Payment Type" = "Shipping Payment Type"::"Third Party") OR
+            (UPSOptionPage."International Billing" =
+             UPSOptionPage."International Billing"::"Third Party")) AND
+           FirstPackage
+        THEN
+          CreateAlternatePartyManifest(CurrentPackage,UPSOptionPage,UPSManifest,'03');  // 300-3
+        IF UPSOptionPage."Ship Notification" AND
+           (FirstPackage OR
+            (UPSOptionPage."UPS Advisory Info. Level" =
+             UPSOptionPage."UPS Advisory Info. Level"::Package))
+        THEN BEGIN
+          IF ShippingAgentAccount."Manifest Version" >=
+             ShippingAgentAccount."Manifest Version"::"7.00"
+          THEN
+            CreateShipNotification2(CurrentPackage,UPSOptionPage,UPSManifest)  // 400
+          ELSE
+            CreateShipNotificationManifest(CurrentPackage,UPSOptionPage,UPSManifest);  // 400
+        END;
+        IF UPSOptionPage."Delivery Notification" AND FirstPackage THEN
+          CreateDeliveryNotification(CurrentPackage,UPSOptionPage,UPSManifest);  // 400
+        IF UPSOptionPage."Exception Notification" AND FirstPackage THEN
+          CreateExceptionNotification(CurrentPackage,UPSOptionPage,UPSManifest);  // 400
+        IF UPSOptionPage."Accessorial Record Required" THEN BEGIN
+          CreateAddHandlingManifest(CurrentPackage,UPSOptionPage,UPSManifest);  // 200
+          IF UPSOptionPage."Dangerous Goods" AND
+             (ShippingAgentAccount."Manifest Version" >=
+              ShippingAgentAccount."Manifest Version"::"7.00")
+          THEN
+            CreateHazardousMaterialRecords(CurrentPackage,UPSOptionPage,UPSManifest,Posted);  // 210 & 220
+        END;
+
+        IF UPSOptionPage."Alternate Call Tag Return" THEN
+          CreateAlternatePartyManifest(CurrentPackage,UPSOptionPage,UPSManifest,'06');  // 300-6
+        IF ("World Wide Service" OR "UPS Canadian Service" OR "UPS Puerto Rico Service") AND
+           FirstPackage
+        THEN BEGIN
+          CreateAlternatePartyManifest(CurrentPackage,UPSOptionPage,UPSManifest,'02');  // 300-2
+          CreateInternationalManifest(CurrentPackage,UPSOptionPage,UPSManifest,TotalValue,Posted);  // 500
+          IF UPSOptionPage."Importer Name" <> '' THEN BEGIN
+            CreateAlternatePartyManifest(CurrentPackage,UPSOptionPage,UPSManifest,'01');  // 300-1
+            CreateAlternatePartyManifest(CurrentPackage,UPSOptionPage,UPSManifest,'09');  // 300-9
+          END;
+          CreateCommodityRecord(CurrentPackage,UPSOptionPage,UPSManifest,Posted);   // 600
+        END;
+        CALCFIELDS(Comment);
+        IF ("World Wide Service" OR "UPS Puerto Rico Service") AND Comment THEN
+          CreateCommentsRecord(CurrentPackage,UPSOptionPage,UPSManifest);  // 700
+      END;
+      EXIT(EntryNo);
+    END;
+
+    LOCAL PROCEDURE CreateReturnServiceRecord@1067(VAR CurrentPackage@1240030000 : Record 14000701;UPSOptionPage@1240030001 : Record 14000761;UPSManifest@1240030002 : Record 14000768);
+    VAR
+      UPSManifest2@1240030003 : Record 14000768;
+      UPSManifestPart2@1240030004 : Record 14000771;
+      EntryNo@1240030005 : Integer;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        IF ShippingAgentAccount."Manifest Version" <
+           ShippingAgentAccount."Manifest Version"::"7.00"
+        THEN
+          EXIT;
+        GetPackingStation;
+        UPSManifest2.RESET;
+        UPSManifest2.LOCKTABLE;
+        UPSManifest2.FIND('+');
+        EntryNo := UPSManifest2."Entry No." + 1;
+        UPSManifest2.INIT;
+        UPSManifest2.COPY(UPSManifest);
+        UPSManifest2."Entry No." := EntryNo;
+        UPSManifest2."Record Type" := '0110';
+        UPSManifestPart2.INIT;
+        UPSManifestPart2."Entry No." := EntryNo;
+        UPSManifestPart2."Return Barcode Reference No." := UPSOptionPage."Call Tag No.";
+        IF ShippingAgentAccount."Manifest Version" = ShippingAgentAccount."Manifest Version"::"7.00" THEN
+          UPSManifestPart2."Return Barcode Method" := '01'
+        ELSE
+        UPSManifestPart2."Return Barcode Method" := '02';
+        UPSManifest2.INSERT;
+        UPSManifestPart2.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateAlternatePartyManifest@55(VAR CurrentPackage@1240030000 : Record 14000701;UPSOptionPage@1240030001 : Record 14000761;UPSManifest@1240030002 : Record 14000768;TypeCode@1240030003 : Code[2]);
+    VAR
+      CompanyInfo@1240030004 : Record 79;
+      UPSManifest2@1240030005 : Record 14000768;
+      UPSManifestPart2@1240030006 : Record 14000771;
+      EntryNo@1240030007 : Integer;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        GetPackingStation;
+        UPSManifest2.RESET;
+        UPSManifest2.LOCKTABLE;
+        UPSManifest2.FIND('+');
+        EntryNo := UPSManifest2."Entry No." + 1;
+        UPSManifest2.INIT;
+        UPSManifest2.COPY(UPSManifest);
+        UPSManifest2."Entry No." := EntryNo;
+        UPSManifest2."Record Type" := '0300';
+        UPSManifest2."Package Tracking Number" := '';
+        UPSManifest2."Alternate Party Type" := TypeCode;
+
+        IF ShippingAgentAccount."Manifest Version" >=
+           ShippingAgentAccount."Manifest Version"::"7.00"
+        THEN BEGIN
+          UPSManifestPart2.INIT;
+          UPSManifestPart2."Entry No." := EntryNo;
+        END;
+
+        CASE TypeCode OF
+          '01':  // Importer Address Information
+          BEGIN
+            UPSManifest2."Third Party Name" := UPSOptionPage."Importer Name";
+            UPSManifest2."Third Party Attention" := UPSOptionPage."Importer Contact";
+            UPSManifest2."Third Party Address1" := UPSOptionPage."Importer Address";
+            UPSManifest2."Third Party Address2" := UPSOptionPage."Impoter Address 2";
+            UPSManifest2."Third Party City" := UPSOptionPage."Importer City";
+            UPSManifest2."Third Party State" := UPSOptionPage."Importer State";
+            UPSManifest2."Third Party Postal Code" := FixZIPCode(UPSOptionPage."Importer ZIP Code");
+            UPSManifest2."Third Party Country" :=
+              GetUPSCountryCode(UPSOptionPage."Importer Country Code");
+            UPSManifest2."Third Party Phone" :=
+              FixPhoneNo(UPSOptionPage."Importer Phone No.",FALSE);
+            UPSManifestPart2."Third Party Tax ID" := LeftString(UPSOptionPage."Importer Tax ID");
+          END;
+          '02':  // Exporter Address Information
+          BEGIN
+            CompanyInfo.GET;
+            UPSManifest2."Third Party Name" := PackingStation."Ship-from Company";
+            UPSManifest2."Third Party Attention" := PackingStation."Ship-from Contact";
+            UPSManifest2."Third Party Address1" := PackingStation."Ship-from Address";
+            UPSManifest2."Third Party Address2" := PackingStation."Ship-from Address2";
+            UPSManifest2."Third Party City" := PackingStation."Ship-from City";
+            UPSManifest2."Third Party State" := PackingStation."Ship-from State";
+            UPSManifest2."Third Party Postal Code" := FixZIPCode(PackingStation."Ship-from ZIP Code");
+            UPSManifest2."Third Party Country" :=
+              GetUPSCountryCode(PackingStation."Ship-from Country Code");
+            UPSManifest2."Third Party Phone" :=
+              FixPhoneNo(PackingStation."Ship-from Phone No.",FALSE);
+            IF ShippingAgentAccount."Manifest Version" >=
+               ShippingAgentAccount."Manifest Version"::"7.00"
+            THEN BEGIN
+              UPSManifestPart2."Third Party Tax ID" := CompanyInfo."VAT Registration No.";
+              UPSManifestPart2."Exporter Tax ID Type" := '79';
+            END;
+          END;
+          '03':  // Shipper Third Party Billing Address Information
+          BEGIN
+            UPSManifest2."Third Party Account No." := "Third Party Ship. Account No.";
+            UPSManifest2."Third Party Name" := LeftString(UPSOptionPage."Third Party Name");
+            UPSManifest2."Third Party Attention" := LeftString(UPSOptionPage."Third Party Contact");
+            UPSManifest2."Third Party Address1" := LeftString(UPSOptionPage."Third Party Address");
+            UPSManifest2."Third Party Address2" := LeftString(UPSOptionPage."Third Party Address 2");
+            UPSManifest2."Third Party City" := LeftString(UPSOptionPage."Third Party City");
+            UPSManifest2."Third Party State" := FixState(UPSOptionPage."Third Party State");
+            UPSManifest2."Third Party Postal Code" := FixZIPCode(UPSOptionPage."Third Party ZIP Code");
+            UPSManifest2."Third Party Country" := GetUPSCountryCode(UPSOptionPage."Third Party Country Code");
+            IF UPSManifest2."Third Party Country" = 'US' THEN
+              UPSManifest2."Third Party Phone" :=
+                FixPhoneNo(UPSOptionPage."Third Party Phone No.",FALSE)
+            ELSE
+              UPSManifest2."Third Party Phone" :=
+                FixPhoneNo(UPSOptionPage."Third Party Phone No.",TRUE);
+            UPSManifestPart2."Third Party Tax ID" := LeftString(UPSOptionPage."Third Party Tax ID");
+          END;
+          '06':  // Alternate Call Tag Return Address Information
+          BEGIN
+            UPSManifest2."Third Party Account No." := '';
+            UPSManifest2."Third Party Name" := LeftString(UPSOptionPage."Return Company Name");
+            UPSManifest2."Third Party Attention" := LeftString(UPSOptionPage."Return Contact");
+            UPSManifest2."Third Party Address1" := LeftString(UPSOptionPage."Return Address");
+            UPSManifest2."Third Party Address2" := LeftString(UPSOptionPage."Return Address 2");
+            UPSManifest2."Third Party City" := LeftString(UPSOptionPage."Return City");
+            UPSManifest2."Third Party State" := LeftString(UPSOptionPage."Return State");
+            UPSManifest2."Third Party Postal Code" := FixZIPCode(UPSOptionPage."Return ZIP Code");
+            UPSManifest2."Third Party Country" :=
+              GetUPSCountryCode(UPSOptionPage."Return Country Code");
+            UPSManifest2."Third Party Phone" := '';
+          END;
+          '09': // Ultimate Consignee Address Information
+          BEGIN
+            UPSManifest2."Third Party Account No." := '';
+            UPSManifest2."Third Party Name" := LeftString("Ship-to Name");
+            UPSManifest2."Third Party Attention" := LeftString("Ship-to Contact");
+            UPSManifest2."Third Party Address1" := LeftString("Ship-to Address");
+            UPSManifest2."Third Party Address2" := LeftString("Ship-to Address 2");
+            UPSManifest2."Third Party City" := LeftString("Ship-to City");
+            UPSManifest2."Third Party State" := LeftString("Ship-to State");
+            UPSManifest2."Third Party Postal Code" := FixZIPCode("Ship-to ZIP Code");
+            UPSManifest2."Third Party Country" := GetUPSCountryCode("Ship-to Country Code");
+            UPSManifest2."Third Party Phone" := '';
+            UPSManifestPart2."Third Party Tax ID" := LeftString(UPSOptionPage."Ship-to Tax ID");
+          END;
+        END;
+        UPSManifest2.INSERT;
+        IF ShippingAgentAccount."Manifest Version" >=
+           ShippingAgentAccount."Manifest Version"::"7.00"
+        THEN
+          UPSManifestPart2.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateShipNotificationManifest@10(VAR CurrentPackage@1240030000 : Record 14000701;UPSOptionPage@1240030001 : Record 14000761;UPSManifest2@1240030002 : Record 14000768);
+    VAR
+      UPSManifest@1240030003 : Record 14000768;
+      CountryCode@1240030004 : Code[3];
+      EntryNo@1240030005 : Integer;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        GetShippingSetup;
+        GetShippingAgent("Shipping Agent Code");
+        GetShippingAgentAccount("Shipping Agent Account No.");
+
+        UPSManifest.RESET;
+        UPSManifest.LOCKTABLE;
+        UPSManifest.FIND('+');
+        EntryNo := UPSManifest."Entry No." + 1;
+        UPSManifest.INIT;
+        UPSManifest.COPY(UPSManifest2);
+        UPSManifest."Entry No." := EntryNo;
+        UPSManifest."Record Type" := '0400';
+        IF UPSOptionPage."UPS Advisory Info. Level" <>
+           UPSOptionPage."UPS Advisory Info. Level"::Package
+        THEN BEGIN
+          UPSManifest."Advisory Info Level" := 'S';
+          UPSManifest."Package Tracking Number" := '';
+        END ELSE
+          UPSManifest."Advisory Info Level" := 'P';
+        IF UPSOptionPage."Ship Notification Type" =
+           UPSOptionPage."Ship Notification Type"::Fax
+        THEN BEGIN
+          CountryCode := GetUPSCountryCode("Ship-to Country Code");
+          IF (CountryCode <> 'US') AND (CountryCode <> 'CA') AND (CountryCode <> 'PR') THEN
+            UPSManifest."Ship Fax Dest. Type" := '1'
+          ELSE
+            UPSManifest."Ship Fax Dest. Type" := '0';
+          IF UPSOptionPage."Ship Notification Fax No." = '' THEN
+            UPSManifest."Ship Notification Fax No." := FixPhoneNo("Ship-to Fax No.","World Wide Service")
+          ELSE
+            UPSManifest."Ship Notification Fax No." :=
+              FixPhoneNo(UPSOptionPage."Ship Notification Fax No.","World Wide Service");
+          IF UPSOptionPage."Ship Notification Attn Name" <> '' THEN
+            UPSManifest."Ship Notification Attn Name" := UPSOptionPage."Ship Notification Attn Name"
+          ELSE
+            UPSManifest."Ship Notification Attn Name" := "Ship-to Contact";
+          IF UPSOptionPage."Ship Notification Phone" <> '' THEN
+            UPSManifest."Ship Notification Phone No." :=
+              FixPhoneNo(UPSOptionPage."Ship Notification Phone","World Wide Service")
+          ELSE
+            UPSManifest."Ship Notification Phone No." :=
+              FixPhoneNo("Ship-to Phone No.","World Wide Service");
+          UPSManifest."Ship Notification Type" := 4;
+        END ELSE BEGIN
+          UPSManifest."Ship Notification Type" := 3;
+          UPSManifest."Ship Notification Email" := UPSOptionPage."Ship Notification Email";
+        END;
+        UPSManifest."Ship Notification Company" := "Ship-to Name";
+        UPSManifest."Ship Notification Memo" := UPSOptionPage."Ship Notification Memo";
+        UPSManifest.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateShipNotification2@69(VAR CurrentPackage@1240030000 : Record 14000701;UPSOptionPage@1240030001 : Record 14000761;UPSManifest2@1240030002 : Record 14000768);
+    VAR
+      UPSManifest@1240030003 : Record 14000768;
+      UPSManifestPart2@1240030004 : Record 14000771;
+      EntryNo@1240030006 : Integer;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        GetShippingSetup;
+        GetShippingAgent("Shipping Agent Code");
+        GetShippingAgentAccount("Shipping Agent Account No.");
+        GetPackingStation;
+
+        UPSManifest.RESET;
+        UPSManifest.LOCKTABLE;
+        UPSManifest.FIND('+');
+        EntryNo := UPSManifest."Entry No." + 1;
+        UPSManifest.INIT;
+        UPSManifest.COPY(UPSManifest2);
+        UPSManifest."Entry No." := EntryNo;
+        UPSManifest."Record Type" := '0400';
+        IF UPSOptionPage."UPS Advisory Info. Level" <>
+           UPSOptionPage."UPS Advisory Info. Level"::Package
+        THEN BEGIN
+          UPSManifest."Advisory Info Level" := 'S';
+          UPSManifest."Package Tracking Number" := '';
+        END ELSE
+          UPSManifest."Advisory Info Level" := 'P';
+
+        UPSManifestPart2.INIT;
+        UPSManifestPart2."Entry No." := EntryNo;
+
+        IF UPSOptionPage."Call Tag Type" > UPSOptionPage."Call Tag Type"::None THEN BEGIN
+          IF UPSOptionPage."Inbound Return Notification" THEN
+            UPSManifestPart2."Request Type Code" := '005'
+          ELSE
+            UPSManifestPart2."Request Type Code" := '004';
+        END ELSE
+          UPSManifestPart2."Request Type Code" := '003';
+        IF "Blind Shipment" OR "Double Blind Shipment" THEN
+          UPSManifestPart2."Sent From Name" := "Blind Ship-from Name"
+        ELSE
+          UPSManifestPart2."Sent From Name" := PackingStation."Ship-from Company";
+
+        IF UPSOptionPage."Ship Notification Type" =
+           UPSOptionPage."Ship Notification Type"::Fax
+        THEN BEGIN
+          UPSManifestPart2."Media Type Code" := '04';
+          UPSManifest."Ship Fax Dest. Type" := '0';
+          IF UPSOptionPage."Ship Notification Fax No." = '' THEN
+            UPSManifest."Ship Notification Fax No." := FixPhoneNo("Ship-to Fax No.",FALSE)
+          ELSE
+            UPSManifest."Ship Notification Fax No." :=
+              FixPhoneNo(UPSOptionPage."Ship Notification Fax No.",FALSE);
+          UPSManifest."Ship Notification Company" := "Ship-to Name";
+          IF UPSOptionPage."Ship Notification Attn Name" <> '' THEN
+            UPSManifest."Ship Notification Attn Name" := UPSOptionPage."Ship Notification Attn Name"
+          ELSE
+            UPSManifest."Ship Notification Attn Name" := "Ship-to Contact";
+          IF UPSOptionPage."Ship Notification Phone" <> '' THEN
+            UPSManifest."Ship Notification Phone No." :=
+              FixPhoneNo(UPSOptionPage."Ship Notification Phone",FALSE)
+          ELSE
+            UPSManifest."Ship Notification Phone No." :=
+              FixPhoneNo("Ship-to Phone No.",FALSE);
+
+        END ELSE BEGIN
+          UPSManifestPart2."Media Type Code" := '03';
+          UPSManifest."Ship Notification Email" := UPSOptionPage."Ship Notification Email";
+          UPSManifestPart2."Reply to Email Address" := UPSOptionPage."Reply To Email Address";
+        END;
+        UPSManifestPart2."Subject Code" := '';
+        UPSManifest."Ship Notification Memo" := UPSOptionPage."Ship Notification Memo";
+        UPSManifest.INSERT;
+        UPSManifestPart2.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateAddHandlingManifest@34(VAR CurrentPackage@1240030000 : Record 14000701;UPSOptionPage@1240030001 : Record 14000761;UPSManifest@1240030002 : Record 14000768);
+    VAR
+      UPSManifest2@1240030003 : Record 14000768;
+      EntryNo@1240030004 : Integer;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        UPSManifest2.RESET;
+        UPSManifest2.LOCKTABLE;
+        UPSManifest2.FIND('+');
+        EntryNo := UPSManifest2."Entry No." + 1;
+        UPSManifest2.INIT;
+        UPSManifest2.COPY(UPSManifest);
+        UPSManifest2."Entry No." := EntryNo;
+        UPSManifest2."Record Type" := '0200';
+        IF UPSOptionPage."Additional Handling Required" THEN
+          UPSManifest2."Additional Handling Req." := '1'
+        ELSE
+          UPSManifest2."Additional Handling Req." := '0';
+        IF UPSOptionPage."Extended Area Surcharge" THEN
+          UPSManifest2."Extended Area" := '1'
+        ELSE
+          UPSManifest2."Extended Area" := '0';
+        IF UPSOptionPage."Dangerous Goods" THEN
+          UPSManifest2."Hazardous Material" := '1'
+        ELSE
+          UPSManifest2."Hazardous Material" := '0';
+        IF UPSOptionPage."Hold At Location" THEN
+          UPSManifest2."Hold for Pickup" := '1'
+        ELSE
+          UPSManifest2."Hold for Pickup" := '0';
+        UPSManifest2."Modify Indicator" := '0';
+        UPSManifest2."On Call Air Indicator" := '0';
+        UPSManifest2."Void Indicator" := '0';
+        IF UPSOptionPage."Verbal Confirm. of Delivery" THEN BEGIN
+          UPSManifest2."Ship Notification Attn Name" := UPSOptionPage."Ship Notification Attn Name";
+          UPSManifest2."Ship Notification Phone No." :=
+            FixPhoneNo(UPSOptionPage."Ship Notification Phone","World Wide Service");
+        END;
+        IF UPSManifest2."Package Length" = '' THEN
+          UPSManifest2."Package Length" := '+00000000';
+        IF UPSManifest2."Package Width" = '' THEN
+          UPSManifest2."Package Width" := '+00000000';
+        IF UPSManifest2."Package Height" = '' THEN
+          UPSManifest2."Package Height" := '+00000000';
+        UPSManifest2.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateHazardousMaterialRecords@68(VAR CurrentPackage@1240030000 : Record 14000701;UPSOptionPage@1240030001 : Record 14000761;UPSManifest@1240030002 : Record 14000768;Posted@1240030003 : Boolean);
+    VAR
+      UPSManifest2@1240030004 : Record 14000768;
+      UPSManifestPart2@1240030005 : Record 14000771;
+      PackageLineArray@1240030006 : ARRAY [3] OF Record 14000702;
+      HazMat@1240030007 : Record 14000773;
+      HazMatProductClass@1240030008 : Record 14000774;
+      EntryNo@1240030009 : Integer;
+      I@1240030010 : Integer;
+      HazMatCount@1240030011 : Integer;
+      RecordSequence@1240030012 : Code[3];
+      QtyText@1240030013 : Text[5];
+      FillText@1240030014 : Text[5];
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        IF ShippingAgentAccount."Manifest Version" <
+           ShippingAgentAccount."Manifest Version"::"7.00"
+        THEN
+          EXIT;
+
+        GetPackingStation;
+        CarrierPackingStation.GetPackingStation(PackingStation);
+        CarrierPackingStation.TESTFIELD("UPS Haz. Mat. Emergency No.");
+        CLEAR(PackageLineArray);
+        RecordSequence := '001';
+        IF NOT Posted THEN
+          HazMatCount := GetHazMatPackageLines(CurrentPackage,PackageLineArray)
+        ELSE
+          HazMatCount := GetHazMatPostedPackageLines(CurrentPackage,PackageLineArray);
+
+        FOR I := 1 TO HazMatCount DO BEGIN
+          HazMat.GET(PackageLineArray[I].Type,PackageLineArray[I]."No.");
+          HazMatProductClass.GET(HazMat."Product Class");
+          UPSManifest2.RESET;
+          UPSManifest2.LOCKTABLE;
+          UPSManifest2.FIND('+');
+          EntryNo := UPSManifest2."Entry No." + 1;
+          UPSManifest2.INIT;
+          UPSManifest2.COPY(UPSManifest);
+          UPSManifest2."Entry No." := EntryNo;
+          UPSManifest2."Record Type" := '0210';
+      //    UPSManifest2."Package Tracking Number" := '';
+          UPSManifestPart2.INIT;
+          UPSManifestPart2."Entry No." := EntryNo;
+          UPSManifestPart2."Haz. Mat. Record Sequence" := RecordSequence;
+          IF "World Wide Service" OR "UPS Canadian Service" THEN
+            UPSManifestPart2."Haz. Mat. Regulation Set" := 'IATA'
+          ELSE
+            UPSManifestPart2."Haz. Mat. Regulation Set" := 'CFR';
+          UPSManifestPart2."Haz. Mat. Shipping Name" := HazMatProductClass."Proper Shipping Name";
+          UPSManifestPart2."Haz. Mat. Technical Name" := HazMatProductClass."Technical Name";
+          UPSManifestPart2."Haz. Mat. Division No." := HazMatProductClass."Hazard Division No.";
+          UPSManifestPart2."Haz. Mat. Subrisk Class" := HazMatProductClass."Subrisk Class";
+          UPSManifestPart2."Haz. Mat. Identification No." := HazMatProductClass."Identification No.";
+          UPSManifest2.INSERT;
+          UPSManifestPart2.INSERT;
+          EntryNo := EntryNo + 1;
+          UPSManifest2."Entry No." := EntryNo;
+          UPSManifest2."Record Type" := '0220';
+      //    UPSManifest2."Package Tracking Number" := '';
+          UPSManifestPart2.INIT;
+          UPSManifestPart2."Entry No." := UPSManifest2."Entry No.";
+          UPSManifestPart2."Haz. Mat. Record Sequence" := RecordSequence;
+          UPSManifestPart2."Haz. Mat. Packing Group No." := HazMatProductClass."Packing Group No.";
+          UPSManifestPart2."Haz. Mat. Additional Info." := HazMatProductClass."Additional Description";
+          FillText := '';
+          QtyText := Decimal2Text(PackageLineArray[I].Quantity,0);
+          UPSManifestPart2."Haz. Mat. Quantity" :=
+            PADSTR(FillText,MAXSTRLEN(QtyText) - STRLEN(QtyText),'0') + QtyText;
+          UPSManifestPart2."Haz. Mat. Units" := PackageLineArray[I]."Unit of Measure Code";
+          UPSManifestPart2."Haz. Mat. Package Type" := HazMatProductClass."Package Type";
+          UPSManifestPart2."Haz. Mat. Packing Instructions" :=
+            HazMatProductClass."Packing Instructions Code";
+          UPSManifestPart2."Haz. Mat. Labels Required" := HazMatProductClass."Labels Required";
+          UPSManifestPart2."Haz. Mat. Emergency Phone No." :=
+            CarrierPackingStation."UPS Haz. Mat. Emergency No.";
+          UPSManifest2.INSERT;
+          UPSManifestPart2.INSERT;
+          RecordSequence := INCSTR(RecordSequence);
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateInternationalManifest@52(VAR CurrentPackage@1240030000 : Record 14000701;UPSOptionPage@1240030001 : Record 14000761;UPSManifest@1240030002 : Record 14000768;TotalValue@1240030003 : Decimal;Posted@1240030004 : Boolean);
+    VAR
+      UPSManifest2@1240030005 : Record 14000768;
+      UPSManifestPart2@1240030006 : Record 14000771;
+      SalesInvoiceHeader@1240030007 : Record 112;
+      Package@1240030012 : Record 14000701;
+      PostedPackage@1240030013 : Record 14000704;
+      DeclaredText@1240030009 : Text[18];
+      DeclaredFillText@1240030010 : Text[18];
+      EntryNo@1240030011 : Integer;
+      LineTotal@1240030014 : Decimal;
+      InsuranceCharge@1240030015 : Decimal;
+      DiscountTotal@1240030016 : Decimal;
+      OtherTotal@1240030017 : Decimal;
+      ShipTotal@1240030018 : Decimal;
+      SubTotal@1240030019 : Integer;
+      InvTotal@1240030020 : Integer;
+      InsuranceValue@1240030021 : Decimal;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        GetShippingAgentService("Shipping Agent Code","Shipping Agent Service","World Wide Service");
+        GetPackingStation;
+        LineTotal := 0;
+        ShipTotal := 0;
+        InsuranceValue := 0;
+        InsuranceCharge := 0;
+        DiscountTotal := 0;
+        OtherTotal := 0;
+
+        IF UPSOptionPage."UPS Packaging Type" <> UPSOptionPage."UPS Packaging Type"::"UPS Letter"
+        THEN BEGIN
+          IF Posted THEN BEGIN
+            IF "Total Packages" = 1 THEN BEGIN
+              PostedPackage.GET("No.");
+              PostedPackage.CALCFIELDS("Value (Price)");
+              TotalValue := PostedPackage."Value (Price)";
+
+              Package.TRANSFERFIELDS(PostedPackage);
+              GetIntlShipmentTotals(
+                Package,LineTotal,InsuranceCharge,InsuranceValue,DiscountTotal,ShipTotal,
+                TotalValue);
+            END ELSE BEGIN
+              PostedPackage.RESET;
+              PostedPackage.SETCURRENTKEY("First Package No.");
+              PostedPackage.SETFILTER("First Package No.",'*' + "First Package No." + '*');
+              PostedPackage.SETRANGE("Manifest No.","Manifest No.");
+              PostedPackage.SETRANGE("Shipping Agent Account No.","Shipping Agent Account No.");
+              PostedPackage.SETRANGE("Exclude From Manifest",FALSE);
+
+              IF PostedPackage.FIND('-') THEN BEGIN
+                REPEAT
+                  PostedPackage.CALCFIELDS("Value (Price)");
+                  TotalValue := ROUND(PostedPackage."Value (Price)",0.01,'>');
+                  Package.TRANSFERFIELDS(PostedPackage);
+                  GetIntlShipmentTotals(
+                    Package,LineTotal,InsuranceCharge,InsuranceValue,DiscountTotal,ShipTotal,TotalValue);
+                UNTIL PostedPackage.NEXT = 0;
+              END;
+            END;
+          END ELSE BEGIN
+            IF "Total Packages" = 1 THEN BEGIN
+              Package.GET("No.");
+              Package.CALCFIELDS("Value (Price)");
+              TotalValue := Package."Value (Price)";
+              GetIntlShipmentTotals(
+                Package,LineTotal,InsuranceCharge,InsuranceValue,DiscountTotal,ShipTotal,
+                TotalValue);
+            END ELSE BEGIN
+              Package.RESET;
+              Package.SETCURRENTKEY("First Package No.");
+              Package.SETFILTER("First Package No.",'*' + "First Package No." + '*');
+              Package.SETRANGE("Manifest No.","Manifest No.");
+              Package.SETRANGE("Shipping Agent Account No.","Shipping Agent Account No.");
+              Package.SETRANGE("Exclude From Manifest",FALSE);
+              IF Package.FIND('-') THEN BEGIN
+                REPEAT
+                  Package.CALCFIELDS("Value (Price)");
+                  TotalValue := ROUND(Package."Value (Price)",0.01,'>');
+                  GetIntlShipmentTotals(
+                    Package,LineTotal,InsuranceCharge,InsuranceValue,DiscountTotal,ShipTotal,TotalValue);
+                UNTIL Package.NEXT = 0;
+              END;
+            END;
+          END;
+        END;
+
+        UPSManifest2.RESET;
+        UPSManifest2.LOCKTABLE;
+        UPSManifest2.FIND('+');
+        EntryNo := UPSManifest2."Entry No." + 1;
+        UPSManifest2.INIT;
+        UPSManifest2.COPY(UPSManifest);
+        UPSManifest2."Entry No." := EntryNo;
+        UPSManifest2."Record Type" := '0500';
+        UPSManifest2."Package Tracking Number" := '';
+        UPSManifestPart2.INIT;
+        UPSManifestPart2."Entry No." := EntryNo;
+        IF NOT "UPS Puerto Rico Service" THEN
+          UPSManifest2."Waybill Printed Indicator" := '1'
+        ELSE
+          UPSManifest2."Waybill Printed Indicator" := '0';
+        IF Posted THEN BEGIN
+          SalesInvoiceHeader.RESET;
+          SalesInvoiceHeader.SETCURRENTKEY("Order No.");
+          SalesInvoiceHeader.SETRANGE("Order No.","Source ID");
+          IF SalesInvoiceHeader.FIND('+') THEN
+            UPSManifestPart2."Invoice No." := SalesInvoiceHeader."No.";
+        END;
+
+        IF LineTotal > 0 THEN BEGIN
+          DeclaredText := STRSUBSTNO('%1',Decimal2Integer(LineTotal));
+          DeclaredFillText := '';
+          UPSManifest2."Invoice Line Totals" :=
+            '+' + PADSTR(DeclaredFillText,MAXSTRLEN(DeclaredText) - STRLEN(DeclaredText),'0') +
+            DeclaredText;
+          IF UPSManifest2."Currency Code" <> '' THEN
+            UPSManifest2."Invoice Currency Code" := UPSManifest2."Currency Code"
+          ELSE
+            UPSManifest2."Invoice Currency Code" := 'USD';
+        END ELSE
+          UPSManifest2."Invoice Line Totals" := '+000000000000000000';
+
+        IF InsuranceValue > 0 THEN BEGIN
+          DeclaredText := Integer2Text(ROUND(InsuranceValue,0.01,'>') * 100);
+          DeclaredFillText := '';
+          UPSManifest2."Declared Value Insurance" :=
+            '+' + PADSTR(DeclaredFillText,MAXSTRLEN(DeclaredText) - STRLEN(DeclaredText),'0') +
+            DeclaredText;
+        END ELSE
+          UPSManifest."Declared Value Insurance" := '+000000000000000000';
+
+        UPSManifest2."Consolidated Clearance Qty." := '00000';
+
+        CASE UPSOptionPage."Export Declaration" OF
+          UPSOptionPage."Export Declaration"::" ":
+            BEGIN
+              IF Package."AES ITN No." <> '' THEN BEGIN
+                UPSManifest2."SED Code" := 'E';
+                UPSManifest2."Parties to Transaction" := '';
+                UPSManifestPart2."AES Transaction No." := Package."AES ITN No.";
+              END ELSE BEGIN
+                UPSManifest2."SED Code" := ' ';
+                UPSManifest2."Parties to Transaction" := '';
+              END;
+            END;
+          UPSOptionPage."Export Declaration"::Included:
+            BEGIN
+              UPSManifest2."SED Code" := 'D';
+              IF UPSOptionPage."Consignee Related to Shipper" THEN
+                UPSManifest2."Parties to Transaction" := 'R'
+              ELSE
+                UPSManifest2."Parties to Transaction" := 'N';
+              UPSManifestPart2."Routed Transaction No." := '0';
+              UPSManifestPart2."Export Information Code" := 'OS';
+            END;
+          UPSOptionPage."Export Declaration"::"UPS Prepare":
+            BEGIN
+              UPSManifest2."SED Code" := 'U';
+              IF UPSOptionPage."Consignee Related to Shipper" THEN
+                UPSManifest2."Parties to Transaction" := 'R'
+              ELSE
+                UPSManifest2."Parties to Transaction" := 'N';
+              UPSManifestPart2."Routed Transaction No." := '0';
+              UPSManifestPart2."Export Information Code" := 'OS';
+            END;
+          UPSOptionPage."Export Declaration"::Unknown:
+            BEGIN
+              UPSManifest2."SED Code" := 'Y';
+              UPSManifest2."Parties to Transaction" := '';
+            END;
+          UPSOptionPage."Export Declaration"::"AESDirect Pre-Depart":
+            IF Package."AES ITN No." <> '' THEN BEGIN
+              UPSManifest2."SED Code" := 'E';
+              UPSManifest2."Parties to Transaction" := '';
+              UPSManifestPart2."AES Transaction No." := Package."AES ITN No.";
+            END ELSE BEGIN
+              UPSManifest2."SED Code" := 'Y';
+              UPSManifest2."Parties to Transaction" := '';
+            END;
+          UPSOptionPage."Export Declaration"::"AESDirect Post-Depart":
+            BEGIN
+              UPSManifest2."SED Code" := 'P';
+              UPSManifest2."Parties to Transaction" := '';
+            END;
+        END;
+
+        IF ShipTotal > 0 THEN BEGIN
+          DeclaredText := STRSUBSTNO('%1',Decimal2Integer(ShipTotal));
+          DeclaredFillText := '';
+          UPSManifest2."Freight Charges" :=
+            '+' + PADSTR(DeclaredFillText,MAXSTRLEN(DeclaredText) - STRLEN(DeclaredText),'0') +
+            DeclaredText;
+        END ELSE
+          UPSManifest2."Freight Charges" := '+000000000000000000';
+
+        IF InsuranceCharge > 0 THEN BEGIN
+          DeclaredText := STRSUBSTNO('%1',Decimal2Integer(InsuranceCharge));
+          DeclaredFillText := '';
+          UPSManifest2."Insurance Charges" :=
+            '+' + PADSTR(DeclaredFillText,MAXSTRLEN(DeclaredText) - STRLEN(DeclaredText),'0') +
+            DeclaredText;
+        END ELSE
+          UPSManifest2."Insurance Charges" := '+000000000000000000';
+
+        IF DiscountTotal > 0 THEN BEGIN
+          DeclaredText := STRSUBSTNO('%1',Decimal2Integer(DiscountTotal));
+          DeclaredFillText := '';
+          UPSManifest2."Discount Rebate" :=
+            '+' + PADSTR(DeclaredFillText,MAXSTRLEN(DeclaredText) - STRLEN(DeclaredText),'0') +
+            DeclaredText;
+        END ELSE
+          UPSManifest2."Discount Rebate" := '+000000000000000000';
+
+        SubTotal := Decimal2Integer(LineTotal) - Decimal2Integer(DiscountTotal);
+        IF SubTotal > 0 THEN BEGIN
+          DeclaredText := STRSUBSTNO('%1',SubTotal);
+          DeclaredFillText := '';
+          UPSManifest2."Invoice SubTotal" :=
+            '+' + PADSTR(DeclaredFillText,MAXSTRLEN(DeclaredText) - STRLEN(DeclaredText),'0') +
+            DeclaredText;
+        END ELSE
+          UPSManifest2."Invoice SubTotal" := '+000000000000000000';
+
+        IF UPSOptionPage."Total Invoice Amount" <> 0 THEN BEGIN
+          InvTotal := Decimal2Integer(UPSOptionPage."Total Invoice Amount");
+          OtherTotal :=
+            InvTotal - SubTotal - Decimal2Integer(ShipTotal) - Decimal2Integer(InsuranceCharge) +
+            Decimal2Integer(DiscountTotal);
+        END ELSE
+          InvTotal := SubTotal + Decimal2Integer(ShipTotal) + Decimal2Integer(InsuranceCharge);
+
+        IF OtherTotal > 0 THEN BEGIN
+          DeclaredText := STRSUBSTNO('%1',Decimal2Integer(OtherTotal));
+          DeclaredFillText := '';
+          UPSManifest2."Other Charges" :=
+            '+' + PADSTR(DeclaredFillText,MAXSTRLEN(DeclaredText) - STRLEN(DeclaredText),'0') +
+            DeclaredText;
+        END ELSE
+          UPSManifest2."Other Charges" := '+000000000000000000';
+
+        IF InvTotal > 0 THEN BEGIN
+          DeclaredText := STRSUBSTNO('%1',InvTotal);
+          DeclaredFillText := '';
+          UPSManifest2."Total Invoice Amount" :=
+            '+' + PADSTR(DeclaredFillText,MAXSTRLEN(DeclaredText) - STRLEN(DeclaredText),'0') +
+            DeclaredText;
+        END ELSE
+          UPSManifest2."Total Invoice Amount" := '+000000000000000000';
+
+        UPSManifest2."Destination Control" := '';
+        UPSManifest2."Shipment Origin" := 'US';
+        UPSManifest2."Waybill No." := DELCHR(UPSOptionPage."Waybill No.");
+        UPSManifest2."Special Instructions" := UPSOptionPage."Special Instructions";
+
+        CASE UPSOptionPage."Certificate of Origin" OF
+          UPSOptionPage."Certificate of Origin"::" ":
+            UPSManifest2."Certificate of Origin" := '';
+          UPSOptionPage."Certificate of Origin"::"Non-NAFTA Included":
+            UPSManifest2."Certificate of Origin" := 'D';
+          UPSOptionPage."Certificate of Origin"::"NAFTA Included":
+            UPSManifest2."Certificate of Origin" := 'N';
+          UPSOptionPage."Certificate of Origin"::"UPS Prepare":
+            UPSManifest2."Certificate of Origin" := 'U';
+        END;
+
+        IF UPSOptionPage."Additional Doc. Attached" THEN
+          UPSManifest2."Other Documents" := '1'
+        ELSE
+          UPSManifest2."Other Documents" := '0';
+        IF (UPSManifest."Document Indicator" = '3') AND
+           ("UPS Canadian Service") AND
+           (InvTotal > 0)
+        THEN BEGIN
+          IF UPSOptionPage."Commodity Origin" <> '' THEN
+            UPSManifest2."Commodity Origin" := UPSOptionPage."Commodity Origin"
+          ELSE
+            UPSManifest2."Commodity Origin" := 'US';
+        END;
+        UPSManifest2."Destination Control" :=
+          'These commodities, technology or software were exported from the United States ' +
+          'in accordance with the Export Administration Regulations.  Diversion contrary to ' +
+          'U.S. law prohibited.';
+        UPSManifest2.INSERT;
+        IF ShippingAgentAccount."Manifest Version" >=
+           ShippingAgentAccount."Manifest Version"::"7.00"
+        THEN
+          UPSManifestPart2.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateCommodityRecord@32(VAR CurrentPackage@1240030000 : Record 14000701;UPSOptionPage@1240030001 : Record 14000761;UPSManifest@1240030002 : Record 14000768;Posted@1240030003 : Boolean);
+    VAR
+      UPSManifest2@1240030004 : Record 14000768;
+      UPSManifestPart2@1240030005 : Record 14000771;
+      Package@1240030006 : Record 14000701;
+      PostedPackage@1240030007 : Record 14000704;
+      PackageLineTmp@1240030008 : TEMPORARY Record 14000702;
+      PackageLinePrevTmp@1240030009 : TEMPORARY Record 14000702;
+      PackageLineSummaryTmp@1240030010 : TEMPORARY Record 14000702;
+      PackageCommodityTmp@1240030011 : TEMPORARY Record 14000703;
+      ScheduleBUOM@1240030022 : Record 14000726;
+      AmountText@1240030012 : Text[18];
+      FillText@1240030013 : Text[18];
+      QtyText@1240030014 : Text[7];
+      SchedBText@1240030015 : Text[10];
+      EntryNo@1240030016 : Integer;
+      TotalPrice@1240030019 : Decimal;
+      TotalWeight@1240030020 : Decimal;
+      TotalQuantity@1240030021 : Decimal;
+      x@1240030024 : Integer;
+      SEDIndUD@1240030025 : Boolean;
+      LineNo@1240030026 : Code[10];
+    BEGIN
+      GetPackingStation;
+      GetShippingSetup;
+
+      IF UPSOptionPage."Export Declaration" IN  [
+           UPSOptionPage."Export Declaration"::"UPS Prepare",
+           UPSOptionPage."Export Declaration"::Included]
+      THEN
+        SEDIndUD := TRUE
+      ELSE
+        SEDIndUD := FALSE;
+
+      IF CurrentPackage."Total Packages" = 1 THEN
+        ShipmentPackageLines(PackageLineTmp,CurrentPackage."No.",Posted,SEDIndUD)
+      ELSE
+        IF Posted THEN BEGIN
+          PostedPackage.RESET;
+          PostedPackage.SETCURRENTKEY("First Package No.");
+          PostedPackage.SETFILTER("First Package No.",'*' + CurrentPackage."First Package No." + '*');
+          PostedPackage.SETRANGE("Manifest No.",CurrentPackage."Manifest No.");
+          PostedPackage.SETRANGE(
+            "Shipping Agent Account No.",CurrentPackage."Shipping Agent Account No.");
+          PostedPackage.SETRANGE("Exclude From Manifest",FALSE);
+          IF PostedPackage.FIND('-') THEN
+            REPEAT
+              ShipmentPackageLines(PackageLineTmp,PostedPackage."No.",TRUE,SEDIndUD);
+            UNTIL PostedPackage.NEXT = 0;
+        END ELSE BEGIN
+          Package.RESET;
+          Package.SETCURRENTKEY("First Package No.");
+          Package.SETFILTER("First Package No.",'*' + CurrentPackage."First Package No." + '*');
+          Package.SETRANGE("Manifest No.",CurrentPackage."Manifest No.");
+          Package.SETRANGE("Shipping Agent Account No.",CurrentPackage."Shipping Agent Account No.");
+          Package.SETRANGE("Exclude From Manifest",FALSE);
+          IF Package.FIND('-') THEN
+            REPEAT
+              ShipmentPackageLines(PackageLineTmp,Package."No.",FALSE,SEDIndUD);
+            UNTIL Package.NEXT = 0;
+        END;
+
+      WITH PackageLineTmp DO BEGIN
+        RESET;
+        SETCURRENTKEY("No.","Serial No.");
+        SETRANGE("Goods Not In Free Circulation",FALSE);  // Not yet processed
+
+        IF FIND('-') THEN
+          REPEAT
+            SETRANGE("Serial No.","Serial No.");  // Serial No. is Commodity Code
+            PackageLinePrevTmp := PackageLineTmp;
+
+            TotalPrice := 0;
+            TotalWeight := 0;
+            TotalQuantity := 0;
+
+            REPEAT
+              IF PackageLinePrevTmp."No." <> "No." THEN BEGIN
+                PackageLineSummaryTmp := PackageLinePrevTmp;
+                PackageLineSummaryTmp."Value (Price)" := TotalPrice;
+                PackageLineSummaryTmp."Gross Weight" := TotalWeight;
+                PackageLineSummaryTmp.Quantity := TotalQuantity;
+                PackageLineSummaryTmp.INSERT;
+
+                PackageLinePrevTmp := PackageLineTmp;
+                TotalPrice := "Value (Price)";
+                TotalWeight := GetWeight;
+                TotalQuantity := Quantity;
+
+                PackageCommodityTmp."Customer No." := "Package No."; // misused for pkgs per commodity
+                PackageCommodityTmp."Item No." := "Serial No.";  // Commodity Code
+                IF PackageCommodityTmp.INSERT THEN ;
+              END ELSE BEGIN
+                TotalPrice := TotalPrice + "Value (Price)";
+                TotalWeight := TotalWeight + GetWeight;
+                TotalQuantity := TotalQuantity + Quantity;
+                PackageCommodityTmp."Customer No." := "Package No."; // misused for pkgs per commodity
+                PackageCommodityTmp."Item No." := "Serial No.";  // Commodity Code
+                IF PackageCommodityTmp.INSERT THEN ;
+              END;
+            UNTIL NEXT = 0;
+
+            PackageLineSummaryTmp := PackageLinePrevTmp;
+            PackageLineSummaryTmp."Value (Price)" := TotalPrice;
+            PackageLineSummaryTmp."Gross Weight" := TotalWeight;
+            PackageLineSummaryTmp.Quantity := TotalQuantity;
+            PackageLineSummaryTmp.INSERT;
+
+            MODIFYALL("Goods Not In Free Circulation",TRUE);
+            SETRANGE("Serial No.");
+          UNTIL NOT FIND('-');
+      END;
+
+      WITH PackageLineSummaryTmp DO BEGIN
+        RESET;
+        SETCURRENTKEY("No.","Serial No.");
+
+        IF FIND('-') THEN BEGIN
+          UPSManifest2.RESET;
+          UPSManifest2.LOCKTABLE;
+          UPSManifest2.FIND('+');
+          EntryNo := UPSManifest2."Entry No." + 1;
+          LineNo := '001';
+
+          REPEAT
+            UPSManifest2.INIT;
+            UPSManifest2.COPY(UPSManifest);
+            UPSManifest2."Entry No." := EntryNo;
+            UPSManifest2."Record Type" := '0600';
+            UPSManifest2."Package Tracking Number" := '';
+            UPSManifest2."Invoice Line No." := LineNo;
+            UPSManifestPart2.INIT;
+            UPSManifestPart2."Entry No." := EntryNo;
+
+            UPSManifest2."Commodity Code" := "Serial No.";    // Serial No. misused as Commodity Code
+            IF Type = Type::Item THEN
+              UPSManifest2."Item No." := "No.";
+
+            UPSManifest2."Commodity Origin" := GetUPSCountryCode("Country of Manufacture");
+            UPSManifest2."Export Controls Class No." := "Export Controls Class No.";
+            AmountText :=  Decimal2Text(ROUND("Value (Price)" / Quantity,0.000001,'>') * 1000000,0);
+            FillText := '';
+            UPSManifest2."Line Unit Amount" :=
+              '+' + PADSTR(FillText,MAXSTRLEN(AmountText) - STRLEN(AmountText),'0') + AmountText;
+            QtyText := Decimal2Text(Quantity,0);
+            FillText := '';
+            UPSManifest2."Line Quantity" :=
+              PADSTR(FillText,MAXSTRLEN(QtyText) - STRLEN(QtyText),'0') + QtyText;
+
+            IF ScheduleBUOM.GET("Unit of Measure Code") THEN
+              UPSManifest2."Line Qty. UOM" := COPYSTR("Unit of Measure Code",1,3)
+            ELSE
+              IF "Unit of Measure Code" IN
+                 ['BA','BE','BG','BH','BOX','BT','BU','BX','CI','CM','CON','CR','CS','CT',
+                  'CY','DOZ','EA','EN','FT','KG','KGS','LB','LBS','L','M','NMB','NO','PA','PAL',
+                  'PC','PCS','PF','PK','PKG','PR','PRS','RL','SET','SME','SYD','TU','YD']
+              THEN
+                UPSManifest2."Line Qty. UOM" := COPYSTR("Unit of Measure Code",1,3)
+              ELSE
+                UPSManifest2."Line Qty. UOM" := 'PCS';
+
+            IF (UPSOptionPage."Export Declaration" = UPSOptionPage."Export Declaration"::Included) OR
+               (UPSOptionPage."Export Declaration" = UPSOptionPage."Export Declaration"::"UPS Prepare")
+            THEN BEGIN
+              UPSManifest2."Line License No." := PackingStation."Export License No.";
+              IF PackingStation."Export License Expiration Date" <> 0D THEN
+                UPSManifest2."Line License Exp. Date" :=
+                  Date2Text(PackingStation."Export License Expiration Date");
+            END;
+
+            UPSManifest2."Line Description" :=
+              COPYSTR(Description,1,MAXSTRLEN(UPSManifest2."Line Description"));
+            CASE UPSOptionPage."Certificate of Origin" OF
+              UPSOptionPage."Certificate of Origin"::" ":
+                BEGIN
+                  UPSManifest2."Line Cert. of Origin Type" := '0';
+                END;
+
+              UPSOptionPage."Certificate of Origin"::"Non-NAFTA Included":
+                IF GetUPSCountryCode("Country of Manufacture") = 'US' THEN
+                  UPSManifest2."Line Cert. of Origin Type" := '1'
+                ELSE
+                  UPSManifest2."Line Cert. of Origin Type" := '0';
+
+              UPSOptionPage."Certificate of Origin"::"NAFTA Included":
+                IF GetUPSCountryCode("Country of Manufacture") IN ['US','CA','MX'] THEN
+                  UPSManifest2."Line Cert. of Origin Type" := '2'
+                ELSE
+                  UPSManifest2."Line Cert. of Origin Type" := '0';
+
+              UPSOptionPage."Certificate of Origin"::"UPS Prepare":
+                IF GetUPSCountryCode(CurrentPackage."Ship-to Country Code") IN ['CA','MX'] THEN BEGIN
+                  IF GetUPSCountryCode("Country of Manufacture") IN ['US','CA','MX'] THEN
+                    UPSManifest2."Line Cert. of Origin Type" := '2'
+                  ELSE
+                    UPSManifest2."Line Cert. of Origin Type" := '0';
+                END ELSE
+                  IF GetUPSCountryCode("Country of Manufacture") = 'US' THEN
+                    UPSManifest2."Line Cert. of Origin Type" := '1'
+                  ELSE
+                    UPSManifest2."Line Cert. of Origin Type" := '0';
+            END;
+
+            IF ShippingSetup."Default Weight Units" = ShippingSetup."Default Weight Units"::LBS THEN
+              QtyText := Decimal2Text(ROUND(ShippingSetup.PoundToKilo("Gross Weight"),0.1,'>') * 10,0)
+            ELSE
+              QtyText := Decimal2Text(ROUND("Gross Weight",0.1,'>') * 10,0);
+
+            FillText := '';
+            UPSManifest2."Line Weight" :=
+              '+' + PADSTR(FillText,MAXSTRLEN(QtyText) - 1 - STRLEN(QtyText),'0') + QtyText;
+
+            PackageCommodityTmp.RESET;
+            PackageCommodityTmp.SETRANGE("Item No.","Serial No.");
+            x := 0;
+            IF PackageCommodityTmp.FIND('-') THEN
+              REPEAT
+                x := x + 1;
+              UNTIL PackageCommodityTmp.NEXT = 0;
+            AmountText := Integer2Text(x);
+            UPSManifest2."Line Packages Per Quantity" :=
+              PADSTR(FillText,3 - STRLEN(AmountText),'0') + AmountText;
+
+            IF (UPSOptionPage."Export Declaration" IN [
+                 UPSOptionPage."Export Declaration"::Included,
+                 UPSOptionPage."Export Declaration"::"UPS Prepare"])
+            THEN BEGIN
+              AmountText := Decimal2Text(ROUND("Value (Price)",0.01,'>') * 100,0);
+              FillText := '';
+              UPSManifest2."Total Value Exported" :=
+                '+' + PADSTR(FillText,MAXSTRLEN(AmountText) - STRLEN(AmountText),'0') + AmountText;
+              UPSManifest2."Line SED Indicator" := '1'
+            END ELSE BEGIN
+              UPSManifest2."Total Value Exported" := '+000000000000000000';
+              UPSManifest2."Line SED Indicator" := '0';
+            END;
+
+            AmountText := Decimal2Text(ROUND("Value (Price)",0.01,'>') * 100,0);
+            FillText := '';
+            UPSManifest2."Line Amount" :=
+              '+' + PADSTR(FillText,MAXSTRLEN(AmountText) - STRLEN(AmountText),'0') + AmountText;
+
+            IF UPSOptionPage."Export Declaration" IN [
+                 UPSOptionPage."Export Declaration"::Included,
+                 UPSOptionPage."Export Declaration"::"UPS Prepare"]
+            THEN BEGIN
+              UPSManifestPart2."Schedule B Code" := "Schedule B code";
+              IF "Schedule B Unit of Measure 1" <> 'X' THEN BEGIN
+                SchedBText := Integer2Text(ROUND("Schedule B Quantity 1" * Quantity,1,'>'));
+                FillText := '';
+                UPSManifestPart2."Quantity Schedule B Units 1" :=
+                  PADSTR(FillText,MAXSTRLEN(SchedBText) - STRLEN(SchedBText),'0') + SchedBText;
+              END;
+              UPSManifestPart2."Unit of Measure Schedule B 1" := "Schedule B Unit of Measure 1";
+
+              IF "Schedule B Unit of Measure 2" <> '' THEN BEGIN
+                SchedBText := Integer2Text(ROUND("Schedule B Quantity 2" * Quantity,1,'>'));
+                FillText := '';
+                UPSManifestPart2."Quantity Schedule B Units 2" :=
+                  PADSTR(FillText,MAXSTRLEN(SchedBText) - STRLEN(SchedBText),'0') + SchedBText;
+                UPSManifestPart2."Unit of Measure Schedule B 2" := "Schedule B Unit of Measure 2";
+              END;
+            END;
+
+            UPSManifest2.INSERT;
+            IF ShippingAgentAccount."Manifest Version" >=
+               ShippingAgentAccount."Manifest Version"::"7.00"
+            THEN
+              UPSManifestPart2.INSERT;
+            LineNo := INCSTR(LineNo);
+            EntryNo := EntryNo + 1;
+          UNTIL PackageLineSummaryTmp.NEXT = 0;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateCommentsRecord@58(VAR CurrentPackage@1240030000 : Record 14000701;UPSOptionPage@1240030001 : Record 14000761;UPSManifest@1240030002 : Record 14000768);
+    VAR
+      UPSManifest2@1240030003 : Record 14000768;
+      DeclarationComment@1240030004 : Record 14000706;
+      ShippingComment@1240030005 : Record 14000706;
+      EntryNo@1240030006 : Integer;
+      DeclarationText@1240030007 : ARRAY [99] OF Text[250];
+      CommentText@1240030008 : ARRAY [99] OF Text[250];
+      I@1240030009 : Integer;
+      DeclarationCount@1240030010 : Integer;
+      CommentCount@1240030011 : Integer;
+      TotalLines@1240030012 : Integer;
+      EndofComment@1240030013 : Boolean;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        ShippingComment.RESET;
+        ShippingComment.SETRANGE("Table ID",DATABASE::Package);
+        ShippingComment.SETRANGE(Code,"No.");
+        ShippingComment.SETRANGE("Shipment Declaration",TRUE);
+        IF NOT ShippingComment.FIND('-') THEN BEGIN
+          ShippingComment.SETRANGE("Shipment Declaration");
+          ShippingComment.SETRANGE("Shipment Comment",TRUE);
+          IF NOT ShippingComment.FIND('-') THEN
+            EXIT;
+        END;
+
+        CLEAR(DeclarationText);
+        CLEAR(CommentText);
+
+        UPSManifest2.RESET;
+        UPSManifest2.LOCKTABLE;
+        UPSManifest2.FIND('+');
+        EntryNo := UPSManifest2."Entry No." + 1;
+        DeclarationCount := 0;
+        CommentCount := 0;
+
+        DeclarationComment.RESET;
+        DeclarationComment.SETRANGE("Table ID",DATABASE::Package);
+        DeclarationComment.SETRANGE(Code,"No.");
+        DeclarationComment.SETRANGE("Shipment Declaration",TRUE);
+        IF DeclarationComment.FIND('-') THEN BEGIN
+          I := 1;
+          EndofComment := FALSE;
+          REPEAT
+            DeclarationText[I] := DeclarationComment.Comment;
+            IF DeclarationComment.NEXT <> 0 THEN BEGIN
+              DeclarationText[I] :=  DeclarationText[I] + ' ' + DeclarationComment.Comment;
+              IF DeclarationComment.NEXT <> 0 THEN BEGIN
+                DeclarationText[I] :=  DeclarationText[I] + ' ' + DeclarationComment.Comment;
+                IF DeclarationComment.NEXT <> 0 THEN
+                  I := I + 1
+                ELSE
+                  EndofComment := TRUE;
+              END ELSE
+                EndofComment := TRUE;
+            END ELSE
+              EndofComment := TRUE;
+          UNTIL EndofComment;
+          DeclarationCount := I;
+        END;
+
+        ShippingComment.RESET;
+        ShippingComment.SETRANGE("Table ID",DATABASE::Package);
+        ShippingComment.SETRANGE(Code,"No.");
+        ShippingComment.SETRANGE("Shipment Comment",TRUE);
+        IF ShippingComment.FIND('-') THEN BEGIN
+          I := 1;
+          EndofComment := FALSE;
+          REPEAT
+            CommentText[I] := ShippingComment.Comment;
+            IF ShippingComment.NEXT <> 0 THEN BEGIN
+              CommentText[I] := CommentText[I] + ' ' + ShippingComment.Comment;
+              IF ShippingComment.NEXT <> 0 THEN BEGIN
+                CommentText[I] := CommentText[I] + ' ' + ShippingComment.Comment;
+                IF ShippingComment.NEXT <> 0 THEN
+                  I := I + 1
+                ELSE
+                  EndofComment := TRUE;
+              END ELSE
+                EndofComment := TRUE;
+            END ELSE
+              EndofComment := TRUE;
+          UNTIL EndofComment;
+          CommentCount := I;
+        END;
+        IF CommentCount > DeclarationCount THEN
+          TotalLines := CommentCount
+        ELSE
+          TotalLines := DeclarationCount;
+        FOR I := 1 TO TotalLines DO BEGIN
+          UPSManifest2.INIT;
+          UPSManifest2.COPY(UPSManifest);
+          UPSManifest2."Entry No." := EntryNo;
+          UPSManifest2."Record Type" := '0700';
+          UPSManifest2."Package Tracking Number" := '';
+          IF DeclarationText[I] <> '' THEN
+            UPSManifest2."Declaration Statement" := DeclarationText[I];
+          IF CommentText[I] <> '' THEN
+            UPSManifest2."Additional Comments" := CommentText[I];
+          UPSManifest2.INSERT;
+          EntryNo := EntryNo + 1;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetPackingStation@51();
+    BEGIN
+      IF PackingStation.Code = '' THEN
+        PackingStation.GetPackingStation;
+    END;
+
+    LOCAL PROCEDURE GetShippingSetup@50();
+    BEGIN
+      IF NOT ShippingSetupRetrieved THEN BEGIN
+        ShippingSetup.GET;
+        ShippingSetupRetrieved := TRUE;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetShippingAgent@30(ShippingAgentCode@1000000000 : Code[10]);
+    BEGIN
+      IF (ShippingAgent.Code <> ShippingAgentCode) OR
+         (ShippingAgentCode = '')
+      THEN
+        ShippingAgent.GET(ShippingAgentCode);
+    END;
+
+    LOCAL PROCEDURE GetShippingAgentService@14(ShippingAgentCode@1000000000 : Code[10];ShippingAgentServiceCode@1000000001 : Code[30];WorldWideService@1000000002 : Boolean);
+    BEGIN
+      IF (ShippingAgentService.Code <> ShippingAgentCode) OR
+         (ShippingAgentService."World Wide Service" <> WorldWideService) OR
+         (ShippingAgentService.Code <> ShippingAgentServiceCode) OR
+         (ShippingAgentServiceCode = '')
+      THEN
+        ShippingAgentService.GET(ShippingAgentCode,ShippingAgentServiceCode,WorldWideService);
+    END;
+
+    LOCAL PROCEDURE GetShippingAgentAccount@22(ShippingAgentAccountNo@1000000000 : Code[10]);
+    BEGIN
+      IF (ShippingAgentAccount."Account No." <> ShippingAgentAccountNo) OR
+         (ShippingAgentAccountNo = '')
+      THEN
+        ShippingAgentAccount.GET(ShippingAgentAccountNo);
+    END;
+
+    LOCAL PROCEDURE GetUPSCountryCode@31(CountryCode@1000000000 : Code[10]) : Code[10];
+    VAR
+      Country@1000000001 : Record 9;
+    BEGIN
+      IF CountryCode <> '' THEN BEGIN
+        Country.GET(CountryCode);
+        EXIT(Country."ISO 2 char Country Code");
+      END ELSE
+        EXIT('US');
+    END;
+
+    LOCAL PROCEDURE GetPackagingType@11(CurrentPackage@1240030000 : Record 14000701;UPSOptionPage@1240030001 : Record 14000761) : Code[2];
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        GetShippingAgentAccount("Shipping Agent Account No.");
+        CASE UPSOptionPage."UPS Packaging Type" OF
+          UPSOptionPage."UPS Packaging Type"::Unknown:
+            EXIT('00');
+          UPSOptionPage."UPS Packaging Type"::"UPS Letter":
+            EXIT('01');
+          UPSOptionPage."UPS Packaging Type"::Package:
+            EXIT('02');
+          UPSOptionPage."UPS Packaging Type"::"UPS Express Tube":
+            EXIT('03');
+          UPSOptionPage."UPS Packaging Type"::"UPS Express Pak":
+            EXIT('04');
+          UPSOptionPage."UPS Packaging Type"::None:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('05') //was 00
+              ELSE
+                EXIT('00'); // was 05
+            END;
+          UPSOptionPage."UPS Packaging Type"::Bag:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('07')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::Barrel:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('08')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::Bolt:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('09')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::Bundle:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('10')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::Can:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('11')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::Canister:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('12')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::Coffin:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('13')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::Crate:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('14')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::Cylinder:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('15')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::Drum:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('16')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::Palletized:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('18')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::Spool:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('19')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::Roll:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('20')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::"UPS Express Box Small":
+            EXIT('21');
+          UPSOptionPage."UPS Packaging Type"::Envelope:
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('22')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::"Jumbo Box":
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" >=
+                 ShippingAgentAccount."Manifest Version"::"5.05"
+              THEN
+                EXIT('23')
+              ELSE
+                EXIT('00');
+            END;
+          UPSOptionPage."UPS Packaging Type"::"UPS 25kg Box":
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" =
+                 ShippingAgentAccount."Manifest Version"::"2.00"
+              THEN
+                EXIT('00')
+              ELSE
+                EXIT('24');
+            END;
+          UPSOptionPage."UPS Packaging Type"::"UPS 10kg Box":
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" =
+                 ShippingAgentAccount."Manifest Version"::"2.00"
+              THEN
+                EXIT('00')
+              ELSE
+                EXIT('25');
+            END;
+          UPSOptionPage."UPS Packaging Type"::"UPS Express Box Medium":
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" <
+                 ShippingAgentAccount."Manifest Version"::"7.00"
+              THEN
+                EXIT('00')
+              ELSE
+                EXIT('27');
+            END;
+          UPSOptionPage."UPS Packaging Type"::"UPS Express Box Large":
+            BEGIN
+              IF ShippingAgentAccount."Manifest Version" <
+                 ShippingAgentAccount."Manifest Version"::"7.00"
+              THEN
+                EXIT('00')
+              ELSE
+                EXIT('28');
+            END;
+          ELSE
+            EXIT('00');
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE FixPhoneNo@35(OriginalPhone@1000000001 : Text[30];WorldWide@1000000002 : Boolean) ReturnPhone@1000000000 : Text[30];
+    VAR
+      PhoneNoText@1000000003 : Text[30];
+    BEGIN
+      IF STRLEN(OriginalPhone) <> 0 THEN BEGIN
+        PhoneNoText := OriginalPhone;
+        PhoneNoText := DELCHR(PhoneNoText,'=','-');
+        PhoneNoText := DELCHR(PhoneNoText,'=','+');
+        PhoneNoText := DELCHR(PhoneNoText,'=','/');
+        PhoneNoText := DELCHR(PhoneNoText,'=',' ');
+        PhoneNoText := DELCHR(PhoneNoText,'=','(');
+        PhoneNoText := DELCHR(PhoneNoText,'=',')');
+        IF NOT WorldWide THEN BEGIN
+          IF STRLEN(PhoneNoText) = 11 THEN
+            ReturnPhone := PhoneNoText + '    '
+          ELSE IF STRLEN(PhoneNoText) = 10 THEN
+            ReturnPhone := '1' + PhoneNoText + '    '
+          ELSE
+            ReturnPhone := '';
+        END ELSE
+          ReturnPhone := PhoneNoText;
+      END ELSE
+        ReturnPhone := '';
+
+      ReturnPhone := COPYSTR(ReturnPhone,1,15);
+    END;
+
+    LOCAL PROCEDURE FixZIPCode@45(ZIPCodeText@1000000000 : Text[30]) : Text[9];
+    BEGIN
+      EXIT(COPYSTR(DELCHR(ZIPCodeText,'=',' -'),1,9));
+    END;
+
+    LOCAL PROCEDURE FixState@21(StateText@1000000000 : Text[30]) : Text[2];
+    BEGIN
+      EXIT(COPYSTR(LeftString(StateText),1,2));
+    END;
+
+    LOCAL PROCEDURE LeftString@46(TextString@1000000001 : Text[250]) OutText@1000000000 : Text[250];
+    BEGIN
+      IF STRLEN(TextString) > 0 THEN
+        OutText := DELCHR(TextString,'<',' ')
+      ELSE
+        OutText := '';
+    END;
+
+    LOCAL PROCEDURE Date2Text@28(InDate@1000000000 : Date) : Text[30];
+    BEGIN
+      EXIT(
+        DELCHR(
+          FORMAT(
+            10000 * DATE2DMY(InDate,3) + 100 * DATE2DMY(InDate,2) + DATE2DMY(InDate,1)),'=',',.'));
+    END;
+
+    LOCAL PROCEDURE Decimal2Text@5(CalcDecimal@1000000000 : Decimal;DecimalToShow@1000000001 : Integer) : Text[30];
+    VAR
+      TempText@1000000002 : Text[30];
+      ThousandChar@1000000003 : Text[1];
+    BEGIN
+      ThousandChar := COPYSTR(FORMAT(1000.1),2,1);
+      TempText := FORMAT(CalcDecimal);
+      TempText := DELCHR(TempText,'=',ThousandChar);
+      TempText := CONVERTSTR(TempText,',','.');
+
+      IF DecimalToShow <> 0 THEN BEGIN
+        IF STRPOS(TempText,'.') = 0 THEN
+          TempText := TempText + '.000000'
+        ELSE
+          TempText := TempText + '00000';
+        TempText := COPYSTR(TempText,1,STRPOS(TempText,'.') + DecimalToShow);
+      END;
+
+      EXIT(TempText);
+    END;
+
+    LOCAL PROCEDURE Integer2Text@4(CalcInteger@1000000000 : Integer) : Text[30];
+    VAR
+      TempText@1000000001 : Text[30];
+      ThousandChar@1000000002 : Text[1];
+    BEGIN
+      ThousandChar := COPYSTR(FORMAT(1000.1),2,1);
+      TempText := FORMAT(CalcInteger);
+      TempText := DELCHR(TempText,'=',ThousandChar);
+      TempText := CONVERTSTR(TempText,',','.');
+      EXIT(TempText);
+    END;
+
+    LOCAL PROCEDURE Decimal2Integer@56(DecimalNumber@1000000001 : Decimal) IntegerNumber@1000000000 : Integer;
+    BEGIN
+      IntegerNumber := ROUND(DecimalNumber,0.01,'>') * 100;
+    END;
+
+    PROCEDURE GroupShipmentsForUPSManifest@13(ManifestHeader@1240030000 : Record 14000712);
+    VAR
+      ManifestLine@1240030001 : Record 14000713;
+      PostedPackage@1240030002 : Record 14000704;
+      Package@1240030003 : Record 14000701;
+      UPSPostedOptionPage@1240030004 : Record 14000762;
+      UPSOptionPage@1240030005 : Record 14000761;
+      PrevShippingAgentService@1240030006 : Code[30];
+      PrevShipToAddress@1240030007 : Text[50];
+      PrevShipToZipCode@1240030008 : Code[20];
+    BEGIN
+      // GroupShipmentsForUPSManifest
+      GetShippingAgentAccount(ManifestHeader."Shipping Agent Account");
+
+      ShipmentPackageTmp.RESET;
+      ShipmentPackageTmp.DELETEALL;
+
+      WITH ManifestLine DO
+        BEGIN
+          RESET;
+          SETCURRENTKEY(
+               "Manifest No.","Shipping Agent Account No.","Shipping Agent Code","World Wide Service",
+               "Shipping Agent Service","Ship-to Address","Ship-to ZIP Code");
+          SETRANGE("Manifest No.",ManifestHeader."No.");
+          SETRANGE(
+            Type,ManifestLine.Type::Package,ManifestLine.Type::"Miscellaneous Package");
+          IF FIND('-') THEN BEGIN
+            PrevShippingAgentService := ManifestLine."Shipping Agent Service" ;
+            PrevShipToAddress := ManifestLine."Ship-to Address" ;
+            PrevShipToZipCode := ManifestLine."Ship-to ZIP Code";
+            REPEAT
+              IF (ManifestLine."Shipping Agent Service" <> PrevShippingAgentService) OR
+                (ManifestLine."Ship-to Address" <> PrevShipToAddress) OR
+                (ManifestLine."Ship-to ZIP Code" <> PrevShipToZipCode)
+              THEN BEGIN
+                GroupPackagesForShipment(ManifestHeader);
+                ShipmentPackageTmp.RESET;
+                ShipmentPackageTmp.DELETEALL;
+                PrevShippingAgentService := ManifestLine."Shipping Agent Service" ;
+                PrevShipToAddress := ManifestLine."Ship-to Address" ;
+                PrevShipToZipCode := ManifestLine."Ship-to ZIP Code";
+              END;
+              ShipmentPackageTmp.INIT;
+              IF Package.GET(ManifestLine."No.") THEN BEGIN
+                UPSOptionPage.GET(UPSOptionPage.Type::Package,"No.",0,0);
+                Package."UPS Hundred Weight" := FALSE;
+                Package."Accessorial Charge" :=
+                  Package."Accessorial Charge" - UPSOptionPage."HW Accessorial Fee Diff.";
+                Package.MODIFY;
+                IF UPSOptionPage."HW Accessorial Fee Diff." <> 0 THEN BEGIN
+                  UPSOptionPage."HW Accessorial Fee Diff." := 0;
+                  UPSOptionPage.MODIFY;
+                END;
+                ShipmentPackageTmp.COPY(Package);
+                ShipmentOptionPageTmp.COPY(UPSOptionPage);
+              END ELSE BEGIN
+                ShipmentPackageTmp.INIT;
+                PostedPackage.GET("No.");
+                UPSPostedOptionPage.GET(PostedPackage."No.");
+                PostedPackage."UPS Hundred Weight" := FALSE;
+                PostedPackage."Accessorial Charge" :=
+                  PostedPackage."Accessorial Charge" - UPSPostedOptionPage."HW Accessorial Fee Diff.";
+                PostedPackage.MODIFY;
+                IF UPSPostedOptionPage."HW Accessorial Fee Diff." <> 0 THEN BEGIN
+                  UPSPostedOptionPage."HW Accessorial Fee Diff." := 0;
+                  UPSPostedOptionPage.MODIFY;
+                END;
+                ShipmentPackageTmp.TRANSFERFIELDS(PostedPackage);
+                ShipmentOptionPageTmp.TRANSFERFIELDS(UPSPostedOptionPage);
+              END;
+              IF NOT ShipmentPackageTmp."World Wide Service"
+                AND NOT ShipmentPackageTmp."UPS Canadian Service"
+                AND NOT ShipmentPackageTmp."UPS Puerto Rico Service"
+              THEN BEGIN
+                ShipmentOptionPageTmp.Type := ShipmentOptionPageTmp.Type::Package;
+                IF ShipmentOptionPageTmp.INSERT THEN;
+                LoadShipmentOptionFields(ShipmentPackageTmp,ShipmentOptionPageTmp);
+                ShipmentPackageTmp."Blind Shipment" := FALSE;  // Package Processed
+                IF ShipmentPackageTmp.INSERT THEN;
+              END;
+            UNTIL ManifestLine.NEXT = 0;
+            GroupPackagesForShipment(ManifestHeader);
+            ShipmentPackageTmp.RESET;
+            ShipmentPackageTmp.DELETEALL;
+          END;
+        END;
+    END;
+
+    PROCEDURE GroupPackagesForShipment@15(ManifestHeader@1240030011 : Record 14000712);
+    VAR
+      ManifestLine@1240030000 : Record 14000713;
+      ShippingAgentService@1240030001 : Record 14000708;
+      ShippingZone@1240030002 : Record 14000766;
+      Package@1240030003 : Record 14000701;
+      PostedPackage@1240030004 : Record 14000704;
+      UPSOptionPage@1240030005 : Record 14000761;
+      UPSPostedOptionPage@1240030006 : Record 14000762;
+      UPSAccessorialCharge@1240030012 : Record 14000767;
+      UPSTransaction@1240030013 : Codeunit 14000761;
+      TotalWeight@1240030007 : Decimal;
+      RatePerPound@1240030008 : Decimal;
+      NoOfPackages@1240030009 : Integer;
+      UPSShipmentNo@1240030010 : Code[35];
+      SaturdayDeliveryCharge@1240030014 : Decimal;
+      SaturdayPickupCharge@1240030015 : Decimal;
+      LargePackageSurcharge@1240030016 : Decimal;
+      CWTDASurcharge@1240030017 : Decimal;
+      CWTResidentialSurcharge@1240030018 : Decimal;
+      DASurcharge@1240030019 : Decimal;
+      HWShippingCost@1240030020 : Decimal;
+      TotalCalcWeight@1240030022 : Decimal;
+      HundredWeightService@1240030021 : Record 14000765;
+    BEGIN
+      // GroupPackagesForShipment
+      ManifestLine.RESET;
+      ManifestLine.SETCURRENTKEY(Type,"No.");
+      ManifestLine.SETRANGE("Manifest No.",ManifestHeader."No.");
+
+      HundredWeightService.RESET;
+      HundredWeightService.SETRANGE(Tier,ShippingAgentAccount."Hundred Weight Tier");
+
+      ShipmentPackageTmp.RESET;
+      REPEAT
+        TotalWeight := 0;
+        NoOfPackages := 0;
+        IF (ShippingAgentAccount."Manifest Version" > ShippingAgentAccount."Manifest Version"::"7.00") AND
+          (ShipmentPackageTmp.COUNT > 1)
+        THEN BEGIN
+          ShipmentPackageTmp.FIND('-');
+          // Find all packages with shipment fields matching the first package
+          FilterFieldsForShipmentLevel(ShipmentPackageTmp);
+        END;
+        IF ShipmentPackageTmp.FIND('-') THEN BEGIN
+          ShippingAgentService.GET(
+            ShipmentPackageTmp."Shipping Agent Code",ShipmentPackageTmp."Shipping Agent Service",
+            ShipmentPackageTmp."World Wide Service");
+
+          HundredWeightService.SETRANGE(
+            "Service Indicator",ShippingAgentService."Service Indicator");
+          HundredWeightService.SETRANGE(Zone,ShipmentPackageTmp."UPS Zone");
+          IF NOT HundredWeightService.FIND('-') THEN
+            HundredWeightService.INIT;
+
+          UPSShipmentNo := ShipmentPackageTmp."External Tracking No.";
+          NoOfPackages := 0;
+          REPEAT
+            TotalCalcWeight := TotalCalcWeight + ShipmentPackageTmp."Calculation Weight (LBS)";
+            TotalWeight := TotalWeight + ShipmentPackageTmp."Calculation Weight (LBS)";
+
+            NoOfPackages := NoOfPackages + 1;
+            IF ShipmentPackageTmp.Miscellaneous THEN
+              ManifestLine.SETRANGE(Type,ManifestLine.Type::"Miscellaneous Package")
+            ELSE
+              ManifestLine.SETRANGE(Type,ManifestLine.Type::Package);
+            ManifestLine.SETRANGE("No.", ShipmentPackageTmp."No.");
+            ManifestLine.FIND('-');
+            ManifestLine."UPS Shipment No." :=  UPSShipmentNo;
+            ManifestLine.MODIFY;
+          UNTIL ShipmentPackageTmp.NEXT = 0;
+
+          IF TotalCalcWeight / NoOfPackages < HundredWeightService."Min Wgt. Per Package" * NoOfPackages THEN
+            TotalCalcWeight := HundredWeightService."Min Wgt. Per Package" * NoOfPackages;
+
+          ShipmentPackageTmp.FIND('-');
+          IF ShipmentPackageTmp."Shipping Agent Service" <> ShippingAgentService.Code THEN
+            ShippingAgentService.GET(
+              ShipmentPackageTmp."Shipping Agent Code",ShipmentPackageTmp."Shipping Agent Service",
+              ShipmentPackageTmp."World Wide Service");
+          ShippingZone.GET(ShippingAgentService."Service Indicator",ShipmentPackageTmp."UPS Zone");
+          IF ShippingAgentService."UPS Hundred Weight Available" AND
+             ShippingAgentAccount."Check for Hundred Weight" AND
+             (ShippingZone."Minimum Hundred Weight" > 0) AND
+             (TotalWeight >= ShippingZone."Minimum Hundred Weight")
+          THEN BEGIN
+            ShipmentOptionPageTmp.GET(ShipmentOptionPageTmp.Type::Package,ShipmentPackageTmp."No.");
+            SaturdayDeliveryCharge := 0;
+            SaturdayPickupCharge := 0;
+
+            UPSAccessorialCharge.RESET;
+            IF ShipmentOptionPageTmp."Saturday Delivery" OR
+               ShipmentOptionPageTmp."Saturday Pickup"
+            THEN BEGIN
+              UPSAccessorialCharge.SETRANGE(Type,UPSAccessorialCharge.Type::SC);
+              IF NOT UPSAccessorialCharge.FIND('-') THEN
+                UPSAccessorialCharge.Fee := 0;
+            END;
+
+            IF ShipmentOptionPageTmp."Saturday Delivery" AND
+               (ShippingAgentService."Service Indicator" = '01')
+            THEN
+              SaturdayDeliveryCharge := UPSAccessorialCharge.Fee;
+
+            IF ShipmentOptionPageTmp."Saturday Pickup" THEN BEGIN
+              // remove pickup charge and add per package charge based on one charge per hw shipment
+              SaturdayPickupCharge :=
+                ROUND(UPSAccessorialCharge.Fee / NoOfPackages) - UPSAccessorialCharge.Fee;
+            END;
+
+            CWTResidentialSurcharge := 0;
+            CWTDASurcharge := 0;
+            DASurcharge := 0;
+            IF ShipmentPackageTmp."Residential Delivery" THEN BEGIN
+              UPSAccessorialCharge.SETRANGE(Type,UPSAccessorialCharge.Type::HRS);
+              IF UPSAccessorialCharge.FIND('-') THEN
+                CWTResidentialSurcharge :=  ROUND(UPSAccessorialCharge.Fee / NoOfPackages);
+              UPSAccessorialCharge.SETRANGE(Type,UPSAccessorialCharge.Type::DASR);
+              UPSAccessorialCharge.SETRANGE("From Zip Code",ShipmentPackageTmp."Ship-to ZIP Code");
+              IF UPSAccessorialCharge.FIND('-') THEN BEGIN
+                DASurcharge :=  UPSAccessorialCharge.Fee;
+                UPSAccessorialCharge.SETRANGE("From Zip Code");
+                UPSAccessorialCharge.SETRANGE(Type,UPSAccessorialCharge.Type::CWTDAS);
+                IF UPSAccessorialCharge.FIND('-') THEN
+                  CWTDASurcharge :=  ROUND(UPSAccessorialCharge.Fee / NoOfPackages);
+              END;
+              UPSAccessorialCharge.SETRANGE("From Zip Code");
+            END ELSE BEGIN
+              UPSAccessorialCharge.SETRANGE(Type,UPSAccessorialCharge.Type::DAS);
+              UPSAccessorialCharge.SETRANGE("From Zip Code",ShipmentPackageTmp."Ship-to ZIP Code");
+              IF UPSAccessorialCharge.FIND('-') THEN BEGIN
+                DASurcharge :=  UPSAccessorialCharge.Fee;
+                UPSAccessorialCharge.SETRANGE("From Zip Code");
+                UPSAccessorialCharge.SETRANGE(Type,UPSAccessorialCharge.Type::CWTDAS);
+                IF UPSAccessorialCharge.FIND('-') THEN
+                  CWTDASurcharge :=  ROUND(UPSAccessorialCharge.Fee / NoOfPackages);
+              END;
+              UPSAccessorialCharge.SETRANGE("From Zip Code");
+            END;
+
+            REPEAT
+              ShipmentOptionPageTmp.GET(ShipmentOptionPageTmp.Type::Package,ShipmentPackageTmp."No.");
+              RatePerPound :=
+                GetHundredWeight(
+                  ShippingAgentService,ShippingAgentAccount."Hundred Weight Tier",
+                  ShipmentPackageTmp."UPS Zone",TotalWeight,ShipmentPackageTmp."Residential Delivery",
+                  NoOfPackages,TotalCalcWeight);
+              IF RatePerPound > 0 THEN BEGIN
+                LargePackageSurcharge := 0;
+                IF ShipmentOptionPageTmp."Large Package" THEN BEGIN
+                  IF ShippingAgentService."Service Indicator" = '03' THEN
+                    UPSAccessorialCharge.SETRANGE(Type,UPSAccessorialCharge.Type::LPS)
+                  ELSE
+                    UPSAccessorialCharge.SETRANGE(Type,UPSAccessorialCharge.Type::LAP);
+                  IF UPSAccessorialCharge.FIND('-') THEN
+                    LargePackageSurcharge := UPSAccessorialCharge.Fee;
+                END;
+
+                IF Package.GET(ShipmentPackageTmp."No.") THEN BEGIN
+                  Package."Base Charge" :=
+                    ROUND(
+                      ROUND(
+                        Package."Calculation Weight (LBS)",1,'>') * RatePerPound) +
+                        LargePackageSurcharge + CWTDASurcharge;
+                  Package.Surcharge :=
+                    UPSTransaction.GetSurcharge(
+                      ShippingAgentAccount,ShippingAgentService,Package."Base Charge");
+                  Package."Accessorial Charge" :=
+                    Package."Accessorial Charge" + CWTResidentialSurcharge + SaturdayPickupCharge -
+                    SaturdayDeliveryCharge - DASurcharge;
+                  Package."Shipping Cost" :=
+                    Package."Base Charge" + Package."Accessorial Charge" + Package.Surcharge;
+                  HWShippingCost := Package."Shipping Cost";
+                  Package."UPS Hundred Weight" := TRUE;
+                  Package.MODIFY;
+                  UPSOptionPage.GET(UPSOptionPage.Type::Package,Package."No.");
+                  UPSOptionPage."HW Accessorial Fee Diff." :=
+                      CWTResidentialSurcharge + SaturdayPickupCharge - SaturdayDeliveryCharge -
+                      DASurcharge;
+                  UPSOptionPage.MODIFY;
+                END ELSE BEGIN
+                  IF PostedPackage.GET(ShipmentPackageTmp."No.") THEN BEGIN
+                    PostedPackage."Base Charge" :=
+                      ROUND(
+                        ROUND(
+                          PostedPackage."Calculation Weight (LBS)",1,'>') * RatePerPound) +
+                          LargePackageSurcharge + CWTDASurcharge;
+                    PostedPackage.Surcharge :=
+                      UPSTransaction.GetSurcharge(
+                        ShippingAgentAccount,ShippingAgentService,PostedPackage."Base Charge");
+                    PostedPackage."Accessorial Charge" :=
+                      PostedPackage."Accessorial Charge" + CWTResidentialSurcharge + SaturdayPickupCharge -
+                      SaturdayDeliveryCharge - DASurcharge;
+                    PostedPackage."Shipping Cost" :=
+                      PostedPackage."Base Charge" + PostedPackage."Accessorial Charge" +
+                      PostedPackage.Surcharge;
+                    HWShippingCost := PostedPackage."Shipping Cost";
+                    PostedPackage."UPS Hundred Weight" := TRUE;
+                    PostedPackage.MODIFY;
+                    UPSPostedOptionPage.GET(PostedPackage."No.");
+                    UPSPostedOptionPage."HW Accessorial Fee Diff." :=
+                      CWTResidentialSurcharge + SaturdayPickupCharge - SaturdayDeliveryCharge -
+                      DASurcharge;
+                    UPSPostedOptionPage.MODIFY;
+                  END;
+                END;
+                ManifestLine.SETRANGE("No.", ShipmentPackageTmp."No.");
+                IF ShipmentPackageTmp.Miscellaneous THEN
+                  ManifestLine.SETRANGE(Type,ManifestLine.Type::"Miscellaneous Package")
+                ELSE
+                  ManifestLine.SETRANGE(Type,ManifestLine.Type::Package);
+                ManifestLine.FIND('-');
+                ManifestLine."Shipping Cost" :=  HWShippingCost;
+                ManifestLine.MODIFY;
+              END;
+            UNTIL ShipmentPackageTmp.NEXT = 0;
+          END;
+          ShipmentPackageTmp.MODIFYALL("Blind Shipment",TRUE);  // Package Processed
+        END;
+        ShipmentPackageTmp.RESET;
+        ShipmentPackageTmp.SETRANGE("Blind Shipment",FALSE);  // Hundred Weight Processed
+      UNTIL NOT ShipmentPackageTmp.FIND('-');
+    END;
+
+    LOCAL PROCEDURE GetHundredWeight@29(CurrentShippingAgentService@1000000001 : Record 14000708;WeightTier@1000000002 : Code[10];ZoneCode@1000000003 : Code[10];TotalWeight@1000000004 : Decimal;ResidentialDelivery@1000000005 : Boolean;NoOfPackages@1240030000 : Integer;TotalCalcWeight@1240030001 : Decimal) RatePerPound@1000000000 : Decimal;
+    VAR
+      HundredWeightService@1000000006 : Record 14000765;
+    BEGIN
+      WITH CurrentShippingAgentService DO BEGIN
+        HundredWeightService.RESET;
+        HundredWeightService.SETRANGE("Service Indicator","Service Indicator");
+        HundredWeightService.SETRANGE(Zone,ZoneCode);
+        HundredWeightService.SETRANGE(Tier,WeightTier);
+
+        IF NOT HundredWeightService.FIND('-') THEN
+          RatePerPound := 0
+        ELSE BEGIN
+          IF TotalWeight < 500 THEN
+            HundredWeightService.SETFILTER("Minimum Weight",'100..200')
+          ELSE
+            IF TotalWeight < 1000 THEN
+              HundredWeightService.SETRANGE("Minimum Weight",500)
+            ELSE
+              HundredWeightService.SETRANGE("Minimum Weight",1000);
+          IF "UPS Residential Serv. Avail." AND ResidentialDelivery THEN
+            HundredWeightService.SETRANGE(Residential,TRUE)
+          ELSE
+            HundredWeightService.SETRANGE(Residential,FALSE);
+          IF NOT HundredWeightService.FIND('+') THEN
+            RatePerPound := 0
+          ELSE BEGIN
+            IF (HundredWeightService."Min. Tier Charge" > 0) AND
+               (ROUND(TotalCalcWeight * HundredWeightService."Rate per Pound") <
+                HundredWeightService."Min. Tier Charge")
+            THEN
+              RatePerPound := HundredWeightService."Min. Tier Charge" / TotalWeight
+            ELSE
+              RatePerPound := (TotalCalcWeight * HundredWeightService."Rate per Pound") / TotalWeight;
+          END;
+        END;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetReferenceTypeID@3(ReferenceType@1240030001 : Integer) ReferenceCode@1240030000 : Code[2];
+    VAR
+      UPSOptionPage@1240030002 : Record 14000761;
+    BEGIN
+      CASE ReferenceType OF
+        UPSOptionPage."Cust. Ref. Type 1"::" ":
+          ReferenceCode := '';
+        UPSOptionPage."Cust. Ref. Type 1"::"FDA Prod":
+          ReferenceCode := '3Q';
+        UPSOptionPage."Cust. Ref. Type 1"::"Customer Account":
+          ReferenceCode := 'AJ';
+        UPSOptionPage."Cust. Ref. Type 1"::"Appropriation No.":
+          ReferenceCode := 'AT';
+        UPSOptionPage."Cust. Ref. Type 1"::"Bill of Lading":
+          ReferenceCode := 'BM';
+        UPSOptionPage."Cust. Ref. Type 1"::"Dept No.":
+          ReferenceCode := 'DP';
+        UPSOptionPage."Cust. Ref. Type 1"::"Employer No.":
+          ReferenceCode := 'EI';
+        UPSOptionPage."Cust. Ref. Type 1"::"Invoice No.":
+          ReferenceCode := 'IK';
+        UPSOptionPage."Cust. Ref. Type 1"::"Model No.":
+          ReferenceCode := 'MJ';
+        UPSOptionPage."Cust. Ref. Type 1"::"Manifest No.":
+          ReferenceCode := 'MK';
+        UPSOptionPage."Cust. Ref. Type 1"::"Dealer No.":
+          ReferenceCode := 'ON';
+        UPSOptionPage."Cust. Ref. Type 1"::"Production Code":
+          ReferenceCode := 'PC';
+        UPSOptionPage."Cust. Ref. Type 1"::"Part No.":
+          ReferenceCode := 'PM';
+        UPSOptionPage."Cust. Ref. Type 1"::"P.O. No.":
+          ReferenceCode := 'PO';
+        UPSOptionPage."Cust. Ref. Type 1"::"Purch. Req.":
+          ReferenceCode := 'RQ';
+        UPSOptionPage."Cust. Ref. Type 1"::Salesperson:
+          ReferenceCode := 'SA';
+        UPSOptionPage."Cust. Ref. Type 1"::"Serial No.":
+          ReferenceCode := 'SE';
+        UPSOptionPage."Cust. Ref. Type 1"::"Store No.":
+          ReferenceCode := 'ST';
+        UPSOptionPage."Cust. Ref. Type 1"::SSN:
+          ReferenceCode := 'SY';
+        UPSOptionPage."Cust. Ref. Type 1"::"Fed Tax ID":
+          ReferenceCode := 'TJ';
+        UPSOptionPage."Cust. Ref. Type 1"::"Trans Ref No.":
+          ReferenceCode := 'TN';
+      END;
+    END;
+
+    LOCAL PROCEDURE Time2Text@37(CalcTime@1240030000 : Time) : Text[30];
+    VAR
+      TempText@1240030001 : Text[30];
+    BEGIN
+      TempText := FORMAT(CalcTime,0,'<Hours24,2><Minutes,2>');
+      IF TempText[1] = ' ' THEN
+        TempText := '0' + COPYSTR(TempText,2,STRLEN(TempText));
+      EXIT(TempText);
+    END;
+
+    LOCAL PROCEDURE CreateDeliveryNotification@7(VAR CurrentPackage@1240030000 : Record 14000701;UPSOptionPage@1240030001 : Record 14000761;UPSManifest2@1240030002 : Record 14000768);
+    VAR
+      UPSManifest@1240030003 : Record 14000768;
+      UPSManifestPart2@1240030004 : Record 14000771;
+      EntryNo@1240030006 : Integer;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        GetShippingSetup;
+        GetShippingAgent("Shipping Agent Code");
+        GetShippingAgentAccount("Shipping Agent Account No.");
+        GetPackingStation;
+
+        UPSManifest.RESET;
+        UPSManifest.LOCKTABLE;
+        UPSManifest.FIND('+');
+        EntryNo := UPSManifest."Entry No." + 1;
+        UPSManifest.INIT;
+        UPSManifest.COPY(UPSManifest2);
+        UPSManifest."Entry No." := EntryNo;
+        UPSManifest."Record Type" := '0400';
+        UPSManifest."Advisory Info Level" := 'S';
+        UPSManifest."Package Tracking Number" := '';
+
+        UPSManifestPart2.INIT;
+        UPSManifestPart2."Entry No." := EntryNo;
+
+        UPSManifestPart2."Request Type Code" := '008';
+
+        IF "Blind Shipment" OR "Double Blind Shipment" THEN
+          UPSManifestPart2."Sent From Name" := "Blind Ship-from Name"
+        ELSE
+          UPSManifestPart2."Sent From Name" := PackingStation."Ship-from Company";
+        UPSManifestPart2."Media Type Code" := '03';
+        UPSManifestPart2."Notification Email Address" := UPSOptionPage."Delivery Notification Email";
+        UPSManifestPart2."Reply to Email Address" := UPSOptionPage."Reply To Email Address";
+        UPSManifestPart2."Subject Code" := '';
+        UPSManifest."Ship Notification Memo" := UPSOptionPage."Ship Notification Memo";
+        UPSManifest.INSERT;
+        UPSManifestPart2.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateExceptionNotification@8(VAR CurrentPackage@1240030000 : Record 14000701;UPSOptionPage@1240030001 : Record 14000761;UPSManifest2@1240030002 : Record 14000768);
+    VAR
+      UPSManifest@1240030003 : Record 14000768;
+      UPSManifestPart2@1240030004 : Record 14000771;
+      EntryNo@1240030006 : Integer;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        GetShippingSetup;
+        GetShippingAgent("Shipping Agent Code");
+        GetShippingAgentAccount("Shipping Agent Account No.");
+        GetPackingStation;
+
+        UPSManifest.RESET;
+        UPSManifest.LOCKTABLE;
+        UPSManifest.FIND('+');
+        EntryNo := UPSManifest."Entry No." + 1;
+        UPSManifest.INIT;
+        UPSManifest.COPY(UPSManifest2);
+        UPSManifest."Entry No." := EntryNo;
+        UPSManifest."Record Type" := '0400';
+        UPSManifest."Advisory Info Level" := 'S';
+        UPSManifest."Package Tracking Number" := '';
+
+        UPSManifestPart2.INIT;
+        UPSManifestPart2."Entry No." := EntryNo;
+
+        UPSManifestPart2."Request Type Code" := '007';
+
+        IF "Blind Shipment" OR "Double Blind Shipment" THEN
+          UPSManifestPart2."Sent From Name" := "Blind Ship-from Name"
+        ELSE
+          UPSManifestPart2."Sent From Name" := PackingStation."Ship-from Company";
+        UPSManifestPart2."Media Type Code" := '03';
+        UPSManifestPart2."Notification Email Address" := UPSOptionPage."Exception Notification Email";
+        UPSManifestPart2."Reply to Email Address" := UPSOptionPage."Reply To Email Address";
+        UPSManifestPart2."Subject Code" := '';
+        UPSManifest."Ship Notification Memo" := UPSOptionPage."Ship Notification Memo";
+        UPSManifest.INSERT;
+        UPSManifestPart2.INSERT;
+      END;
+    END;
+
+    LOCAL PROCEDURE GetHazMatPackageLines@12(CurrentPackage@1240030001 : Record 14000701;VAR PackageLineArray@1240030002 : ARRAY [3] OF Record 14000702) HazMatCount@1240030000 : Integer;
+    VAR
+      PackageLine@1240030003 : Record 14000702;
+      PackageLine2@1240030004 : Record 14000702;
+      UPSHazMat@1240030005 : Record 14000773;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        HazMatCount := 0;
+        PackageLine.RESET;
+        PackageLine.SETRANGE("Package No.","No.");
+        IF PackageLine.FIND('-') THEN
+          REPEAT
+            IF PackageLine.Type <> PackageLine.Type::Package THEN BEGIN
+              UPSHazMat.RESET;
+              UPSHazMat.SETRANGE(Type,PackageLine.Type);
+              UPSHazMat.SETRANGE("No.",PackageLine."No.");
+              IF UPSHazMat.FIND('-') THEN BEGIN
+                HazMatCount := HazMatCount + 1;
+                IF HazMatCount > 3 THEN
+                  ERROR(
+                    Text003 +
+                    Text004,"No.");
+                PackageLineArray[HazMatCount].COPY(PackageLine);
+              END;
+            END ELSE BEGIN
+              PackageLine2.RESET;
+              PackageLine2.SETRANGE("Package No.",PackageLine."No.");
+              IF PackageLine2.FIND('-') THEN
+                REPEAT
+                  UPSHazMat.RESET;
+                  UPSHazMat.SETRANGE(Type,PackageLine2.Type);
+                  UPSHazMat.SETRANGE("No.",PackageLine2."No.");
+                  IF UPSHazMat.FIND('-') THEN BEGIN
+                    HazMatCount := HazMatCount + 1;
+                    IF HazMatCount > 3 THEN
+                      ERROR(
+                        Text003 +
+                        Text005,"No.",PackageLine."No.");
+                    PackageLineArray[HazMatCount].COPY(PackageLine2);
+                  END;
+                UNTIL PackageLine2.NEXT = 0;
+            END;
+          UNTIL PackageLine.NEXT = 0
+      END;
+    END;
+
+    LOCAL PROCEDURE GetHazMatPostedPackageLines@9(CurrentPackage@1240030001 : Record 14000701;VAR PackageLineArray@1240030002 : ARRAY [3] OF Record 14000702) HazMatCount@1240030000 : Integer;
+    VAR
+      PostedPackageLine@1240030003 : Record 14000705;
+      PostedPackageLine2@1240030004 : Record 14000705;
+      UPSHazMat@1240030005 : Record 14000773;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        HazMatCount := 0;
+        PostedPackageLine.RESET;
+        PostedPackageLine.SETRANGE("Package No.","No.");
+        IF PostedPackageLine.FIND('-') THEN
+          REPEAT
+            IF PostedPackageLine.Type <> PostedPackageLine.Type::Package THEN BEGIN
+              UPSHazMat.RESET;
+              UPSHazMat.SETRANGE(Type,PostedPackageLine.Type);
+              UPSHazMat.SETRANGE("No.",PostedPackageLine."No.");
+              IF UPSHazMat.FIND('-') THEN BEGIN
+                HazMatCount := HazMatCount + 1;
+                IF HazMatCount > 3 THEN
+                  ERROR(
+                    Text003 +
+                    Text004,"No.");
+                PackageLineArray[HazMatCount].TRANSFERFIELDS(PostedPackageLine);
+              END;
+            END ELSE BEGIN
+              PostedPackageLine2.RESET;
+              PostedPackageLine2.SETRANGE("Package No.",PostedPackageLine."No.");
+              IF PostedPackageLine2.FIND('-') THEN
+                REPEAT
+                  UPSHazMat.RESET;
+                  UPSHazMat.SETRANGE(Type,PostedPackageLine2.Type);
+                  UPSHazMat.SETRANGE("No.",PostedPackageLine2."No.");
+                  IF UPSHazMat.FIND('-') THEN BEGIN
+                    HazMatCount := HazMatCount + 1;
+                    IF HazMatCount > 3 THEN
+                      ERROR(
+                        Text003 +
+                        Text005,"No.",PostedPackageLine."No.");
+                    PackageLineArray[HazMatCount].TRANSFERFIELDS(PostedPackageLine2);
+                  END;
+                UNTIL PostedPackageLine2.NEXT = 0;
+            END;
+          UNTIL PostedPackageLine.NEXT = 0
+      END;
+    END;
+
+    PROCEDURE LoadShipmentOptionFields@25(VAR PackageTmp@1240030000 : Record 14000701;UPSOptionPageTmp@1240030001 : Record 14000761);
+    BEGIN
+      // Package Fields Misused as Option Fields
+      PackageTmp."UCC No. (Print)" := FORMAT(UPSOptionPageTmp."Call Tag Type");
+      PackageTmp."Blind Ship-from Name 2" := COPYSTR(UPSOptionPageTmp."Delivery Notification Email",1,30);
+      PackageTmp.Closed := UPSOptionPageTmp."Extended Area Surcharge";
+      PackageTmp."Closed by Packing Station Code" := UPSOptionPageTmp."Receiver Location ID";
+      PackageTmp."Multi Document No." := UPSOptionPageTmp."Reply To Email Address";
+      PackageTmp."Airborne Canadian Service" := UPSOptionPageTmp."Saturday Delivery";
+      PackageTmp."COD Cashiers Check" := UPSOptionPageTmp."Saturday Pickup";
+      PackageTmp.Description := UPSOptionPageTmp."Ship Notification Attn Name";
+      PackageTmp."FedEx Transaction ID" := COPYSTR(UPSOptionPageTmp."Ship Notification Email",1,40);
+      PackageTmp."Manifest No." := UPSOptionPageTmp."Ship Notification Fax No.";
+      PackageTmp."Blind Ship-from Phone No." := COPYSTR(UPSOptionPageTmp."Ship Notification Memo",1,30);
+      PackageTmp."Packed By" := UPSOptionPageTmp."Ship Notification Phone";
+      PackageTmp."First Package No." := FORMAT(UPSOptionPageTmp."Ship Notification Type");
+      PackageTmp."Blind Ship-from Fax No." := COPYSTR(FORMAT(UPSOptionPageTmp."Ship. Ref. Type 1"),1,30);
+      PackageTmp."Blind Ship-from State" := COPYSTR(FORMAT(UPSOptionPageTmp."Ship. Ref. Type 2"),1,30);
+      PackageTmp."Use Dim Weight" := UPSOptionPageTmp."Tagless COD";
+      PackageTmp."Blind Ship-from Address" := COPYSTR(UPSOptionPageTmp."Third Party Address",1,30);
+      PackageTmp."Blind Ship-from Address 2" := COPYSTR(UPSOptionPageTmp."Third Party Address 2",1,30);
+      PackageTmp."Blind Ship-from City" := UPSOptionPageTmp."Third Party City";
+      PackageTmp."Ship-to Name 2" := COPYSTR(UPSOptionPageTmp."Third Party Contact",1,30);
+      PackageTmp."Source ID" := UPSOptionPageTmp."Third Party Country Code";
+      PackageTmp."Blind Ship-from Contact" := COPYSTR(UPSOptionPageTmp."Third Party Name",1,30);
+      PackageTmp."Posted Source ID" := UPSOptionPageTmp."Third Party Phone No.";
+      PackageTmp."No. Series" := UPSOptionPageTmp."Third Party State";
+      PackageTmp."Blind Ship-from ZIP Code" := UPSOptionPageTmp."Third Party ZIP Code";
+      PackageTmp."External Document No." := UPSOptionPageTmp."Third Party Tax ID";
+      PackageTmp."UCC No." := FORMAT(UPSOptionPageTmp."UPS Packaging Type");
+      PackageTmp."Ship-to No." := UPSOptionPageTmp."Ship-to Tax ID";
+      PackageTmp."Airborne Puerto Rico Service" := UPSOptionPageTmp."Hundred Wgt. Keep Mult. Value";
+    END;
+
+    PROCEDURE FilterFieldsForShipmentLevel@17(VAR PackageTmp@1240030000 : Record 14000701);
+    BEGIN
+      // Package Fields
+      WITH PackageTmp DO BEGIN
+        SETRANGE("Blind Ship-from Name","Blind Ship-from Name");
+        SETRANGE(COD,COD);
+        SETRANGE("Currency Code","Currency Code");
+        SETRANGE("Shipping Payment Type","Shipping Payment Type");
+        SETRANGE("Ship-to Address","Ship-to Address");
+        SETRANGE("Ship-to Address 2","Ship-to Address 2");
+        SETRANGE("Ship-to City","Ship-to City");
+        SETRANGE("Ship-to Contact","Ship-to Contact");
+        SETRANGE("Ship-to Country Code","Ship-to Country Code");
+        SETRANGE("Ship-to Fax No.","Ship-to Fax No.");
+        SETRANGE("Ship-to Name","Ship-to Name");
+        SETRANGE("Ship-to Phone No.","Ship-to Phone No.");
+        SETRANGE("Ship-to State","Ship-to State");
+        SETRANGE("Ship-to ZIP Code","Ship-to ZIP Code");
+        SETRANGE("Third Party Ship. Account No.","Third Party Ship. Account No.");
+        SETRANGE("Residential Delivery","Residential Delivery");
+        // Package Fields Misused as Option Fields
+        // UpsOptionPage."Call Tag Type"
+        SETRANGE("UCC No. (Print)","UCC No. (Print)");
+        // UpsOptionPage."Delivery Notification Email"
+        SETRANGE("Blind Ship-from Name 2","Blind Ship-from Name 2");
+        // UpsOptionPage."Extended Area Surcharge"
+        SETRANGE(Closed,Closed);
+        // UpsOptionPage."Receiver Location ID"
+        SETRANGE("Closed by Packing Station Code","Closed by Packing Station Code");
+        // UpsOptionPage."Reply To Email Address",1,30)
+        SETRANGE("Multi Document No.","Multi Document No.");
+        // UpsOptionPage."Saturday Delivery"
+        SETRANGE("Airborne Canadian Service","Airborne Canadian Service");
+        // UpsOptionPage."Saturday Pickup"
+        SETRANGE("COD Cashiers Check","COD Cashiers Check");
+        // UpsOptionPage."Ship Notification Attn Name"
+        SETRANGE(Description,Description);
+        // UpsOptionPage."Ship Notification Email",1,40)
+        SETRANGE("FedEx Transaction ID","FedEx Transaction ID");
+        // UpsOptionPage."Ship Notification Fax No."
+        SETRANGE("Manifest No.","Manifest No.");
+        // UpsOptionPage."Ship Notification Memo",1,30)
+        SETRANGE("Blind Ship-from Phone No.","Blind Ship-from Phone No.");
+        // UpsOptionPage."Ship Notification Phone"
+        SETRANGE("Packed By","Packed By");
+        // UpsOptionPage."Ship Notification Type")
+        SETRANGE("First Package No.","First Package No.");
+        // UpsOptionPage."Ship. Ref. Type 1"),1,30)
+        SETRANGE("Blind Ship-from Fax No.","Blind Ship-from Fax No.");
+        // UpsOptionPage."Ship. Ref. Type 2"),1,30)
+        SETRANGE("Blind Ship-from State","Blind Ship-from State");
+        // UpsOptionPage."Tagless COD"
+        SETRANGE("Use Dim Weight","Use Dim Weight");
+        // UpsOptionPage."Third Party Address",1,30)
+        SETRANGE("Blind Ship-from Address","Blind Ship-from Address");
+        // UpsOptionPage."Third Party Address 2",1,30)
+        SETRANGE("Blind Ship-from Address 2","Blind Ship-from Address 2");
+        // UpsOptionPage."Third Party City"
+        SETRANGE("Blind Ship-from City","Blind Ship-from City");
+        // UpsOptionPage."Third Party Contact",1,30)
+        SETRANGE("Ship-to Name 2","Ship-to Name 2");
+        // UpsOptionPage."Third Party Country Code"
+        SETRANGE("Source ID","Source ID");
+        // UpsOptionPage."Third Party Name",1,30)
+        SETRANGE("Blind Ship-from Contact","Blind Ship-from Contact");
+        // UpsOptionPage."Third Party Phone No."
+        SETRANGE("Posted Source ID","Posted Source ID");
+        // UpsOptionPage."Third Party State"
+        SETRANGE("No. Series","No. Series");
+        // UpsOptionPage."Third Party ZIP Code"
+        SETRANGE("Blind Ship-from ZIP Code","Blind Ship-from ZIP Code");
+        // UpsOptionPage."Third Party Tax ID"
+        SETRANGE("External Document No.","External Document No.");
+        // UpsOptionPage."UPS Packaging Type")
+        SETRANGE("UCC No.","UCC No.");
+        // UpsOptionPage."Ship-to Tax ID"
+        SETRANGE("Ship-to No.","Ship-to No.");
+        // UPSOptionPage."Hundred Wgt. Keep Mult. Value"
+        SETRANGE("Airborne Puerto Rico Service","Airborne Puerto Rico Service");
+      END;
+    END;
+
+    PROCEDURE GetIntlShipmentTotals@70(CurrentPackage@1240030000 : Record 14000701;VAR LineTotal@1240030001 : Decimal;VAR InsuranceCharge@1240030002 : Decimal;VAR InsuranceValue@1240030003 : Decimal;VAR DiscountTotal@1240030004 : Decimal;VAR ShipTotal@1240030005 : Decimal;TotalValue@1240030006 : Decimal);
+    VAR
+      Package@1240030007 : Record 14000701;
+    BEGIN
+      WITH CurrentPackage DO BEGIN
+        IF ("UPS Canadian Service" OR "UPS Puerto Rico Service") AND
+           (TotalValue = 0) AND
+           ("Override Value" = 0)
+        THEN
+          LineTotal := LineTotal + ROUND("Calculation Insured Value",0.01,'>')
+        ELSE
+          IF TotalValue > 0 THEN
+            LineTotal := LineTotal + TotalValue
+          ELSE
+            IF "Override Value" > 0 THEN
+              LineTotal := LineTotal + ROUND("Override Value",0.01,'>');
+
+        IF "Shipping Charge" > 0 THEN BEGIN
+          ShipTotal := ShipTotal + ROUND("Shipping Charge" - "Insurance Charge",0.01,'>');
+          InsuranceCharge := InsuranceCharge + ROUND("Insurance Charge",0.01,'>');
+        END;
+
+        InsuranceValue := InsuranceValue + ROUND("Calculation Insured Value",0.01,'>');
+        DiscountTotal :=
+          DiscountTotal + ROUND("Rebate Amount",0.01,'>') + ROUND("Discount Amount",0.01,'>');
+      END;
+    END;
+
+    PROCEDURE ShipmentPackageLines@71(VAR PackageLineTmp@1240030000 : TEMPORARY Record 14000702;PackageNo@1240030001 : Code[20];Posted@1240030002 : Boolean;SEDIndUD@1240030003 : Boolean);
+    VAR
+      PackageLine@1240030004 : Record 14000702;
+      PostedPackageLine@1240030005 : Record 14000705;
+      PackageLineNo@1240030006 : Integer;
+    BEGIN
+      IF Posted THEN BEGIN
+        PostedPackageLine.RESET;
+        PostedPackageLine.SETRANGE("Package No.",PackageNo);
+        PostedPackageLine.SETFILTER(Quantity,'<>0');
+
+        IF PostedPackageLine.FIND('-') THEN
+          REPEAT
+            PackageLineTmp.TRANSFERFIELDS(PostedPackageLine);
+            PackageLineNo := PackageLineNo + 1;
+            PackageLineTmp."Line No." := PackageLineNo;
+            PackageLineTmp."Goods Not In Free Circulation" := FALSE;  // misused field
+            IF SEDIndUD THEN
+              PackageLineTmp."Serial No." := PostedPackageLine."Schedule B code"
+            ELSE
+              PackageLineTmp."Serial No." := COPYSTR(PostedPackageLine."Schedule B code",1,6); // misused
+            PackageLineTmp.INSERT;
+          UNTIL PostedPackageLine.NEXT = 0;
+      END ELSE BEGIN
+        PackageLine.RESET;
+        PackageLine.SETRANGE("Package No.",PackageNo);
+        PackageLine.SETFILTER(Quantity,'<>0');
+
+        IF PackageLine.FIND('-') THEN
+          REPEAT
+            PackageLineTmp.COPY(PackageLine);
+            PackageLineNo := PackageLineNo + 1;
+            PackageLineTmp."Line No." := PackageLineNo;
+            PackageLineTmp."Goods Not In Free Circulation" := FALSE;  // misused field
+
+            PackageLineTmp."Serial No." := COPYSTR(PackageLine."Schedule B code",1,6); // misused
+            PackageLineTmp.INSERT;
+          UNTIL PackageLine.NEXT = 0;
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

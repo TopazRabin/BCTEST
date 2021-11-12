@@ -1,0 +1,954 @@
+OBJECT Page 2310 BC O365 Sales Invoice
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/22/20;
+    Time=[ 4:57:39 AM];
+    Version List=NAVW111.00,NAVNA11.00;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Draft Invoice;
+               ESM=Borrador de factura;
+               FRC=Facture provisoire;
+               ENC=Draft Invoice];
+    DeleteAllowed=No;
+    SourceTable=Table36;
+    DataCaptionExpr='';
+    SourceTableView=WHERE(Document Type=CONST(Invoice));
+    PageType=Document;
+    RefreshOnActivate=Yes;
+    OnInit=BEGIN
+             IsCanada := O365SalesInvoiceMgmt.IsCountryCanada;
+           END;
+
+    OnOpenPage=VAR
+                 O365SalesInitialSetup@6115 : Record 2110;
+                 CalendarEventMangement@1000 : Codeunit 2160;
+               BEGIN
+                 IsUsingVAT := O365SalesInitialSetup.IsUsingVAT;
+
+                 CalendarEventMangement.CreateCalendarEventForCodeunit(TODAY,SyncBusinessInfoTxt,CODEUNIT::"Graph Sync. - Business Profile");
+                 ;ESACC_EasySecurity(TRUE);
+               END;
+
+    OnNewRecord=BEGIN
+                  CustomerName := '';
+                  CustomerEmail := '';
+                  WorkDescription := '';
+                  "Document Type" := "Document Type"::Invoice;
+
+                  SetDefaultPaymentServices;
+                END;
+
+    OnDeleteRecord=VAR
+                     CustInvoiceDisc@1000 : Record 19;
+                   BEGIN
+                     ForceExit := TRUE;
+
+                     IF CustInvoiceDisc.GET("Invoice Disc. Code","Currency Code",0) THEN
+                       CustInvoiceDisc.DELETE;
+                   END;
+
+    OnQueryClosePage=BEGIN
+                       EXIT(O365SalesInvoiceMgmt.OnQueryCloseForSalesHeader(Rec,ForceExit,CustomerName));
+                     END;
+
+    OnAfterGetCurrRecord=VAR
+                           O365TaxSettingsManagement@1020000 : Codeunit 10150;
+                         BEGIN
+                           O365SalesInvoiceMgmt.UpdateCustomerFields(Rec,CustomerName,CustomerEmail);
+                           WorkDescription := GetWorkDescription;
+                           CurrPageEditable := CurrPage.EDITABLE;
+                           GetTotalTaxRate;
+                           IF ("Sell-to Customer Name" <> '') AND "Tax Liable" AND (NOT O365TaxSettingsManagement.IsTaxSet("Tax Area Code")) THEN
+                             O365SalesInvoiceMgmt.NotifyTaxSetupNeeded("Tax Area Code");
+                           O365SalesInvoiceMgmt.OnAfterGetSalesHeaderRecord(Rec,CurrencyFormat,TaxAreaDescription);
+                           O365SalesInvoiceMgmt.UpdateNoOfAttachmentsLabel(O365SalesAttachmentMgt.GetNoOfAttachments(Rec),NoOfAttachmentsValueTxt);
+                           O365SalesInvoiceMgmt.UpdateAddress(Rec,FullAddress);
+                           O365SalesInvoiceMgmt.CalcInvoiceDiscountAmount(Rec,SubTotalAmount,DiscountTxt,InvoiceDiscountAmount,InvDiscAmountVisible);
+                           IsCompanyContact := O365SalesInvoiceMgmt.IsCustomerCompanyContact("Sell-to Customer No.");
+                           O365SalesInvoiceMgmt.NotifyOrWarnAboutCoupons(Rec);
+                           O365SalesInvoiceMgmt.GetCouponCodesAndCouponsExists(Rec,CouponCodes,CouponsExistsForCustomer);
+                         END;
+
+    ActionList=ACTIONS
+    {
+      { 22      ;    ;ActionContainer;
+                      CaptionML=[ENU=Invoice;
+                                 ESM=Facturar;
+                                 FRC=Facture;
+                                 ENC=Invoice];
+                      ActionContainerType=ActionItems }
+      { 23      ;1   ;Action    ;
+                      Name=Post;
+                      ShortCutKey=Ctrl+Right;
+                      CaptionML=[ENU=Send;
+                                 ESM=Enviar;
+                                 FRC=Envoyer;
+                                 ENC=Send];
+                      ToolTipML=[ENU=Finalize and send the invoice.;
+                                 ESM=Permite finalizar y enviar la factura.;
+                                 FRC=Finalisez et envoyez la facture.;
+                                 ENC=Finalize and send the invoice.];
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Visible=ESACC_C23_Visible;
+                      Enabled=ESACC_C23_Enabled AND (CustomerName <> '');
+                      PromotedIsBig=Yes;
+                      Image=Invoicing-MDL-Send;
+                      PromotedCategory=Process;
+                      PromotedOnly=Yes;
+                      OnAction=VAR
+                                 O365SendResendInvoice@1001 : Codeunit 2104;
+                               BEGIN
+                                 IF O365SendResendInvoice.SendSalesInvoiceOrQuoteFromBC(Rec) THEN BEGIN
+                                   ForceExit := TRUE;
+                                   CurrPage.CLOSE;
+                                 END;
+                               END;
+                                }
+      { 3       ;1   ;Action    ;
+                      Name=ViewPdf;
+                      CaptionML=[ENU=Preview;
+                                 ESM=Vista previa;
+                                 FRC=Aper‡u;
+                                 ENC=Preview];
+                      ToolTipML=[ENU=View the preview of the invoice before sending.;
+                                 ESM=Permite ver la vista previa de la factura antes de enviarla.;
+                                 FRC=Affichez l'aper‡u de la facture avant envoi.;
+                                 ENC=View the preview of the invoice before sending.];
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Visible=ESACC_C3_Visible;
+                      Enabled=ESACC_C3_Enabled AND (CustomerName <> '');
+                      Image=Invoicing-MDL-PreviewDoc;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 ReportSelections@1001 : Record 77;
+                                 DocumentPath@1000 : Text[250];
+                               BEGIN
+                                 SETRECFILTER;
+                                 LOCKTABLE;
+                                 FIND;
+                                 ReportSelections.GetPdfReport(DocumentPath,ReportSelections.Usage::"S.Invoice Draft",Rec,"Sell-to Customer No.");
+                                 DOWNLOAD(DocumentPath,'','','',DocumentPath);
+                                 FIND;
+                               END;
+                                }
+      { 4       ;1   ;Action    ;
+                      Name=DeleteAction;
+                      CaptionML=[ENU=Discard;
+                                 ESM=Descartar;
+                                 FRC=Ignorer;
+                                 ENC=Discard];
+                      ToolTipML=[ENU=Discards the draft invoice;
+                                 ESM=Descarta el borrador de factura;
+                                 FRC=Ignore la facture provisoire;
+                                 ENC=Discards the draft invoice];
+                      ApplicationArea=#Basic,#Suite,#Invoicing;
+                      Promoted=Yes;
+                      Visible=ESACC_C4_Visible;
+                      Enabled=ESACC_C4_Enabled;
+                      Image=Invoicing-MDL-Delete;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 CustInvoiceDisc@1000 : Record 19;
+                               BEGIN
+                                 IF NOT FIND THEN BEGIN
+                                   CurrPage.CLOSE;
+                                   EXIT;
+                                 END;
+
+                                 IF NOT CONFIRM(DeleteQst) THEN
+                                   EXIT;
+
+                                 ForceExit := TRUE;
+
+                                 IF CustInvoiceDisc.GET("Invoice Disc. Code","Currency Code",0) THEN
+                                   CustInvoiceDisc.DELETE;
+                                 DELETE(TRUE);
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1   ;0   ;Container ;
+                ContainerType=ContentArea }
+
+    { 25  ;1   ;Group     ;
+                CaptionML=[ENU=Sell to;
+                           ESM=Direcci¢n venta;
+                           FRC=Donneur d'ordre;
+                           ENC=Sell to];
+                GroupType=Group }
+
+    { 9   ;2   ;Field     ;
+                CaptionML=[ENU=Customer Name;
+                           ESM=Nombre del cliente;
+                           FRC=Nom du client;
+                           ENC=Customer Name];
+                ToolTipML=[ENU=Specifies the customer's name.;
+                           ESM=Especifica el nombre del cliente.;
+                           FRC=Sp‚cifie le nom du client.;
+                           ENC=Specifies the customer's name.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                NotBlank=Yes;
+                SourceExpr="Sell-to Customer Name";
+                Importance=Promoted;
+                Visible=ESACC_F79_Visible;
+                Editable=ESACC_F79_Editable;
+                LookupPageID=BC O365 Contact Lookup;
+                HideValue=ESACC_F79_HideValue;
+                OnValidate=BEGIN
+                             O365SalesInvoiceMgmt.ValidateCustomerName(Rec,CustomerName,CustomerEmail);
+                             O365SalesInvoiceMgmt.UpdateAddress(Rec,FullAddress);
+                             CurrPage.UPDATE(TRUE);
+                             O365SalesInvoiceMgmt.CustomerChanged;
+                             O365SalesInvoiceMgmt.NotifyOrWarnAboutCoupons(Rec);
+                             O365SalesInvoiceMgmt.GetCouponCodesAndCouponsExists(Rec,CouponCodes,CouponsExistsForCustomer);
+                           END;
+
+                ShowMandatory=TRUE;
+                QuickEntry=FALSE }
+
+    { 18  ;2   ;Field     ;
+                ExtendedDatatype=E-Mail;
+                CaptionML=[ENU=Email Address;
+                           ESM=Direcci¢n de correo elect.;
+                           FRC=Adresse de courriel;
+                           ENC=Email Address];
+                ToolTipML=[ENU=Specifies the customer's email address.;
+                           ESM=Especifica la direcci¢n de correo electr¢nico del cliente.;
+                           FRC=Sp‚cifie l'adresse de courriel du client.;
+                           ENC=Specifies the customer's email address.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=CustomerEmail;
+                Editable=CurrPageEditable AND (CustomerName <> '');
+                OnValidate=BEGIN
+                             O365SalesInvoiceMgmt.ValidateCustomerEmail(Rec,CustomerEmail);
+                           END;
+                            }
+
+    { 24  ;2   ;Group     ;
+                Visible=CustomerName <> '';
+                GroupType=Group }
+
+    { 16  ;3   ;Field     ;
+                Name=ViewContactCard;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=ViewContactDetailsLbl;
+                Editable=FALSE;
+                OnDrillDown=VAR
+                              Customer@1000 : Record 18;
+                            BEGIN
+                              IF Customer.GET("Sell-to Customer No.") THEN
+                                PAGE.RUNMODAL(PAGE::"BC O365 Sales Customer Card",Customer);
+                            END;
+
+                ShowCaption=No }
+
+    { 11  ;2   ;Group     ;
+                GroupType=Group }
+
+    { 15  ;3   ;Field     ;
+                CaptionML=[ENU=Address;
+                           ESM=Direcci¢n;
+                           FRC=Adresse;
+                           ENC=Address];
+                ToolTipML=[ENU=Specifies the address where the customer is located.;
+                           ESM=Especifica la direcci¢n donde reside el cliente.;
+                           FRC=Sp‚cifie l'adresse o— se trouve le client.;
+                           ENC=Specifies the address where the customer is located.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Sell-to Address";
+                Visible=ESACC_F81_Visible;
+                Editable=ESACC_F81_Editable AND (CustomerName <> '');
+                HideValue=ESACC_F81_HideValue;
+                OnValidate=BEGIN
+                             O365SalesInvoiceMgmt.ValidateCustomerAddress("Sell-to Address","Sell-to Customer No.");
+                             O365SalesInvoiceMgmt.UpdateAddress(Rec,FullAddress);
+                           END;
+                            }
+
+    { 12  ;3   ;Field     ;
+                CaptionML=[ENU=Address 2;
+                           ESM=Colonia 2;
+                           FRC=Adresseÿ2;
+                           ENC=Address 2];
+                ToolTipML=[ENU=Specifies additional address information.;
+                           ESM=Especifica informaci¢n adicional de la direcci¢n.;
+                           FRC=Sp‚cifie des informations d'adresse suppl‚mentaires.;
+                           ENC=Specifies additional address information.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Sell-to Address 2";
+                Visible=ESACC_F82_Visible;
+                Editable=ESACC_F82_Editable AND (CustomerName <> '');
+                HideValue=ESACC_F82_HideValue;
+                OnValidate=BEGIN
+                             O365SalesInvoiceMgmt.ValidateCustomerAddress2("Sell-to Address 2","Sell-to Customer No.");
+                             O365SalesInvoiceMgmt.UpdateAddress(Rec,FullAddress);
+                           END;
+                            }
+
+    { 5   ;3   ;Field     ;
+                Lookup=No;
+                CaptionML=[ENU=ZIP Code;
+                           ESM=C¢digo postal;
+                           FRC=Code postal;
+                           ENC=Postal/ZIP Code];
+                ToolTipML=[ENU=Specifies the ZIP Code.;
+                           ESM=Especifica el c¢digo postal.;
+                           FRC=Sp‚cifie le code postal.;
+                           ENC=Specifies the postal code.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Sell-to Post Code";
+                Visible=ESACC_F88_Visible;
+                Enabled=ESACC_F88_Editable;
+                Editable=ESACC_F88_Editable AND (CustomerName <> '');
+                HideValue=ESACC_F88_HideValue;
+                OnValidate=BEGIN
+                             O365SalesInvoiceMgmt.ValidateCustomerPostCode("Sell-to Post Code","Sell-to Customer No.");
+                             O365SalesInvoiceMgmt.UpdateAddress(Rec,FullAddress);
+                           END;
+                            }
+
+    { 2   ;3   ;Field     ;
+                Lookup=No;
+                CaptionML=[ENU=City;
+                           ESM=Municipio/Ciudad;
+                           FRC=Ville;
+                           ENC=City];
+                ToolTipML=[ENU=Specifies the address city.;
+                           ESM=Especifica el Municipio/Ciudad de la direcci¢n.;
+                           FRC=Sp‚cifie la ville de l'adresse.;
+                           ENC=Specifies the address city.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Sell-to City";
+                Visible=ESACC_F83_Visible;
+                Enabled=ESACC_F83_Editable;
+                Editable=ESACC_F83_Editable AND (CustomerName <> '');
+                HideValue=ESACC_F83_HideValue;
+                OnValidate=BEGIN
+                             O365SalesInvoiceMgmt.ValidateCustomerCity("Sell-to City","Sell-to Customer No.");
+                             O365SalesInvoiceMgmt.UpdateAddress(Rec,FullAddress);
+                           END;
+                            }
+
+    { 8   ;3   ;Field     ;
+                Lookup=No;
+                CaptionML=[ENU=State;
+                           ESM=Provincia;
+                           FRC=Comt‚;
+                           ENC=Province/State];
+                ToolTipML=[ENU=Specifies the address state.;
+                           ESM=Especifica la provincia de la direcci¢n.;
+                           FRC=Sp‚cifie le comt‚ de l'adresse.;
+                           ENC=Specifies the address province/state.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Sell-to County";
+                Visible=ESACC_F89_Visible;
+                Editable=ESACC_F89_Editable AND (CustomerName <> '');
+                HideValue=ESACC_F89_HideValue;
+                OnValidate=BEGIN
+                             O365SalesInvoiceMgmt.ValidateCustomerCounty("Sell-to County","Sell-to Customer No.");
+                             O365SalesInvoiceMgmt.UpdateAddress(Rec,FullAddress);
+                           END;
+                            }
+
+    { 33  ;3   ;Field     ;
+                CaptionML=[ENU=Country/Region Code;
+                           ESM=C¢digo pa¡s/regi¢n;
+                           FRC=Code pays/r‚gion;
+                           ENC=Country/Region Code];
+                ToolTipML=[ENU=Specifies the address country/region.;
+                           ESM=Especifica el pa¡s o la regi¢n de la direcci¢n.;
+                           FRC=Sp‚cifie le pays/la r‚gion de l'adresse.;
+                           ENC=Specifies the address country/region.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Sell-to Country/Region Code";
+                Visible=ESACC_F90_Visible;
+                Editable=ESACC_F90_Editable AND (CustomerName <> '');
+                LookupPageID=BC O365 Country/Region List;
+                HideValue=ESACC_F90_HideValue;
+                OnValidate=BEGIN
+                             O365SalesInvoiceMgmt.ValidateCustomerCountryRegion("Sell-to Country/Region Code","Sell-to Customer No.");
+                             O365SalesInvoiceMgmt.UpdateAddress(Rec,FullAddress);
+                           END;
+                            }
+
+    { 20  ;1   ;Group     ;
+                CaptionML=[ENU=Invoice Details;
+                           ESM=Detalles factura;
+                           FRC=D‚tails facture;
+                           ENC=Invoice Details];
+                GroupType=Group }
+
+    { 26  ;2   ;Field     ;
+                ToolTipML=[ENU=Specifies when the sales invoice must be paid.;
+                           ESM=Especifica cu ndo se debe pagar la factura de venta.;
+                           FRC=Sp‚cifie la date … laquelle la facture vente doit ˆtre pay‚e.;
+                           ENC=Specifies when the sales invoice must be paid.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Due Date";
+                Visible=ESACC_F24_Visible;
+                Editable=ESACC_F24_Editable AND (CustomerName <> '');
+                HideValue=ESACC_F24_HideValue;
+                OnValidate=BEGIN
+                             IF "Due Date" < "Document Date" THEN
+                               VALIDATE("Due Date","Document Date");
+                           END;
+                            }
+
+    { 6   ;2   ;Field     ;
+                CaptionML=[ENU=Invoice Date;
+                           ESM=Fecha de factura;
+                           FRC=Date facture;
+                           ENC=Invoice Date];
+                ToolTipML=[ENU=Specifies when the sales invoice was created.;
+                           ESM=Especifica cu ndo se cre¢ la factura de venta.;
+                           FRC=Sp‚cifie la date … laquelle la facture vente a ‚t‚ cr‚‚e.;
+                           ENC=Specifies when the sales invoice was created.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Document Date";
+                Visible=ESACC_F99_Visible;
+                Editable=ESACC_F99_Editable AND (CustomerName <> '');
+                HideValue=ESACC_F99_HideValue;
+                OnValidate=VAR
+                             NotificationLifecycleMgt@1001 : Codeunit 1511;
+                             PastNotification@1000 : Notification;
+                           BEGIN
+                             VALIDATE("Posting Date","Document Date");
+
+                             IF "Document Date" < WORKDATE THEN BEGIN
+                               PastNotification.ID := CREATEGUID;
+                               PastNotification.MESSAGE(DocumentDatePastMsg);
+                               PastNotification.SCOPE(NOTIFICATIONSCOPE::LocalScope);
+                               NotificationLifecycleMgt.SendNotification(PastNotification,RECORDID);
+                             END;
+                             O365SalesInvoiceMgmt.InvoiceDateChanged(Rec);
+                           END;
+                            }
+
+    { 19  ;2   ;Field     ;
+                CaptionML=[ENU=Customer is tax liable;
+                           ESM=El cliente est  sujeto a impuestos;
+                           FRC=Client imposable;
+                           ENC=Customer is tax liable];
+                ToolTipML=[ENU=Specifies if the sales invoice contains sales tax.;
+                           ESM=Especifica si la factura de venta contiene el impuesto sobre las ventas.;
+                           FRC=Sp‚cifie si la facture vente contient la taxe de vente.;
+                           ENC=Specifies if the sales invoice contains sales tax.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Tax Liable";
+                Visible=ESACC_F115_Visible AND (NOT IsUsingVAT);
+                Editable=ESACC_F115_Editable AND (CustomerName <> '');
+                HideValue=ESACC_F115_HideValue;
+                OnValidate=BEGIN
+                             CurrPage.UPDATE;
+                           END;
+                            }
+
+    { 17  ;2   ;Field     ;
+                Name=TaxAreaDescription;
+                CaptionML=[ENU=Customer tax rate;
+                           ESM=Tasa de impuesto de cliente;
+                           FRC=Taux de taxe client;
+                           ENC=Customer tax rate];
+                ToolTipML=[ENU=Specifies the customer's tax area.;
+                           ESM=Especifica el  rea de impuestos del cliente.;
+                           FRC=Sp‚cifie la r‚gion fiscale du client.;
+                           ENC=Specifies the customer's tax area.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                NotBlank=Yes;
+                SourceExpr=TaxAreaDescription;
+                Visible=NOT IsUsingVAT;
+                Enabled=CustomerName <> '';
+                Editable=FALSE;
+                OnDrillDown=VAR
+                              TaxArea@1020000 : Record 318;
+                            BEGIN
+                              IF NOT TaxArea.GET("Tax Area Code") THEN
+                                EXIT;
+
+                              PAGE.RUNMODAL(PAGE::"BC O365 Tax Settings Card",TaxArea);
+                            END;
+
+                OnAssistEdit=VAR
+                               TaxArea@1000 : Record 318;
+                             BEGIN
+                               IF PAGE.RUNMODAL(PAGE::"O365 Tax Area List",TaxArea) = ACTION::LookupOK THEN BEGIN
+                                 VALIDATE("Tax Area Code",TaxArea.Code);
+                                 TaxAreaDescription := TaxArea.GetDescriptionInCurrentLanguage;
+                                 CurrPage.UPDATE;
+                               END;
+                             END;
+
+                QuickEntry=FALSE }
+
+    { 1020000;2;Field     ;
+                CaptionML=[ENU=Tax %;
+                           ESM=% de impuesto;
+                           FRC=% taxes;
+                           ENC=Tax %];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=TotalTaxRate;
+                Visible=IsCanada;
+                Enabled=CustomerName <> '';
+                Editable=FALSE }
+
+    { 37  ;2   ;Field     ;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="VAT Registration No.";
+                Visible=ESACC_F70_Visible AND (IsUsingVAT);
+                Editable=ESACC_F70_Editable AND ((IsUsingVAT AND IsCompanyContact));
+                HideValue=ESACC_F70_HideValue }
+
+    { 14  ;1   ;Part      ;
+                Name=Lines;
+                CaptionML=[ENU=Line Items;
+                           ESM=Productos de l¡nea;
+                           FRC=Articles de la ligne;
+                           ENC=Line Items];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SubPageLink=Document Type=FIELD(Document Type),
+                            Document No.=FIELD(No.);
+                PagePartID=Page2311;
+                Enabled=CustomerName <> '';
+                Editable=CustomerName <> '';
+                PartType=Page }
+
+    { 40  ;1   ;Group     ;
+                CaptionML=[ENU=Totals;
+                           ESM=Totales;
+                           FRC=Totaux;
+                           ENC=Totals];
+                Visible=NOT InvDiscAmountVisible;
+                GroupType=Group }
+
+    { 39  ;2   ;Group     ;
+                GroupType=Group }
+
+    { 35  ;3   ;Field     ;
+                Name=Amount;
+                Lookup=No;
+                DrillDown=No;
+                CaptionML=[ENU=Net Total;
+                           ESM=Total neto;
+                           FRC=Total net;
+                           ENC=Net Total];
+                ToolTipML=[ENU=Specifies the total amount on the sales invoice excluding tax.;
+                           ESM=Especifica el importe total de la factura de ventas sin IVA.;
+                           FRC=Sp‚cifie le montant total de la facture vente, sans la TVA.;
+                           ENC=Specifies the total amount on the sales invoice excluding tax.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=Amount;
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                Visible=ESACC_F60_Visible;
+                HideValue=ESACC_F60_HideValue }
+
+    { 34  ;3   ;Field     ;
+                Name=AmountInclVAT;
+                Lookup=No;
+                DrillDown=No;
+                CaptionML=[ENU=Total Including tax;
+                           ESM=Total con IVA;
+                           FRC=Total TTC;
+                           ENC=Total Including Tax];
+                ToolTipML=[ENU=Specifies the total amount on the sales invoice including tax.;
+                           ESM=Especifica el importe total de la factura de venta con IVA.;
+                           FRC=Sp‚cifie le montant total de la facture vente, avec la TVA.;
+                           ENC=Specifies the total amount on the sales invoice including tax.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Amount Including VAT";
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                Importance=Promoted;
+                Visible=ESACC_F61_Visible;
+                HideValue=ESACC_F61_HideValue;
+                Style=Strong;
+                StyleExpr=TRUE }
+
+    { 38  ;3   ;Group     ;
+                Visible=CouponsExistsForCustomer;
+                GroupType=Group }
+
+    { 42  ;4   ;Field     ;
+                Name=CouponCodes;
+                CaptionML=[ENU=Coupons;
+                           ESM=Cupones;
+                           FRC=Coupons;
+                           ENC=Coupons];
+                ToolTipML=[ENU=Specifies the coupons that are used on this invoice.;
+                           ESM=Especifica los cupones empleados en esta factura.;
+                           FRC=Sp‚cifie les coupons utilis‚s pour cette facture.;
+                           ENC=Specifies the coupons that are used on this invoice.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=CouponCodes;
+                Editable=FALSE;
+                OnDrillDown=VAR
+                              DisplayCoupons@1000 : Codeunit 2115;
+                            BEGIN
+                              DisplayCoupons.ShowCouponsForDocument("Document Type","No.");
+                            END;
+                             }
+
+    { 36  ;3   ;Field     ;
+                Name=DiscountLink;
+                DrillDown=Yes;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=DiscountTxt;
+                Enabled=CustomerName <> '';
+                Editable=FALSE;
+                OnDrillDown=BEGIN
+                              IF PAGE.RUNMODAL(PAGE::"O365 Sales Invoice Discount",Rec) = ACTION::LookupOK THEN
+                                CurrPage.UPDATE;
+                            END;
+
+                ShowCaption=No }
+
+    { 30  ;1   ;Group     ;
+                CaptionML=[ENU=Totals;
+                           ESM=Totales;
+                           FRC=Totaux;
+                           ENC=Totals];
+                Visible=InvDiscAmountVisible;
+                GroupType=Group }
+
+    { 32  ;2   ;Group     ;
+                GroupType=Group }
+
+    { 31  ;3   ;Field     ;
+                CaptionML=[ENU=Subtotal;
+                           ESM=Subtotal;
+                           FRC=Sous-total;
+                           ENC=Subtotal];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=SubTotalAmount;
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                Importance=Promoted;
+                Editable=FALSE }
+
+    { 29  ;3   ;Field     ;
+                Name=InvoiceDiscount;
+                CaptionML=[ENU=Invoice Discount;
+                           ESM=Descuento en factura;
+                           FRC=Escompte de la facture;
+                           ENC=Invoice Discount];
+                ToolTipML=[ENU=Specifies the invoice discount amount. To edit the invoice discount, click on the amount.;
+                           ESM=Especifica el importe de descuento en factura. Para editar este descuento, haga clic en el importe.;
+                           FRC=Sp‚cifie le montant d'escompte de la facture. Pour modifier l'escompte de la facture, cliquez sur le montant.;
+                           ENC=Specifies the invoice discount amount. To edit the invoice discount, click on the amount.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=-InvoiceDiscountAmount;
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                CaptionClass=GetInvDiscountCaption;
+                Importance=Promoted;
+                Editable=FALSE;
+                OnDrillDown=BEGIN
+                              IF PAGE.RUNMODAL(PAGE::"O365 Sales Invoice Discount",Rec) = ACTION::LookupOK THEN
+                                CurrPage.UPDATE;
+                            END;
+                             }
+
+    { 28  ;3   ;Field     ;
+                Name=Amount2;
+                Lookup=No;
+                DrillDown=No;
+                CaptionML=[ENU=Net Total;
+                           ESM=Neto total;
+                           FRC=Total net;
+                           ENC=Net Total];
+                ToolTipML=[ENU=Specifies the total amount on the sales invoice excluding Tax.;
+                           ESM=Especifica el importe total de la factura de venta sin IVA.;
+                           FRC=Sp‚cifie le montant total de la facture vente, sans la TVA.;
+                           ENC=Specifies the total amount on the sales invoice excluding Tax.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=Amount;
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                Visible=ESACC_F60_Visible;
+                HideValue=ESACC_F60_HideValue }
+
+    { 21  ;3   ;Field     ;
+                Name=AmountInclVAT2;
+                Lookup=No;
+                DrillDown=No;
+                CaptionML=[ENU=Total Including Tax;
+                           ESM=Total con IVA;
+                           FRC=Total TTC;
+                           ENC=Total Including Tax];
+                ToolTipML=[ENU=Specifies the total amount on the sales invoice including Tax.;
+                           ESM=Especifica el importe total de la factura de venta con IVA.;
+                           FRC=Sp‚cifie le montant total de la facture vente, avec la TVA.;
+                           ENC=Specifies the total amount on the sales invoice including Tax.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr="Amount Including VAT";
+                AutoFormatType=10;
+                AutoFormatExpr=CurrencyFormat;
+                Importance=Promoted;
+                Visible=ESACC_F61_Visible;
+                HideValue=ESACC_F61_HideValue;
+                Style=Strong;
+                StyleExpr=TRUE }
+
+    { 10  ;3   ;Group     ;
+                Visible=CouponsExistsForCustomer;
+                GroupType=Group }
+
+    { 41  ;4   ;Field     ;
+                Name=CouponCodes2;
+                CaptionML=[ENU=Coupons;
+                           ESM=Cupones;
+                           FRC=Coupons;
+                           ENC=Coupons];
+                ToolTipML=[ENU=Specifies the coupons that are used on this invoice.;
+                           ESM=Especifica los cupones empleados en esta factura.;
+                           FRC=Sp‚cifie les coupons utilis‚s pour cette facture.;
+                           ENC=Specifies the coupons that are used on this invoice.];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=CouponCodes;
+                Editable=FALSE;
+                OnDrillDown=VAR
+                              DisplayCoupons@1000 : Codeunit 2115;
+                            BEGIN
+                              DisplayCoupons.ShowCouponsForDocument("Document Type","No.");
+                            END;
+                             }
+
+    { 7   ;1   ;Group     ;
+                CaptionML=[ENU=Note for customer;
+                           ESM=Nota para el cliente;
+                           FRC=Note pour le client;
+                           ENC=Note for customer];
+                GroupType=Group }
+
+    { 27  ;2   ;Field     ;
+                CaptionML=[ENU=Note for customer;
+                           ESM=Nota para el cliente;
+                           FRC=Note pour le client;
+                           ENC=Note for customer];
+                ToolTipML=[ENU=Specifies the products or service being offered;
+                           ESM=Especifica los productos o servicios que se ofrecen.;
+                           FRC=Sp‚cifie les produits ou services offerts;
+                           ENC=Specifies the products or service being offered];
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=WorkDescription;
+                Editable=CurrPageEditable AND (CustomerName <> '');
+                MultiLine=Yes;
+                OnValidate=BEGIN
+                             SetWorkDescription(WorkDescription);
+                           END;
+
+                ShowCaption=No }
+
+    { 13  ;1   ;Field     ;
+                Name=NoOfAttachments;
+                DrillDown=Yes;
+                ApplicationArea=#Basic,#Suite,#Invoicing;
+                SourceExpr=NoOfAttachmentsValueTxt;
+                Enabled=CustomerName <> '';
+                Editable=FALSE;
+                OnDrillDown=BEGIN
+                              O365SalesInvoiceMgmt.UpdateNoOfAttachmentsLabel(O365SalesAttachmentMgt.EditAttachments(Rec),NoOfAttachmentsValueTxt);
+                              CurrPage.UPDATE(FALSE);
+                            END;
+
+                ShowCaption=No }
+
+  }
+  CODE
+  {
+    VAR
+      ESACC_ESFLADSMgt@14123801 : Codeunit 14123801;
+      ESACC_C3_Visible@905000030 : Boolean INDATASET;
+      ESACC_C3_Enabled@905000033 : Boolean INDATASET;
+      ESACC_C4_Visible@905000040 : Boolean INDATASET;
+      ESACC_C4_Enabled@905000043 : Boolean INDATASET;
+      ESACC_C23_Visible@905000230 : Boolean INDATASET;
+      ESACC_C23_Enabled@905000233 : Boolean INDATASET;
+      ESACC_F24_Visible@900000240 : Boolean INDATASET;
+      ESACC_F24_Editable@900000241 : Boolean INDATASET;
+      ESACC_F24_HideValue@900000242 : Boolean INDATASET;
+      ESACC_F60_Visible@900000620 : Boolean INDATASET;
+      ESACC_F60_HideValue@900000622 : Boolean INDATASET;
+      ESACC_F61_Visible@900000630 : Boolean INDATASET;
+      ESACC_F61_HideValue@900000632 : Boolean INDATASET;
+      ESACC_F70_Visible@900000700 : Boolean INDATASET;
+      ESACC_F70_Editable@900000701 : Boolean INDATASET;
+      ESACC_F70_HideValue@900000702 : Boolean INDATASET;
+      ESACC_F79_Visible@900000790 : Boolean INDATASET;
+      ESACC_F79_Editable@900000791 : Boolean INDATASET;
+      ESACC_F79_HideValue@900000792 : Boolean INDATASET;
+      ESACC_F81_Visible@900000810 : Boolean INDATASET;
+      ESACC_F81_Editable@900000811 : Boolean INDATASET;
+      ESACC_F81_HideValue@900000812 : Boolean INDATASET;
+      ESACC_F82_Visible@900000820 : Boolean INDATASET;
+      ESACC_F82_Editable@900000821 : Boolean INDATASET;
+      ESACC_F82_HideValue@900000822 : Boolean INDATASET;
+      ESACC_F83_Visible@900000830 : Boolean INDATASET;
+      ESACC_F83_Editable@900000831 : Boolean INDATASET;
+      ESACC_F83_HideValue@900000832 : Boolean INDATASET;
+      ESACC_F88_Visible@900000880 : Boolean INDATASET;
+      ESACC_F88_Editable@900000881 : Boolean INDATASET;
+      ESACC_F88_HideValue@900000882 : Boolean INDATASET;
+      ESACC_F89_Visible@900000890 : Boolean INDATASET;
+      ESACC_F89_Editable@900000891 : Boolean INDATASET;
+      ESACC_F89_HideValue@900000892 : Boolean INDATASET;
+      ESACC_F90_Visible@900000900 : Boolean INDATASET;
+      ESACC_F90_Editable@900000901 : Boolean INDATASET;
+      ESACC_F90_HideValue@900000902 : Boolean INDATASET;
+      ESACC_F99_Visible@900000990 : Boolean INDATASET;
+      ESACC_F99_Editable@900000991 : Boolean INDATASET;
+      ESACC_F99_HideValue@900000992 : Boolean INDATASET;
+      ESACC_F115_Visible@900001150 : Boolean INDATASET;
+      ESACC_F115_Editable@900001151 : Boolean INDATASET;
+      ESACC_F115_HideValue@900001152 : Boolean INDATASET;
+      O365SalesAttachmentMgt@1006 : Codeunit 2112;
+      O365SalesInvoiceMgmt@1023 : Codeunit 2310;
+      CustomerName@1000 : Text[50];
+      CustomerEmail@1004 : Text[80];
+      WorkDescription@1002 : Text;
+      FullAddress@1016 : Text;
+      CurrPageEditable@1003 : Boolean;
+      IsUsingVAT@6116 : Boolean;
+      ForceExit@1012 : Boolean;
+      NoOfAttachmentsValueTxt@1011 : Text;
+      CurrencyFormat@1013 : Text;
+      IsCompanyContact@1090 : Boolean;
+      InvDiscAmountVisible@1024 : Boolean;
+      InvoiceDiscountAmount@1001 : Decimal;
+      CouponsExistsForCustomer@1014 : Boolean;
+      SubTotalAmount@1017 : Decimal;
+      DiscountTxt@1005 : Text;
+      DeleteQst@1009 : TextConst 'ENU=Are you sure?;ESM=¨Est  seguro?;FRC=Òtes-vous certainÿ?;ENC=Are you sure?';
+      TaxAreaDescription@1018 : Text[50];
+      SyncBusinessInfoTxt@1010 : TextConst 'ENU=Delta sync Business Information;ESM=Informaci¢n de la empresa con sincronizaci¢n delta;FRC=Synchro. ‚cart informations professionnelles;ENC=Delta sync Business Information';
+      DocumentDatePastMsg@1008 : TextConst 'ENU=Invoice date is in the past.;ESM=La fecha de factura es en el pasado.;FRC=La date facture est d‚pass‚e.;ENC=Invoice date is in the past.';
+      ViewContactDetailsLbl@1007 : TextConst 'ENU=Open contact details;ESM=Abrir detalles de contacto;FRC=Ouvrir les d‚tails du contact;ENC=Open contact details';
+      TotalTaxRate@1020000 : Text;
+      PercentTxt@1020001 : TextConst 'ENU=%;ESM=%;FRC=%;ENC=%';
+      IsCanada@1020002 : Boolean;
+      CouponCodes@1015 : Text;
+
+    LOCAL PROCEDURE ESACC_EasySecurity@14123801(OpenObject@14123801 : Boolean);
+    VAR
+      SetFilters@14123802 : Codeunit 14123812;
+      TempBoolean@14123803 : Boolean;
+    BEGIN
+      IF OpenObject THEN BEGIN
+        SetFilters.Filter36(Rec,8,2310);
+
+        TempBoolean := CurrPage.EDITABLE;
+        IF ESACC_ESFLADSMgt.PageGeneral(36,2310,TempBoolean) THEN
+          CurrPage.EDITABLE := TempBoolean;
+      END;
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,1,3,
+        ESACC_C3_Visible,ESACC_C3_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,1,4,
+        ESACC_C4_Visible,ESACC_C4_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,1,23,
+        ESACC_C23_Visible,ESACC_C23_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,24,
+        ESACC_F24_Visible,ESACC_F24_Editable,ESACC_F24_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,60,
+        ESACC_F60_Visible,TempBoolean,ESACC_F60_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,60,
+        ESACC_F60_Visible,TempBoolean,ESACC_F60_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,61,
+        ESACC_F61_Visible,TempBoolean,ESACC_F61_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,61,
+        ESACC_F61_Visible,TempBoolean,ESACC_F61_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,70,
+        ESACC_F70_Visible,ESACC_F70_Editable,ESACC_F70_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,79,
+        ESACC_F79_Visible,ESACC_F79_Editable,ESACC_F79_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,81,
+        ESACC_F81_Visible,ESACC_F81_Editable,ESACC_F81_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,82,
+        ESACC_F82_Visible,ESACC_F82_Editable,ESACC_F82_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,83,
+        ESACC_F83_Visible,ESACC_F83_Editable,ESACC_F83_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,88,
+        ESACC_F88_Visible,ESACC_F88_Editable,ESACC_F88_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,89,
+        ESACC_F89_Visible,ESACC_F89_Editable,ESACC_F89_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,90,
+        ESACC_F90_Visible,ESACC_F90_Editable,ESACC_F90_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,99,
+        ESACC_F99_Visible,ESACC_F99_Editable,ESACC_F99_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,2310,0,115,
+        ESACC_F115_Visible,ESACC_F115_Editable,ESACC_F115_HideValue);
+
+      ESACC_EasySecurityManual(OpenObject);
+    END;
+
+    LOCAL PROCEDURE ESACC_EasySecurityManual@14123811(OpenObject@14123811 : Boolean);
+    BEGIN
+    END;
+
+    PROCEDURE SuppressExitPrompt@5();
+    BEGIN
+      ForceExit := TRUE;
+    END;
+
+    LOCAL PROCEDURE GetTotalTaxRate@1020001();
+    VAR
+      O365TaxSettingsManagement@1020000 : Codeunit 10150;
+    BEGIN
+      IF "Tax Area Code" <> '' THEN
+        TotalTaxRate := FORMAT(O365TaxSettingsManagement.GetTotalTaxRate("Tax Area Code")) + PercentTxt
+      ELSE
+        TotalTaxRate := '';
+    END;
+
+    LOCAL PROCEDURE GetInvDiscountCaption@8() : Text;
+    BEGIN
+      EXIT(O365SalesInvoiceMgmt.GetInvoiceDiscountCaption(ROUND("Invoice Discount Value",0.1)));
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

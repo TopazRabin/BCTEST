@@ -1,0 +1,1217 @@
+OBJECT Codeunit 14000574 Create Location Inv. Roll Up
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/01/21;
+    Time=12:00:00 PM;
+    Version List=UBP3.03.03;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      AdvForSetup@1240030006 : Record 14002651;
+      InvMgtSetup@1240020008 : Record 14000551;
+      TempLocInvRollUp@1240030012 : TEMPORARY Record 14000583;
+      Forecast@1240030007 : Codeunit 14000567;
+      UBP@1240020007 : Codeunit 14000564;
+      ReplPath@1240030011 : Page 14000529;
+      Level@1240030002 : Integer;
+      LevelArray@1240030001 : ARRAY [50] OF Integer;
+      LocArray@1240030000 : ARRAY [50] OF Code[10];
+      MaximumSOQ@1240030010 : Decimal;
+      MinimumSOQ@1240030009 : Decimal;
+      UseSurplusFactor@1240030013 : Boolean;
+      UseExcessFactor@1240020028 : Boolean;
+      TopLevelSafetyStock@1240020004 : Decimal;
+      TopLevelSurplus@1240020006 : Decimal;
+      GblOverrideCalcSingleLocForecast@1240020010 : Boolean;
+      GblCalcProductionPlanningLines@1240020011 : Boolean;
+      SetupRetrieved@1240020012 : Boolean;
+      TxtLocInvPos@1240020022 : TextConst 'ENU="Loc Inv Pos (%1) = Net Inv Pos (%2)"';
+      TxtLocInvPosSpoke@1240020000 : TextConst 'ENU="Loc Inv Pos (%1) = Net Inv Pos (%2) + Spoke Forecast (%3)"';
+      TxtLocInvPosAdjByMin@1240020017 : TextConst 'ENU="Adj. Loc Inv Pos (%1) = Qty Exp (%2) - Min Shelf (%3)"';
+      TxtTransferInvPosOrig@1240020009 : TextConst 'ENU="Trans Qty (%1) = Loc Inv Pos (%2)  + Tout (%3) + Tin (%4)"';
+      TxtTransferQty@1240020015 : TextConst 'ENU="Trans Qty (%1) ="';
+      TxtTransferInvPos@1240020016 : TextConst 'ENU=Loc Inv Pos (%1) + Trans Out (%2) + Trans In (%3)';
+      TxtNetAutoAdjustment@1240020002 : TextConst 'ENU="Loc Inv Pos (%1) = Loc Inv Pos (%2) + Net Forc Adj (%3)"';
+      TxtLocInvPosMinMax@1240020001 : TextConst 'ENU="Loc Inv Pos (%1) = Qty. Exp (%2) + Transfer Out (%3) + Transfer In (%4)"';
+      TxtLocInvPosMax@1240020003 : TextConst 'ENU=" - Max Qty (%1)"';
+      TxtLocInvPosMinMax2@1240020021 : TextConst 'ENU="Loc Inv Pos (%1) = Qty. Exp (%2)  - Max Qty (%3)"';
+      TxtFinalPos@1240020005 : TextConst 'ENU="Surp Pos (%1) = Loc Inv Pos (%2) + Transfer Out (%3) + Transfer In (%4)"';
+      TxtOrdMin@1240020014 : TextConst 'ENU=Increase (%1) to (%2) by Ord Min';
+      TxtOrdMult@1240020013 : TextConst 'ENU=Increase (%1) to (%2) by Ord Mult (%3)';
+      TextNetInvPos@1240020018 : TextConst 'ENU=Net Inv Pos (%1)';
+      TextLocInvPos@1240020019 : TextConst 'ENU=Loc Inv Pos (%1)';
+      TextLocInvPosLocMax@1240020020 : TextConst 'ENU="Loc Inv Pos (%1) = Net Inv Pos (%2) - Max Qty (%3)"';
+      TxtReplQty@1240020023 : TextConst 'ENU="Replenishment Qty (%1) = "';
+      TxtReplInvPos@1240020026 : TextConst 'ENU=Loc Inv Pos (%1) + Trans Out (%2) + Trans In (%3)';
+      TxtReplQtyOrig@1240020024 : TextConst 'ENU="Replenishment Qty (%1) = Loc Inv Pos (%2)  + Tout (%3) + Tin (%4)"';
+      TxtReplQtyOld@1240020025 : TextConst 'ENU="Replenishment Qty (%1) = Loc Inv Pos (%2) + Transfer Out (%3) + Transfer In (%4)"';
+      GblSurplusExcessFactor@1240020027 : Decimal;
+
+    PROCEDURE CalcRollUp@1240030000(CurrProcUnit@1240030000 : Record 14000555;DispForm@1240030024 : Boolean;FormType@1240030025 : 'Roll UP,Repl. Path,None';OverrideLTHDate@1240030037 : Date);
+    BEGIN
+      GetSetup;
+
+      CalcRollUpAdjHub(CurrProcUnit,DispForm,FormType,OverrideLTHDate);
+    END;
+
+    PROCEDURE CalcRollUpAdjHub@1240020000(CurrProcUnit@1240020003 : Record 14000555;DispForm@1240020002 : Boolean;FormType@1240020001 : 'Roll UP,Repl. Path,None';OverrideLTHDate@1240020000 : Date);
+    VAR
+      Location@1240020032 : Record 14;
+      LocProcUnit@1240020031 : Record 14000555;
+      SourceProcUnit@1240020030 : Record 14000555;
+      TempLocInvRollUp2@1240020029 : TEMPORARY Record 14000583;
+      i@1240020005 : Integer;
+      j@1240020004 : Integer;
+      NetInvPos@1240020018 : Decimal;
+      QtyExpected@1240020033 : Decimal;
+      TransferQty@1000000001 : Decimal;
+      TransferQty1@1000000000 : Decimal;
+      MultRemainder@1000000002 : Decimal;
+      NegSurplusInv@1000000003 : Decimal;
+      SurplusInv@1000000004 : Decimal;
+      ShelfAdj@1240020006 : Decimal;
+      TempAutoAdj@1240020007 : Decimal;
+      QtyBeforeMin@1240020008 : Decimal;
+      QtyBeforeMult@1240020011 : Decimal;
+      QtyAfterMult@1240020009 : Decimal;
+      LevelUpTransferQty@1240020010 : Decimal;
+      OrigQty@1240020012 : Decimal;
+      ReplenishQty@1240020013 : Decimal;
+      TempMsg@1240020014 : Text[500];
+      SingleLocTempMsg@1240020015 : Text[250];
+      SporadicAvgUsg@1240020016 : Decimal;
+    BEGIN
+      CLEAR(LevelArray);
+      CLEAR(LocArray);
+
+      SourceProcUnit.COPY(CurrProcUnit);
+      GetSourceUnit(SourceProcUnit);
+
+      i := 1;
+      j := 1;
+      Level := 1;
+      LocArray[i] := SourceProcUnit."Location Code";
+      LevelArray[i] := 1;
+      i := i + 1;
+
+      REPEAT
+        LocProcUnit.RESET;
+        LocProcUnit.SETRANGE("Item No.",SourceProcUnit."Item No.");
+        LocProcUnit.SETRANGE("Variant Code",SourceProcUnit."Variant Code");
+        LocProcUnit.SETRANGE("Replenishment Source Type",LocProcUnit."Replenishment Source Type"::Location);
+        LocProcUnit.SETRANGE("Replenishment Source Code",LocArray[j]);
+        IF LocProcUnit.FINDSET THEN BEGIN
+          REPEAT
+            InsertLoc(LocProcUnit);
+          UNTIL LocProcUnit.NEXT = 0;
+        END;
+        j := j + 1;
+      UNTIL LocArray[j] = '';
+
+      LocProcUnit.RESET;
+
+      TempLocInvRollUp.RESET;
+      TempLocInvRollUp.DELETEALL;
+      TempLocInvRollUp2.RESET;
+      TempLocInvRollUp2.DELETEALL;
+
+      TopLevelSafetyStock := 0;
+
+      // By Level fill out the individual Location roll-up data
+      i := 1;
+      REPEAT
+        TempLocInvRollUp.INIT;
+        TempLocInvRollUp."Item No." := SourceProcUnit."Item No.";
+        TempLocInvRollUp."Location Code" := SourceProcUnit."Location Code";
+        TempLocInvRollUp."Variant Code" := SourceProcUnit."Variant Code";
+
+        TempLocInvRollUp.Level := LevelArray[i];
+        TempLocInvRollUp.VALIDATE("Individual Location Code",LocArray[i]);
+        IF i = 1 THEN
+          TempLocInvRollUp."Repl. Path" := TempLocInvRollUp."Repl. Path"::Source
+        ELSE
+          TempLocInvRollUp."Repl. Path" := TempLocInvRollUp."Repl. Path"::Yes;
+
+        LocProcUnit.GET(LocArray[i],SourceProcUnit."Item No.",SourceProcUnit."Variant Code");
+        TempLocInvRollUp."Spokes Exist" := UBP.SpokesExist(LocProcUnit);
+
+        IF LocProcUnit."Replenishment Source Type" = LocProcUnit."Replenishment Source Type"::Location THEN
+          TempLocInvRollUp."Repl. Path Location Code" := LocProcUnit."Replenishment Source Code";
+
+        TempLocInvRollUp."Order Minimum" := LocProcUnit."Order Minimum";
+        TempLocInvRollUp."Order Multiple" := LocProcUnit."Order Multiple";
+
+        LocProcUnit.SETFILTER("Location Filter",LocProcUnit."Location Code");
+        LocProcUnit.SETFILTER("Expire Date Filter",'>=%1',WORKDATE);
+        IF NOT LocProcUnit."Nonstock Unit" THEN BEGIN
+          IF LocProcUnit."Summarize Variant Detail" THEN BEGIN
+            LocProcUnit.CALCFIELDS("Additional Stock Quantity Sum.");
+            TempLocInvRollUp."Additional Stock Qty." := LocProcUnit."Additional Stock Quantity Sum.";
+          END ELSE BEGIN
+            LocProcUnit.CALCFIELDS("Additional Stock Quantity");
+            TempLocInvRollUp."Additional Stock Qty." := LocProcUnit."Additional Stock Quantity";
+          END;
+        END ELSE
+          TempLocInvRollUp."Additional Stock Qty." := 0;
+
+        IF NOT LocProcUnit."Nonstock Unit" THEN
+          TempLocInvRollUp."Minimum Shelf Stock" := LocProcUnit."Minimum Shelf Stock";
+
+        Location.GET(LocProcUnit."Location Code");
+
+        IF (i = 1) AND (OverrideLTHDate = 0D) THEN
+            OverrideLTHDate := UBP.GetLeadTimeHorizHub(LocProcUnit);
+
+        CLEAR(Forecast);
+        Forecast.SetForecastOnlyReqPeriods;
+        IF UseSurplusFactor THEN BEGIN
+          Forecast.SetUseSurplusFactor(TRUE);
+        END;
+        IF UseExcessFactor THEN BEGIN
+          Forecast.SetUseExcessFactor(TRUE);
+        END;
+        Forecast.SetCalcProductionPlanninglines(GblCalcProductionPlanningLines);
+
+        NetInvPos := Forecast.CalcNetNeed(LocProcUnit, '', OverrideLTHDate,FALSE);
+
+        IF GUIALLOWED THEN
+          TempLocInvRollUp."Message 1" := Forecast.GetNetInvPosSource();
+
+        IF (LocProcUnit."Replenishment Source Type" <>
+             LocProcUnit."Replenishment Source Type"::Location) AND
+           (LocProcUnit."Safety Stock Calc. Method" =
+             LocProcUnit."Safety Stock Calc. Method"::"Forecast Deviation")
+        THEN BEGIN
+          TopLevelSafetyStock := Forecast.GetSafetyStockQty;
+        END;
+
+        TempLocInvRollUp."Repl. Source Type" := LocProcUnit."Replenishment Source Type";
+        TempLocInvRollUp."Nonstock Item" := LocProcUnit."Nonstock Unit";
+
+        TempLocInvRollUp."Net Exp. Inv." := NetInvPos;
+        TempLocInvRollUp."Rolled Up Forecast" := Forecast.GetLTHForecast;
+        TempLocInvRollUp."Auto Forc. Adj" :=
+          Forecast.GetLTHForecastAdj(LocProcUnit."Location Code",OverrideLTHDate);
+        TempLocInvRollUp."Frozen Forecast" := Forecast.GetFrozenForecast();
+
+        IF (LocProcUnit."Replenishment Model" = LocProcUnit."Replenishment Model"::"Min/Max") AND
+           (NOT LocProcUnit."Nonstock Unit") THEN BEGIN
+          IF LocProcUnit."Maximum Inventory" <> 0 THEN BEGIN
+            TempLocInvRollUp."Max. Qty." := LocProcUnit."Maximum Inventory";
+            TempLocInvRollUp."Min. Qty." := LocProcUnit."Minimum Inventory";
+          END ELSE BEGIN
+            IF LocProcUnit."Maximum Days Supply" <> 0 THEN BEGIN
+              TempLocInvRollUp."Target Stock Level" := Forecast.GetTargetStockLevelForRollUp;
+              TempLocInvRollUp."Target Stock Level Full" := TempLocInvRollUp."Target Stock Level";
+            END;
+          END;
+        END ELSE BEGIN
+          TempLocInvRollUp."Target Stock Level" := Forecast.GetTargetStockLevelForRollUp;
+          TempLocInvRollUp."Target Stock Level Full" := TempLocInvRollUp."Target Stock Level";
+        END;
+
+        TempLocInvRollUp."Adj. Net Exp. Inv." := TempLocInvRollUp."Net Exp. Inv.";
+
+        // enables comparing the target stock level (forecast) to the rolled-up forecast
+        // handle sporadic if not using max
+        IF (TempLocInvRollUp."Max. Qty." = 0) THEN BEGIN
+          IF TempLocInvRollUp."Target Stock Level" > 0 THEN BEGIN
+            TempLocInvRollUp."Rolled Up Forecast" := TempLocInvRollUp."Rolled Up Forecast" + TempLocInvRollUp."Target Stock Level"; // Enables Target as forecast for roll-up consideration
+          END;
+        END;
+
+        TempLocInvRollUp."Loc. Exp. Inv." := TempLocInvRollUp."Adj. Net Exp. Inv.";
+
+        TempLocInvRollUp."Loc. Forecast" := TempLocInvRollUp."Rolled Up Forecast";
+
+        TempLocInvRollUp."Loc. Immediate Demand" := CalcDemand(
+          TempLocInvRollUp."Individual Location Code",
+          TempLocInvRollUp."Item No.",
+          TempLocInvRollUp."Variant Code",
+          OverrideLTHDate);
+
+        TempLocInvRollUp."Loc. Component Demand" := CalcComponentDemand(LocProcUnit, OverrideLTHDate);
+        TempLocInvRollUp."Loc. Transfer Demand" := CalcTransferDemand(LocProcUnit, OverrideLTHDate);
+        TempLocInvRollUp."Loc. Inventory" := CalcInventory(LocProcUnit);
+        TempLocInvRollUp."Rec. No." := i;
+        TempLocInvRollUp."Horizon Date" := OverrideLTHDate;
+        TempLocInvRollUp.INSERT;
+        TempLocInvRollUp2.INIT;
+        TempLocInvRollUp2.COPY(TempLocInvRollUp);
+        TempLocInvRollUp2.INSERT;
+        i := i + 1;
+      UNTIL LocArray[i] = '';
+
+      // Calculate Details - loop through the path updating its source location
+      TempLocInvRollUp2.RESET;
+      TempLocInvRollUp2.SETCURRENTKEY(Level);
+      TempLocInvRollUp2.SETFILTER(Level,'>%1',1);
+      IF TempLocInvRollUp2.FINDSET THEN BEGIN
+        REPEAT
+          // find replenishment path location
+          TempLocInvRollUp.SETRANGE(
+            "Individual Location Code",TempLocInvRollUp2."Repl. Path Location Code");
+          TempLocInvRollUp.SETRANGE("Item No.",TempLocInvRollUp2."Item No.");
+          TempLocInvRollUp.SETRANGE("Variant Code",TempLocInvRollUp2."Variant Code");
+          TempLocInvRollUp.FINDFIRST;
+
+          // Added 2.99.01 - Do not roll-up forecasts if this level is max qty. - this is to compensate for suggested orders and min/max qty.
+          // if suggested orders used roll-up for min/max replenishment types then this could be removed.
+          IF (TempLocInvRollUp."Max. Qty." = 0) THEN
+            TempLocInvRollUp."Prev. Level Forecast" :=
+              TempLocInvRollUp."Prev. Level Forecast" + TempLocInvRollUp2."Rolled Up Forecast";
+
+          IF (TempLocInvRollUp."Max. Qty." = 0) THEN
+            TempLocInvRollUp."Prev. Level Auto Forc. Adj." :=
+                TempLocInvRollUp."Prev. Level Auto Forc. Adj." + TempLocInvRollUp2."Auto Forc. Adj";
+
+          TempLocInvRollUp."Loc. Forecast" :=
+            TempLocInvRollUp."Rolled Up Forecast" - TempLocInvRollUp."Prev. Level Forecast";
+
+          IF TempLocInvRollUp."Loc. Forecast" < 0 THEN
+            TempLocInvRollUp."Loc. Forecast" := 0;
+
+          TempLocInvRollUp."Adj. Net Exp. Inv." := TempLocInvRollUp."Net Exp. Inv." + TempLocInvRollUp."Prev. Level Forecast";
+          // rounding issues - due to order multiple and order min then round down
+          //IF (TempLocInvRollUp."Adj. Net Exp. Inv." < 0) AND (TempLocInvRollUp."Adj. Net Exp. Inv." > -1) THEN
+          //  TempLocInvRollUp."Adj. Net Exp. Inv." := 0;
+
+          // do not adjust from previous level if using single loc for. roll-up
+          TempAutoAdj := 0;
+          IF  (AdvForSetup."Hub to Spoke Forc. Calc." = AdvForSetup."Hub to Spoke Forc. Calc."::Accumulated) THEN BEGIN
+            // if we had to auto forecast adjust the previous levels more than the current fix that adjustment
+            // forecast was bigger at the top to cover the update to previous level we can reduce the previous level forecast further
+            IF TempLocInvRollUp."Auto Forc. Adj" < TempLocInvRollUp."Prev. Level Auto Forc. Adj." THEN BEGIN
+              TempLocInvRollUp."Net Auto Forc. Adj." := TempLocInvRollUp."Auto Forc. Adj" - TempLocInvRollUp."Prev. Level Auto Forc. Adj.";
+              TempAutoAdj := TempLocInvRollUp."Adj. Net Exp. Inv." + TempLocInvRollUp."Net Auto Forc. Adj.";
+              TempLocInvRollUp."Adj. Net Exp. Inv." :=  TempAutoAdj;
+            END;
+          END;
+
+          // not being used currently
+          TempLocInvRollUp."Unusual Demand Adjustment" := 0;
+          TempLocInvRollUp."Loc. Exp. Inv." :=
+            TempLocInvRollUp."Loc. Exp. Inv." - TempLocInvRollUp."Unusual Demand Adjustment";
+          // not being used currently
+
+          TempLocInvRollUp."Loc. Exp. Inv." := TempLocInvRollUp."Adj. Net Exp. Inv.";
+          TempLocInvRollUp.MODIFY(FALSE);
+
+        UNTIL TempLocInvRollUp2.NEXT = 0;
+
+      END ELSE BEGIN
+        // single level only - straight forecast
+        TempLocInvRollUp.GET(1);
+        TempLocInvRollUp.Surplus := TempLocInvRollUp."Loc. Exp. Inv.";
+        TempLocInvRollUp.MODIFY(FALSE);
+      END;
+
+      TempLocInvRollUp2.RESET;
+      TempLocInvRollUp2.DELETEALL;
+
+      TempLocInvRollUp.RESET;
+      IF TempLocInvRollUp.FINDSET THEN
+        REPEAT
+          TempLocInvRollUp2.INIT;
+          TempLocInvRollUp2 := TempLocInvRollUp;
+          TempLocInvRollUp2.INSERT(FALSE);
+        UNTIL TempLocInvRollUp.NEXT = 0;
+
+      LocProcUnit.RESET;
+
+      // final calculations from bottom spokes to ordering hub
+      TempLocInvRollUp2.SETCURRENTKEY(Level);
+      TempLocInvRollUp2.ASCENDING(FALSE);
+      IF TempLocInvRollUp2.FIND('-') THEN
+        REPEAT
+
+          LocProcUnit.GET(
+            TempLocInvRollUp2."Individual Location Code",
+            TempLocInvRollUp2."Item No.",
+            TempLocInvRollUp2."Variant Code");
+
+          TempLocInvRollUp.GET(TempLocInvRollUp2."Rec. No.");
+
+          TempMsg := TempLocInvRollUp."Message 1";  // hold until after single location adjustment
+
+          // Single Location
+          IF GUIALLOWED THEN
+            SingleLocTempMsg := '';
+          SporadicAvgUsg := 0;
+          IF (TempLocInvRollUp."Spokes Exist" OR GblOverrideCalcSingleLocForecast) THEN BEGIN
+            IF (TempLocInvRollUp."Nonstock Item") OR (TempLocInvRollUp."Max. Qty." > 0) THEN BEGIN
+              TempLocInvRollUp."Single Loc. Adj. Forecast" := TempLocInvRollUp."Loc. Immediate Demand" + TempLocInvRollUp."Loc. Component Demand" + TempLocInvRollUp."Loc. Transfer Demand";
+              IF GUIALLOWED THEN BEGIN
+                IF TempLocInvRollUp."Nonstock Item" THEN
+                  SingleLocTempMsg := STRSUBSTNO('Nonstock Item:\Loc. Forecast (%1) = Immediate Demand (%2) + Component Demand (%3) + Transfer Deamnd (%4)',
+                    TempLocInvRollUp."Single Loc. Adj. Forecast", TempLocInvRollUp."Loc. Immediate Demand", TempLocInvRollUp."Loc. Component Demand", TempLocInvRollUp."Loc. Transfer Demand");
+                IF (TempLocInvRollUp."Max. Qty." > 0) THEN BEGIN
+                  SingleLocTempMsg := STRSUBSTNO('Max Qty Item:', TempLocInvRollUp."Max. Qty.");
+                  SingleLocTempMsg += STRSUBSTNO('\Loc. Forecast (%1) = Immediate Demand (%2) + Component Demand (%3) + Transfer Deamnd (%4)',
+                    TempLocInvRollUp."Single Loc. Adj. Forecast", TempLocInvRollUp."Loc. Immediate Demand", TempLocInvRollUp."Loc. Component Demand", TempLocInvRollUp."Loc. Transfer Demand");
+                END;
+              END;
+              // single location is allowed to go higher than the rolled up forecast but only for visibility adjustments to the ordering are not
+              //IF TempLocInvRollUp."Single Loc. Adj. Forecast" > TempLocInvRollUp."Rolled Up Forecast" THEN
+              //  TempLocInvRollUp."Single Loc. Adj. Forecast" := TempLocInvRollUp."Rolled Up Forecast";
+            END ELSE BEGIN
+              TempLocInvRollUp."Single Loc. Adj. Forecast" := CalcSingleLocForecast(LocProcUnit, OverrideLTHDate, FALSE);
+              IF GUIALLOWED THEN BEGIN
+                  //SingleLocTempMsg := Forecast.GetNetInvPosSource();
+                  SingleLocTempMsg := STRSUBSTNO('Loc. Forecast (%1)',
+                    TempLocInvRollUp."Single Loc. Adj. Forecast");
+              END;
+              IF (TempLocInvRollUp."Target Stock Level" > 0) THEN BEGIN
+                IF TempLocInvRollUp."Spokes Exist" THEN BEGIN
+                  SporadicAvgUsg := (((OverrideLTHDate - WORKDATE)+1) * CalcSingleLocAvgUsagePerDay(LocProcUnit));
+                  Forecast.RoundValueForForecast(LocProcUnit,SporadicAvgUsg);
+                  IF GUIALLOWED THEN BEGIN
+                    IF (SporadicAvgUsg > 0) THEN
+                      SingleLocTempMsg += STRSUBSTNO('\Loc. Forc. Adj. (Hub) (%1) := Loc. Forc. (%2) + Sporadic Item Adj (%3)',
+                        (TempLocInvRollUp."Single Loc. Adj. Forecast" + SporadicAvgUsg),TempLocInvRollUp."Single Loc. Adj. Forecast", SporadicAvgUsg);
+                  END;
+                  TempLocInvRollUp."Single Loc. Adj. Forecast" := TempLocInvRollUp."Single Loc. Adj. Forecast" + (SporadicAvgUsg);
+                END ELSE BEGIN
+                  IF GUIALLOWED THEN BEGIN
+                    IF (TempLocInvRollUp."Target Stock Level" > 0) THEN
+                      SingleLocTempMsg += STRSUBSTNO('\Loc. Forc. Adj. (Spoke) (%1) := Loc. Forc. (%2) + Sporadic Item Adj (%3)',
+                        (TempLocInvRollUp."Single Loc. Adj. Forecast" + TempLocInvRollUp."Target Stock Level"),TempLocInvRollUp."Single Loc. Adj. Forecast", TempLocInvRollUp."Target Stock Level");
+                  END;
+                  TempLocInvRollUp."Single Loc. Adj. Forecast" := TempLocInvRollUp."Single Loc. Adj. Forecast" + TempLocInvRollUp."Target Stock Level";
+                END;
+              END;
+              IF GUIALLOWED THEN BEGIN
+                  IF (TempLocInvRollUp."Loc. Component Demand" > 0) OR (TempLocInvRollUp."Loc. Transfer Demand" > 0) THEN
+                    SingleLocTempMsg += STRSUBSTNO('\Loc. Forc. Adj. Comp/Trans (%1) := Loc. Forc. (%2) + Comp. (%3) + Transer (%4)',
+                      TempLocInvRollUp."Single Loc. Adj. Forecast" + TempLocInvRollUp."Loc. Component Demand" + TempLocInvRollUp."Loc. Transfer Demand",
+                      TempLocInvRollUp."Single Loc. Adj. Forecast",
+                      TempLocInvRollUp."Loc. Component Demand",
+                      TempLocInvRollUp."Loc. Transfer Demand");
+              END;
+              TempLocInvRollUp."Single Loc. Adj. Forecast" := TempLocInvRollUp."Single Loc. Adj. Forecast" + TempLocInvRollUp."Loc. Component Demand" + TempLocInvRollUp."Loc. Transfer Demand";
+            END;
+          END;
+          IF TempLocInvRollUp."Single Loc. Adj. Forecast" < 0 THEN
+            TempLocInvRollUp."Single Loc. Adj. Forecast" := 0;
+          Forecast.RoundValueForForecast(LocProcUnit,TempLocInvRollUp."Single Loc. Adj. Forecast");
+          TempLocInvRollUp."Single Loc. Message" := SingleLocTempMsg;
+          // Single Location
+
+          // Hub and Spoke Forecast Adjustments
+          IF ((TempLocInvRollUp."Rolled Up Forecast" < TempLocInvRollUp."Prev. Level Forecast") OR
+            (AdvForSetup."Hub to Spoke Forc. Calc." = AdvForSetup."Hub to Spoke Forc. Calc."::"Loc. Forecast"))
+              AND (TempLocInvRollUp."Spokes Exist") THEN BEGIN
+
+            IF TempLocInvRollUp."Single Loc. Adj. Forecast" > 0 THEN BEGIN
+              // single loc. adj. forecast cannot include component and transfer demand as it will be included in the net exp. inv.
+              TempLocInvRollUp."Loc. Forecast" := TempLocInvRollUp."Single Loc. Adj. Forecast" - (TempLocInvRollUp."Loc. Component Demand" + TempLocInvRollUp."Loc. Transfer Demand");
+              IF TempLocInvRollUp."Loc. Forecast" < 0 THEN
+                TempLocInvRollUp."Loc. Forecast" := 0;
+
+              // reduce the prev. level to assume the top is correct and guard its own forecast
+              // single location is allowed to go higher than the rolled up forecast but only for visibility ordering it does not
+              IF TempLocInvRollUp."Loc. Forecast" > TempLocInvRollUp."Rolled Up Forecast" THEN
+                TempLocInvRollUp."Loc. Forecast" := TempLocInvRollUp."Rolled Up Forecast";
+              Forecast.RoundValueForForecast(LocProcUnit, TempLocInvRollUp."Loc. Forecast");
+
+              // Frozen Forecasts
+              // No multiple values for hub & spoke - Try to adjust so that all the forecast is not for the hub
+              IF TempLocInvRollUp."Frozen Forecast" THEN BEGIN
+                IF GUIALLOWED THEN
+                IF (TempLocInvRollUp."Rolled Up Forecast" = TempLocInvRollUp."Loc. Forecast") THEN BEGIN
+                  SingleLocTempMsg := 'Frozen Forecast:  Hub and Single location forecasts are equal.  Adjusting Single Location\';
+                  IF (TempLocInvRollUp."Nonstock Item") OR (TempLocInvRollUp."Max. Qty." > 0) THEN BEGIN
+                    TempLocInvRollUp."Single Loc. Adj. Forecast" := TempLocInvRollUp."Loc. Immediate Demand" + TempLocInvRollUp."Loc. Component Demand" + TempLocInvRollUp."Loc. Transfer Demand";
+                    IF GUIALLOWED THEN BEGIN
+                      IF (TempLocInvRollUp."Loc. Component Demand" > 0) OR (TempLocInvRollUp."Loc. Transfer Demand" > 0) THEN
+                        SingleLocTempMsg += STRSUBSTNO('\Loc. Forc. Adj. Comp/Trans (%1) := Loc. Forc. (%2) + Comp. (%3) + Transer (%4)',
+                        TempLocInvRollUp."Single Loc. Adj. Forecast" + TempLocInvRollUp."Loc. Component Demand" + TempLocInvRollUp."Loc. Transfer Demand",
+                        TempLocInvRollUp."Single Loc. Adj. Forecast",
+                        TempLocInvRollUp."Loc. Component Demand",
+                        TempLocInvRollUp."Loc. Transfer Demand");
+                    END;
+                  END ELSE BEGIN
+                    TempLocInvRollUp."Single Loc. Adj. Forecast" := CalcSingleLocForecast(LocProcUnit, OverrideLTHDate, TRUE);
+                    IF GUIALLOWED THEN BEGIN
+                      SingleLocTempMsg += STRSUBSTNO('Loc. Forecast (%1) - Ignores Frozen Forecast to find a new Loc. Forecast',
+                        TempLocInvRollUp."Single Loc. Adj. Forecast");
+                    END;
+                    IF (TempLocInvRollUp."Target Stock Level" > 0) THEN BEGIN
+                      SporadicAvgUsg := (((OverrideLTHDate - WORKDATE)+1) * CalcSingleLocAvgUsagePerDay(LocProcUnit));
+                      Forecast.RoundValueForForecast(LocProcUnit,SporadicAvgUsg);
+                      IF GUIALLOWED THEN BEGIN
+                        IF SporadicAvgUsg > 0 THEN
+                          SingleLocTempMsg += STRSUBSTNO('\Loc. Forc. Adj. (Hub) (%1) := Loc. Forc. (%2) + Sporadic Item Adj (%3)',
+                            (TempLocInvRollUp."Single Loc. Adj. Forecast" + SporadicAvgUsg),TempLocInvRollUp."Single Loc. Adj. Forecast", SporadicAvgUsg);
+                      END;
+                      TempLocInvRollUp."Single Loc. Adj. Forecast" := TempLocInvRollUp."Single Loc. Adj. Forecast" + (SporadicAvgUsg);
+                    END;
+                  END;
+                  IF TempLocInvRollUp."Single Loc. Adj. Forecast" < 0 THEN
+                    TempLocInvRollUp."Single Loc. Adj. Forecast" := 0;
+
+                  Forecast.RoundValueForForecast(LocProcUnit, TempLocInvRollUp."Single Loc. Adj. Forecast");
+                  TempLocInvRollUp."Loc. Forecast" := TempLocInvRollUp."Single Loc. Adj. Forecast";
+                  IF TempLocInvRollUp."Loc. Forecast" > TempLocInvRollUp."Rolled Up Forecast" THEN
+                    TempLocInvRollUp."Loc. Forecast" := TempLocInvRollUp."Rolled Up Forecast";
+                END;
+                IF SingleLocTempMsg <> '' THEN
+                  TempLocInvRollUp."Single Loc. Message" := SingleLocTempMsg;
+              END;
+              // Frozen Forecasts
+
+              TempLocInvRollUp."Prev. Level Forecast" := TempLocInvRollUp."Rolled Up Forecast" - TempLocInvRollUp."Loc. Forecast";
+              TempLocInvRollUp."Prev. Level Auto Forc. Adj." := 0;
+              TempLocInvRollUp."Net Auto Forc. Adj." := 0;
+              // this could auto adjust the hub up instead changing the rolled up forecast and making the forecast higher
+              //TempLocInvRollUp."Rolled Up Forecast" := TempLocInvRollUp."Prev. Level Forecast" + TempLocInvRollUp."Single Loc. Adj. Forecast";
+            END ELSE BEGIN
+              // when replacing previous level the compoenent demand and transfer demand will get included from the net exp. inv.
+              TempLocInvRollUp."Prev. Level Forecast" := TempLocInvRollUp."Rolled Up Forecast" - TempLocInvRollUp."Loc. Immediate Demand";
+
+              IF TempLocInvRollUp."Prev. Level Forecast" < 0 THEN
+                TempLocInvRollUp."Prev. Level Forecast" := 0;
+
+              TempLocInvRollUp."Prev. Level Auto Forc. Adj." := 0;
+              TempLocInvRollUp."Net Auto Forc. Adj." := 0;
+              TempLocInvRollUp."Loc. Forecast" := TempLocInvRollUp."Rolled Up Forecast" - TempLocInvRollUp."Prev. Level Forecast";
+            END;
+
+            // previous level has been adjusted flag if using accumulated and the spoke is greater than the hub
+            IF ((TempLocInvRollUp."Rolled Up Forecast" < TempLocInvRollUp."Prev. Level Forecast") AND
+            (AdvForSetup."Hub to Spoke Forc. Calc." <> AdvForSetup."Hub to Spoke Forc. Calc."::"Loc. Forecast")) THEN
+              TempLocInvRollUp."Forced Forc. Adj." := TRUE;
+
+            TempLocInvRollUp."Adj. Net Exp. Inv." := TempLocInvRollUp."Net Exp. Inv." + TempLocInvRollUp."Prev. Level Forecast";
+            // rounding issues - due to order multiple and order min then round down
+            //IF (TempLocInvRollUp."Adj. Net Exp. Inv." < 0) AND (TempLocInvRollUp."Adj. Net Exp. Inv." > -1) THEN
+            //  TempLocInvRollUp."Adj. Net Exp. Inv." := 0;
+
+            TempLocInvRollUp."Loc. Exp. Inv." := TempLocInvRollUp."Adj. Net Exp. Inv.";
+
+            IF GUIALLOWED THEN
+              TempLocInvRollUp."Message 1" += '\' + STRSUBSTNO(TxtLocInvPosSpoke, TempLocInvRollUp."Loc. Exp. Inv.",  TempLocInvRollUp."Net Exp. Inv.", TempLocInvRollUp."Prev. Level Forecast");
+
+            IF TempLocInvRollUp."Auto Forc. Adj" < TempLocInvRollUp."Prev. Level Auto Forc. Adj." THEN BEGIN
+              TempLocInvRollUp."Net Auto Forc. Adj." :=
+                TempLocInvRollUp."Auto Forc. Adj" - TempLocInvRollUp."Prev. Level Auto Forc. Adj.";
+              TempAutoAdj := TempLocInvRollUp."Adj. Net Exp. Inv." + TempLocInvRollUp."Net Auto Forc. Adj.";
+              IF GUIALLOWED THEN
+                TempLocInvRollUp."Message 1" += STRSUBSTNO(TxtNetAutoAdjustment, TempAutoAdj, TempLocInvRollUp."Adj. Net Exp. Inv.", TempLocInvRollUp."Net Auto Forc. Adj.");
+              TempLocInvRollUp."Adj. Net Exp. Inv." :=  TempAutoAdj;
+            END;
+          END;
+          // Hub and Spoke Forecast Adjustments
+
+          // Unless overidden by exception Loc Inv. Pos. is set based on the forecast options
+          IF GUIALLOWED THEN BEGIN
+            IF TempLocInvRollUp."Spokes Exist" THEN
+              TempLocInvRollUp."Message 1" := TempMsg + '\' + STRSUBSTNO(TxtLocInvPosSpoke, TempLocInvRollUp."Adj. Net Exp. Inv.", TempLocInvRollUp."Net Exp. Inv.", TempLocInvRollUp."Prev. Level Forecast")
+            ELSE
+              TempLocInvRollUp."Message 1" := TempMsg + '\' + STRSUBSTNO(TxtLocInvPos, TempLocInvRollUp."Loc. Exp. Inv.", TempLocInvRollUp."Net Exp. Inv.");
+          END;
+
+          // min/max qty adjustments
+          QtyExpected := 0;
+          IF (TempLocInvRollUp."Max. Qty." > 0) THEN BEGIN
+            LocProcUnit.SETRANGE("Date Filter", 0D, OverrideLTHDate);
+            LocProcUnit.SETRANGE("Location Filter", LocProcUnit."Location Code");
+            LocProcUnit.SETFILTER("Prod. Order Status Filter", UBP.GetProductionStatusFilter());
+            QtyExpected := LocProcUnit.QtyExpected;
+            TempLocInvRollUp."Net Exp. Inv." := QtyExpected;
+            // executing production plan - simulated orders not yet created
+            IF GblCalcProductionPlanningLines THEN BEGIN
+              IF LocProcUnit."Summarize Variant Detail" THEN BEGIN
+                LocProcUnit.CALCFIELDS("Qty. on Prod. Plan Sum.");
+                LocProcUnit."Qty. on Prod. Plan" := LocProcUnit."Qty. on Prod. Plan Sum.";
+              END ELSE
+                LocProcUnit.CALCFIELDS("Qty. on Prod. Plan");
+              QtyExpected := QtyExpected + LocProcUnit."Qty. on Prod. Plan";
+            END;
+            TempLocInvRollUp."Net Exp. Inv." := QtyExpected;
+
+            IF GUIALLOWED THEN
+              TempLocInvRollUp."Message 1" := STRSUBSTNO(TextNetInvPos, TempLocInvRollUp."Net Exp. Inv.");
+
+            TempLocInvRollUp."Adj. Net Exp. Inv." := TempLocInvRollUp."Net Exp. Inv." + TempLocInvRollUp."Transfer Out Qty." + TempLocInvRollUp."Transfer In Qty.";
+
+            IF (TempLocInvRollUp."Repl. Source Type" <> TempLocInvRollUp."Repl. Source Type"::Location) THEN BEGIN
+              IF (TempLocInvRollUp."Adj. Net Exp. Inv." < TempLocInvRollUp."Min. Qty.") THEN BEGIN
+                TempLocInvRollUp."Loc. Exp. Inv." := TempLocInvRollUp."Net Exp. Inv." - TempLocInvRollUp."Max. Qty.";
+                IF GUIALLOWED THEN BEGIN
+                  TempLocInvRollUp."Message 1" += '\' + STRSUBSTNO(TxtLocInvPosMinMax2, TempLocInvRollUp."Loc. Exp. Inv.", TempLocInvRollUp."Net Exp. Inv.", TempLocInvRollUp."Max. Qty.");
+                END;
+              END ELSE BEGIN
+                TempLocInvRollUp."Loc. Exp. Inv." := TempLocInvRollUp."Net Exp. Inv.";
+                IF GUIALLOWED THEN
+                  TempLocInvRollUp."Message 1" += '\' + STRSUBSTNO(TextLocInvPos, TempLocInvRollUp."Loc. Exp. Inv.");
+              END;
+            END ELSE BEGIN
+              TempLocInvRollUp."Loc. Exp. Inv." := TempLocInvRollUp."Net Exp. Inv." - TempLocInvRollUp."Max. Qty.";
+              IF GUIALLOWED THEN BEGIN
+                TempLocInvRollUp."Message 1" += '\' + STRSUBSTNO(TextLocInvPosLocMax, TempLocInvRollUp."Loc. Exp. Inv.", TempLocInvRollUp."Net Exp. Inv.", TempLocInvRollUp."Max. Qty.");
+              END;
+            END;
+          END;
+          // min/max qty adjustments
+
+          // Shelf Adj due to Spoke Froecast Adj
+          // correct any issue were the Net Expected Inventory due to the previous level forecast adjustment ends in the
+          // current location's expected availability as calculated higher than the actual availability (Qty. Expected)
+          QtyExpected := 0;
+          IF TempLocInvRollUp."Spokes Exist" THEN BEGIN
+            LocProcUnit.SETRANGE("Date Filter", 0D, OverrideLTHDate);
+            LocProcUnit.SETRANGE("Location Filter", LocProcUnit."Location Code");
+            LocProcUnit.SETFILTER("Prod. Order Status Filter", UBP.GetProductionStatusFilter());
+            QtyExpected := LocProcUnit.QtyExpected();
+            IF GblCalcProductionPlanningLines THEN BEGIN
+              IF LocProcUnit."Summarize Variant Detail" THEN BEGIN
+                LocProcUnit.CALCFIELDS("Qty. on Prod. Plan Sum.");
+                LocProcUnit."Qty. on Prod. Plan" := LocProcUnit."Qty. on Prod. Plan Sum.";
+              END ELSE
+                LocProcUnit.CALCFIELDS("Qty. on Prod. Plan");
+            END;
+
+            ShelfAdj := 0;
+            IF NOT LocProcUnit."Nonstock Unit" THEN BEGIN
+              Location.GET(TempLocInvRollUp."Individual Location Code");
+              IF TempLocInvRollUp."Minimum Shelf Stock" > 0 THEN
+                  ShelfAdj := TempLocInvRollUp."Minimum Shelf Stock";
+
+              IF (Location."Min. Presentation Qty." > 0) AND (Location."Min. Presentation Qty." > ShelfAdj) THEN
+                  ShelfAdj := Location."Min. Presentation Qty.";
+
+              IF ShelfAdj < 0 THEN
+                ShelfAdj := 0;
+            END;
+
+            IF TempLocInvRollUp."Loc. Exp. Inv." > ((QtyExpected + LocProcUnit."Qty. on Prod. Plan") - ShelfAdj) THEN BEGIN
+              TempLocInvRollUp."Loc. Exp. Inv." := (QtyExpected + LocProcUnit."Qty. on Prod. Plan") - ShelfAdj;
+
+              IF GUIALLOWED THEN BEGIN
+                IF TempLocInvRollUp.Level = 1 THEN
+                    TempLocInvRollUp."Message 1" += '\' + STRSUBSTNO(TxtLocInvPosAdjByMin, TempLocInvRollUp."Loc. Exp. Inv.", QtyExpected + LocProcUnit."Qty. on Prod. Plan", ShelfAdj)
+                  ELSE BEGIN
+                    TempLocInvRollUp."Message 1" += '\' + STRSUBSTNO(TxtLocInvPosSpoke, TempLocInvRollUp."Net Exp. Inv.", TempLocInvRollUp."Prev. Level Forecast");
+                    TempLocInvRollUp."Message 1" += '\' + STRSUBSTNO(TxtLocInvPosAdjByMin, TempLocInvRollUp."Loc. Exp. Inv.", QtyExpected + LocProcUnit."Qty. on Prod. Plan", ShelfAdj)
+                  END;
+              END;
+            END;
+          END;
+          // Shelf Adj due to Spoke Froecast Adj
+
+          IF TempLocInvRollUp.Level > 1 THEN BEGIN
+            TransferQty1 :=
+              TempLocInvRollUp."Loc. Exp. Inv." + TempLocInvRollUp."Transfer In Qty." +
+              TempLocInvRollUp."Transfer Out Qty.";
+
+            IF TransferQty1 < 0 THEN
+              TransferQty := TransferQty1
+            ELSE
+              TransferQty := 0;
+
+            TransferQty := ABS(TransferQty);
+
+            // adjust transfer qty for min/multiple
+            QtyBeforeMult := 0;
+            QtyBeforeMin := 0;
+            QtyAfterMult := 0;
+            OrigQty := TransferQty;
+            LevelUpTransferQty := 0;
+            IF ((LocProcUnit."Order Multiple" <> 0) OR
+                (LocProcUnit."Order Minimum" <> 0)) AND
+                (TransferQty > 0)
+            THEN BEGIN
+              IF LocProcUnit."Order Multiple" = 0 THEN
+                LocProcUnit."Order Multiple" := 1;
+
+              MultRemainder := TransferQty MOD LocProcUnit."Order Multiple";
+              IF MultRemainder <> 0 THEN BEGIN
+                QtyBeforeMult := TransferQty;
+                TransferQty :=  TransferQty + (LocProcUnit."Order Multiple" - MultRemainder);
+                QtyAfterMult := TransferQty;
+              END;
+
+              IF TransferQty < LocProcUnit."Order Minimum" THEN BEGIN
+                QtyBeforeMin := TransferQty;
+                TransferQty := LocProcUnit."Order Minimum";
+              END;
+              LevelUpTransferQty := -TransferQty;
+            END;
+
+            IF GUIALLOWED THEN BEGIN
+              IF (QtyBeforeMin = 0) AND (QtyBeforeMult = 0) THEN BEGIN
+                TempLocInvRollUp."Message 2" := STRSUBSTNO(TxtTransferQty, TransferQty);
+                TempLocInvRollUp."Message 2" += ' ' + STRSUBSTNO(TxtTransferInvPos, TempLocInvRollUp."Loc. Exp. Inv.", TempLocInvRollUp."Transfer Out Qty.", TempLocInvRollUp."Transfer In Qty.");
+              END ELSE BEGIN
+                TempLocInvRollUp."Message 2" := STRSUBSTNO(TxtTransferInvPosOrig, OrigQty, TempLocInvRollUp."Loc. Exp. Inv.", TempLocInvRollUp."Transfer Out Qty.", TempLocInvRollUp."Transfer In Qty.");
+                IF (QtyBeforeMult > 0) THEN BEGIN
+                  IF TempLocInvRollUp."Message 2" <> '' THEN
+                    TempLocInvRollUp."Message 2" += '\';
+                  TempLocInvRollUp."Message 2" += STRSUBSTNO(TxtTransferQty, QtyAfterMult);
+                  TempLocInvRollUp."Message 2" += STRSUBSTNO(TxtOrdMult, QtyBeforeMult, QtyAfterMult, LocProcUnit."Order Multiple");
+                END;
+                IF (QtyBeforeMin > 0) THEN BEGIN
+                  IF TempLocInvRollUp."Message 2" <> '' THEN
+                    TempLocInvRollUp."Message 2" += '\';
+                  TempLocInvRollUp."Message 2" += STRSUBSTNO(TxtTransferQty, TransferQty);
+                  TempLocInvRollUp."Message 2" += ' ' + STRSUBSTNO(TxtOrdMin, QtyBeforeMin, TransferQty);
+                END;
+              END;
+            END;
+            // adjust transfer qty for min/multiple
+
+            TempLocInvRollUp."Transfer In Qty." :=
+              TempLocInvRollUp."Transfer In Qty." + TransferQty;
+            TempLocInvRollUp."Transfer In Qty. Need" := TempLocInvRollUp."Transfer In Qty.";
+
+            TempLocInvRollUp.Surplus :=
+              TempLocInvRollUp."Loc. Exp. Inv." +
+              TempLocInvRollUp."Transfer Out Qty." +
+              TempLocInvRollUp."Transfer In Qty.";
+
+            TempLocInvRollUp."Inbound Supply Quantity" := CalcInbound(LocProcUnit, OverrideLTHDate, TempLocInvRollUp."Transfer In Qty.");
+            IF TempLocInvRollUp."Spokes Exist" THEN
+              TempLocInvRollUp."Avail. to Send" := CalcAvailableToSend(LocProcUnit, TempLocInvRollUp, OverrideLTHDate);
+
+            IF GUIALLOWED THEN
+              TempLocInvRollUp."Message 3" := STRSUBSTNO(TxtFinalPos, TempLocInvRollUp.Surplus, TempLocInvRollUp."Loc. Exp. Inv.", TempLocInvRollUp."Transfer Out Qty.", TempLocInvRollUp."Transfer In Qty.");
+
+            TempLocInvRollUp.MODIFY(FALSE);
+
+            // mid level components
+            TempLocInvRollUp.SETRANGE("Individual Location Code",TempLocInvRollUp2."Repl. Path Location Code");
+            TempLocInvRollUp.SETRANGE("Item No.",TempLocInvRollUp2."Item No.");
+            TempLocInvRollUp.SETRANGE("Variant Code",TempLocInvRollUp2."Variant Code");
+            TempLocInvRollUp.FINDFIRST;
+
+            // update next hub level up for UOM changes
+            TempLocInvRollUp."Transfer Out Qty." :=
+              //TempLocInvRollUp."Transfer Out Qty." + TransferQty;
+              TempLocInvRollUp."Transfer Out Qty." + LevelUpTransferQty;
+
+            TempLocInvRollUp.Surplus :=
+              TempLocInvRollUp."Loc. Exp. Inv." +
+              TempLocInvRollUp."Transfer Out Qty." +
+              TempLocInvRollUp."Transfer In Qty.";
+
+
+            IF GUIALLOWED THEN
+              TempLocInvRollUp."Message 3" := STRSUBSTNO(TxtFinalPos, TempLocInvRollUp.Surplus, TempLocInvRollUp."Loc. Exp. Inv.", TempLocInvRollUp."Transfer Out Qty.", TempLocInvRollUp."Transfer In Qty.");
+            // mid level components
+
+          END ELSE BEGIN
+
+            ReplenishQty := 0;
+
+            TempLocInvRollUp.Surplus :=
+              TempLocInvRollUp."Loc. Exp. Inv." +
+              TempLocInvRollUp."Transfer Out Qty." +
+              TempLocInvRollUp."Transfer In Qty.";
+
+            // begin replenish qty out for view only
+            IF GUIALLOWED THEN BEGIN
+              ReplenishQty := TempLocInvRollUp.Surplus;
+              IF ReplenishQty < 0 THEN
+                ReplenishQty := ABS(ReplenishQty)
+              ELSE
+                ReplenishQty := 0;
+
+              // adjust transfer qty for min/multiple
+              QtyBeforeMult := 0;
+              QtyBeforeMin := 0;
+              QtyAfterMult := 0;
+              OrigQty := ReplenishQty;
+              IF ((TempLocInvRollUp."Order Multiple" <> 0) OR
+                  (TempLocInvRollUp."Order Minimum" <> 0)) AND
+                  (ReplenishQty > 0)
+              THEN BEGIN
+                IF TempLocInvRollUp."Order Multiple" = 0 THEN
+                  TempLocInvRollUp."Order Multiple" := 1;
+
+                MultRemainder := ReplenishQty MOD TempLocInvRollUp."Order Multiple";
+                IF MultRemainder <> 0 THEN BEGIN
+                  QtyBeforeMult := ReplenishQty;
+                  ReplenishQty :=  ReplenishQty + (TempLocInvRollUp."Order Multiple" - MultRemainder);
+                  QtyAfterMult := ReplenishQty;
+                END;
+
+                IF (ReplenishQty < LocProcUnit."Order Minimum") THEN BEGIN
+                  QtyBeforeMin := ReplenishQty;
+                  ReplenishQty := TempLocInvRollUp."Order Minimum";
+                END;
+              END;
+
+              IF (QtyBeforeMin = 0) AND (QtyBeforeMult = 0) THEN BEGIN
+                TempLocInvRollUp."Message 2" := STRSUBSTNO(TxtReplQty, ReplenishQty);
+                TempLocInvRollUp."Message 2" += ' ' + STRSUBSTNO(TxtReplInvPos, TempLocInvRollUp."Loc. Exp. Inv.", TempLocInvRollUp."Transfer Out Qty.", TempLocInvRollUp."Transfer In Qty.");
+              END ELSE BEGIN
+                TempLocInvRollUp."Message 2" := STRSUBSTNO(TxtReplQtyOrig, OrigQty, TempLocInvRollUp."Loc. Exp. Inv.", TempLocInvRollUp."Transfer Out Qty.", TempLocInvRollUp."Transfer In Qty.");
+                IF (QtyBeforeMult > 0) THEN BEGIN
+                  IF TempLocInvRollUp."Message 2" <> '' THEN
+                    TempLocInvRollUp."Message 2" += '\';
+                  TempLocInvRollUp."Message 2" += STRSUBSTNO(TxtReplQty, QtyAfterMult);
+                  TempLocInvRollUp."Message 2" += STRSUBSTNO(TxtOrdMult, QtyBeforeMult, QtyAfterMult, TempLocInvRollUp."Order Multiple");
+                END;
+                IF (QtyBeforeMin > 0) THEN BEGIN
+                  IF TempLocInvRollUp."Message 2" <> '' THEN
+                    TempLocInvRollUp."Message 2" += '\';
+                  TempLocInvRollUp."Message 2" += STRSUBSTNO(TxtReplQty, ReplenishQty);
+                  TempLocInvRollUp."Message 2" += STRSUBSTNO(TxtOrdMin, QtyBeforeMin, ReplenishQty);
+                END;
+              END;
+            END;
+            // begin replenish qty out for view only
+
+            IF GUIALLOWED THEN
+              TempLocInvRollUp."Message 3" := STRSUBSTNO(TxtFinalPos, TempLocInvRollUp.Surplus, TempLocInvRollUp."Loc. Exp. Inv.", TempLocInvRollUp."Transfer Out Qty.", TempLocInvRollUp."Transfer In Qty.");
+
+
+            TempLocInvRollUp."Inbound Supply Quantity" := CalcInbound(LocProcUnit, OverrideLTHDate, TempLocInvRollUp."Transfer In Qty.");
+            IF TempLocInvRollUp."Spokes Exist" THEN
+              TempLocInvRollUp."Avail. to Send" := CalcAvailableToSend(LocProcUnit, TempLocInvRollUp, OverrideLTHDate);
+          END;
+
+          TempLocInvRollUp.MODIFY(FALSE);
+        UNTIL TempLocInvRollUp2.NEXT = 0;
+
+      TempLocInvRollUp.RESET;
+      TempLocInvRollUp.FINDSET;
+
+      TopLevelSurplus := TempLocInvRollUp.Surplus;
+      REPEAT
+        IF TempLocInvRollUp.Surplus > 0 THEN
+          SurplusInv := SurplusInv + TempLocInvRollUp.Surplus
+        ELSE
+          NegSurplusInv := NegSurplusInv + TempLocInvRollUp.Surplus;
+      UNTIL TempLocInvRollUp.NEXT = 0;
+
+      MinimumSOQ := NegSurplusInv + SurplusInv;
+      MaximumSOQ := TopLevelSurplus;
+
+      IF MinimumSOQ < 0 THEN
+        MinimumSOQ := ABS(MinimumSOQ)
+      ELSE
+        MinimumSOQ := 0;
+
+      IF MaximumSOQ < 0 THEN
+        MaximumSOQ := ABS(MaximumSOQ)
+      ELSE
+        MaximumSOQ := 0;
+
+      Forecast.RoundValueForForecast(SourceProcUnit, MinimumSOQ);
+      Forecast.RoundValueForForecast(SourceProcUnit, MaximumSOQ);
+
+      IF FormType = FormType::"Repl. Path" THEN BEGIN
+        TempLocInvRollUp.RESET;
+        IF TempLocInvRollUp.FINDSET THEN BEGIN
+          REPEAT
+            ReplPath.SetSurplusRecord(TempLocInvRollUp);
+          UNTIL TempLocInvRollUp.NEXT = 0;
+        END;
+        IF DispForm THEN
+          ReplPath.RUN;
+      END;
+    END;
+
+    PROCEDURE InsertLoc@1240030001(CurrProcUnit@1240030000 : Record 14000555);
+    VAR
+      a@1240030001 : Integer;
+    BEGIN
+      a := 0;
+      REPEAT
+        a := a + 1;
+      UNTIL LocArray[a] = '';
+
+      IF LocArray[a - 1] = CurrProcUnit."Replenishment Source Code" THEN BEGIN
+        LocArray[a] := CurrProcUnit."Location Code";
+        LevelArray[a] := LevelArray[a - 1] + 1;
+        EXIT;
+      END;
+
+      REPEAT
+        LocArray[a] := LocArray[a - 1];
+        LevelArray[a] := LevelArray[a - 1];
+        a := a - 1;
+      UNTIL LocArray[a - 1] = CurrProcUnit."Replenishment Source Code";
+      LocArray[a] := CurrProcUnit."Location Code";
+      LevelArray[a] := LevelArray[a - 1] + 1;
+    END;
+
+    PROCEDURE GetSafetyStock@1240020002() Resp : Decimal;
+    BEGIN
+      EXIT(TopLevelSafetyStock);
+    END;
+
+    PROCEDURE GetMinMaxSOQ@1240030003(VAR LocMinSOQ@1240030000 : Decimal;VAR LocMaxSOQ@1240030001 : Decimal);
+    BEGIN
+      LocMinSOQ := MinimumSOQ;
+      LocMaxSOQ := MaximumSOQ;
+    END;
+
+    PROCEDURE GetSourceUnit@1240030004(VAR CurrProcUnit@1240030000 : Record 14000555);
+    VAR
+      LocProcUnit@1240030002 : Record 14000555;
+      i@1240030003 : Integer;
+      LocationCode@1240030001 : Code[10];
+      Text001@1240030004 : TextConst 'ENU=Replenishment Path Loop: Location %1 Item %2 %3';
+      Finished@1000000000 : Boolean;
+    BEGIN
+      IF CurrProcUnit."Replenishment Source Type" <>
+           CurrProcUnit."Replenishment Source Type"::Location THEN
+        EXIT;
+
+      CurrProcUnit.TESTFIELD("Replenishment Source Code");
+      LocationCode := CurrProcUnit."Replenishment Source Code";
+
+      i := 0;
+      LocProcUnit.SETRANGE("Item No.",CurrProcUnit."Item No.");
+      LocProcUnit.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+      REPEAT
+        IF (LocationCode <> '') THEN BEGIN
+          LocProcUnit.SETRANGE("Location Code",LocationCode);
+          LocProcUnit.FINDFIRST;
+          IF LocProcUnit."Replenishment Source Type" = LocProcUnit."Replenishment Source Type"::Location THEN BEGIN
+            LocationCode := LocProcUnit."Replenishment Source Code";
+            i := i + 1;
+            IF i > 50 THEN
+              ERROR(
+                Text001,CurrProcUnit."Location Code",CurrProcUnit."Item No.",CurrProcUnit."Variant Code");
+          END;
+        END ELSE BEGIN
+          LocProcUnit := CurrProcUnit;
+          Finished := TRUE;
+        END;
+      UNTIL (LocProcUnit."Replenishment Source Type" <> LocProcUnit."Replenishment Source Type"::Location) OR Finished;
+
+      CurrProcUnit.COPY(LocProcUnit);
+    END;
+
+    PROCEDURE GetNextRollUpLine@1240030005(VAR CurrLocInvRollUp@1240030000 : Record 14000583;First@1240030001 : Boolean) Resp : Boolean;
+    BEGIN
+      IF First THEN BEGIN
+        TempLocInvRollUp.RESET;
+        IF NOT TempLocInvRollUp.FINDFIRST THEN
+          EXIT(FALSE)
+        ELSE BEGIN
+          CurrLocInvRollUp.COPY(TempLocInvRollUp);
+          EXIT(TRUE);
+        END;
+      END ELSE
+        IF TempLocInvRollUp.NEXT <> 0 THEN BEGIN
+          CurrLocInvRollUp.COPY(TempLocInvRollUp);
+          EXIT(TRUE);
+        END ELSE
+          EXIT(FALSE);
+    END;
+
+    PROCEDURE GetTransferIn@1240030007(CurrProcUnit@1240030000 : Record 14000555) TransQty : Decimal;
+    BEGIN
+      TempLocInvRollUp.RESET;
+      TempLocInvRollUp.SETRANGE("Individual Location Code",CurrProcUnit."Location Code");
+      IF TempLocInvRollUp.FINDFIRST THEN
+        EXIT(TempLocInvRollUp."Transfer In Qty.")
+      ELSE
+        EXIT(0);
+    END;
+
+    PROCEDURE CheckForecastAdjust@1240030006(CurrLTHDate@1240030001 : Date) Resp : Boolean;
+    VAR
+      ForecastAdjust@1240030000 : Record 14002707;
+      Location@1240030004 : Record 14;
+      LocInvPeriod@1240030003 : Record 14000553;
+      LocProcUnit@1240030002 : Record 14000555;
+    BEGIN
+      Location.GET(TempLocInvRollUp."Individual Location Code");
+      LocInvPeriod.SETFILTER("Starting Date",'>%1',Location."Last Closed Period Date");
+      LocInvPeriod.SETRANGE("Location Code",TempLocInvRollUp."Location Code");
+      LocInvPeriod.SETRANGE("Period End Closed",FALSE);
+      LocInvPeriod.FINDFIRST;
+
+      LocProcUnit.GET(TempLocInvRollUp."Individual Location Code",TempLocInvRollUp."Item No.",TempLocInvRollUp."Variant Code");
+      IF LocProcUnit."Frozen Usage Expiration Date" >= CurrLTHDate THEN
+        EXIT(TRUE);
+
+      ForecastAdjust.SETCURRENTKEY("Item No.","Variant Code","Location Code","Starting Date");
+      ForecastAdjust.SETRANGE("Location Code",TempLocInvRollUp."Individual Location Code");
+      ForecastAdjust.SETRANGE("Item No.",TempLocInvRollUp."Item No.");
+      ForecastAdjust.SETRANGE("Variant Code",TempLocInvRollUp."Variant Code");
+      ForecastAdjust.SETFILTER("Starting Date",'%1..%2',LocInvPeriod."Starting Date",CurrLTHDate);
+      ForecastAdjust.CALCSUMS(Quantity);
+      IF ForecastAdjust.Quantity <> 0 THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    PROCEDURE SetUseSurplusFactor@1240020027(inUseSurplusFactor@1240020002 : Boolean);
+    BEGIN
+      UseSurplusFactor := inUseSurplusFactor;
+    END;
+
+    PROCEDURE SetUseExcessFactor@1240020011(inUseExcessFactor@1240020002 : Boolean);
+    BEGIN
+      UseExcessFactor := inUseExcessFactor;
+    END;
+
+    PROCEDURE CalcDemand@1240030042(LocCode@1240020005 : Code[10];ItemNo@1240020004 : Code[50];VariantCode@1240020002 : Code[10];CurrHorizonDate@1240020000 : Date) DemandQty : Decimal;
+    VAR
+      CurrProcUnit@1240020001 : Record 14000555;
+    BEGIN
+
+      WITH CurrProcUnit DO BEGIN
+        GET(LocCode, ItemNo, VariantCode);
+        SETFILTER("Location Filter", "Location Code");
+        SETFILTER("Date Filter", '..%1', CurrHorizonDate);
+        SETFILTER("Prod. Order Status Filter", UBP.GetProductionStatusFilter());
+        IF "Summarize Variant Detail" THEN BEGIN
+          CALCFIELDS(
+            "Qty. on Sales Order Sum.","Additional Demand Sum.",
+            "Qty. on Component Lines Sum.","Qty. on Service Order Sum.");
+          "Qty. on Sales Order" := "Qty. on Sales Order Sum.";
+          "Additional Demand" := "Additional Demand Sum.";
+          "Qty. on Service Order" := "Qty. on Service Order Sum.";
+        END ELSE
+          CALCFIELDS(
+            "Qty. on Sales Order","Additional Demand", "Qty. on Service Order");
+        IF InvMgtSetup."Consider Comp. Cons. as Usage" THEN BEGIN
+          IF "Summarize Variant Detail" THEN BEGIN
+            CALCFIELDS(
+              "Qty. on Component Lines Sum.","Qty. on Assy. Comp. Sum.","Qty. on Assy. Comp. FC Sum.");
+            "Qty. on Component Lines" := "Qty. on Component Lines Sum.";
+            "Qty. on Assy. Comp." := "Qty. on Assy. Comp. Sum.";
+            "Qty. on Assy. Comp. FC" := "Qty. on Assy. Comp. FC Sum.";
+          END ELSE
+            CALCFIELDS(
+              "Qty. on Component Lines","Qty. on Assy. Comp.","Qty. on Assy. Comp. FC");
+          DemandQty :=
+            "Qty. on Sales Order" + "Additional Demand" +
+            "Qty. on Component Lines" + "Qty. on Service Order" +
+            "Qty. on Assy. Comp." + "Qty. on Assy. Comp. FC";
+        END ELSE
+          DemandQty :=
+            "Qty. on Sales Order" + "Additional Demand" + "Qty. on Service Order";
+      END;
+    END;
+
+    PROCEDURE CalcInbound@1240020004(VAR CurrProcUnit@1240020001 : Record 14000555;CurrHorizonDate@1240020000 : Date;SuggestedTransferInQty@1240020003 : Decimal) InboundQty : Decimal;
+    BEGIN
+      WITH CurrProcUnit DO BEGIN
+        SETFILTER("Location Filter", "Location Code");
+        SETFILTER("Date Filter", '..%1', CurrHorizonDate);
+        SETFILTER("Prod. Order Status Filter", UBP.GetProductionStatusFilter());
+        IF ("Summarize Variant Detail") THEN BEGIN
+           CALCFIELDS(
+                "Qty. on Purchase Order Sum.","Qty. on Transfer In Sum.","Qty. on Prod. Order Sum.","Qty. on Assy. Order Sum.");
+                "Qty. on Purchase Order" := "Qty. on Purchase Order Sum.";
+                "Qty. on Transfer In" := "Qty. on Transfer In Sum.";
+                "Qty. on Prod. Order" := "Qty. on Prod. Order Sum.";
+                "Qty. on Assy. Order" := "Qty. on Assy. Order Sum.";
+        END ELSE
+          CALCFIELDS(
+                "Qty. on Purchase Order","Qty. on Transfer In","Qty. on Prod. Order","Qty. on Assy. Order");
+        InboundQty :=
+          "Qty. on Purchase Order" + "Qty. on Transfer In" +
+          "Qty. on Prod. Order" + SuggestedTransferInQty +
+          "Qty. on Assy. Order";
+        EXIT(InboundQty);
+      END;
+    END;
+
+    LOCAL PROCEDURE CalcSingleLocForecast@1240020003(VAR CurrProcUnit@1240020001 : Record 14000555;VAR CurrOverrideLTHDate@1240020002 : Date;IgnoreFrozenForecast@1240020000 : Boolean) ForecastQty : Decimal;
+    VAR
+      AccumCustForecast@1240020026 : Decimal;
+      AccumForecast@1240020025 : Decimal;
+      InvPlusExpRec@1240020024 : Decimal;
+      LeadTimeDays@1240020021 : Decimal;
+      LeadTimeHorizonDate@1240020020 : Date;
+      MinSOQ@1240020019 : Decimal;
+      NegSurplusInv@1240020018 : Decimal;
+      NetInvPos@1240020017 : Decimal;
+      PurchQtyBase@1240020016 : Decimal;
+      PushVendorLTDays@1240020015 : Decimal;
+      ReviewCycleDays@1240020014 : Integer;
+      SafetyStock@1240020013 : Decimal;
+      SafetyStockDays@1240020012 : Decimal;
+      TotalSlsShipments@1240020011 : Decimal;
+      TransFromLoc@1240020010 : ARRAY [500] OF Code[10];
+      TransFromQty@1240020009 : ARRAY [500] OF Decimal;
+      TransferQty@1240020008 : Decimal;
+      TransferQty1@1240020007 : Decimal;
+      VendorLeadTimeDays@1240020006 : Integer;
+      TransferMultRemainder@1240020005 : Decimal;
+    BEGIN
+      ForecastQty := 0;
+      // Show Single Location Forecast
+      CLEAR(Forecast);
+      Forecast.SetForecastOnlyReqPeriods;
+      Forecast.SetOverrideForSingleLocForecast(TRUE);
+      Forecast.SetCalcProductionPlanninglines(GblCalcProductionPlanningLines);
+      Forecast.SetIgnoreFrozenForcAdjust(IgnoreFrozenForecast);
+      Forecast.CalcNetNeed(CurrProcUnit, '', CurrOverrideLTHDate,FALSE);
+      ForecastQty := Forecast.GetLTHForecast;
+      EXIT(ForecastQty);
+    END;
+
+    LOCAL PROCEDURE CalcSingleLocAvgUsagePerDay@1240020007(VAR CurrProcUnit@1240020000 : Record 14000555) AvgDailyUsage : Decimal;
+    VAR
+      LocInvPeriod@1240020003 : Record 14000553;
+      ItemUsage@1240020001 : Record 14000557;
+    BEGIN
+      AvgDailyUsage := 0;
+      LocInvPeriod.SETRANGE("Location Code", CurrProcUnit."Location Code");
+      LocInvPeriod.SETRANGE("Period End Closed",TRUE);
+      IF LocInvPeriod.FINDLAST THEN BEGIN
+        ItemUsage.SETCURRENTKEY("Location Code","Starting Date","Item No.","Variant Code");
+        ItemUsage.SETRANGE("Location Code",LocInvPeriod."Location Code");
+        ItemUsage.SETRANGE("Starting Date",LocInvPeriod."Starting Date");
+        ItemUsage.SETRANGE("Item No.",CurrProcUnit."Item No.");
+        ItemUsage.SETRANGE("Variant Code",CurrProcUnit."Variant Code");
+        IF ItemUsage.FINDFIRST THEN
+          AvgDailyUsage := ItemUsage."Single Loc. Avg Usage Per Day";
+      END;
+      EXIT(AvgDailyUsage);
+    END;
+
+    LOCAL PROCEDURE CalcAvailableToSend@1240020010(VAR CurrProcUnit@1240020001 : Record 14000555;VAR CurrTempLocInvRollUp@1240020002 : Record 14000583;VAR CurrOverrideLTHDate@1240020000 : Date) AvailToSendQty : Decimal;
+    VAR
+      QtyReleasedFromHub@1240020003 : Decimal;
+      FCReleasedFromHub@1240020004 : Decimal;
+      LocQtyExp@1240020005 : Decimal;
+    BEGIN
+      AvailToSendQty := 0;
+      QtyReleasedFromHub := 0;
+      IF CurrTempLocInvRollUp."Spokes Exist" THEN BEGIN
+        IF (CurrTempLocInvRollUp."Single Loc. Adj. Forecast" > 0) AND (CurrTempLocInvRollUp."Max. Qty." = 0) THEN BEGIN
+
+          AvailToSendQty := CurrTempLocInvRollUp."Loc. Inventory" - CurrTempLocInvRollUp."Single Loc. Adj. Forecast";
+          AvailToSendQty := ROUND(AvailToSendQty,1.0,'<');
+
+          IF AvailToSendQty < 0 THEN
+            AvailToSendQty := 0;
+
+          LocQtyExp := CurrTempLocInvRollUp."Loc. Inventory" -
+            (CurrTempLocInvRollUp."Loc. Immediate Demand" + CurrTempLocInvRollUp."Loc. Component Demand" + CurrTempLocInvRollUp."Loc. Transfer Demand");
+
+
+          IF LocQtyExp < 0 THEN
+            LocQtyExp := 0;
+
+          IF AvailToSendQty > LocQtyExp THEN
+            AvailToSendQty := LocQtyExp;
+
+        END ELSE BEGIN
+          AvailToSendQty := CurrTempLocInvRollUp."Loc. Inventory" -
+            (CurrTempLocInvRollUp."Loc. Immediate Demand" + CurrTempLocInvRollUp."Loc. Component Demand" + CurrTempLocInvRollUp."Loc. Transfer Demand");
+
+          IF AvailToSendQty < 0 THEN
+            AvailToSendQty := 0;
+        END;
+      END;
+      EXIT(AvailToSendQty);
+    END;
+
+    LOCAL PROCEDURE AdjustTargetQtyForSurplus@1240020012(VAR CurrProcUnit@1240020002 : Record 14000555;VAR CurrTempLocInvRollUp@1240020001 : Record 14000583;VAR CurrLocation@1240020000 : Record 14);
+    VAR
+      PctToUse@1240020003 : Decimal;
+      AdjustedQty@1240020004 : Decimal;
+    BEGIN
+      IF CurrProcUnit."Replenishment Source Type" = CurrProcUnit."Replenishment Source Type"::Location THEN
+        PctToUse := CurrLocation."Loc. Surplus Calc. Add Pct."
+      ELSE
+        PctToUse := CurrLocation."Vend. Surplus Calc. Add Pct.";
+      CurrTempLocInvRollUp."Target Stock Level" := CurrTempLocInvRollUp."Target Stock Level" +
+        (CurrTempLocInvRollUp."Target Stock Level" * (PctToUse / 100));
+      Forecast.RoundValueForForecast(CurrProcUnit, CurrTempLocInvRollUp."Target Stock Level");
+    END;
+
+    LOCAL PROCEDURE AdjustMaxQtyForSurplus@1240020014(VAR CurrProcUnit@1240020002 : Record 14000555;VAR CurrTempLocInvRollUp@1240020001 : Record 14000583;VAR CurrLocation@1240020000 : Record 14);
+    VAR
+      PctToUse@1240020003 : Decimal;
+    BEGIN
+      IF CurrProcUnit."Replenishment Source Type" = CurrProcUnit."Replenishment Source Type"::Location THEN
+        PctToUse := CurrLocation."Loc. Surplus Calc. Add Pct."
+      ELSE
+        PctToUse := CurrLocation."Vend. Surplus Calc. Add Pct.";
+      CurrTempLocInvRollUp."Max. Qty." :=
+             CurrTempLocInvRollUp."Max. Qty." +
+                 (CurrProcUnit."Maximum Inventory" * (PctToUse / 100));
+      Forecast.RoundValueForForecast(CurrProcUnit, CurrTempLocInvRollUp."Max. Qty.");
+    END;
+
+    PROCEDURE CalcComponentDemand@1240020005(VAR CurrProcUnit@1240020001 : Record 14000555;CurrHorizonDate@1240020000 : Date) CompDemandQty : Decimal;
+    BEGIN
+      CompDemandQty := 0;
+      IF InvMgtSetup."Consider Comp. Cons. as Usage" THEN
+        EXIT(CompDemandQty);
+      // single location demand
+      WITH CurrProcUnit DO BEGIN
+        SETFILTER("Location Filter", "Location Code");
+        SETFILTER("Date Filter", '..%1', CurrHorizonDate);
+        SETFILTER("Prod. Order Status Filter", UBP.GetProductionStatusFilter());
+        CALCFIELDS("Qty. on Component Lines", "Qty. on Assy. Comp.", "Qty. on Assy. Comp. FC");
+        CompDemandQty := "Qty. on Component Lines" + "Qty. on Assy. Comp." + "Qty. on Assy. Comp. FC";
+        EXIT(CompDemandQty);
+      END;
+    END;
+
+    LOCAL PROCEDURE CalcTransferDemand@1240020006(VAR CurrProcUnit@1240020001 : Record 14000555;CurrHorizonDate@1240020000 : Date) TransferDemandQty : Decimal;
+    BEGIN
+      TransferDemandQty := 0;
+      WITH CurrProcUnit DO BEGIN
+        SETFILTER("Location Filter", "Location Code");
+        SETFILTER("Date Filter", '..%1', CurrHorizonDate);
+        CALCFIELDS("Qty. on Transfer Out");
+        TransferDemandQty := "Qty. on Transfer Out";
+        EXIT(TransferDemandQty);
+      END;
+    END;
+
+    LOCAL PROCEDURE CalcInventory@1240020016(VAR CurrProcUnit@1240020001 : Record 14000555) InventoryQty : Decimal;
+    BEGIN
+      InventoryQty := 0;
+      WITH CurrProcUnit DO BEGIN
+        SETFILTER("Location Filter", "Location Code");
+        CALCFIELDS(Inventory);
+        InventoryQty := Inventory;
+        EXIT(InventoryQty);
+      END;
+    END;
+
+    PROCEDURE SetGblOverrideCalcSingleLocForecast@1240020001(CurrCalcSingleLocForecast@1240020000 : Boolean);
+    BEGIN
+      GblOverrideCalcSingleLocForecast := CurrCalcSingleLocForecast;
+    END;
+
+    PROCEDURE SetCalcProductionPlanninglines@1240020008(inCalcProductionPlanningLines@1240020000 : Boolean);
+    BEGIN
+      GblCalcProductionPlanningLines := inCalcProductionPlanningLines;
+    END;
+
+    LOCAL PROCEDURE GetSetup@1240020009();
+    BEGIN
+      IF NOT SetupRetrieved THEN BEGIN
+        AdvForSetup.GET;
+        InvMgtSetup.GET;
+        SetupRetrieved := TRUE;
+      END;
+    END;
+
+    PROCEDURE GetTopLevelSurplus@1000000000() : Decimal;
+    BEGIN
+      EXIT(TopLevelSurplus);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

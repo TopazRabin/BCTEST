@@ -1,0 +1,464 @@
+OBJECT Codeunit 14002361 E.D.I. Funct. Ack. Send
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/13/20;
+    Time=12:00:00 PM;
+    Version List=SE0.62,TPZEDI;
+  }
+  PROPERTIES
+  {
+    TableNo=14002358;
+    Permissions=TableData 112=rimd;
+    OnRun=VAR
+            EDIDocument2@1240020001 : Record 14002353;
+            EDIXMLManagement@1240020000 : Codeunit 14099302;
+            Resend@1240020002 : Boolean;
+          BEGIN
+            CLEAR(EDILoadEDIOutFields);
+            Resend := FALSE;
+
+            IF "Funct. Ack. Sent" THEN
+              IF GUIALLOWED THEN BEGIN
+                IF CONFIRM(Text001,TRUE) THEN
+                  Resend := TRUE
+                ELSE
+                  ERROR(Text002);
+              END ELSE
+                ERROR(Text002);
+
+            IF NOT EDITradePartner.GET("Trade Partner No.") THEN
+              ERROR(Text003,"Trade Partner No.");
+
+            DocumentNo := 'E_FUNCTACK';
+
+            EDIDocument.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+            EDIDocument.SETFILTER(Status,'%1|%2',EDIDocument.Status::Test,EDIDocument.Status::Production);
+            EDIDocument.SETRANGE("Navision Document",DocumentNo);
+            EDIDocument.SETRANGE(Type,EDIDocument.Type::Export);
+            IF NOT EDIDocument.FIND('-') THEN
+              ERROR(Text004,EDITradePartner."No.",DocumentNo);
+            XMLDoc := EDIDocument."XML Document";
+
+            IF EDIDocument."Packaged Map" THEN BEGIN
+              IF EDIPackageMapIntegration.EDIFunctAckSend(Rec) THEN
+              // IF EDIFunctAckSendPM.RUN(Rec) THEN
+                ERROR(Text900,"Internal Doc. No.")
+              ELSE
+                EXIT;
+            END;
+
+            EDIDocument.CALCFIELDS("Element Mapping Error","Conditional Mapping Error");
+            IF EDIDocument."Element Mapping Error" OR EDIDocument."Conditional Mapping Error" THEN
+              ERROR(
+                Text005,
+                EDIDocument."Navision Document",EDIDocument."Trade Partner No.");
+
+            EDITemplate.GET(EDIDocument."EDI Template Code");
+
+            EDISegment.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+            EDISegment.SETRANGE("Navision Document",DocumentNo);
+            EDISegment.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+            EDISegment.SETRANGE(Version,EDIDocument.Version);
+            EDISegment.SETRANGE(Type,EDIDocument.Type);
+            IF NOT EDISegment.FIND('-') THEN
+              ERROR(
+                Text006,"Trade Partner No.",DocumentNo);
+            EDISegment.SETRANGE("Segment Type",EDISegment."Segment Type"::Command);
+            IF EDISegment.FIND('-') THEN
+              SendAckByRecDoc := TRUE
+            ELSE
+              SendAckByRecDoc := FALSE;
+            EDISegment.SETRANGE("Segment Type");
+
+            EDIRecDocHdr.RESET;
+            EDIRecDocHdr.SETRANGE("Internal Doc. No.","Internal Doc. No.");
+            EDIRecDocHdr.SETRANGE("Funct. Ack. Required",TRUE);
+            IF SendAckByRecDoc THEN BEGIN
+              EDIRecDocHdr.RESET;
+              EDIRecDocHdr.SETCURRENTKEY(
+              "Funct. Ack. Required","Trade Partner No.","Group Control No.","Transaction Set Control No.");
+              EDIRecDocHdr.SETRANGE("Funct. Ack. Required",TRUE);
+              IF NOT Resend THEN
+                EDIRecDocHdr.SETRANGE("Funct. Ack. Sent",FALSE);
+              EDIRecDocHdr.SETRANGE("Trade Partner No.","Trade Partner No.");
+              EDIRecDocHdr.SETRANGE("Group Control No.","Group Control No.");
+              EDIRecDocHdr.SETRANGE("Interchange Control No.","Interchange Control No.");
+              EDIRecDocHdr.SETRANGE("Navision Document","Navision Document");
+              EDIRecDocHdr.SETRANGE("EDI Document No.","EDI Document No.");
+            END;
+            TransactionSetCount := EDIRecDocHdr.COUNT;
+            EDIRecDocHdr.FIND('-');
+
+            EDISendDocHdr."Internal Doc No." := EDIRecDocHdr."Internal Doc. No.";
+            EDISendDocHdr."Navision Document" := DocumentNo;
+            EDISendDocHdr."Document No." := EDIRecDocHdr."Group Control No.";
+            EDISendDocHdr."Shortcut Dimension 5 Code" := EDIRecDocHdr."Shortcut Dimension 5 Code"; //TPZEDI
+            IF XMLDoc THEN BEGIN
+               WITH EDIRecDocHdr DO
+                EDIDocument2.GET(
+                  "Trade Partner No.","Navision Document","EDI Document No.","EDI Version",EDIDocument.Type::Import);
+              IF EDIRecDocHdr."Response DTD URL" = '' THEN
+                EDISendDocHdr."Response DTD URL" := EDIDocument2."Doctype DTD URL"
+              ELSE
+                EDISendDocHdr."Response DTD URL" := EDIRecDocHdr."Response DTD URL";
+              IF EDIRecDocHdr."cXML Payload ID" = '' THEN
+                EDISendDocHdr."cXML Response Payload ID" := EDIDocument2."cXML Payload ID"
+              ELSE
+                EDISendDocHdr."cXML Response Payload ID" := EDIRecDocHdr."cXML Payload ID";
+            END;
+            EDISend.CreateSendHdr(EDITradePartner,EDIDocument,EDISendDocHdr);
+
+            i := 1;
+            IF EDISegment.FIND('-') THEN
+              REPEAT
+                NewSegment := TRUE;
+                NodeOnly := FALSE;
+                CreateNode := TRUE;
+                EDIElement.SETRANGE("Trade Partner No.",EDISegment."Trade Partner No.");
+                EDIElement.SETRANGE("Navision Document",EDISegment."Navision Document");
+                EDIElement.SETRANGE("EDI Document No.",EDISegment."EDI Document No.");
+                EDIElement.SETRANGE(Version,EDISegment.Version);
+                EDIElement.SETRANGE(Type,EDISegment.Type);
+                EDIElement.SETRANGE(Segment,EDISegment.Segment);
+                IF NOT EDIElement.FIND('-') THEN BEGIN
+                  IF XMLDoc THEN BEGIN
+                    EDISegment.CALCFIELDS("Has Attributes","Node Text");
+                    IF EDISegment."Node Text" OR EDISegment."Has Attributes" THEN
+                      ERROR(
+                        Text008,
+                          EDISegment."Trade Partner No.",EDISegment."Navision Document",
+                          EDISegment.Version,EDISegment."Node Name")
+                     ELSE
+                       NodeOnly := TRUE;
+                  END ELSE
+                    IF EDISegment."Segment Type" = EDISegment."Segment Type"::Segment THEN
+                      ERROR(
+                        Text008,
+                          EDISegment."Trade Partner No.",EDISegment."Navision Document",
+                          EDISegment.Version,EDISegment.Segment);
+                END ELSE
+                  IF XMLDoc AND EDIElement."Node Text" THEN
+                    CreateNode := FALSE;
+                IF EDISegment."Segment Type" = EDISegment."Segment Type"::Segment THEN
+                  IF (XMLDoc = FALSE) OR (XMLDoc AND NodeOnly = FALSE) OR (XMLDoc AND CreateNode) THEN
+                    REPEAT
+                      CreateElementData;
+                      NewSegment := FALSE;
+                    UNTIL EDIElement.NEXT = 0;
+              UNTIL (EDISegment.NEXT = 0) OR (EDISegment."Segment Type" = EDISegment."Segment Type"::Command);
+
+            IF SendAckByRecDoc THEN BEGIN
+              REPEAT
+                IF EDISegment.FIND('-') THEN
+                  REPEAT
+                  UNTIL (EDISegment.NEXT = 0) OR (EDISegment."Segment Type" = EDISegment."Segment Type"::Command);
+                  EDISegment.NEXT;
+                  REPEAT
+                    NewSegment := TRUE;
+                    NodeOnly := FALSE;
+                    CreateNode := TRUE;
+                    EDIElement.SETRANGE("Trade Partner No.",EDISegment."Trade Partner No.");
+                    EDIElement.SETRANGE("Navision Document",EDISegment."Navision Document");
+                    EDIElement.SETRANGE("EDI Document No.",EDISegment."EDI Document No.");
+                    EDIElement.SETRANGE(Version,EDISegment.Version);
+                    EDIElement.SETRANGE(Type,EDISegment.Type);
+                    EDIElement.SETRANGE(Segment,EDISegment.Segment);
+                    IF NOT EDIElement.FIND('-') THEN BEGIN
+                      IF XMLDoc THEN BEGIN
+                        EDISegment.CALCFIELDS("Has Attributes","Node Text");
+                        IF EDISegment."Node Text" OR EDISegment."Has Attributes" THEN
+                          ERROR(
+                            Text008,
+                              EDISegment."Trade Partner No.",EDISegment."Navision Document",
+                              EDISegment.Version,EDISegment."Node Name")
+                        ELSE
+                          NodeOnly := TRUE;
+                      END ELSE
+                        IF EDISegment."Segment Type" = EDISegment."Segment Type"::Segment THEN
+                          ERROR(
+                            Text008,
+                              EDISegment."Trade Partner No.",EDISegment."Navision Document",
+                              EDISegment.Version,EDISegment.Segment);
+                    END ELSE
+                      IF XMLDoc AND EDIElement."Node Text" THEN
+                        CreateNode := FALSE;
+                    IF EDISegment."Segment Type" = EDISegment."Segment Type"::Segment THEN
+                      IF (XMLDoc = FALSE) OR (XMLDoc AND NodeOnly = FALSE) OR (XMLDoc AND CreateNode) THEN
+                        REPEAT
+                          CreateElementData;
+                          NewSegment := FALSE;
+                        UNTIL EDIElement.NEXT = 0;
+                  UNTIL (EDISegment.NEXT = 0) OR (EDISegment."Segment Type" = EDISegment."Segment Type"::Command);
+              UNTIL EDIRecDocHdr.NEXT = 0;
+              EDISegment.NEXT;
+              NewSegment := TRUE;
+              NodeOnly := FALSE;
+              CreateNode := TRUE;
+              EDIElement.SETRANGE("Trade Partner No.",EDISegment."Trade Partner No.");
+              EDIElement.SETRANGE("Navision Document",EDISegment."Navision Document");
+              EDIElement.SETRANGE("EDI Document No.",EDISegment."EDI Document No.");
+              EDIElement.SETRANGE(Version,EDISegment.Version);
+              EDIElement.SETRANGE(Type,EDISegment.Type);
+              EDIElement.SETRANGE(Segment,EDISegment.Segment);
+              IF NOT EDIElement.FIND('-') THEN BEGIN
+                IF XMLDoc THEN BEGIN
+                  EDISegment.CALCFIELDS("Has Attributes","Node Text");
+                    IF EDISegment."Node Text" OR EDISegment."Has Attributes" THEN
+                      ERROR(
+                        Text008,
+                          EDISegment."Trade Partner No.",EDISegment."Navision Document",
+                          EDISegment.Version,EDISegment."Node Name")
+                    ELSE
+                      NodeOnly := TRUE;
+                END ELSE
+                  IF EDISegment."Segment Type" = EDISegment."Segment Type"::Segment THEN
+                    ERROR(
+                      Text008,
+                        EDISegment."Trade Partner No.",EDISegment."Navision Document",
+                        EDISegment.Version,EDISegment.Segment);
+              END ELSE
+                IF XMLDoc AND EDIElement."Node Text" THEN
+                  CreateNode := FALSE;
+              IF EDISegment."Segment Type" = EDISegment."Segment Type"::Segment THEN
+                IF (XMLDoc = FALSE) OR (XMLDoc AND NodeOnly = FALSE) OR (XMLDoc AND CreateNode) THEN
+                  REPEAT
+                    CreateElementData;
+                    NewSegment := FALSE;
+                  UNTIL EDIElement.NEXT = 0;
+            END;
+
+            IF XMLDoc THEN
+              EDIXMLManagement.GetResponseReferenceID(EDISendDocHdr);
+
+            EDIRecDocHdr.LOCKTABLE;
+            IF EDIRecDocHdr.FIND('-') THEN
+              REPEAT
+                EDIRecDocHdr."Funct. Ack. Sent" := TRUE;
+                EDIRecDocHdr."Funct. Ack. Sent Date" := WORKDATE;
+                EDIRecDocHdr."Funct. Ack. Sent Time" := TIME;
+                EDIRecDocHdr.MODIFY;
+              UNTIL EDIRecDocHdr.NEXT = 0;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EDITemplate@1240030000 : Record 14002350;
+      EDITradePartner@1240030001 : Record 14002360;
+      EDIDocument@1240030002 : Record 14002353;
+      EDISegment@1240030003 : Record 14002354;
+      EDIElement@1240030004 : Record 14002355;
+      EDISendDocHdr@1240030005 : Record 14002369;
+      EDIRecDocHdr@1240030006 : Record 14002358;
+      EDIFormat@1240030007 : Codeunit 14002351;
+      EDISend@1240030009 : Codeunit 14002356;
+      EDIPackageMapIntegration@1240030024 : Codeunit 14002378;
+      EDILoadDBFields@1240020001 : Codeunit 14002392;
+      EDILoadEDIOutFields@1240020005 : Codeunit 14000381;
+      i@1240030011 : Integer;
+      BooleanVariable@1240030012 : Boolean;
+      BypassSegment@1240030013 : Boolean;
+      DateVariable@1240030014 : Date;
+      DecimalVariable@1240030015 : Decimal;
+      DocumentNo@1240030016 : Code[10];
+      IntegerVariable@1240030017 : Integer;
+      NewSegment@1240030018 : Boolean;
+      OutFldArray@1240030019 : ARRAY [100] OF Text[250];
+      OutErrorArray@1240030020 : ARRAY [100] OF Boolean;
+      ReverseCrossRefValue@1240020000 : Text[40];
+      SendAckByRecDoc@1240030021 : Boolean;
+      TransactionSetCount@1240030023 : Integer;
+      Text001@1001 : TextConst 'ENU=Functional Acknowledgement has already been created.  Create it Again?';
+      Text002@1002 : TextConst 'ENU=Functional Acknowledgement not created.';
+      Text003@1003 : TextConst 'ENU=Trading Partner %1 could not be found.';
+      Text004@1004 : TextConst 'ENU=Trading Partner %1 is not set up for EDI transaction %2.';
+      Text005@1005 : TextConst 'ENU=EDI Document %1 for Trading Partner %2 has a mapping error.';
+      Text006@1006 : TextConst 'ENU=Segments not found for %1 %2';
+      Text008@1240020007 : TextConst 'ENU=Unable to find EDI Segment Elements for the following: %1 - %2 - %3 - %4';
+      Text900@1240030025 : TextConst 'ENU=Functional Ack not sent for Receive Doc %1';
+      TimeVariable@1240020002 : Time;
+      DateTimeVariable@1240020003 : DateTime;
+      RecRef@1240020004 : RecordRef;
+      XMLDoc@1240020006 : Boolean;
+      NodeOnly@1240020009 : Boolean;
+      CreateNode@1240020008 : Boolean;
+
+    PROCEDURE CreateElementData@4();
+    BEGIN
+      ReverseCrossRefValue := '';
+
+      IF ((EDIElement."Fixed Value" <> '') AND (XMLDoc = FALSE)) OR
+         ((EDIElement."XML Fixed Value" <> '') AND (XMLDoc))
+      THEN BEGIN
+        IF XMLDoc THEN
+          OutFldArray[i] := EDIElement."XML Fixed Value"
+        ELSE
+          OutFldArray[i] := EDIElement."Fixed Value";
+      END ELSE
+        CASE EDIElement.Origin OF
+          EDIElement.Origin::Navision:
+            LoadDBFields;
+          EDIElement.Origin::"EDI In":
+            EDIFormat.LoadEDIInFields(
+              EDIElement,EDIRecDocHdr."Internal Doc. No.",0,FALSE,i,OutFldArray,
+              BooleanVariable,DateVariable,DecimalVariable,IntegerVariable,TimeVariable,
+              DateTimeVariable);
+          EDIElement.Origin::"EDI Out":
+            LoadEDIOutFields;
+        END;
+      EDIFormat.FormatOutput(
+        EDITemplate,EDIElement,OutFldArray,OutErrorArray,i,BypassSegment,
+        BooleanVariable,DateVariable,DecimalVariable,IntegerVariable,TimeVariable,
+        DateTimeVariable);
+      IF BypassSegment THEN
+        EXIT;
+      IF XMLDoc AND CreateNode THEN BEGIN
+        EDISend.CreateSendLine(
+          EDISendDocHdr,EDIElement,OutFldArray[i],EDIElement.Length,FALSE,
+          NewSegment,ReverseCrossRefValue,EDIDocument,TRUE,EDISegment);
+          NewSegment := FALSE;
+          CreateNode := FALSE;
+      END;
+      IF (XMLDoc = FALSE) OR (XMLDoc AND NodeOnly = FALSE) THEN
+        EDISend.CreateSendLine(
+          EDISendDocHdr,EDIElement,OutFldArray[i],EDIElement.Length,FALSE,
+          NewSegment,ReverseCrossRefValue,EDIDocument,FALSE,EDISegment);
+    END;
+
+    PROCEDURE LoadDBFields@2();
+    BEGIN
+      CASE EDIElement."NAV Table No." OF
+        14002350:
+          BEGIN
+            RecRef.OPEN(14002350);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDITemplate);
+          END;
+         14002353:
+          BEGIN
+            RecRef.OPEN(14002353);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDIDocument);
+          END;
+        14002358:
+          BEGIN
+            RecRef.OPEN(14002358);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDIRecDocHdr);
+          END;
+          14002369:
+          BEGIN
+            RecRef.OPEN(14002369);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDISendDocHdr);
+          END;
+        ELSE
+          EXIT;
+      END;
+      EDILoadDBFields.LoadDBFields(
+        EDIElement,OutFldArray,DecimalVariable,IntegerVariable,DateVariable,
+        BooleanVariable,TimeVariable,DateTimeVariable,i,RecRef);
+      RecRef.CLOSE;
+    END;
+
+    PROCEDURE LoadEDIOutFields@1();
+    BEGIN
+      BooleanVariable := FALSE;
+      DateVariable := 0D;
+      IntegerVariable := 0;
+      DecimalVariable := 0;
+      TimeVariable := 0T;
+      DateTimeVariable := 0DT;
+
+      IF EDIElement.Origin = EDIElement.Origin::"EDI Out" THEN BEGIN
+        CASE EDIElement."Field Name" OF
+          ELSE BEGIN
+            LoadEDIOutVariable;
+            LoadEDIOutRecordRef;
+            EDILoadEDIOutFields.FunctAckSendEDIOut(
+              EDIElement,OutFldArray,DecimalVariable,IntegerVariable,DateVariable,
+              BooleanVariable,TimeVariable,DateTimeVariable,i);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE LoadEDILineInFields@22();
+    VAR
+      EDIRecDocField@1240020000 : Record 14002359;
+    BEGIN
+      BooleanVariable := FALSE;
+      DateVariable := 0D;
+      IntegerVariable := 0;
+      DecimalVariable := 0;
+      TimeVariable := 0T;
+      DateTimeVariable := 0DT;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Field Name");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+      EDIRecDocField.SETRANGE("Field Name",EDIElement."Field Name");
+      EDIRecDocField.SETRANGE("Document Line No.",0);
+      IF EDIRecDocField.FIND('-') THEN
+        CASE EDIElement."Data Type" OF
+          EDIElement."Data Type"::Text:
+            OutFldArray[i] := EDIRecDocField."Field Text Value";
+          EDIElement."Data Type"::"Dec Implied":
+            DecimalVariable := EDIRecDocField."Field Dec. Value";
+          EDIElement."Data Type"::"Dec Explicit":
+            DecimalVariable := EDIRecDocField."Field Dec. Value";
+          EDIElement."Data Type"::Integer:
+            IntegerVariable := EDIRecDocField."Field Integer Value";
+          EDIElement."Data Type"::"Date YYMMDD":
+            DateVariable := EDIRecDocField."Field Date Value";
+          EDIElement."Data Type"::"Date YYYYMMDD":
+            DateVariable := EDIRecDocField."Field Date Value";
+        END;
+    END;
+
+    PROCEDURE LoadEDIOutRecordRef@1240020002();
+    BEGIN
+      RecRef.OPEN(14002350);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDITemplate);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002353);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDIDocument);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002359);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDISendDocHdr);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002360);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDITradePartner);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+    END;
+
+    PROCEDURE LoadEDIOutVariable@1240020003();
+    BEGIN
+      EDILoadEDIOutFields.SetFunctAckSendVariable(TransactionSetCount);
+    END;
+
+    BEGIN
+    {
+      // EDI Functional Acknowledgement Export
+    }
+    END.
+  }
+}
+

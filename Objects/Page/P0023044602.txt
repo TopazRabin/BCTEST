@@ -1,0 +1,3303 @@
+OBJECT Page 23044602 DSHIP Package Worksheet
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/20/21;
+    Time=[ 5:10:11 AM];
+    Modified=Yes;
+    Version List=DSHIP2.2.3,002,3142,3143,008,3268,3304,3336,014,3353,3299,3187;
+  }
+  PROPERTIES
+  {
+    CaptionML=[ENU=Dynamic Ship Package Worksheet;
+               ESM=Hoja de trabajo Dynamic Ship paquete;
+               FRC=Feuille de Travail Dynamic Ship Package;
+               ENC=Dynamic Ship Package Worksheet];
+    SourceTable=Table23044602;
+    SourceTableView=SORTING(Document Line No.)
+                    WHERE(License Plate No.=FILTER(<>''));
+    DataCaptionFields=Document No.;
+    PageType=Worksheet;
+    SourceTableTemporary=Yes;
+    PromotedActionCategoriesML=[ENU=New,Process,Report,Packing,Print;
+                                ESM=Nuevo, procesar, informe, la creaci¢n de kits, imprimir;
+                                FRC=Nouveau, Traitement, Rapport, Emballage, Imprimer;
+                                ENC=New,Process,Report,Packing,Print];
+    OnInit=BEGIN
+
+             recDShipSetup.GET;
+           END;
+
+    OnOpenPage=BEGIN
+                 //  Allows open without source doc (i.e. init page)
+                 //  maintains existing functionality when coming from order packaging
+
+                 IF ( codLocationCode <> '' ) THEN BEGIN
+                   refresh;
+                 END;
+                 setPrompt();
+                 setUnpackedStatus();
+               END;
+
+    OnAfterGetRecord=BEGIN
+                       setUnpackedStatus();
+                     END;
+
+    OnQueryClosePage=BEGIN
+
+                       recDShipSetup.GET;
+                       IF ( recDShipSetup."Warn On Unpacked Lines" = recDShipSetup."Warn On Unpacked Lines"::Always ) THEN
+                         IF ( bUnpackedLines ) THEN
+                           EXIT(CONFIRM(tcConfirmClose));
+                     END;
+
+    OnAfterGetCurrRecord=BEGIN
+
+                           IF ( bEditable ) THEN BEGIN
+                             IF( "New License Plate No." = '' ) THEN BEGIN
+                               CurrPage.packFactBox.PAGE.setLicensePlate("License Plate No.");
+                             END ELSE BEGIN
+                               CurrPage.packFactBox.PAGE.setLicensePlate("New License Plate No.");
+                             END;
+
+                             //CurrPage.pictureFactBox.PAGE.setItem("Item No.");
+                           END;
+                         END;
+
+    ActionList=ACTIONS
+    {
+      { 1000000011;  ;ActionContainer;
+                      ActionContainerType=ActionItems }
+      { 1000000036;1 ;ActionGroup;
+                      CaptionML=[ENU=Packing;
+                                 ESM=Creaci¢n de kits;
+                                 FRC=Emballage;
+                                 ENC=Packing];
+                      Image=Action }
+      { 1000000025;2 ;Action    ;
+                      Name=acEditLines;
+                      CaptionML=[ENU=Edit Lines;
+                                 ESM=Editar l°neas;
+                                 FRC=Modifiez les Lignes;
+                                 ENC=Edit Lines];
+                      Promoted=Yes;
+                      Enabled=(NOT bEditable) AND (codSourceNo <> '');
+                      PromotedIsBig=Yes;
+                      Image=EditLines;
+                      PromotedCategory=Category4;
+                      OnAction=BEGIN
+                                 setLinesEditable(TRUE);
+                                 CurrPage.ACTIVATE(TRUE);;
+                                 codLicensePlateNo := '';
+                                 refresh();
+                               END;
+                                }
+      { 1000000012;2 ;Action    ;
+                      Name=acPack;
+                      CaptionML=[ENU=Pack;
+                                 ESM=PAQ.;
+                                 FRC=Pack;
+                                 ENC=Pack];
+                      Promoted=Yes;
+                      Enabled=bEditable;
+                      PromotedIsBig=Yes;
+                      Image=Item;
+                      PromotedCategory=Category4;
+                      OnAction=BEGIN
+                                 packLines();
+                               END;
+                                }
+      { 1000000032;2 ;Action    ;
+                      Name=acScan;
+                      CaptionML=[ENU=Scan;
+                                 ESM=Escanee;
+                                 FRC=Scannez;
+                                 ENC=Scan];
+                      Promoted=Yes;
+                      Enabled=bEditable;
+                      PromotedIsBig=Yes;
+                      Image=BarCode;
+                      PromotedCategory=Category4;
+                      OnAction=BEGIN
+                                 setLinesEditable(FALSE);
+                                 CurrPage.ACTIVATE(TRUE);;
+                                 codLicensePlateNo := '';
+                                 refresh();
+                               END;
+                                }
+      { 1000000073;2 ;Action    ;
+                      Name=Combine Shipment;
+                      CaptionML=ENU=MOP;
+                      Image=Filed;
+                      OnAction=VAR
+                                 WSH@1000000000 : Record 7320;
+                                 WSL@1000000001 : Record 7321;
+                                 WSLRec@1000000002 : Record 7321;
+                                 DSHIPPackageManagement@1000000004 : Codeunit 23044601;
+                                 DSHIPPackageOrderBuffer@1000000003 : Record 23044601;
+                               BEGIN
+                                 //TPZ2895 Pankaj
+                                 IF (STRPOS(UPPERCASE("Document No."),'WS') = 0) THEN
+                                   ERROR('Please scan pick ticket or warehouse shipment No. to do MOP.');
+                                 WSH.RESET;
+                                 WSH.SETRANGE(Status,WSH.Status::Released);
+                                 WSH.SETFILTER("No.",'<>%1',Rec."Document No.");
+                                 WSH.SETFILTER("Document Status",'%1|%2|%3',WSH."Document Status"::"Completely Picked",WSH."Document Status"::"Partially Picked",WSH."Document Status"::"Partially Shipped");
+                                 WSH.SETRANGE("Source Type",37);
+                                 WSH.SETRANGE("Location Code","Location Code");
+                                 WSH.SETFILTER("Source No.",'<>%1','');
+                                 IF WSH.FINDFIRST THEN
+                                   IF PAGE.RUNMODAL(50070,WSH) = ACTION::LookupOK THEN BEGIN
+                                     WSL.RESET;
+                                     WSL.SETRANGE("No.",WSH."No.");
+                                     IF WSL.FINDFIRST THEN BEGIN
+                                       REPEAT
+                                         WSLRec.INIT;
+                                         WSLRec.TRANSFERFIELDS(WSL);
+                                         WSLRec."No." := "Document No.";
+                                         WSLRec."Line No." := GetLine("Document No.");
+                                         WSLRec."Original Document No." := WSL."No.";
+                                         WSLRec.INSERT;
+                                         WSL.DELETE;
+                                       UNTIL WSL.NEXT = 0;
+                                       UpdateShiptoInfoMOP(WSL."Source No."); //TPZ3336
+                                     END;
+                                     WSH."Combined To" := "Document No.";
+                                     WSH.MODIFY;
+                                   END;
+                                 DSHIPPackageOrderBuffer."Document Type" := DSHIPPackageOrderBuffer."Document Type"::"Warehouse Shipment";
+                                 DSHIPPackageOrderBuffer."Document No." := Rec."Document No.";
+                                 DSHIPPackageManagement.updateDocumentQtyToShip(DSHIPPackageOrderBuffer);
+                                 refresh;
+                               END;
+                                }
+      { 1000000077;2 ;Action    ;
+                      Name=Undo Combine Shipment;
+                      CaptionML=ENU=Undo MOP;
+                      Image=Undo;
+                      OnAction=VAR
+                                 WSH@1000000000 : Record 7320;
+                                 WSL@1000000001 : Record 7321;
+                                 WSLRec@1000000002 : Record 7321;
+                               BEGIN
+                                 //-->TPZ3346
+                                 IF Rec.FINDSET(FALSE) THEN
+                                   REPEAT
+                                     IF Rec."License Plate No." <> '' THEN
+                                       ERROR(Text0005);
+                                   UNTIL Rec.NEXT = 0;
+                                 //<--TPZ3346
+                                 //TPZ2895 Pankaj
+                                 WSL.RESET;
+                                 WSL.SETRANGE("No.","Document No.");
+                                 WSL.SETFILTER("Original Document No.",'<>%1','');
+                                 IF WSL.FINDFIRST THEN
+                                   REPEAT
+                                     WSLRec.INIT;
+                                     WSLRec.TRANSFERFIELDS(WSL);
+                                     WSLRec."No." := WSL."Original Document No.";
+                                     WSLRec."Line No." := GetLine(WSLRec."No.");
+                                     WSLRec."Original Document No." := '';
+                                     WSLRec.INSERT;
+                                     WSL.DELETE;
+                                     IF WSH.GET(WSLRec."No.") THEN BEGIN
+                                       WSH."Combined To" := '';
+                                       WSH.MODIFY;
+                                     END;
+                                   UNTIL WSL.NEXT = 0;
+                                 refresh;
+                               END;
+                                }
+      { 1000000037;1 ;ActionGroup;
+                      CaptionML=[ENU=&Print;
+                                 ESM=Imprimir;
+                                 FRC=Imprimer;
+                                 ENC=&Print];
+                      Image=Print }
+      { 1000000038;2 ;Action    ;
+                      Name=acPrintInternal;
+                      CaptionML=[ENU=Internal Package Label;
+                                 ESM=Etiqueta de paquete interno;
+                                 FRC=êtiquette de Package. internes;
+                                 ENC=Internal Package Label];
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=PrintReport;
+                      PromotedCategory=Category5;
+                      OnAction=BEGIN
+                                 printInternalPackLabel;
+                               END;
+                                }
+      { 1000000019;2 ;Action    ;
+                      Name=acPrintCarrierLabel;
+                      CaptionML=[ENU=Carrier Label;
+                                 ESM=Etiqueta de soporte;
+                                 FRC=êtiquette carrier;
+                                 ENC=Carrier Label];
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=PrintCover;
+                      PromotedCategory=Category5;
+                      OnAction=BEGIN
+                                 printCarrierLabel;
+                               END;
+                                }
+      { 1000000056;2 ;Action    ;
+                      Name=acPrintBillOfLading;
+                      CaptionML=[ENU=Bill of Lading;
+                                 ESM=Facturaci¢n de Lading;
+                                 FRC=Lading de de facturation;
+                                 ENC=Bill of Lading];
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=PrintDocument;
+                      PromotedCategory=Category5;
+                      OnAction=BEGIN
+                                 printBillOfLading;
+                               END;
+                                }
+      { 1000000057;2 ;Action    ;
+                      Name=acCommInv;
+                      CaptionML=[ENU=Commercial Invoice;
+                                 ESM=Factura comercial;
+                                 FRC=Facture commercial;
+                                 ENC=Commercial Invoice];
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=Invoice;
+                      PromotedCategory=Category5;
+                      OnAction=BEGIN
+                                 printCommercialInvoice;
+                               END;
+                                }
+      { 1000000062;2 ;Action    ;
+                      Name=acCODRetLabel;
+                      CaptionML=[ENU=COD Return Label;
+                                 ESM=Etiqueta de contra reembolso devoluci¢n;
+                                 FRC=Les êtiquettes Retour êtiquette;
+                                 ENC=COD Return Label];
+                      Image=Check;
+                      PromotedCategory=Category5;
+                      OnAction=BEGIN
+                                 openCODReturnLabel;
+                               END;
+                                }
+      { 1000000064;2 ;Action    ;
+                      Name=acPrintReturnLabel;
+                      CaptionML=[ENU=Return Label;
+                                 ESM=Etiqueta de devoluci¢n;
+                                 FRC=êtiquette de retour;
+                                 ENC=Return Label];
+                      Image=PrintCheck;
+                      PromotedCategory=Category5;
+                      OnAction=BEGIN
+                                 printReturnLabel;
+                               END;
+                                }
+      { 1000000072;2 ;Action    ;
+                      Name=acPrintLP;
+                      CaptionML=ENU=License Plate Label;
+                      Image=PrintDocument;
+                      OnAction=BEGIN
+                                 printLPLabel;
+                               END;
+                                }
+      { 1000000074;2 ;Action    ;
+                      CaptionML=ENU=Packing Slip;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=PrintDocument;
+                      PromotedCategory=Category5;
+                      OnAction=VAR
+                                 ShippingSetup@1000000000 : Record 14000707;
+                                 SalesHeader@1000000001 : Record 36;
+                                 WarehouseShipmentLine@1000000002 : Record 7321;
+                                 SourceNo@1000000003 : Code[20];
+                                 SourceNoFilter@1000000004 : Text[250];
+                               BEGIN
+                                 {
+                                 //<vaseem>
+                                     ShippingSetup.GET;
+                                     WarehouseShipmentLine.RESET;
+                                     WarehouseShipmentLine.SETRANGE("No.",codSourceNo);
+                                 IF WarehouseShipmentLine.FINDFIRST THEN BEGIN
+                                       IF SalesHeader.GET(SalesHeader."Document Type"::Order,WarehouseShipmentLine."Source No.") THEN BEGIN
+                                         SalesHeader.SETRECFILTER;
+                                         REPORT.RUNMODAL(ShippingSetup."Close Sales Report ID",TRUE,FALSE,SalesHeader);
+                                       END;
+                                 END;
+                                 //</vaseem>
+                                 }
+                                 //>>TPZ2895  Added new code to print combine order packing slip
+                                 ShippingSetup.GET;
+                                 WarehouseShipmentLine.RESET;
+                                 WarehouseShipmentLine.SETCURRENTKEY("No.","Source Document","Source No.");
+                                 WarehouseShipmentLine.SETRANGE("No.",codSourceNo);
+                                 IF WarehouseShipmentLine.FINDFIRST THEN BEGIN
+                                   REPEAT
+                                     IF SourceNo <> WarehouseShipmentLine."Source No." THEN
+                                       IF SourceNoFilter = '' THEN
+                                         SourceNoFilter := WarehouseShipmentLine."Source No."
+                                       ELSE
+                                         SourceNoFilter := SourceNoFilter +'|' + WarehouseShipmentLine."Source No.";
+                                     SourceNo := WarehouseShipmentLine."Source No.";
+                                   UNTIL WarehouseShipmentLine.NEXT = 0;
+                                   SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::Order);
+                                   SalesHeader.SETFILTER("No.",SourceNoFilter);
+                                   REPORT.RUNMODAL(ShippingSetup."Close Sales Report ID",TRUE,FALSE,SalesHeader);
+                                 END;
+                                 //<<TPZ2895
+                               END;
+                                }
+      { 1000000045;1 ;ActionGroup;
+                      CaptionML=[ENU=F&unctions;
+                                 ESM=Funciones;
+                                 FRC=Fonctions;
+                                 ENC=F&unctions];
+                      Image=Action }
+      { 1000000046;2 ;Action    ;
+                      Name=acGetLabel;
+                      CaptionML=[ENU=Get &Label;
+                                 ESM=Obtener etiqueta;
+                                 FRC=Extraire êtiquette;
+                                 ENC=Get &Label];
+                      Promoted=Yes;
+                      Enabled=codSourceNo <> '';
+                      PromotedIsBig=Yes;
+                      Image=SuggestItemPrice;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 getLabel;
+                               END;
+                                }
+      { 1000000070;2 ;Action    ;
+                      Name=acPkgDetails;
+                      CaptionML=ENU=Packages;
+                      Promoted=Yes;
+                      Enabled=NOT bIsUnpacked;
+                      PromotedIsBig=Yes;
+                      Image=CopyItem;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 doPackageDetails(Rec."Document Type", codSourceNo);
+                               END;
+                                }
+      { 1000000050;2 ;Action    ;
+                      Name=acPkgOptions;
+                      CaptionML=[ENU=Package Options;
+                                 ESM=Opciones de paquete;
+                                 FRC=Options du package;
+                                 ENC=Package Options];
+                      Promoted=Yes;
+                      Enabled=codLicensePlateNo <> '';
+                      PromotedIsBig=Yes;
+                      Image=ItemVariant;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 doPackOptions(codLicensePlateNo);
+                               END;
+                                }
+      { 1000000039;2 ;Action    ;
+                      Name=acShpOptions;
+                      CaptionML=[ENU=Shipment Options;
+                                 ESM=Opciones de env°o;
+                                 FRC=Options de livraison;
+                                 ENC=Shipment Options];
+                      Promoted=Yes;
+                      Enabled=codSourceNo <> '';
+                      PromotedIsBig=Yes;
+                      Image=Shipment;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 doShipOptions("Document Type", "Document No.", "Document Subtype");
+                               END;
+                                }
+      { 1000000049;2 ;Action    ;
+                      Name=acCustoms;
+                      CaptionML=[ENU=Customs;
+                                 ESM=Aduana;
+                                 FRC=Aupräs des administrations douaniäres;
+                                 ENC=Customs];
+                      Promoted=Yes;
+                      Enabled=codSourceNo <> '';
+                      PromotedIsBig=Yes;
+                      Image=Voucher;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 doCustoms;
+                               END;
+                                }
+      { 1000000051;2 ;Action    ;
+                      Name=acInsurance;
+                      CaptionML=[ENU=Insurance;
+                                 ESM=Seguros;
+                                 FRC=Assurance;
+                                 ENC=Insurance];
+                      Promoted=Yes;
+                      Enabled=codLicensePlateNo <> '';
+                      PromotedIsBig=Yes;
+                      Image=Insurance;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 doInsurance(codLicensePlateNo);
+                               END;
+                                }
+      { 1000000063;2 ;Action    ;
+                      Name=acGetReturnLabel;
+                      CaptionML=[ENU=Get Return Label;
+                                 ESM=Obtener etiqueta devoluci¢n;
+                                 FRC=Extraire êtiquette de Retour;
+                                 ENC=Get Return Label];
+                      Image=ReturnShipment;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 getReturnLabel;
+                               END;
+                                }
+      { 1000000058;2 ;Action    ;
+                      Name=acGetTracking;
+                      CaptionML=[ENU=Show Tracking;
+                                 ESM=Mostrar seguimiento;
+                                 FRC=Afficher la TraáabilitÇ;
+                                 ENC=Show Tracking];
+                      Image=OrderTracking;
+                      OnAction=BEGIN
+                                 showTrackingURLs;
+                               END;
+                                }
+      { 1000000080;2 ;Action    ;
+                      Name=Pallet Details;
+                      CaptionML=ENU=Pallet Details;
+                      Promoted=Yes;
+                      PromotedIsBig=Yes;
+                      Image=DataEntry;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 GetPalletDetailsPS;
+                               END;
+                                }
+      { 1000000065;2 ;ActionGroup;
+                      Name=acScaleActions;
+                      CaptionML=[ENU=Scale Actions;
+                                 ESM=Escalar acciones;
+                                 FRC=Scale Actions;
+                                 ENC=Scale Actions];
+                      Image=UnitOfMeasure }
+      { 1000000067;3 ;Action    ;
+                      Name=acScaleGetWeight;
+                      CaptionML=[ENU=Get Weight;
+                                 ESM=Obtener peso;
+                                 FRC=Extraire Poids;
+                                 ENC=Get Weight];
+                      Enabled=codLicensePlateNo <> '';
+                      Image=UntrackedQuantity;
+                      OnAction=BEGIN
+
+                                 getWeight;
+                               END;
+                                }
+      { 1000000069;3 ;Action    ;
+                      Name=acScaleTare;
+                      CaptionML=[ENU=Tare Weight;
+                                 ESM=Peso tare;
+                                 FRC=Poids tare;
+                                 ENC=Tare Weight];
+                      Image=Reuse;
+                      OnAction=BEGIN
+
+                                 tareWeight;
+                               END;
+                                }
+      { 1000000068;3 ;Action    ;
+                      Name=acScaleSelect;
+                      CaptionML=[ENU=Select Scale;
+                                 ESM=Seleccione escala;
+                                 FRC=SÇlectionner Scale;
+                                 ENC=Select Scale];
+                      Image=SetupList;
+                      OnAction=BEGIN
+
+                                 setScale;
+                               END;
+                                }
+      { 1000000048;1 ;ActionGroup;
+                      CaptionML=[ENU=P&osting;
+                                 ESM=Registro;
+                                 FRC=Report;
+                                 ENC=P&osting];
+                      Image=Post }
+      { 1000000047;2 ;Action    ;
+                      Name=Post;
+                      ShortCutKey=F9;
+                      Ellipsis=Yes;
+                      CaptionML=[ENU=P&ost;
+                                 ESM=Registrar;
+                                 FRC=Reporter;
+                                 ENC=P&ost];
+                      Promoted=Yes;
+                      Enabled=codSourceNo <> '';
+                      PromotedIsBig=Yes;
+                      Image=PostOrder;
+                      PromotedCategory=Process;
+                      OnAction=BEGIN
+                                 doPost;
+                               END;
+                                }
+      { 1000000055;0 ;ActionContainer;
+                      ActionContainerType=RelatedInformation }
+      { 1000000054;1 ;ActionGroup;
+                      CaptionML=[ENU=Documents;
+                                 ESM=Documentos;
+                                 FRC=Documents;
+                                 ENC=Documents];
+                      Image=Shipment }
+      { 1000000053;2 ;Action    ;
+                      Name=acShowDocument;
+                      ShortCutKey=Shift+F7;
+                      CaptionML=[ENU=Show D&ocument;
+                                 ESM=Muestra documento;
+                                 FRC=Afficher le document;
+                                 ENC=Show D&ocument];
+                      Image=View;
+                      OnAction=BEGIN
+                                 cuPackMgmt.showSourceDocument(recrRecRef);
+                               END;
+                                }
+      { 1000000078;2 ;Action    ;
+                      Name=ShowSalesDocument;
+                      CaptionML=ENU=Show Sales Document;
+                      Promoted=Yes;
+                      Image=Sales;
+                      PromotedCategory=Process;
+                      OnAction=VAR
+                                 lrecrRecRefSales@1000000001 : RecordRef;
+                                 SalesHeaderLoc@1000000000 : Record 36;
+                                 TransHeaderLoc@1000000002 : Record 5740;
+                               BEGIN
+                                 //PKS
+                                 SalesHeaderLoc.SETRANGE("No.","Source ID");
+                                 IF SalesHeaderLoc.FINDFIRST THEN BEGIN
+                                   lrecrRecRefSales.GETTABLE(SalesHeaderLoc);
+                                   cuPackMgmt.showSourceDocument(lrecrRecRefSales);
+                                 END ELSE BEGIN
+                                   TransHeaderLoc.SETRANGE("No.","Source ID");
+                                   IF TransHeaderLoc.FINDFIRST THEN BEGIN
+                                     lrecrRecRefSales.GETTABLE(TransHeaderLoc);
+                                     cuPackMgmt.showSourceDocument(lrecrRecRefSales);
+                                   END;
+                                 END;
+                               END;
+                                }
+      { 1000000052;2 ;Action    ;
+                      Name=acComments;
+                      CaptionML=[ENU=Co&mments;
+                                 ESM=Comentarios;
+                                 FRC=Commentaires;
+                                 ENC=Co&mments];
+                      Image=ViewComments;
+                      OnAction=BEGIN
+                                 cuPackMgmt.showSourceComments(recrRecRef);
+                               END;
+                                }
+      { 1000000079;2 ;Action    ;
+                      Name=Registered Picks;
+                      CaptionML=ENU=Registered Picks;
+                      Image=PickLines;
+                      OnAction=VAR
+                                 RegisteredWhseActivityHdr@1000000000 : Record 5772;
+                                 RegisteredWhseActivityLine@1000000001 : Record 5773;
+                                 SourceNoLoc@1000000002 : Text;
+                                 PickNoLoc@1000000003 : Text;
+                               BEGIN
+                                 //TPZ3210
+                                 IF Rec.FINDFIRST THEN
+                                   REPEAT
+                                     IF SourceNoLoc = '' THEN
+                                       SourceNoLoc := Rec."Source ID"
+                                     ELSE IF STRPOS(SourceNoLoc,Rec."Source ID") = 0 THEN
+                                       SourceNoLoc += '|' + Rec."Source ID";
+                                   UNTIL NEXT = 0;
+                                 RegisteredWhseActivityLine.RESET;
+                                 RegisteredWhseActivityLine.SETCURRENTKEY("Activity Type","Source No.","Source Document");
+                                 RegisteredWhseActivityLine.SETFILTER("Source No.",SourceNoLoc);
+                                 IF RegisteredWhseActivityLine.FINDFIRST THEN
+                                   REPEAT
+                                     IF PickNoLoc = '' THEN
+                                       PickNoLoc := RegisteredWhseActivityLine."No."
+                                     ELSE IF STRPOS(PickNoLoc,RegisteredWhseActivityLine."No.") = 0 THEN
+                                       PickNoLoc += '|' + RegisteredWhseActivityLine."No.";
+                                   UNTIL RegisteredWhseActivityLine.NEXT = 0;
+                                 RegisteredWhseActivityHdr.RESET;
+                                 RegisteredWhseActivityHdr.SETFILTER("No.",PickNoLoc);
+                                 PAGE.RUNMODAL(0,RegisteredWhseActivityHdr);
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1000000000;0;Container;
+                ContainerType=ContentArea }
+
+    { 1000000027;1;Group  ;
+                GroupType=Group }
+
+    { 1000000026;2;Group  ;
+                Name=groupDetails;
+                CaptionML=[ENU=DETAILS;
+                           ESM=DETALLES;
+                           FRC=DêTAILS;
+                           ENC=DETAILS];
+                GroupType=Group }
+
+    { 1000000024;3;Field  ;
+                Lookup=Yes;
+                CaptionML=[ENU=Order;
+                           ESM=Pedido;
+                           FRC=Commande;
+                           ENC=Order];
+                SourceExpr=codSourceNo;
+                Enabled=FALSE;
+                Editable=FALSE;
+                Style=Strong;
+                StyleExpr=TRUE;
+                ColumnSpan=2 }
+
+    { 1000000040;3;Field  ;
+                Lookup=Yes;
+                CaptionML=[ENU=Location;
+                           ESM=AlmacÇn;
+                           FRC=Emplacement;
+                           ENC=Location];
+                SourceExpr=codLocationCode;
+                Enabled=FALSE;
+                Editable=FALSE }
+
+    { 1000000021;3;Field  ;
+                Name=lbdUnpackedQty;
+                Lookup=Yes;
+                CaptionML=[ENU=Unpacked Quantity;
+                           ESM=Cantidad unpacked;
+                           FRC=QuantitÇ unpacked;
+                           ENC=Unpacked Quantity];
+                DecimalPlaces=0:2;
+                SourceExpr=FORMAT(dUnpackedQty);
+                Enabled=FALSE;
+                Editable=FALSE }
+
+    { 1000000031;3;Field  ;
+                Name=lbiUnpackedLines;
+                Lookup=Yes;
+                CaptionML=[ENU=Unpacked Lines;
+                           ESM=L°neas unpacked;
+                           FRC=Lignes unpacked;
+                           ENC=Unpacked Lines];
+                DecimalPlaces=0:2;
+                SourceExpr=FORMAT(iUnpackedLines);
+                Enabled=FALSE;
+                Editable=FALSE }
+
+    { 1000000023;2;Group  ;
+                CaptionML=[ENU=SCANNING;
+                           ESM=ESCANEO;
+                           FRC=SCANNING;
+                           ENC=SCANNING];
+                GroupType=Group }
+
+    { 1000000030;3;Field  ;
+                Lookup=Yes;
+                SourceExpr=sPrompt;
+                Enabled=FALSE;
+                Editable=FALSE;
+                Style=StrongAccent;
+                StyleExpr=TRUE;
+                ShowCaption=No }
+
+    { 1000000020;3;Field  ;
+                Name=edtScan;
+                CaptionML=[ENU=Scan Here;
+                           ESM=Este campo digitalizar;
+                           FRC=Scannez Ici;
+                           ENC=Scan Here];
+                SourceExpr=sScan;
+                Editable=NOT bEditable;
+                OnValidate=BEGIN
+                             processRawScan(sScan);
+                           END;
+                            }
+
+    { 1000000028;3;Field  ;
+                CaptionML=[ENU=Current Package;
+                           ESM=Paquete actual;
+                           FRC=Package en cours;
+                           ENC=Current Package];
+                SourceExpr=codLicensePlateNo;
+                Enabled=FALSE;
+                Editable=FALSE }
+
+    { 1000000029;3;Field  ;
+                CaptionML=[ENU=Current Item;
+                           ESM=Producto actual;
+                           FRC=Article en cours;
+                           ENC=Current Item];
+                SourceExpr=codItemNo;
+                Enabled=FALSE;
+                Editable=FALSE }
+
+    { 1000000022;3;Field  ;
+                Lookup=Yes;
+                CaptionML=[ENU=Last Scan;
+                           ESM=Èltima digitalizar;
+                           FRC=Derniäre Scannez;
+                           ENC=Last Scan];
+                SourceExpr=sLastScan;
+                Enabled=FALSE;
+                Editable=FALSE }
+
+    { 1000000015;1;Group  ;
+                CaptionML=[ENU=Packed Lines;
+                           ESM=L°neas embaladas;
+                           FRC=Lignes emballÇ;
+                           ENC=Packed Lines];
+                GroupType=Group }
+
+    { 1000000001;2;Group  ;
+                Name=Group;
+                CaptionML=[ENU=Packed Lines;
+                           ESM=L°neas embaladas;
+                           FRC=Lignes emballÇ;
+                           ENC=Packed Lines];
+                Enabled=bLinesEnabled;
+                Editable=bEditable;
+                GroupType=Repeater }
+
+    { 1000000044;3;Field  ;
+                SourceExpr="Assembly Item No.";
+                Visible=FALSE;
+                Editable=FALSE;
+                Style=Attention;
+                StyleExpr=bIsUnpacked }
+
+    { 1000000041;3;Field  ;
+                SourceExpr="Document Type";
+                Visible=FALSE;
+                Editable=FALSE;
+                Style=Attention;
+                StyleExpr=bIsUnpacked }
+
+    { 1000000042;3;Field  ;
+                SourceExpr="Document No.";
+                Visible=FALSE;
+                Editable=FALSE;
+                Style=Attention;
+                StyleExpr=bIsUnpacked }
+
+    { 1000000043;3;Field  ;
+                SourceExpr="Document Line No.";
+                Visible=FALSE;
+                Editable=FALSE;
+                Style=Attention;
+                StyleExpr=bIsUnpacked }
+
+    { 1000000002;3;Field  ;
+                SourceExpr="Item No.";
+                Editable=FALSE;
+                Style=Attention;
+                StyleExpr=bIsUnpacked }
+
+    { 1000000003;3;Field  ;
+                SourceExpr="Variant Code";
+                Visible=FALSE;
+                Editable=FALSE;
+                Style=Attention;
+                StyleExpr=bIsUnpacked }
+
+    { 1000000004;3;Field  ;
+                SourceExpr=Description;
+                Editable=FALSE;
+                Style=Attention;
+                StyleExpr=bIsUnpacked }
+
+    { 1000000005;3;Field  ;
+                SourceExpr="Description 2";
+                Visible=FALSE;
+                Editable=FALSE;
+                Style=Attention;
+                StyleExpr=bIsUnpacked }
+
+    { 1000000014;3;Field  ;
+                SourceExpr="Serial No.";
+                Editable=FALSE;
+                Style=Attention;
+                StyleExpr=bIsUnpacked }
+
+    { 1000000008;3;Field  ;
+                SourceExpr=Quantity;
+                Editable=FALSE;
+                Style=Attention;
+                StyleExpr=bIsUnpacked }
+
+    { 1000000016;3;Field  ;
+                SourceExpr="Lot No.";
+                Editable=FALSE;
+                Style=Attention;
+                StyleExpr=bIsUnpacked }
+
+    { 1000000013;3;Field  ;
+                SourceExpr="Packed Qty.";
+                Editable=FALSE }
+
+    { 1000000007;3;Field  ;
+                SourceExpr="Unit of Measure Code";
+                Visible=FALSE;
+                Editable=FALSE;
+                Style=Attention;
+                StyleExpr=bIsUnpacked }
+
+    { 1000000009;3;Field  ;
+                SourceExpr="License Plate No.";
+                Enabled=FALSE;
+                Editable=FALSE;
+                OnDrillDown=VAR
+                              lrecLPHeader@1000000000 : Record 23044505;
+                            BEGIN
+                              IF ( lrecLPHeader.GET(Rec."License Plate No.") ) THEN BEGIN
+                                PAGE.RUNMODAL(PAGE::"DSHIP LP Shipment Details", lrecLPHeader);
+                              END;
+                            END;
+                             }
+
+    { 1000000017;3;Field  ;
+                BlankZero=Yes;
+                SourceExpr="Qty. to Move";
+                MinValue=0;
+                Enabled=bEditable;
+                Editable=bEditable;
+                OnValidate=BEGIN
+
+                             IF ( "Qty. to Move" > Quantity ) THEN
+                               ERROR(tcMaxQtyToPack,Quantity,"Item No.");
+                           END;
+                            }
+
+    { 1000000018;3;Field  ;
+                SourceExpr="New License Plate No.";
+                Enabled=bEditable;
+                Editable=bEditable;
+                OnValidate=BEGIN
+
+                             CurrPage.packFactBox.PAGE.setLicensePlate("New License Plate No.");
+                           END;
+
+                OnAssistEdit=VAR
+                               ltrecLPHeader@1000000000 : TEMPORARY Record 23044505;
+                               lpgLPList@1000000001 : Page 23044613;
+                             BEGIN
+
+                               lpgLPList.LOOKUPMODE(TRUE);
+                               lpgLPList.initSelection(Rec."Document Type",Rec."Document No.");
+                               IF ( lpgLPList.RUNMODAL = ACTION::LookupOK ) THEN BEGIN
+                                 lpgLPList.GETRECORD(ltrecLPHeader);
+
+                                 IF ( LOWERCASE(ltrecLPHeader."No.") = 'new' ) THEN BEGIN
+                                   VALIDATE("New License Plate No.", cuPackMgmt.createLicensePlate(codLocationCode,codBinCode,''));
+                                 END ELSE BEGIN
+                                   VALIDATE("New License Plate No.", ltrecLPHeader."No.");
+                                 END;
+
+                                 CurrPage.packFactBox.PAGE.setLicensePlate("New License Plate No.");
+                               END;
+                             END;
+                              }
+
+    { 1000000006;3;Field  ;
+                CaptionML=[ENU=Total Qty. to Ship;
+                           ESM=Total Cdad. a enviar;
+                           FRC=QtÇ totale Ö Livrer;
+                           ENC=Total Qty. to Ship];
+                SourceExpr="Qty. to Ship";
+                Visible=FALSE;
+                Editable=FALSE }
+
+    { 1000000010;3;Field  ;
+                SourceExpr="Total Packed Qty.";
+                Visible=FALSE;
+                Editable=FALSE }
+
+    { 1000000033;3;Field  ;
+                SourceExpr="Has Shipment Label";
+                Visible=FALSE;
+                Editable=FALSE }
+
+    { 1000000059;3;Field  ;
+                SourceExpr="Location Code";
+                Visible=FALSE;
+                Editable=FALSE }
+
+    { 1000000071;3;Field  ;
+                SourceExpr="Qty. Picked";
+                Visible=FALSE;
+                Editable=FALSE;
+                Style=Attention;
+                StyleExpr=bIsUnpacked }
+
+    { 1000000075;3;Field  ;
+                SourceExpr="Source ID" }
+
+    { 1000000076;3;Field  ;
+                SourceExpr="Source Ref. No." }
+
+    { 1000000034;;Container;
+                ContainerType=FactBoxArea }
+
+    { 1000000035;1;Part   ;
+                Name=packFactBox;
+                CaptionML=[ENU=Package Details;
+                           ESM=Detalles de paquete;
+                           FRC=DÇtails du package;
+                           ENC=Package Details];
+                PagePartID=Page23044610;
+                PartType=Page }
+
+    { 1000000061;1;Part   ;
+                Name=shipInfoFactBox;
+                CaptionML=[ENU=Shipment Information;
+                           ESM=Informaci¢n de env°o;
+                           FRC=Des Renseignements de livraison;
+                           ENC=Shipment Information];
+                PagePartID=Page23044632;
+                PartType=Page }
+
+    { 1000000066;1;Part   ;
+                Name=packagesInfoFactBox;
+                CaptionML=[ENU=Packages Information;
+                           ESM=Informaci¢n de los paquetes;
+                           FRC=Packages Informations;
+                           ENC=Packages Information];
+                PagePartID=Page23044640;
+                PartType=Page }
+
+    { 1000000060;1;Part   ;
+                Name=orderCommentsFactBox;
+                CaptionML=[ENU=Order Comments;
+                           ESM=Comentarios de pedidos;
+                           FRC=Les Commentaires de commande;
+                           ENC=Order Comments];
+                PagePartID=Page23044631;
+                PartType=Page }
+
+  }
+  CODE
+  {
+    VAR
+      recrRecRef@1000000002 : RecordRef;
+      recDShipSetup@1000000038 : Record 23044600;
+      trecPackLineBuffer@1000000051 : TEMPORARY Record 23044602;
+      cuPackMgmt@1000000000 : Codeunit 23044601;
+      cuRateMgmt@1000000039 : Codeunit 23044602;
+      cuListMgmt@1000000040 : Codeunit 23044600;
+      cuCustomsMgmt@1000000008 : Codeunit 23044603;
+      sScan@1000000006 : Text[250];
+      sLastScan@1000000011 : Text[250];
+      sPrompt@1000000007 : Text;
+      codSourceNo@1000000009 : Code[20];
+      codLocationCode@1000000004 : Code[20];
+      codBinCode@1000000003 : Code[20];
+      codItemNo@1000000012 : Code[20];
+      codVariantCode@1000000013 : Code[20];
+      codLotNo@1000000014 : Code[20];
+      codSerialNo@1000000015 : Code[20];
+      codLicensePlateNo@1000000016 : Code[20];
+      dQtyToMove@1000000017 : Decimal;
+      tcMaxQtyToPack@1000000020 : TextConst 'ENU=You can only pack: %1 of item: %2.;ESM=S¢lo puede empaquetado: %1 del producto: %2.;FRC=Vous pouvez uniquement pack: %1 de article: %2.;ENC=You can only pack: %1 of item: %2.';
+      dUnpackedQty@1000000018 : Decimal;
+      iUnpackedLines@1000000021 : Integer;
+      tcConfirmClose@1000000022 : TextConst 'ENU=There are still unpacked lines.\Are you sure you want to close?;ESM=®Existen l°neas. \Are unpacked a£n est† seguro de que desea cerrar?;FRC=Il y a des lignes. \Are toujours unpacked voulez-vous sñr de vouloir fermer?;ENC=There are still unpacked lines.\Are you sure you want to close?';
+      tcNewPackageMissing@1000000023 : TextConst 'ENU=Item [%1] does not have a New Package No. specified.;ESM=Producto [%1] no tiene un n£mero nuevo paquete. especificado.;FRC=Article [%1] n'' est pas un Nouveau n ¯ Package spÇcifiÇ.;ENC=Item [%1] does not have a New Package No. specified.';
+      tcQtyToMoveMissing@1000000024 : TextConst 'ENU=Item [%1] does not have a Qty. to Move specified.;ESM=[%1] prod. no tiene una Cdad. a mover especificado.;FRC=Article [%1] n'' a pas un qtÇ Ö DÇplacer spÇcifiÇ.;ENC=Item [%1] does not have a Qty. to Move specified.';
+      tcNothingToPack@1000000025 : TextConst 'ENU=There is nothing left to pack.;ESM=No hay nada que izquierda que empaquetado.;FRC=Il n'' y a rien gauche Ö pack.;ENC=There is nothing left to pack.';
+      tcScanLPFirst@1000000026 : TextConst 'ENU=You must scan a Package to pack first.;ESM=Se debe digitaliza un paquete a empaquetado primero.;FRC=Vous devez scannez un Package pour le pack en premier.;ENC=You must scan a Package to pack first.';
+      tcScanItemFirst@1000000030 : TextConst 'ENU=You must scan an Item to pack first.;ESM=Se debe digitaliza un producto a empaquetado primero.;FRC=Vous devez scannez un Article Ö pack en premier.;ENC=You must scan an Item to pack first.';
+      tcPackage@1000000027 : TextConst 'ENU=Package: %1;ESM=Paquete: %1;FRC=Package: %1;ENC=Package: %1';
+      tcItem@1000000028 : TextConst 'ENU=Item: %1;ESM=Producto: %1;FRC=Article: %1;ENC=Item: %1';
+      tcSNLot@1000000046 : TextConst 'ENU=SN/Lot No.: %1;ESM=Nß seguim. Nß serie/lote: %1;FRC=N ¯ de n ¯ de SÇrie/Lot: %1;ENC=SN/Lot No.: %1';
+      tcQuantity@1000000029 : TextConst 'ENU=Quantity: %1;ESM=Cantidad: %1;FRC=QuantitÇ: %1;ENC=Quantity: %1';
+      tcUnknownScan@1000000031 : TextConst 'ENU=Unknown Scan: %1;ESM=Escanee desconocido: %1;FRC=Scannez inconnu: %1;ENC=Unknown Scan: %1';
+      tcPromptFullyPacked@1000000032 : TextConst 'ENU=Order fully packed;ESM=Pedido embalado totalmente;FRC=Totalement emballÇ de commande;ENC=Order fully packed';
+      tcPromptScanPackage@1000000033 : TextConst 'ENU=Scan a package to pack;ESM=Por el esc†ner un paquete de empaquetado;FRC=Un package pour le pack scannez;ENC=Scan a Package to pack';
+      tcPromptScanItem@1000000034 : TextConst 'ENU=Scan an item to pack;ESM=Un producto a empaquetado pasar por el esc†ner;FRC=Un article Ö pack scannez;ENC=Scan an item to pack';
+      tcPromptScanQty@1000000035 : TextConst 'ENU=Scan the Quantity to Pack;ESM=La cantidad para el paquete de pasar por el esc†ner;FRC=La QuantitÇ Ö Pack scannez;ENC=Scan the Quantity to Pack';
+      tcHasLabel@1000000036 : TextConst 'ENU=Package %1 already has a shipment label. Others may as well. \Do you still want to update the packages?;ESM=®Paquete %1 tiene ya un env°o etiqueta. \Do para actualizarla?;FRC=Package %1 possäde dÇjÖ un livraisonÇtiquette. \Do souhaitez-vous mettre Ö jour?;ENC=Package %1 already has a shipment label.\Do you still want to update it?';
+      tcWarnHasLabel@1000000037 : TextConst 'ENU=Warning.  Package %1 already has a shipment label.;ESM=Advertencia.  Paquete %1 ya tiene una etiqueta de env°o.;FRC=Avertissement.  Package %1 une Çtiquette de la livraison a dÇjÖ.;ENC=Warning.  Package %1 already has a shipment label.';
+      tcCannotRemove@1000000041 : TextConst 'ENU=The maximum quantity can be removed is %1.;ESM=Puede eliminar la cantidad m†xima es %1.;FRC=La quantitÇ maximum peut àtre supprimÇ est %1.;ENC=The maximum quantity can be removed is %1.';
+      bGotItem@1000000042 : Boolean;
+      bIsUnpacked@1000000010 : Boolean INDATASET;
+      bUnpackedLines@1000000005 : Boolean INDATASET;
+      bEditable@1000000001 : Boolean;
+      bLinesEnabled@1000000059 : Boolean;
+      bGotLotSerial@1000000043 : Boolean;
+      bGotQuantity@1000000044 : Boolean;
+      tcPromptScanLotSerial@1000000045 : TextConst 'ENU=Scan Lot/Serial to pack;ESM=Por el esc†ner n£mero serie/lote a empaquetado;FRC=SÇrie/Lot Ö pack scannez;ENC=Scan Lot/Serial to pack';
+      tcCommInvNoLP@1000000048 : TextConst 'ENU=Line hasn''t been packed yet.\You must label the shipment first.;ESM=L°nea hasn''t ha embalado a£n. \You debe etiqueta primero de la remisi¢n de venta.;FRC=Ligne hasn''t encore ÇtÇ emballÇ. \You doit Çtiquette la livraison en premier.;ENC=Line hasn''t been packed yet.\You must label the shipment first.';
+      tcCommInvNoCustoms@1000000047 : TextConst 'ENU=You must have a customs invoice.\You must label the shipment first.;ESM=Debe tener un aduaneras factura. \You debe etiquetar primero en el env°o.;FRC=Vous devez avoir un aupräs des administrations douaniäres \You. facture doit Çtiquette la livraison en premier.;ENC=You must have a customs invoice.\You must label the shipment first.';
+      tcCommInvNoLabel@1000000049 : TextConst 'ENU=You must label the shipment first.;ESM=Primero se debe etiqueta la remisi¢n de venta.;FRC=Vous devez d''abord Çtiquette la livraison.;ENC=You must label the shipment first.';
+      tcNotShipped@1000000050 : TextConst 'ENU=This order hasn''t been shipped yet.\You must label it first.;ESM=Este pedido hasn''t enviado todav°a. \You debe etiquetar primero.;FRC=Cette commande hasn''t encore ÇtÇ livrÇs. \You doit Çtiquette elle en premier.;ENC=This order hasn''t been shipped yet.\You must label it first.';
+      bIsShipped@1000000019 : Boolean;
+      tcShipmentPosted@1000000052 : TextConst 'ENU=This order has already been shipped.;ESM=Este pedido ya se ha enviado.;FRC=Cet ordre a dÇjÖ ÇtÇ livrÇ.;ENC=This order has already been shipped.';
+      tcPromptScanOrder@1000000054 : TextConst 'ENU=Scan an order to begin;ESM=Un pedido para empezar a pasar por el esc†ner;FRC=Une commande commencer scannez;ENC=Scan an order to begin';
+      tcAllHasLabel@1000000055 : TextConst 'ENU=All packages already have a shipment label.\Do you still want to continue?;ESM=®Todos los paquetes tienen ya un env°o etiqueta. \Do continuar?;FRC=Packages tous les vous l''avez dÇjÖ une livraisonÇtiquette \Do vous quand màme continuer?;ENC=All packages already have a shipment label.\Do you still want to continue?';
+      tcNoOrder@1000000053 : TextConst 'ENU=You must open an order first.;ESM=Primero debe abrir un pedido.;FRC=Vous devez d''abord ouvrir une commande.;ENC=You must open an order first.';
+      tcWhseMultiDestination@1000000056 : TextConst 'ENU=The Warehouse Shipment %1 may contain orders going to multiple destinations. \Would you like to ignore this?;ESM=El env°o de almacÇn%1 puede contener pedidos que se va a varios destinos. \Would ®desea ignorar esto?;FRC=La Livraison Entrepìt %1 peut contenir va destinations plusieurs des commandes. \Would-vous ignorer cette?;ENC=The Warehouse Shipment %1 may contain orders going to multiple destinations. \Would you like to ignore this?';
+      tcWhseMultiDestBlocked@1000000057 : TextConst 'ENU=The Warehouse Shipment %1 may contain orders going to multiple destinations. \These orders are configured to be blocked from opening.';
+      tcSerialMismatchErr@1000000058 : TextConst 'ENU=The serial numbers do not match.';
+      SalesSetup@100000000 : Record 311;
+      Text0001@1000000060 : TextConst 'ENU=Cannot be post, At least one item must be packed.';
+      Text0002@1000000061 : TextConst 'ENU=Please create label, cannot be post.';
+      DSHIPPackageRateManagement@1000000062 : Codeunit 23044602;
+      Text0005@1000000063 : TextConst 'ENU=Please unpack all lines of MOP order before undo MOP.';
+      Text0004@1000000064 : TextConst 'ENU=If it is Parcel then Yes and if Freight then No?';
+      Text0003@1000000065 : TextConst 'ENU=BOL No. %1 already created for License Plate %2.';
+      FreightPalletDialog@1000000066 : Page 51132;
+
+    PROCEDURE initPage@1000000000(VAR precrRecRef@1000000000 : RecordRef;pcodLocationCode@1000000002 : Code[10];pcodBinCode@1000000003 : Code[20]);
+    BEGIN
+      //<FUNC>
+      //  Description: Initializes the page record and global variables.
+      //  Called From: Codeunit 23044601, This page
+      //  Side Effect: None
+      //</FUNC>
+
+      recrRecRef := precrRecRef;
+      codLicensePlateNo := '';
+      codLocationCode := pcodLocationCode;
+      codBinCode := pcodBinCode;
+      setLinesEditable(FALSE);
+    END;
+
+    LOCAL PROCEDURE refresh@1000000007();
+    BEGIN
+      //<FUNC>
+      //  Description: Refreshes the packing details/assignments
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      bUnpackedLines := FALSE;
+      dUnpackedQty := 0;
+      iUnpackedLines := 0;
+
+      codItemNo := '';
+      codVariantCode := '';
+      codSerialNo := '';
+      codLotNo := '';
+      dQtyToMove := 0;
+      //codLicensePlateNo := '';
+
+      bGotQuantity := FALSE;
+      bGotLotSerial := FALSE;
+
+      trecPackLineBuffer.RESET;
+      trecPackLineBuffer.DELETEALL;
+      CLEAR(trecPackLineBuffer);
+      Rec.RESET;
+      Rec.DELETEALL;
+      CLEAR(Rec);
+      CurrPage.UPDATE(FALSE);
+
+      IF ( recrRecRef.NUMBER <> 0 ) THEN BEGIN
+        orderOpened(recrRecRef);
+        cuPackMgmt.getPackageData(recrRecRef, trecPackLineBuffer);
+
+        IF ( trecPackLineBuffer.FINDSET(FALSE) ) THEN BEGIN
+          REPEAT
+            Rec := trecPackLineBuffer;
+            Rec.INSERT;
+            IF ( Rec."License Plate No." = '' ) THEN BEGIN
+              iUnpackedLines += 1;
+              dUnpackedQty += Rec.Quantity;
+            END;
+            CheckifAlreadyPackedUsingEship; //TPZ3304
+          UNTIL(trecPackLineBuffer.NEXT=0);
+        END;
+
+        cuPackMgmt.createShipOptions("Document Type", "Document No.");
+      END;
+      codSourceNo := "Document No.";
+      setPrompt;
+      factBoxUpdates;
+
+      // findset before setting the key resolves a 2013 graphics redraw issue
+      IF ( Rec.FINDSET ) THEN ;
+      SETCURRENTKEY("Document Line No.", "Packed Qty.");
+    END;
+
+    LOCAL PROCEDURE packLines@1000000006();
+    VAR
+      lbProcess@1000000000 : Boolean;
+      lbWarningShown@1000000001 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Takes the current package assignments and processes them
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      // so if new license plate # is different
+      IF ( FINDSET ) THEN BEGIN
+        REPEAT
+          lbProcess := TRUE;
+          IF ( (NOT lbWarningShown) AND (Rec."Has Shipment Label") ) THEN BEGIN
+            lbWarningShown := TRUE;
+            lbProcess := CONFIRM(STRSUBSTNO(tcHasLabel, "License Plate No."));
+          END;
+          IF ( lbProcess ) THEN BEGIN
+            IF ( "Qty. to Move" <> 0 ) THEN BEGIN
+              IF ( "License Plate No." = '') THEN BEGIN
+                IF ( "New License Plate No." = '' ) THEN BEGIN
+                  ERROR(tcNewPackageMissing,"Item No.");
+                END;
+                // pack
+                cuPackMgmt.packLine(Rec);
+              END ELSE BEGIN
+                IF ( "License Plate No." = "New License Plate No." ) THEN BEGIN
+                  "New License Plate No." := '';
+                  "Qty. to Move" := 0;
+                END ELSE BEGIN
+                  IF ( "New License Plate No." = '' ) THEN BEGIN
+                    //unpack
+                    cuPackMgmt.unpackLine(Rec);
+                  END ELSE BEGIN
+                    // move
+                    cuPackMgmt.transferLine(Rec);
+                  END;
+                END;
+              END;
+            END ELSE BEGIN
+              IF ( "New License Plate No." <> '' ) THEN
+                ERROR(tcQtyToMoveMissing, "Item No.");
+            END;
+          END;
+        UNTIL( (Rec.NEXT=0) OR (NOT lbProcess) );
+      END;
+
+      refresh();
+    END;
+
+    LOCAL PROCEDURE processScan@1000000015(psScan@1000000000 : Text);
+    VAR
+      lsScan@1000000002 : Text;
+      lsScanPrefix@1000000001 : Text;
+      WarehouseActivityHeader@1000000004 : Record 5766;
+      LPickAvl@1000000003 : Boolean;
+      TextPick001@1000000005 : TextConst 'ENU=Pick %1  is in not registered, would you like to Register it now..?';
+    BEGIN
+      //<FUNC>
+      //  Description: Calls processing functions for text entered into the scan edit box until handled
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      sScan := '';
+
+      IF ( psScan = '' ) THEN
+        EXIT;
+
+      sLastScan := psScan;
+      psScan := DELCHR(LOWERCASE(psScan), '<>');
+
+      IF ( cuRateMgmt.callScanExtension(recDShipSetup."Shipment Extension Codeunit", codLicensePlateNo, "Document Type", "Document No.", sLastScan, codItemNo) ) THEN BEGIN
+        refresh;
+        EXIT;
+      END;
+
+      lsScan := psScan;
+      IF ( STRLEN(lsScan) > 3 ) THEN BEGIN
+        IF ( STRPOS(lsScan, '%') = 1 ) THEN BEGIN
+          lsScan := COPYSTR(lsScan, 1, STRPOS(COPYSTR(lsScan, 2), '%') + 1);
+        END ELSE IF ( STRPOS(lsScan, '--') = 1 ) THEN BEGIN
+          lsScan := COPYSTR(lsScan, 3);
+        END;
+      END;
+      //<TPZ3297>
+       WarehouseActivityHeader.RESET;
+       WarehouseActivityHeader.SETRANGE(Type,WarehouseActivityHeader.Type::Pick);
+       WarehouseActivityHeader.SETRANGE("No.",psScan);
+       IF WarehouseActivityHeader.FINDFIRST THEN BEGIN
+         LPickAvl := CONFIRM(STRSUBSTNO(TextPick001,WarehouseActivityHeader."No."));
+         IF LPickAvl THEN
+           PAGE.RUNMODAL(PAGE::"Warehouse Pick", WarehouseActivityHeader);
+       END;
+      //</TPZ3297>
+      //>>008 TPZ3238
+      CheckSalesLineQuantityPack(psScan);
+      //<<008 TPZ3238
+
+      CASE lsScan OF
+        '%s%',
+        '%t%',
+        '%ws%':
+          processDocScan(psScan);
+        'new',
+        '%lp%',
+        '%lpt%':
+          processLPScan(psScan);
+        'packall':
+          processPackAllScan;
+        'packdetail':
+          processPackDetailScan;
+        'getweight':
+          processGetWeightScan;
+        'insure':
+          processInsurance;
+        'packoption':
+          processPackOptionsScan;
+        'shipoption':
+          processShipOptionsScan;
+        'unpackall':
+          processUnpackAllScan;
+        'getlabel',
+        'getrates':
+          getLabel;
+        'getreturn':
+          getReturnLabel;
+        'shptlabel':
+          printCarrierLabel;
+        'lplabel':
+          printLPLabel;
+        'post':
+          doPost;
+        'customs':
+          doCustoms;
+        'clear':
+          doClear;
+        'tracking':
+          showTrackingURLs;
+        'codlabel':
+          openCODReturnLabel;
+        'retlabel':
+          printReturnLabel;
+        'bol':
+          printBillOfLading;
+        'comminv':
+          printCommercialInvoice;
+        'intpkglabel':
+          printInternalPackLabel;
+        ELSE BEGIN
+          //  Avoids ledger entry serials matching quantities
+          IF ( (bGotItem) AND (bGotLotSerial) ) THEN
+            IF ( processQtyScan(psScan) ) THEN EXIT;
+          IF ( processItemScan(psScan) ) THEN EXIT;
+          IF ( processDocNoPrefixScan(psScan) ) THEN EXIT;
+          IF ( processLPNoPrefixScan(psScan) ) THEN EXIT;
+
+          sLastScan := STRSUBSTNO(tcUnknownScan, sLastScan);
+          setPrompt;
+        END; // else case
+      END; // case lsScan
+    END;
+
+    LOCAL PROCEDURE processDocScan@1000000004(psScan@1000000000 : Text) : Boolean;
+    VAR
+      lrecWhseShipHeader@1000000001 : Record 7320;
+      lrecSalesHeader@1000000006 : Record 36;
+      lrecTransferHeader@1000000007 : Record 5740;
+      ltrecPackOrderBuffer@1000000008 : TEMPORARY Record 23044601;
+      lrecrRecRef@1000000002 : RecordRef;
+      lcodLocationCode@1000000003 : Code[10];
+      lcodBinCode@1000000004 : Code[20];
+      lbIsDoc@1000000005 : Boolean;
+      lcodSourceNo@1000000009 : Code[20];
+      RegisteredWhseActivityHdr@1000000010 : Record 5772;
+      RegisteredWhseActivityLine@1000000011 : Record 5773;
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if the scan text was for a document barcode.
+      //               Page will be reloaded with new document details.
+      //               Supports Warehouse shipment barcode: '%ws%whse_ship_number'
+      //               Supports sales order barcode: '%s%sales_order_number'
+      //               Supports outbound transfer barcode: '%t%outbound_transfer_number'
+      //  Called From: This page
+      //  Side Effect: Any open packages or activities in progress will be cleared
+      //</FUNC>
+
+      psScan := LOWERCASE(psScan);
+      lbIsDoc := FALSE;
+      ltrecPackOrderBuffer.INIT;
+
+      IF ( STRPOS(psScan,'%ws%') = 1 ) THEN BEGIN
+        lrecWhseShipHeader.GET(COPYSTR(psScan,5));
+        checkWhseShipDestinationIdentical(lrecWhseShipHeader."No.");
+        lcodSourceNo := COPYSTR(psScan,5);
+        lcodLocationCode := lrecWhseShipHeader."Location Code";
+        lcodBinCode := lrecWhseShipHeader."Bin Code";
+        lrecrRecRef.GETTABLE(lrecWhseShipHeader);
+        lbIsDoc := TRUE;
+        ltrecPackOrderBuffer."Document Type" := ltrecPackOrderBuffer."Document Type"::"Warehouse Shipment";
+      //  Adding support for other document types
+      END ELSE IF ( STRPOS(psScan,'%s%') = 1 ) THEN BEGIN
+        lrecSalesHeader.GET(lrecSalesHeader."Document Type"::Order, COPYSTR(psScan,4));
+        lcodSourceNo := COPYSTR(psScan,4);
+        lcodLocationCode := lrecSalesHeader."Location Code";
+        lcodBinCode := '';
+        lrecrRecRef.GETTABLE(lrecSalesHeader);
+        lbIsDoc := TRUE;
+        ltrecPackOrderBuffer."Document Type" := ltrecPackOrderBuffer."Document Type"::"Sales Order";
+      END ELSE IF ( STRPOS(psScan,'%t%') = 1 ) THEN BEGIN
+        lrecTransferHeader.GET(COPYSTR(psScan,4));
+        lcodSourceNo := COPYSTR(psScan,4);
+        lcodLocationCode := lrecTransferHeader."Transfer-from Code";
+        lcodBinCode := '';
+        lrecrRecRef.GETTABLE(lrecTransferHeader);
+        lbIsDoc := TRUE;
+        ltrecPackOrderBuffer."Document Type" := ltrecPackOrderBuffer."Document Type"::"Outbound Transfer";
+      //-->004  PKS
+      END ELSE IF ( STRPOS(psScan,'%wpi%') = 1 ) THEN BEGIN //WPI2058640 ////TPZ3143
+        RegisteredWhseActivityHdr.SETRANGE("Whse. Activity No.",COPYSTR(psScan,6));
+        IF RegisteredWhseActivityHdr.FINDFIRST THEN;
+        RegisteredWhseActivityLine.SETRANGE("No.",RegisteredWhseActivityHdr."No.");
+        IF RegisteredWhseActivityLine.FINDFIRST THEN;
+        lrecWhseShipHeader.GET(RegisteredWhseActivityLine."Whse. Document No.");
+        checkWhseShipDestinationIdentical(lrecWhseShipHeader."No.");
+        lcodSourceNo := lrecWhseShipHeader."No.";
+        lcodLocationCode := lrecWhseShipHeader."Location Code";
+        lcodBinCode := lrecWhseShipHeader."Bin Code";
+        lrecrRecRef.GETTABLE(lrecWhseShipHeader);
+        lbIsDoc := TRUE;
+        ltrecPackOrderBuffer."Document Type" := ltrecPackOrderBuffer."Document Type"::"Warehouse Shipment";
+      //<--004
+      END;
+
+      IF ( lbIsDoc ) THEN BEGIN
+        initPage(lrecrRecRef, lcodLocationCode, lcodBinCode);
+        refresh;
+        codSourceNo := lcodSourceNo;
+        ltrecPackOrderBuffer."Document No." := codSourceNo;
+        cuPackMgmt.updateDocumentQtyToShip(ltrecPackOrderBuffer);
+      END;
+
+      EXIT(lbIsDoc);
+    END;
+
+    LOCAL PROCEDURE processLPScan@1000000018(psScan@1000000000 : Text) : Boolean;
+    VAR
+      lrecLPSetup@1000000004 : Record 23044523;
+      lrecLPHeader@1000000002 : Record 23044505;
+      lbLicensePlateScanned@1000000001 : Boolean;
+      lbPrintLabel@1000000003 : Boolean;
+      lbNewLP@1000000005 : Boolean;
+      SalesLine@1000000008 : Record 37;
+      RegisteredWhseActivityLine@1000000007 : Record 5773;
+      PickRegistered@1000000006 : Boolean;
+      UserSetupLoc@1000000009 : Record 91;
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if scan text is related to creating/opening license plates.
+      //               Can create new license plates via 'new'.
+      //               Can create new license plates via templates, '%lpt%template_code'.
+      //               Can open an existing license plate via the LP barcode, '%lp%lp_number'.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+      //<vaseem> // error on --new if pick is not registered in case of Sales Order NO Scan
+      PickRegistered := FALSE;
+      IF "Document Type" = "Document Type"::"Sales Order" THEN BEGIN
+        SalesLine.RESET;
+        SalesLine.SETRANGE("Document Type",SalesLine."Document Type"::Order);
+        SalesLine.SETRANGE("Document No.","Document No.");
+        SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+        IF SalesLine.FINDSET THEN
+          REPEAT
+            RegisteredWhseActivityLine.RESET;
+            RegisteredWhseActivityLine.SETRANGE("Source Document",RegisteredWhseActivityLine."Source Document"::"Sales Order");
+            RegisteredWhseActivityLine.SETRANGE("Source No.","Document No.");
+            RegisteredWhseActivityLine.SETRANGE("Item No.",SalesLine."No.");
+            IF RegisteredWhseActivityLine.FINDFIRST THEN
+              PickRegistered := TRUE;
+          UNTIL SalesLine.NEXT=0;
+        IF NOT PickRegistered THEN
+         ERROR('Pick is Not Registered');
+      END;
+
+      //</vaseem>
+      psScan := LOWERCASE(psScan);
+
+      lbLicensePlateScanned := TRUE;
+      lbNewLP := TRUE;
+      lbPrintLabel := recDShipSetup."Package LP Print Behaviour" IN [recDShipSetup."Package LP Print Behaviour"::Automatic, recDShipSetup."Package LP Print Behaviour"::"Automatic with prompt"];
+
+      IF ( STRPOS(psScan,'%lp%') = 1 ) THEN BEGIN
+        lrecLPHeader.SETAUTOCALCFIELDS("Source Document", "Source No.");
+        lrecLPHeader.GET(COPYSTR(psScan,5));
+        openAssigendDocument(lrecLPHeader);
+        IF ( codSourceNo = '' ) THEN BEGIN
+          MESSAGE(tcNoOrder);
+          EXIT(TRUE);
+        END;
+        codLicensePlateNo := lrecLPHeader."No.";
+        lbPrintLabel := FALSE;
+        lbNewLP := FALSE;
+      END ELSE IF ( psScan IN ['new', '--new'] ) THEN BEGIN
+        IF ( codSourceNo = '' ) THEN BEGIN
+          MESSAGE(tcNoOrder);
+          EXIT(TRUE);
+        END;
+        IF ( checkAlreadyPacked ) THEN
+          EXIT(TRUE);
+        codLicensePlateNo := cuPackMgmt.createLicensePlate(codLocationCode, codBinCode, '');
+      END ELSE IF ( STRPOS(psScan,'%lpt%') = 1 ) THEN BEGIN
+        IF ( checkAlreadyPacked ) THEN
+          EXIT(TRUE);
+        codLicensePlateNo := cuPackMgmt.createLicensePlate(codLocationCode, codBinCode, COPYSTR(psScan, 6));
+      END ELSE BEGIN
+        lbLicensePlateScanned := FALSE;
+      END;
+
+      IF ( lbLicensePlateScanned ) THEN BEGIN
+        IF ( lrecLPHeader.GET(codLicensePlateNo) ) THEN BEGIN
+          lrecLPHeader.CALCFIELDS("Package Carrier Label");
+          IF ( lrecLPHeader."Package Carrier Label".HASVALUE ) THEN
+            MESSAGE(tcWarnHasLabel, lrecLPHeader."No.");
+
+          IF ( lbPrintLabel ) THEN BEGIN
+            COMMIT;
+            lrecLPHeader.SETRANGE("No.",lrecLPHeader."No.");
+
+            IF ( recDShipSetup."Package LP Print Behaviour" = recDShipSetup."Package LP Print Behaviour"::Automatic ) THEN
+              cuPackMgmt.printPackageTag(lrecLPHeader,FALSE,FALSE)
+            ELSE IF ( recDShipSetup."Package LP Print Behaviour" = recDShipSetup."Package LP Print Behaviour"::"Automatic with prompt" ) THEN
+              cuPackMgmt.printPackageTag(lrecLPHeader,TRUE,FALSE);
+          END; // if lpprintlabel
+
+          IF ( lbNewLP ) THEN BEGIN
+            cuPackMgmt.setInsuranceHandling(codLicensePlateNo, "Document Type", "Document No.");
+            IF (lrecLPSetup.GET()) THEN BEGIN
+              lrecLPHeader."Weight Unit of Measure" := lrecLPSetup."Weight Unit of Measure";
+              lrecLPHeader."Shpt. Dim. Unit of Measure" := lrecLPSetup."Dimensions Unit of Measure";
+              lrecLPHeader.MODIFY(FALSE);
+            END;
+          END; //if
+          cuPackMgmt.createPackOptions(codLicensePlateNo, "Document Type", "Document No.");
+
+        END; // if lreclpheader.get
+
+        sLastScan := STRSUBSTNO(tcPackage, codLicensePlateNo);
+        CurrPage.packFactBox.PAGE.setLicensePlate(codLicensePlateNo);
+        setPrompt();
+      END;
+
+      //-->TPZ3299
+      IF ( psScan IN ['new', '--new'] ) THEN
+        IF UserSetupLoc.GET(USERID) AND (UserSetupLoc."DSHIP API Integration") THEN BEGIN //09242021 new code to enable confirmation if user is enabled for unishipper
+          {
+          IF CONFIRM(Text0004,TRUE) THEN
+            doPackageDetailsPS(Rec."Document Type", codLicensePlateNo)
+          ELSE
+            doPalletDetailsPS(codLicensePlateNo);
+          } //3187
+          //>>3187
+          COMMIT;
+          CLEAR(FreightPalletDialog);
+          FreightPalletDialog.SetValues(Rec."Document Type",codLicensePlateNo,Rec."Source ID");
+          IF FreightPalletDialog.RUNMODAL = ACTION::OK THEN;
+          //<<3187
+        END ELSE doPackageDetailsPS(Rec."Document Type", codLicensePlateNo);
+      //<--TPZ3299
+
+      EXIT(lbLicensePlateScanned);
+    END;
+
+    LOCAL PROCEDURE processPackAllScan@1000000008();
+    VAR
+      lrecLPHeader@1000000000 : Record 23044505;
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if the scan text was to pack all remaining items into the current package.
+      //               If items require lot/serial tracking this will not be captured/generated.
+      //               Looks for 'packall' as the scan.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( codLicensePlateNo = '' ) THEN BEGIN
+        MESSAGE(tcScanLPFirst);
+      END ELSE BEGIN
+        cuPackMgmt.packAll(trecPackLineBuffer,codLicensePlateNo);
+        //-->003 TPZ3143
+        //cuPackMgmt.getLPSrcTypeFromDShipDocType(Rec."Document Type", Rec."Document Type"); //3299 not required
+        lrecLPHeader.SETRANGE("Source Document", Rec."Document Type");
+        lrecLPHeader.SETRANGE("Source No.", codSourceNo);
+        lrecLPHeader.SETRANGE("Shipment Gross Weight",0);
+        IF (lrecLPHeader.FINDSET(TRUE)) THEN
+      //    IF (Rec."Location Code" = '80') OR (Rec."Location Code" = '25') OR (Rec."Location Code" = '30') OR (Rec."Location Code" = '22')
+      //      OR (Rec."Location Code" = '2') THEN //25, 30
+            doPackageDetails(Rec."Document Type", codSourceNo);
+
+        //<--
+        refresh();
+      END;
+    END;
+
+    LOCAL PROCEDURE processPackDetailScan@1000000005();
+    VAR
+      lrecLPHeader@1000000002 : Record 23044505;
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if the scan text was for showing the package details (dimensions, weight).
+      //               Looks for 'packdetail' as the scan.
+      //               Will open the details dialog so user can set values.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( codLicensePlateNo = '' ) THEN BEGIN
+        MESSAGE(tcScanLPFirst);
+      END ELSE BEGIN
+        lrecLPHeader.GET(codLicensePlateNo);
+        PAGE.RUNMODAL(PAGE::"DSHIP LP Shipment Details", lrecLPHeader);
+        CurrPage.packFactBox.PAGE.setLicensePlate(codLicensePlateNo);
+      END;
+    END;
+
+    LOCAL PROCEDURE processGetWeightScan@1000000044();
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if the scan text is getweight
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( codLicensePlateNo = '' ) THEN BEGIN
+        MESSAGE(tcScanLPFirst);
+      END ELSE BEGIN
+        getWeight;
+      END;
+    END;
+
+    LOCAL PROCEDURE processInsurance@1000000024();
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if the scan text was to show the insurance for the shipping document.
+      //               Looks for 'INSURE' as the scan.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( codLicensePlateNo = '' ) THEN
+        MESSAGE(tcScanLPFirst)
+      ELSE
+        doInsurance(codLicensePlateNo);
+    END;
+
+    LOCAL PROCEDURE processPackOptionsScan@1000000020();
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if the scan text was to show the shipment Options for the shipping document.
+      //               Looks for 'packoption' as the scan.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( codLicensePlateNo = '' ) THEN
+        MESSAGE(tcScanLPFirst)
+      ELSE
+        doPackOptions(codLicensePlateNo);
+    END;
+
+    LOCAL PROCEDURE processShipOptionsScan@1000000042();
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if the scan text was to show the shipment Options for the shipping document.
+      //               Looks for 'packoption' as the scan.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( codSourceNo <> '' ) THEN BEGIN
+        doShipOptions(Rec."Document Type", codSourceNo, Rec."Document Subtype");
+      END;
+    END;
+
+    LOCAL PROCEDURE processUnpackAllScan@1000000037();
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if the scan text was to unpack all packed items.
+      //               Looks for 'unpackall' as the scan.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      cuPackMgmt.unpackAll(trecPackLineBuffer);
+      refresh();
+    END;
+
+    LOCAL PROCEDURE processQtyScan@1000000025(psScan@1000000000 : Text) : Boolean;
+    VAR
+      ldQty@1000000001 : Decimal;
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if the scan text was for quantity to pack.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+
+      ASSERTERROR BEGIN
+        EVALUATE(ldQty, psScan);
+        ERROR('x');
+      END;
+      IF ( GETLASTERRORTEXT<>'x' ) THEN BEGIN
+        //ERROR(GETLASTERRORTEXT);
+        EXIT(FALSE);
+      END;
+
+      IF ( codLicensePlateNo = '' ) THEN BEGIN
+        MESSAGE(tcScanLPFirst);
+        EXIT(TRUE);
+      END;
+
+      IF ( codItemNo = '' ) THEN BEGIN
+        MESSAGE(tcScanItemFirst);
+        EXIT(TRUE);
+      END;
+
+      sLastScan := STRSUBSTNO(tcQuantity, ldQty);
+      bGotQuantity := handleQuantityScan(ldQty, trecPackLineBuffer."Unit of Measure Code");
+      IF ( bGotQuantity ) THEN BEGIN
+        //  moved to separate function to properly handle scanned negative quantities
+        handleLinePacking;
+        setPrompt();
+      END;
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE processItemScan@1000000022(psScan@1000000003 : Text) : Boolean;
+    VAR
+      lrecItem@1000000002 : Record 27;
+      lrecBarcodeRule@1000000001 : Record 23044509;
+      lrecItemTracking@1000000008 : Record 6502;
+      lpgDShipMultiscanSerial@1000000006 : Page 23044630;
+      lcuDecodeRuleMgmt@1000000004 : Codeunit 23044517;
+      lbFound@1000000000 : Boolean;
+      lcodItem@1000000007 : Code[50];
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if the scan text was for an item number.
+      //               Uses the WMDM Barcode Rules to interpret the item scan.
+      //               Will utilize number/lot/serial/uom from barcode.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      //  enables the use of sticky items in barcode rules, necessary for SN/Lot outbound only
+      IF ( codItemNo <> '' ) THEN BEGIN
+        lcodItem := codItemNo;
+      END;
+
+      setBarcodeRuleFilter(lrecBarcodeRule, lcodItem);
+
+      lbFound := lcuDecodeRuleMgmt.decodeItemBarcode(psScan,
+                                                     lrecBarcodeRule,
+                                                     lrecItem,
+                                                     lrecBarcodeRule.Context::Generic,
+                                                     lcodItem,
+                                                     '');
+
+      IF ( lbFound ) THEN BEGIN
+        IF ( codLicensePlateNo = '' ) THEN BEGIN
+          MESSAGE(tcScanLPFirst);
+          EXIT(TRUE);
+        END;
+
+        //  Reset the flags for the case: different item scanned instead of expected sn/qty
+        IF ( codItemNo <> lrecItem."No." ) THEN BEGIN
+          bGotQuantity := FALSE;
+          bGotLotSerial := FALSE;
+        END;
+
+        sLastScan := STRSUBSTNO(tcItem, psScan);
+        handleItemScan(lrecItem, lrecBarcodeRule);
+        bGotItem := TRUE;
+        IF ( lrecBarcodeRule."Quantity Result" <> 0 ) THEN BEGIN
+          bGotQuantity := handleQuantityScan(lrecBarcodeRule."Quantity Result", lrecBarcodeRule."UOM Result");
+        END;
+
+        //  altered to look at only the outbound tracking we care about
+        IF ( lrecItemTracking.GET(lrecItem."Item Tracking Code") ) THEN ;
+        IF (
+            ( lrecItemTracking."SN Purchase Outbound Tracking" ) OR
+            ( lrecItemTracking."SN Sales Outbound Tracking" ) OR
+            ( lrecItemTracking."Lot Purchase Outbound Tracking" ) OR
+            ( lrecItemTracking."Lot Sales Outbound Tracking" )
+           ) THEN BEGIN
+
+          IF (trecPackLineBuffer."Serial No." <> '') THEN BEGIN
+            CASE recDShipSetup."Item Tracking Behaviour" OF
+              recDShipSetup."Item Tracking Behaviour"::Confirm:
+                BEGIN
+                  IF ( (codSerialNo <> '') OR (bGotQuantity) ) THEN
+                    IF (trecPackLineBuffer."Serial No." <> codSerialNo) THEN
+                      ERROR(tcSerialMismatchErr);
+                END;
+              recDShipSetup."Item Tracking Behaviour"::Reenter:
+                  BEGIN
+                    IF (trecPackLineBuffer."Serial No." <> codSerialNo) THEN
+                      removeExistingTracking();
+                  END;
+              recDShipSetup."Item Tracking Behaviour"::Skip:
+                  BEGIN
+                    codSerialNo := trecPackLineBuffer."Serial No.";
+                  END;
+            END;
+          END;
+
+          IF ( recDShipSetup."Use Multiscan Entry" = recDShipSetup."Use Multiscan Entry"::"On Serial Nos." ) THEN BEGIN
+            //  Calls the multiscan serial page ONLY on serials, not lots
+            IF ( lrecItemTracking."SN Purchase Outbound Tracking" OR lrecItemTracking."SN Sales Outbound Tracking" ) THEN BEGIN
+              IF ( trecPackLineBuffer.Quantity > 1 ) THEN BEGIN
+                //  2013 won't redraw the table correctly. Fixed with R2
+                {// 2013-::begin
+                CLEAR(Rec);
+                DELETEALL;
+                }// 2013-::end
+                lpgDShipMultiscanSerial.initPage(trecPackLineBuffer, codLicensePlateNo, codSerialNo, codLotNo);
+                lpgDShipMultiscanSerial.RUNMODAL;
+                IF ( lpgDShipMultiscanSerial.isOK ) THEN BEGIN
+                  refresh();
+                  EXIT(TRUE);
+                END;
+                codItemNo := '';
+                bGotItem := FALSE;
+                refresh();
+                EXIT(FALSE);
+              END; // if trecpacklinebuffer.quantity > 1
+            END; //if
+          END; //if
+
+          IF ( (codLotNo <> '') OR (codSerialNo <> '') ) THEN BEGIN
+            bGotLotSerial := TRUE;
+            trecPackLineBuffer."Lot No." := codLotNo;
+            trecPackLineBuffer."Serial No." := codSerialNo;
+          END; // if codlotno | codserialno <> ''
+          IF ( codSerialNo <> '' ) THEN BEGIN
+            IF ( recDShipSetup."Item Quantity Behaviour" = recDShipSetup."Item Quantity Behaviour"::"Pack Serialized" ) THEN BEGIN
+              bGotQuantity := handleQuantityScan(1, '');
+            END; // if item scanning behaviour = "serialized only"
+          END; // if codserialno <> ''
+
+        END ELSE BEGIN
+          bGotLotSerial := TRUE;
+        END;
+        IF ( recDShipSetup."Item Quantity Behaviour" = recDShipSetup."Item Quantity Behaviour"::"Pack One" ) THEN BEGIN
+          bGotQuantity := handleQuantityScan(1, '');
+        END;
+      END; // IF lbFound
+
+      //  moved to separate function to properly handle scanned negative quantities
+      handleLinePacking;
+
+      setPrompt();
+
+      EXIT(lbFound);
+    END;
+
+    LOCAL PROCEDURE processDocNoPrefixScan@1000000034(psScan@1000000000 : Text) : Boolean;
+    VAR
+      lrecWhseShipHeader@1000000001 : Record 7320;
+      lrecSalesHeader@1000000006 : Record 36;
+      lrecTransferHeader@1000000007 : Record 5740;
+      lsPrefix@1000000002 : Text;
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if the scan text was for a document barcode.
+      //               Page will be reloaded with new document details.
+      //               Attempts to use scan text as a whse, sales order, outbound transfer number
+      //               Placeholder until we can implement document barcode rules
+      //  Called From: This page (P23044602)
+      //  Side Effect: Any open packages or activities in progress will be cleared
+      //</FUNC>
+
+      psScan := LOWERCASE(psScan);
+
+      // Assuming that all No. code fields are identical for diff docs
+      IF ( STRLEN(psScan) > MAXSTRLEN(lrecWhseShipHeader."No.") ) THEN
+        EXIT(FALSE);
+
+      IF ( lrecWhseShipHeader.GET(psScan) ) THEN BEGIN
+        lsPrefix := '%ws%';
+      END ELSE IF ( lrecSalesHeader.GET(lrecSalesHeader."Document Type"::Order, psScan) ) THEN BEGIN
+        lsPrefix := '%s%';
+      END ELSE IF ( lrecTransferHeader.GET(psScan) ) THEN BEGIN
+        lsPrefix := '%t%';
+      //-->004  PKS
+      END ELSE IF GetWHI(psScan) THEN BEGIN
+        lsPrefix := '%wpi%'; //TPZ3143;
+      //<--004
+      END;
+
+      IF ( lsPrefix <> '' ) THEN
+        EXIT(processDocScan(lsPrefix + psScan));
+    END;
+
+    LOCAL PROCEDURE processLPNoPrefixScan@1000000050(psScan@1000000000 : Text) : Boolean;
+    VAR
+      lrecLPHeader@1000000001 : Record 23044505;
+      lrecLPTHeader@1000000002 : Record 23044536;
+      lsPrefix@1000000003 : Text;
+    BEGIN
+      //<FUNC>
+      //  Description: Checks to see if the scan text was for a LP/LPT.
+      //  Called From: This page (P23044602)
+      //  Side Effect: Open order may be cleared, if the LP is assigned to another order
+      //</FUNC>
+
+      psScan := LOWERCASE(psScan);
+
+      IF ( STRLEN(psScan) > MAXSTRLEN(lrecLPHeader."No.") ) THEN
+        EXIT(FALSE);
+
+      IF ( lrecLPHeader.GET(psScan) ) THEN BEGIN
+        lsPrefix := '%lp%';
+      END ELSE IF ( lrecLPTHeader.GET(psScan) ) THEN BEGIN
+        lsPrefix := '%lpt%';
+      END;
+
+      IF ( lsPrefix <> '' ) THEN
+        EXIT(processLPScan(lsPrefix + psScan));
+    END;
+
+    LOCAL PROCEDURE openAssigendDocument@1000000035(VAR precLPHeader@1000000001 : Record 23044505);
+    VAR
+      lsDocScan@1000000000 : Text;
+    BEGIN
+      //<FUNC>
+      //  Description:
+      //  Called From:
+      //  Side Effect:
+      //</FUNC>
+
+      IF ( precLPHeader."Source No." = codSourceNo ) THEN
+        EXIT;
+
+      CASE precLPHeader."Source Document" OF
+        precLPHeader."Source Document"::Shipment:
+          lsDocScan := '%ws%';
+        precLPHeader."Source Document"::"Sales Order":
+          lsDocScan := '%s%';
+        precLPHeader."Source Document"::"Outbound Transfer":
+          lsDocScan := '%t%';
+        ELSE
+          EXIT;
+      END;
+
+      lsDocScan += precLPHeader."Source No.";
+
+      processDocScan(lsDocScan);
+    END;
+
+    LOCAL PROCEDURE setPrompt@1000000091();
+    BEGIN
+      //<FUNC>
+      //  Description: Updates the user prompt for what to scan/do next based on current state
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( bEditable ) THEN
+        sPrompt := ''
+      ELSE IF ( codSourceNo = '' ) THEN
+        sPrompt := tcPromptScanOrder
+      ELSE IF ( iUnpackedLines = 0 ) THEN
+        sPrompt := tcPromptFullyPacked
+      ELSE BEGIN
+        IF ( codLicensePlateNo = '' ) THEN
+          sPrompt := tcPromptScanPackage
+        ELSE IF ( codItemNo = '' ) THEN
+          sPrompt := tcPromptScanItem
+        ELSE IF ( NOT bGotLotSerial ) THEN
+          sPrompt := tcPromptScanLotSerial
+        ELSE
+          sPrompt := tcPromptScanQty;
+      END;
+    END;
+
+    LOCAL PROCEDURE printInternalPackLabel@1000000001();
+    VAR
+      lrecLPHeader@1000000000 : Record 23044505;
+    BEGIN
+      //<FUNC>
+      //  Description: Prints the package labels for the shipping document.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      CASE "Document Type" OF
+      "Document Type"::"Sales Order":
+        BEGIN
+          lrecLPHeader.SETRANGE("Source Document", lrecLPHeader."Source Document"::"Sales Order");
+        END;
+      "Document Type"::"Warehouse Shipment":
+        BEGIN
+          lrecLPHeader.SETRANGE("Source Document", lrecLPHeader."Source Document"::Shipment);
+        END;
+      "Document Type"::"Outbound Transfer":
+        BEGIN
+          lrecLPHeader.SETRANGE("Source Document", lrecLPHeader."Source Document"::"Outbound Transfer");
+        END;
+      END;
+      lrecLPHeader."Source No." := Rec."Document No.";
+
+      lrecLPHeader.SETFILTER("No.", cuPackMgmt.CreateLPNoFilterWithDShipDocType(Rec."Document Type", Rec."Document No."));
+      cuPackMgmt.printInternalPackageLabel(lrecLPHeader, 2);
+    END;
+
+    LOCAL PROCEDURE printLPLabel@1000000048();
+    VAR
+      lrecLPHeader@1000000000 : Record 23044505;
+    BEGIN
+      //<FUNC>
+      //  Description: Prints the package labels for the shipping document.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecLPHeader.SETFILTER("No.", cuPackMgmt.CreateLPNoFilterWithDShipDocType(Rec."Document Type", Rec."Document No."));
+      cuPackMgmt.printPackageTag(lrecLPHeader, TRUE, FALSE);
+    END;
+
+    LOCAL PROCEDURE printCarrierLabel@1000000002();
+    VAR
+      lrecLPHeader@1000000000 : Record 23044505;
+    BEGIN
+      //<FUNC>
+      //  Description: Prints the Carrier shipping labels for the shipping document.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      //  call will error when opening posted order, best to catch
+      IF ( "Document No." = '' ) THEN
+        ERROR(tcShipmentPosted);
+
+      lrecLPHeader.SETFILTER("No.", cuPackMgmt.CreateLPNoFilterWithDShipDocType(Rec."Document Type", Rec."Document No."));
+      cuRateMgmt.printCarrierLabel(lrecLPHeader,TRUE);
+    END;
+
+    LOCAL PROCEDURE printBillOfLading@1000000026();
+    BEGIN
+      //<FUNC>
+      //  Description: Prints the bill of lading
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      cuPackMgmt.printBillOfLading("Document Type", "Document No.", TRUE);
+    END;
+
+    LOCAL PROCEDURE checkAlreadyPacked@1000000016() : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Wrapper for showing a message to user if the document has already been fully packed.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( iUnpackedLines = 0 ) THEN BEGIN
+        MESSAGE(tcNothingToPack);
+      END;
+
+      EXIT(iUnpackedLines = 0);
+    END;
+
+    LOCAL PROCEDURE doPost@1000000014();
+    VAR
+      ltrecPackOrderBuffer@1000000000 : TEMPORARY Record 23044601;
+      lrecLPUsage@1000000001 : Record 23044507;
+      loptSourceDocType@1000000002 : Option;
+      lrecSalesHeader@1000000003 : Record 36;
+      lrecTransferHeader@1000000004 : Record 5740;
+      lrecShipment@1000000005 : Record 7320;
+      lrecrRecRef@1000000006 : RecordRef;
+      WhseSalesPostviaJobQueue@100000000 : Codeunit 50008;
+      WarehouseShipmentLine@1000000007 : Record 7321;
+      SalesHeader@1000000008 : Record 36;
+      ShippingSetup@1000000009 : Record 14000707;
+      WarehouseShipHdrLoc@1000000010 : Record 7320;
+      SourceNo@1000000013 : Code[20];
+      SourceNoFilter@1000000012 : Text[250];
+    BEGIN
+      //<FUNC>
+      //  Description: Posts the shipping document
+      //  Called From: This page
+      //  Side Effect: Whatever effects of posting the NAV documents are.
+      //</FUNC>
+      DoNotPostWithoutLPandLabel;//PKS
+      ltrecPackOrderBuffer."Document Type" := "Document Type";
+      ltrecPackOrderBuffer."Document No." := "Document No.";
+
+      CASE "Document Type" OF
+        "Document Type"::"Warehouse Shipment":
+        BEGIN
+          loptSourceDocType := lrecLPUsage."Source Document"::Shipment;
+          lrecShipment.GET("Document No.");
+          lrecShipment.SETRECFILTER;
+          lrecrRecRef.GETTABLE(lrecShipment);
+        END;
+        "Document Type"::"Sales Order":
+        BEGIN
+          loptSourceDocType := lrecLPUsage."Source Document"::"Sales Order";
+          lrecSalesHeader.GET(lrecSalesHeader."Document Type"::Order, "Document No.");
+          lrecSalesHeader.SETRECFILTER;
+          lrecrRecRef.GETTABLE(lrecSalesHeader);
+        END;
+        "Document Type"::"Outbound Transfer":
+        BEGIN
+          loptSourceDocType := lrecLPUsage."Source Document"::"Outbound Transfer";
+          lrecTransferHeader.GET("Document No.");
+          lrecTransferHeader.SETRECFILTER;
+          lrecrRecRef.GETTABLE(lrecTransferHeader);
+        END;
+      END;
+
+      cuListMgmt.setStatusFields(ltrecPackOrderBuffer, lrecrRecRef, loptSourceDocType, "Document No.");
+
+      ltrecPackOrderBuffer.INSERT;
+
+      cuListMgmt.postOrder(ltrecPackOrderBuffer);
+      // //vaseem
+      // SalesSetup.GET;
+      // IF SalesSetup."Post from Whse. with Job Q." THEN
+      //  WhseSalesPostviaJobQueue.EnqueueWhseDoc(lrecSalesHeader);
+      // //vaseem
+      UpdateQtyToShip;
+      recDShipSetup.GET;
+      CASE recDShipSetup."Pkg. Worksheet Post Behaviour" OF
+        recDShipSetup."Pkg. Worksheet Post Behaviour"::"0",
+        recDShipSetup."Pkg. Worksheet Post Behaviour"::Close:
+          BEGIN
+            //<vaseem>
+          //COMMIT;
+
+            {
+          WarehouseShipmentLine.RESET;
+          WarehouseShipmentLine.SETRANGE("No.",lrecShipment."No.");
+          IF WarehouseShipmentLine.FINDFIRST THEN
+            IF SalesHeader.GET(SalesHeader."Document Type"::Order,WarehouseShipmentLine."Source No.") THEN BEGIN
+              SalesHeader.SETRECFILTER;
+              REPORT.RUNMODAL(ShippingSetup."Close Sales Report ID",FALSE,FALSE,SalesHeader);
+            END;
+      //</vaseem>
+            }
+            //>>TPZ2895  Added new code to print combine order packing slip
+            COMMIT;
+            ShippingSetup.GET;
+            WarehouseShipmentLine.RESET;
+            WarehouseShipmentLine.SETCURRENTKEY("No.","Source Document","Source No.");
+            WarehouseShipmentLine.SETRANGE("No.",codSourceNo);
+            IF WarehouseShipmentLine.FINDFIRST THEN BEGIN
+              REPEAT
+                IF SourceNo <> WarehouseShipmentLine."Source No." THEN
+                  IF SourceNoFilter = '' THEN
+                    SourceNoFilter := WarehouseShipmentLine."Source No."
+                  ELSE
+                    SourceNoFilter := SourceNoFilter +'|' + WarehouseShipmentLine."Source No.";
+                SourceNo := WarehouseShipmentLine."Source No.";
+              UNTIL WarehouseShipmentLine.NEXT = 0;
+              SalesHeader.SETRANGE("Document Type",SalesHeader."Document Type"::Order);
+              SalesHeader.SETFILTER("No.",SourceNoFilter);
+              REPORT.RUNMODAL(ShippingSetup."Close Sales Report ID",FALSE,FALSE,SalesHeader);
+            END;
+            DSHIPPackageRateManagement.PrintTOPackingList(ltrecPackOrderBuffer."Document Type",codSourceNo);//3268
+            //<<TPZ2895
+                  bUnpackedLines := FALSE;
+            //-->TPZ3143 Code to not close page on post
+            //IF "Location Code" IN ['80','30','25','22'] THEN BEGIN
+              doClear;
+      //      END ELSE
+      //      //<--TPZ3143
+      //        CurrPage.CLOSE;
+
+            EXIT;
+          END;
+      END;
+
+      // refresh to get accurate count on packlinebuffer
+      codLicensePlateNo := '';
+      refresh;
+
+      IF ( (trecPackLineBuffer.COUNT = 0) OR
+           (recDShipSetup."Pkg. Worksheet Post Behaviour" = recDShipSetup."Pkg. Worksheet Post Behaviour"::"Clear Order") ) THEN
+      BEGIN
+        doClear;
+      END ELSE IF ( recDShipSetup."Pkg. Worksheet Post Behaviour" = recDShipSetup."Pkg. Worksheet Post Behaviour"::"Remain Open"  ) THEN
+      BEGIN
+        cuPackMgmt.updateDocumentQtyToShip(ltrecPackOrderBuffer);
+      END;
+      //>>TPZ2895
+      WarehouseShipHdrLoc.RESET;
+      WarehouseShipHdrLoc.SETRANGE("Combined To","Document No.");
+      IF WarehouseShipHdrLoc.FINDFIRST THEN
+        REPEAT
+          WarehouseShipHdrLoc.DELETE;
+        UNTIL WarehouseShipHdrLoc.NEXT = 0;
+      //<<TPZ2895
+    END;
+
+    LOCAL PROCEDURE getLabel@1000000019();
+    VAR
+      lrecLPHeader@1000000008 : Record 23044505;
+      ltrecPackOrderBuffer@1000000000 : TEMPORARY Record 23044601;
+      lbPackedLabelled@1000000007 : Boolean;
+      IWXLicensePlateHeader@1000000001 : Record 23044505;
+    BEGIN
+      //<FUNC>
+      //  Description: Shows/Retrieves rates for the shipping document.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      //  call will error when opening posted order, best to catch
+      IF ( "Document No." = '' ) THEN
+        ERROR(tcPromptScanOrder);
+
+      IF ( Rec.FINDSET(FALSE) ) THEN
+        REPEAT
+          lbPackedLabelled := ( Rec."License Plate No." <> '' ) AND Rec."Has Shipment Label";
+        UNTIL( (Rec.NEXT=0) OR (NOT lbPackedLabelled) );
+
+      //>> PKS TPZ3187
+      IF ( Rec.FINDSET(FALSE) ) THEN
+        REPEAT
+          IF IWXLicensePlateHeader.GET(Rec."License Plate No.") AND (IWXLicensePlateHeader."BOL No." <> '' ) THEN
+            ERROR(Text0003,IWXLicensePlateHeader."BOL No.",IWXLicensePlateHeader."No.");
+        UNTIL Rec.NEXT = 0;
+      //<<--PKS TPZ3187
+      CheckSameShiptoInfoMOP; //TPZ3336
+      IF ( lbPackedLabelled ) THEN
+        IF ( NOT CONFIRM(tcAllHasLabel) ) THEN EXIT;
+
+      ltrecPackOrderBuffer."Document Type" := "Document Type";
+      ltrecPackOrderBuffer."Document Subtype" := "Document Subtype";
+      ltrecPackOrderBuffer."Document No." := "Document No.";
+      ltrecPackOrderBuffer.INSERT;
+
+      cuRateMgmt.PalletDetailExist(isPalletEntry,"License Plate No.",CheckFirstPackedMOP); //TPZ3299 //TPZ3353 added new parameter CheckFirstPackedMOP
+      cuRateMgmt.getShippingLabel(ltrecPackOrderBuffer);
+
+      factBoxUpdates;
+    END;
+
+    LOCAL PROCEDURE doCustoms@1000000013();
+    VAR
+      lrecCustomsHeader@1000000000 : Record 23044605;
+    BEGIN
+      //<FUNC>
+      //  Description: Shows/Creates the Customs information for the shipping document.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      CASE "Document Type" OF
+        "Document Type"::"Warehouse Shipment": cuCustomsMgmt.showCustomsPage(lrecCustomsHeader."Document Type"::"Warehouse Shipment","Document No.");
+        "Document Type"::"Sales Order": cuCustomsMgmt.showCustomsPage(lrecCustomsHeader."Document Type"::"Sales Order","Document No.");
+        "Document Type"::"Outbound Transfer": cuCustomsMgmt.showCustomsPage(lrecCustomsHeader."Document Type"::"Outbound Transfer","Document No.");
+      END;
+    END;
+
+    PROCEDURE doPackOptions@1000000021(pcodLicensePlateNo@1000000000 : Code[20]);
+    VAR
+      lrecPackOptions@1000000001 : Record 23044608;
+    BEGIN
+      //<FUNC>
+      //  Description: Shows/Creates the Package Options for the shipping document.
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( pcodLicensePlateNo = '' ) THEN
+        EXIT;
+
+      IF ( NOT lrecPackOptions.GET(pcodLicensePlateNo) ) THEN
+        cuPackMgmt.createPackOptions(pcodLicensePlateNo, Rec."Document Type", Rec."Document No.");
+
+      lrecPackOptions.FILTERGROUP(2);
+      lrecPackOptions.SETRANGE("License Plate No.", pcodLicensePlateNo);
+      lrecPackOptions.FILTERGROUP(0);
+
+      PAGE.RUN(PAGE::"DSHIP Package Options Card", lrecPackOptions);
+    END;
+
+    PROCEDURE doShipOptions@1000000031(poptSourceType@1000000002 : Option;pcodSourceNo@1000000000 : Code[20];piSourceSubtype@1000000003 : Integer);
+    VAR
+      lrecShipOptions@1000000001 : Record 23044616;
+    BEGIN
+      //<FUNC>
+      //  Description: Shows/Creates the Shipment Options for the shipping document.
+      //  Called From: This page (P23044602)
+      //  Side Effect: None
+      //</FUNC>
+
+      IF ( pcodSourceNo = '' ) THEN
+        EXIT;
+
+      cuPackMgmt.createShipOptions(poptSourceType, pcodSourceNo);
+
+      lrecShipOptions.FILTERGROUP(2);
+      lrecShipOptions.SETRANGE("Document Type", poptSourceType);
+      lrecShipOptions.SETRANGE("Document No.", pcodSourceNo);
+      lrecShipOptions.SETRANGE("Document Subtype", piSourceSubtype);
+      lrecShipOptions.FILTERGROUP(0);
+
+      PAGE.RUN(PAGE::"DSHIP Shipment Options Card", lrecShipOptions);
+    END;
+
+    PROCEDURE doInsurance@1000000003(pcodLicensePlateNo@1000000000 : Code[20]);
+    VAR
+      lrecLPHeader@1000000001 : Record 23044505;
+    BEGIN
+      IF ( pcodLicensePlateNo = '' ) THEN
+        EXIT;
+      lrecLPHeader.FILTERGROUP(2);
+      lrecLPHeader.GET(pcodLicensePlateNo);
+      lrecLPHeader.FILTERGROUP(0);
+
+      PAGE.RUNMODAL(PAGE::"DSHIP LP Insurance Prompt", lrecLPHeader);
+      CurrPage.packFactBox.PAGE.setLicensePlate(pcodLicensePlateNo);
+    END;
+
+    LOCAL PROCEDURE checkAlreadyPackedQuantity@1000000027(pdRemovedQuantity@1000000001 : Decimal) : Boolean;
+    VAR
+      lrecLPLine@1000000000 : Record 23044506;
+      ldPackedQuantity@1000000002 : Decimal;
+    BEGIN
+      //<FUNC>
+      //  Description: Check already packed quantity for an item
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      ldPackedQuantity := 0;
+      lrecLPLine.SETRANGE("License Plate No.", codLicensePlateNo);
+      lrecLPLine.SETRANGE("Item No.", trecPackLineBuffer."Item No.");
+      lrecLPLine.SETRANGE("Variant Code", trecPackLineBuffer."Variant Code");
+      lrecLPLine.SETRANGE("Lot No.", trecPackLineBuffer."Lot No.");
+      lrecLPLine.SETRANGE("Serial No.", trecPackLineBuffer."Serial No.");
+      lrecLPLine.SETRANGE("Unit of Measure Code", trecPackLineBuffer."Unit of Measure Code");
+      IF ( lrecLPLine.FINDSET(FALSE) ) THEN BEGIN
+        ldPackedQuantity := ldPackedQuantity + lrecLPLine.Quantity;
+      END;
+
+      IF ( pdRemovedQuantity > ldPackedQuantity ) THEN BEGIN
+        MESSAGE(tcCannotRemove, ldPackedQuantity);
+        EXIT(FALSE);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE handleItemScan@1000000023(precItem@1000000001 : Record 27;precBarcodeRule@1000000000 : Record 23044509);
+    BEGIN
+      //<FUNC>
+      //  Description: Handle scanned item
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      codItemNo := precItem."No.";
+      codVariantCode := precBarcodeRule."Variant Result";
+      codSerialNo := precBarcodeRule."Serial No. Result";
+      codLotNo := precBarcodeRule."Lot No. Result";
+
+      // IF ( bGotItem AND (codItemNo = trecPackLineBuffer."Item No.") ) THEN
+      //   EXIT;
+
+      trecPackLineBuffer.RESET;
+      trecPackLineBuffer.SETRANGE("Item No.",codItemNo);
+      IF ( codVariantCode <> '' ) THEN
+        trecPackLineBuffer.SETRANGE("Variant Code",codVariantCode);
+      IF ( codSerialNo <> '' ) THEN
+        trecPackLineBuffer.SETRANGE("Serial No.",codSerialNo);
+      IF ( codLotNo <> '' ) THEN
+        trecPackLineBuffer.SETRANGE("Lot No.",codLotNo);
+      trecPackLineBuffer.SETFILTER("License Plate No.",'%1','');
+      IF ( NOT trecPackLineBuffer.FINDFIRST ) THEN BEGIN
+        trecPackLineBuffer.SETRANGE("Serial No.");
+        trecPackLineBuffer.SETRANGE("Lot No.");
+        IF ( NOT trecPackLineBuffer.FINDFIRST ) THEN BEGIN
+          // IF all packed
+          trecPackLineBuffer.SETRANGE("License Plate No.");
+          trecPackLineBuffer.FINDFIRST;
+        END;
+      END;
+
+      //CurrPage.pictureFactBox.PAGE.setItem(codItemNo);
+    END;
+
+    LOCAL PROCEDURE handleQuantityScan@1000000028(pdQuantity@1000000000 : Decimal;pcodUOM@1000000001 : Code[10]) : Boolean;
+    VAR
+      ldQtyToCheck@1000000002 : Decimal;
+      lrecItem@1000000004 : Record 27;
+      lcuCommonBase@1000000003 : Codeunit 23044519;
+    BEGIN
+      //<FUNC>
+      //  Description: Handle scanned quantity
+      //  Called From: This page
+      //  Side Effect: None
+      //</FUNC>
+
+      ldQtyToCheck := pdQuantity;
+      IF ( pcodUOM <> '' ) THEN BEGIN
+        IF ( pcodUOM <> trecPackLineBuffer."Unit of Measure Code" ) THEN BEGIN
+          lrecItem.GET(codItemNo);
+          ldQtyToCheck := lcuCommonBase.ConvertUnitOfMeasure(lrecItem, pdQuantity, pcodUOM, trecPackLineBuffer."Unit of Measure Code");
+        END;
+      END;
+
+      IF ( ldQtyToCheck > 0 ) THEN BEGIN
+        IF ( checkAlreadyPacked ) THEN
+          EXIT(FALSE);
+      END;
+
+      IF ( ldQtyToCheck < 0 ) THEN BEGIN
+        IF ( NOT checkAlreadyPackedQuantity(ABS(ldQtyToCheck)) ) THEN
+          EXIT(FALSE);
+      END;
+
+      //  Avoids the issue where the serial could be a qty, e.g. single digit number
+      IF ( ldQtyToCheck = 0 ) THEN BEGIN
+        bGotItem := FALSE;
+        bGotLotSerial := FALSE;
+        codItemNo := '';
+        setPrompt();
+        EXIT(FALSE);
+      END;
+
+      dQtyToMove := ldQtyToCheck;
+
+      trecPackLineBuffer.VALIDATE("Qty. to Move",dQtyToMove);
+
+      IF ( trecPackLineBuffer."Qty. to Move" > trecPackLineBuffer.Quantity ) THEN BEGIN
+        MESSAGE(tcMaxQtyToPack,trecPackLineBuffer.Quantity,codItemNo);
+        EXIT(FALSE);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE printCommercialInvoice@1000000029();
+    VAR
+      lrecLPHeader@1000000000 : Record 23044505;
+    BEGIN
+      //<FUNC>
+      //  Description: Opens the commercial invoice (if it exists)
+      //  Called From: This page (23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+      cuPackMgmt.printCommercialInvoice(Rec."Document Type", codSourceNo, TRUE);
+    END;
+
+    LOCAL PROCEDURE showTrackingURLs@1000000030();
+    VAR
+      lrecLPHeader@1000000002 : Record 23044505;
+      lpgTrackingInfo@1000000000 : Page 23044621;
+      loptSrcDocType@1000000001 : Option;
+    BEGIN
+      //<FUNC>
+      //  Description: Displays the tracking URLs (if they exist)
+      //  Called From: This page (23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+      CASE "Document Type" OF
+        "Document Type"::"Sales Order":
+          BEGIN
+            loptSrcDocType := lrecLPHeader."Source Document"::"Sales Order";
+          END;
+        "Document Type"::"Outbound Transfer":
+          BEGIN
+            loptSrcDocType := lrecLPHeader."Source Document"::"Outbound Transfer";
+          END;
+        "Document Type"::"Warehouse Shipment":
+          BEGIN
+            loptSrcDocType := lrecLPHeader."Source Document"::Shipment;
+          END;
+      END; // case "document type"
+
+      IF ( lpgTrackingInfo.initPage(loptSrcDocType,codSourceNo) ) THEN BEGIN
+        lpgTrackingInfo.RUNMODAL;
+      END ELSE BEGIN
+        MESSAGE(tcNotShipped);
+      END;
+    END;
+
+    LOCAL PROCEDURE handleLinePacking@1000000041();
+    BEGIN
+      //<FUNC>
+      //  Description: Packs or unpacks lines depending on pos/neg quantity
+      //  Called From: This page (23044602)
+      //  Side Effect: trecPackLineBuffer is manipulated
+      //  Note       : Revision of code for TFS3571 (original at bottom)
+      //</FUNC>
+
+      IF ( bGotItem AND bGotLotSerial AND bGotQuantity ) THEN BEGIN
+        IF ( trecPackLineBuffer."Qty. to Move" < 0 ) THEN BEGIN
+          trecPackLineBuffer."Qty. to Move" *= -1;
+          trecPackLineBuffer.VALIDATE("License Plate No.",codLicensePlateNo);
+          cuPackMgmt.unpackLine(trecPackLineBuffer);
+        END ELSE BEGIN
+          trecPackLineBuffer.VALIDATE("New License Plate No.",codLicensePlateNo);
+          cuPackMgmt.packLine(trecPackLineBuffer);
+        END;
+        {//2013-::begin
+        CLEAR(Rec);
+        DELETEALL;
+        }//2013-::end
+        refresh();
+      END;
+
+      //IF ( bGotItem AND bGotLotSerial AND bGotQuantity ) THEN BEGIN
+      //  trecPackLineBuffer.VALIDATE("New License Plate No.",codLicensePlateNo);
+      //  cuPackMgmt.packLine(trecPackLineBuffer);
+      //  refresh();
+      //END;
+    END;
+
+    LOCAL PROCEDURE openCODReturnLabel@1000000032();
+    VAR
+      lrecLPHeader@1000000000 : Record 23044505;
+      loptLPSourceDoc@1000000001 : Option;
+      lsFilter@1000000002 : Text;
+      lrecPackOptions@1000000003 : Record 23044608;
+    BEGIN
+      //<FUNC>
+      //  Description: Opens the commercial invoice (if it exists)
+      //  Called From: This page (P23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+      lrecLPHeader.SETFILTER("No.", cuPackMgmt.CreateLPNoFilterWithDShipDocType(Rec."Document Type", Rec."Document No."));
+      cuRateMgmt.printCODReturnLabel(lrecLPHeader, TRUE);
+    END;
+
+    LOCAL PROCEDURE doClear@1000000036();
+    VAR
+      lrecrRecRef@1000000000 : RecordRef;
+    BEGIN
+      //<FUNC>
+      //  Description: Clears the pacakge worksheet of the current document
+      //  Called From: This page (23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+      initPage(lrecrRecRef, '', '');
+      refresh;
+    END;
+
+    LOCAL PROCEDURE getReturnLabel@1000000039();
+    VAR
+      lpgOrderPack@1000000000 : Page 23044601;
+    BEGIN
+      //<FUNC>
+      //  Description: Makes a request for a return label
+      //  Called From: This page (P23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+      lpgOrderPack.getReturnLabel(Rec."Document Type", Rec."Document No.");
+    END;
+
+    LOCAL PROCEDURE printReturnLabel@1000000038();
+    VAR
+      lpgOrderPack@1000000000 : Page 23044601;
+    BEGIN
+      //<FUNC>
+      //  Description: Prints the return label
+      //  Called From: This page (P23044601)
+      //  Side Effect: None
+      //</FUNC>
+
+      lpgOrderPack.printReturnLabel("Document Type", "Document No.", TRUE);
+    END;
+
+    LOCAL PROCEDURE factBoxUpdates@1000000040();
+    BEGIN
+
+      CurrPage.packFactBox.PAGE.setLicensePlate(codLicensePlateNo);
+      CurrPage.shipInfoFactBox.PAGE.setOrder(recrRecRef);
+      CurrPage.packagesInfoFactBox.PAGE.setOrder(recrRecRef);
+      CurrPage.orderCommentsFactBox.PAGE.setOrder(recrRecRef);
+    END;
+
+    LOCAL PROCEDURE getWeight@1000000046();
+    VAR
+      lrecLPHeader@1000000004 : Record 23044505;
+      lcuScaleMgmt@1000000000 : Codeunit 23044610;
+      ldWeight@1000000001 : Decimal;
+      lcodWeightUOM@1000000002 : Code[20];
+      lbScaleUI@1000000003 : Boolean;
+      lbShowGetWeight@1000000005 : Boolean;
+      lbStableReading@1000000006 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Manages calls to the scale mgmt singleton
+      //  Called From: This page (P23044602)
+      //  Side Effect: Will set the scale's device path if not set.
+      //</FUNC>
+
+      IF ( NOT cuRateMgmt.callGetWeightExtension(recDShipSetup."Shipment Extension Codeunit", codLicensePlateNo, Rec."Document Type", codSourceNo) ) THEN BEGIN
+        recDShipSetup.GET;
+        lbShowGetWeight := recDShipSetup."Scale Integration" = recDShipSetup."Scale Integration"::Disabled;
+        IF ( NOT lbShowGetWeight ) THEN BEGIN
+          lbScaleUI := recDShipSetup."Scale Integration" = recDShipSetup."Scale Integration"::"Force UI";
+          //lbStableReading := lcuScaleMgmt.getWeight(lbScaleUI, ldWeight, lcodWeightUOM);
+          IF ( (NOT lcuScaleMgmt.getWeight(lbScaleUI, ldWeight, lcodWeightUOM)) AND (lcodWeightUOM = '') ) THEN BEGIN
+            lbShowGetWeight := TRUE;
+          END ELSE BEGIN
+            lrecLPHeader.GET(codLicensePlateNo);
+            lrecLPHeader."Shipment Gross Weight" := ldWeight;
+            lrecLPHeader.VALIDATE("Weight Unit of Measure", lcodWeightUOM);
+            lrecLPHeader.MODIFY(TRUE);
+          END;
+        END;
+
+        IF ( lbShowGetWeight ) THEN BEGIN
+          lrecLPHeader.GET(codLicensePlateNo);
+          PAGE.RUNMODAL(PAGE::"DSHIP Get Weight Dialogue", lrecLPHeader);
+        END;
+      END;
+
+      refresh();
+    END;
+
+    LOCAL PROCEDURE tareWeight@1000000045();
+    VAR
+      lcuScaleMgmt@1000000000 : Codeunit 23044610;
+    BEGIN
+      //<FUNC>
+      //  Description: Tare the scale's weight
+      //  Called From:
+      //  Side Effect:
+      //</FUNC>
+
+      lcuScaleMgmt.tareWeight;
+    END;
+
+    LOCAL PROCEDURE setScale@1000000053();
+    VAR
+      lcuScaleMgmt@1000000000 : Codeunit 23044610;
+    BEGIN
+      //<FUNC>
+      //  Description: Allows for setting the scale, on errors, bad selection, etc
+      //  Called From: This page (P23044602)
+      //  Side Effect:
+      //</FUNC>
+
+      //lcuScaleMgmt.setScaleDevicePath := '';
+      lcuScaleMgmt.selectScaleUI;
+    END;
+
+    LOCAL PROCEDURE orderOpened@1000000047(VAR precrRecRef@1000000000 : RecordRef);
+    VAR
+      ltrecPackOrderBuffer@1000000001 : Record 23044601;
+      loptDocType@1000000002 : Option;
+      lcodDocNo@1000000003 : Code[20];
+    BEGIN
+      //<FUNC>
+      //  Description: Calls the order opened extensibility event
+      //  Called From: This Page (P23044602)
+      //  Side Effect: Whatever happens in the event.
+      //</FUNC>
+
+      CASE precrRecRef.NUMBER OF
+        DATABASE::"Warehouse Shipment Header":
+          BEGIN
+            loptDocType := ltrecPackOrderBuffer."Document Type"::"Warehouse Shipment";
+            lcodDocNo := FORMAT(precrRecRef.FIELD(1));
+          END;
+        DATABASE::"Transfer Header":
+          BEGIN
+            loptDocType := ltrecPackOrderBuffer."Document Type"::"Outbound Transfer";
+            lcodDocNo := FORMAT(precrRecRef.FIELD(1));
+          END;
+        DATABASE::"Sales Header":
+          BEGIN
+            loptDocType := ltrecPackOrderBuffer."Document Type"::"Sales Order";
+            lcodDocNo := FORMAT(precrRecRef.FIELD(3));
+          END;
+        DATABASE::"DSHIP Miscellaneous Shipment":
+          BEGIN
+            loptDocType := ltrecPackOrderBuffer."Document Type"::"Misc. Shipment";
+            lcodDocNo := FORMAT(precrRecRef.FIELD(1));
+          END;
+      END;
+      cuRateMgmt.callOrderOpenedExtension(recDShipSetup."Shipment Extension Codeunit", loptDocType, lcodDocNo);
+    END;
+
+    LOCAL PROCEDURE checkWhseShipDestinationIdentical@1000000057(pcodWhseShipNo@1000000000 : Code[20]);
+    VAR
+      lrecWhseShipLine@1000000001 : Record 7321;
+      loptSourceDoc@1000000006 : Option;
+      lcodDestination@1000000005 : Code[20];
+      lcodDestinationShipTo@1000000004 : Code[20];
+      lbShowWarning@1000000003 : Boolean;
+    BEGIN
+      //<FUNC>
+      //  Description: Displays a prompt if the whse shipment may be heading to multiple addresses
+      //  Called From: This page (P23044602)
+      //  Side Effect: Will error if no is selected
+      //</FUNC>
+
+      recDShipSetup.GET;
+      IF (recDShipSetup."Handling Multiple Destinations" = recDShipSetup."Handling Multiple Destinations"::Allow) THEN
+        EXIT;
+
+      lrecWhseShipLine.SETRANGE("No.", pcodWhseShipNo);
+      IF ( lrecWhseShipLine.FINDSET(FALSE) ) THEN BEGIN
+        loptSourceDoc := lrecWhseShipLine."Source Document";
+        // run once to get baseline values, ignore return
+        checkDestinationIdentical(lrecWhseShipLine, lcodDestination, lcodDestinationShipTo);
+        REPEAT
+          IF ( NOT lbShowWarning ) THEN BEGIN
+            IF ( loptSourceDoc = lrecWhseShipLine."Source Document" ) THEN BEGIN
+              lbShowWarning := NOT checkDestinationIdentical(lrecWhseShipLine, lcodDestination, lcodDestinationShipTo);
+            END ELSE // if loptsourcedoc = lrecwhsehsipline.source doc
+              lbShowWarning := TRUE;
+
+            IF ( lbShowWarning ) THEN BEGIN
+              CASE recDShipSetup."Handling Multiple Destinations" OF
+                recDShipSetup."Handling Multiple Destinations"::Deny:
+                  ERROR(tcWhseMultiDestBlocked, lrecWhseShipLine."No.");
+                recDShipSetup."Handling Multiple Destinations"::Warn:
+                  IF ( NOT CONFIRM(tcWhseMultiDestination, FALSE, lrecWhseShipLine."No.") ) THEN ERROR('');
+              END;
+            END;
+          END; // not lbshowwarning
+        UNTIL( (lrecWhseShipLine.NEXT=0) OR lbShowWarning);
+      END;
+    END;
+
+    LOCAL PROCEDURE checkDestinationIdentical@1000000058(precWhseShipLine@1000000000 : Record 7321;VAR pcodDestination@1000000001 : Code[20];VAR pcodDestinationShipTo@1000000002 : Code[20]) rbNoChange : Boolean;
+    VAR
+      lrecSalesHeader@1000000003 : Record 36;
+      lrecTransferHeader@1000000004 : Record 5740;
+      lrecPurchaseHeader@1000000005 : Record 38;
+      lrecServiceHeader@1000000008 : Record 5900;
+      lcodDestination@1000000006 : Code[20];
+      lcodDestinationShipTo@1000000007 : Code[20];
+    BEGIN
+      //<FUNC>
+      //  Description: Checks if the destination of the line is identical to the passed VARs
+      //               True if so, False if it's a mismatch
+      //  Called From: This codeunit (CU23044601)
+      //  Side Effect: Updates the two VARs
+      //</FUNC>
+
+      CASE precWhseShipLine."Source Document" OF
+        precWhseShipLine."Source Document"::"Sales Order":
+          BEGIN
+            lrecSalesHeader.GET(precWhseShipLine."Source Subtype", precWhseShipLine."Source No.");
+            lcodDestination := lrecSalesHeader."Sell-to Customer No.";
+            lcodDestinationShipTo := lrecSalesHeader."Ship-to Code";
+          END;
+        precWhseShipLine."Source Document"::"Outbound Transfer":
+          BEGIN
+            lrecTransferHeader.GET(precWhseShipLine."Source No.");
+            lcodDestination := lrecTransferHeader."Transfer-to Code";
+            lcodDestinationShipTo := '';
+          END;
+        precWhseShipLine."Source Document"::"Purchase Return Order":
+          BEGIN
+            lrecPurchaseHeader.GET(precWhseShipLine."Source Subtype", precWhseShipLine."Source No.");
+            lcodDestination := lrecPurchaseHeader."Buy-from Vendor No.";
+            lcodDestinationShipTo := lrecPurchaseHeader."Ship-to Code"; // this should be blank
+          END;
+        precWhseShipLine."Source Document"::"Service Order":
+          BEGIN
+            lrecServiceHeader.GET(precWhseShipLine."Source Subtype", precWhseShipLine."Source No.");
+            lcodDestination := lrecServiceHeader."Customer No.";
+            lcodDestinationShipTo := lrecServiceHeader."Ship-to Code";
+          END;
+      END; // case precwhseshipline.source doc
+
+      rbNoChange := (pcodDestination = lcodDestination) AND
+                    (pcodDestinationShipTo = lcodDestinationShipTo);
+
+      pcodDestination := lcodDestination;
+      pcodDestinationShipTo := lcodDestinationShipTo;
+
+      EXIT(rbNoChange);
+    END;
+
+    LOCAL PROCEDURE removeExistingTracking@1000000009();
+    VAR
+      lrecTransferLine@1000000000 : Record 5741;
+      lrecSalesLine@1000000001 : Record 37;
+      lrecWhseShipLine@1000000002 : Record 7321;
+      lrecActivityLine@1000000005 : Record 5767;
+      lcuResMgmt@1000000003 : Codeunit 23044514;
+    BEGIN
+      //<FUNC>
+      //  Description: Removes existing tracking.
+      //  Called From: This page (P23044602)
+      //  Side Effect:
+      //</FUNC>
+
+      CASE trecPackLineBuffer."Document Type" OF
+        trecPackLineBuffer."Document Type"::"Outbound Transfer":
+          BEGIN
+            IF (lrecTransferLine.GET(trecPackLineBuffer."Document No.", trecPackLineBuffer."Document Line No.")) THEN
+              lcuResMgmt.AddRemoveTransferTracking(lrecTransferLine, trecPackLineBuffer."Serial No.",
+              trecPackLineBuffer."Lot No.", TRUE, -1, 0D);
+            END;
+        trecPackLineBuffer."Document Type"::"Sales Order":
+          BEGIN
+            IF (lrecSalesLine.GET(trecPackLineBuffer."Document Subtype", trecPackLineBuffer."Document No.", trecPackLineBuffer."Document Line No.")) THEN
+                lcuResMgmt.AddRemoveSalesShipTracking(lrecSalesLine, trecPackLineBuffer."Serial No.",
+                trecPackLineBuffer."Lot No.", -1, lrecSalesLine."Unit of Measure Code",0D, lrecActivityLine);
+          END;
+        trecPackLineBuffer."Document Type"::"Warehouse Shipment":
+          BEGIN
+            IF (lrecWhseShipLine.GET(trecPackLineBuffer."Document No.", trecPackLineBuffer."Document Line No.")) THEN
+                lcuResMgmt.AddRemoveWhseShipTracking(lrecWhseShipLine, trecPackLineBuffer."Serial No.",
+                trecPackLineBuffer."Lot No.", -1, lrecWhseShipLine."Unit of Measure Code",0D);
+          END;
+      END;
+    END;
+
+    LOCAL PROCEDURE setLinesEditable@1000000011(pbEditable@1000000000 : Boolean);
+    BEGIN
+      //<FUNC>
+      //  Description: Works around bug in NAV web client when there's many rows for a temp rec
+      //  Called From: This page (P23044602)
+      //  Side Effect:
+      //</FUNC>
+
+      bEditable := pbEditable;
+      bLinesEnabled := bEditable;
+      //2015+::begin
+      IF ( CURRENTCLIENTTYPE <> CLIENTTYPE::Windows ) THEN
+        bLinesEnabled := TRUE;
+      //2015+::end
+      {//2015-::begin
+      IF (GUIALLOWED) THEN
+        bLinesEnabled := TRUE;
+      }//2015-::end
+    END;
+
+    LOCAL PROCEDURE processRawScan@1000000010(psScan@1000000000 : Text);
+    VAR
+      lsScan@1000000001 : Text;
+      lcChar@1000000002 : Char;
+      liScanLen@1000000003 : Integer;
+      liCharPos@1000000004 : Integer;
+      liDelimCount@1000000005 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Description: Processes multiple scan commands
+      //  Called From: This page (P23044602)
+      //  Side Effect:
+      //</FUNC>
+
+      recDShipSetup.GET;
+
+      CASE recDShipSetup."Chain Multiple Commands" OF
+        recDShipSetup."Chain Multiple Commands"::Disabled:
+          BEGIN
+            processScan(psScan);
+            EXIT;
+          END;
+      END;
+
+      liScanLen := STRLEN(psScan);
+
+      WHILE liCharPos < liScanLen DO BEGIN
+        liCharPos += 1;
+        lcChar := psScan[liCharPos];
+
+        CASE lcChar OF
+          '-': BEGIN
+            IF (COPYSTR(psScan, liCharPos, 2) = '--') THEN BEGIN
+              processScan(lsScan);
+              lsScan := '';
+            END;//got cmd
+          END;//case -
+
+          '%': BEGIN
+            liDelimCount += 1;
+            IF ( (liDelimCount > 2) OR (lsScan[1] = '-') ) THEN BEGIN
+              processScan(lsScan);
+              lsScan := '';
+              liDelimCount := 1;
+            END;//if
+          END;//case %
+        END;//case
+
+        lsScan += FORMAT(lcChar);
+
+      END;//while
+
+      processScan(lsScan);
+    END;
+
+    LOCAL PROCEDURE setBarcodeRuleFilter@1000000012(VAR precBarcodeRule@1000000000 : Record 23044509;pcodItemNo@1000000001 : Code[50]);
+    VAR
+      lrecItem@1000000008 : Record 27;
+      lrecItemTracking@1000000007 : Record 6502;
+      lbHasSerialTracking@1000000006 : Boolean;
+      lbHasSerialSpecificTracking@1000000005 : Boolean;
+      lbHasLotTracking@1000000004 : Boolean;
+      lbHasLotSpecificTracking@1000000003 : Boolean;
+      lsBarcodeRuleFilter@1000000002 : Text;
+    BEGIN
+      //<FUNC>
+      //  Description: Sets the barcode rule filter according to SN/Lot rules
+      //  Called From: This page (P23044602)
+      //  Side Effect: Forces user to enter SN/Lot on prompt
+      //</FUNC>
+
+      // filter barcode rules for LOT and/or SN rule inclusion or exclusion
+      // this is done to avoid false positives and allow tracked and untracked serials
+      // persistent item should be enabled on non-validating rules
+      lsBarcodeRuleFilter := '';
+      precBarcodeRule.RESET();
+      precBarcodeRule.SETRANGE(Enabled, TRUE);
+      IF (precBarcodeRule.FINDSET(FALSE)) THEN ;
+
+      IF ( sPrompt <> tcPromptScanLotSerial) THEN BEGIN
+        // if we aren't expecting a serial, do not run rules that have validate serial/lot disabled
+        // these will cause false matches because any value could be the serial/lot no
+        // keep rules that have multiple values - may include a serial/lot no
+        REPEAT
+          IF ((STRPOS(precBarcodeRule."Find Text", ' ') = 0) AND
+              (((precBarcodeRule."Serial No. Expression" <> '') AND (NOT precBarcodeRule."Validate Serial No.")) OR
+               ((precBarcodeRule."Lot No. Expression" <> '') AND (NOT precBarcodeRule."Validate Lot No."))))
+          THEN
+            lsBarcodeRuleFilter += '&<>' + FORMAT(precBarcodeRule."Rule ID");
+        UNTIL(precBarcodeRule.NEXT() = 0);
+      END ELSE BEGIN
+        // when a serial/lot is expected, ignore all none serial/lot numbers barcode rules
+        // this will avoid errors if the serial is not verifiable and could be a quantity
+        // as well as qty before serial rules
+        // this forces a serial/lot entry and "locks" the process flow for the time being.
+
+        IF (NOT lrecItem.GET(pcodItemNo)) THEN BEGIN
+          // bad config =>  sticky items should be enabled
+          REPEAT
+            IF ((precBarcodeRule."Serial No. Expression" <> '') OR (precBarcodeRule."Lot No. Expression" <> '') ) THEN
+              lsBarcodeRuleFilter += '|' + FORMAT(precBarcodeRule."Rule ID");
+          UNTIL(precBarcodeRule.NEXT() = 0);
+        END ELSE BEGIN
+          // make use of item knowledge (if possible)
+          IF ( lrecItemTracking.GET(lrecItem."Item Tracking Code") ) THEN ;
+          lbHasLotTracking := lrecItemTracking."Lot Purchase Outbound Tracking" OR lrecItemTracking."Lot Sales Outbound Tracking";
+          lbHasLotSpecificTracking := lrecItemTracking."Lot Specific Tracking" OR lrecItemTracking."Lot Info. Inbound Must Exist" OR
+                                      lrecItemTracking."Lot Pos. Adjmt. Inb. Tracking" OR lrecItemTracking."Lot Neg. Adjmt. Inb. Tracking" OR
+                                      lrecItemTracking."Lot Assembly Inbound Tracking" OR lrecItemTracking."Lot Manuf. Inbound Tracking";
+          lbHasSerialTracking := lrecItemTracking."SN Purchase Outbound Tracking" OR lrecItemTracking."SN Sales Outbound Tracking";
+          lbHasSerialSpecificTracking := lrecItemTracking."SN Specific Tracking" OR lrecItemTracking."SN Info. Inbound Must Exist" OR
+                                         lrecItemTracking."SN Pos. Adjmt. Inb. Tracking" OR lrecItemTracking."SN Neg. Adjmt. Inb. Tracking" OR
+                                         lrecItemTracking."SN Assembly Inbound Tracking" OR lrecItemTracking."SN Manuf. Inbound Tracking";
+          REPEAT
+            // if we need serial details
+            IF (((precBarcodeRule."Serial No. Expression" <> '') AND
+                 ((lbHasSerialSpecificTracking AND precBarcodeRule."Validate Serial No.") OR
+                  (NOT lbHasSerialSpecificTracking AND NOT precBarcodeRule."Validate Serial No." AND lbHasSerialTracking)))
+                OR // or we need lot details
+                ((precBarcodeRule."Lot No. Expression" <> '') AND
+                 ((lbHasLotSpecificTracking AND precBarcodeRule."Validate Lot No.") OR
+                  (NOT lbHasLotSpecificTracking AND NOT precBarcodeRule."Validate Lot No." AND lbHasLotTracking))))
+            THEN BEGIN
+              lsBarcodeRuleFilter += '|' + FORMAT(precBarcodeRule."Rule ID");
+            END; //if
+          UNTIL(precBarcodeRule.NEXT() = 0);
+        END; //if
+      END;
+
+      // Apply filter from above
+      precBarcodeRule.RESET();
+      IF (STRLEN(lsBarcodeRuleFilter) > 1) THEN BEGIN
+        // remove leading logical operator
+        lsBarcodeRuleFilter := COPYSTR(lsBarcodeRuleFilter, 2, STRLEN(lsBarcodeRuleFilter));
+        precBarcodeRule.SETFILTER("Rule ID", lsBarcodeRuleFilter);
+      END;
+    END;
+
+    LOCAL PROCEDURE doPackageDetails@1000000033(poptDocType@1000000000 : Option;pcodDocNo@1000000001 : Code[50]);
+    VAR
+      lrecLPHeader@1000000002 : Record 23044505;
+    BEGIN
+      //<FUNC>
+      //  Description: Shows the package details for associated LPs
+      //  Called From: This page (P23044602)
+      //  Side Effect: LP Dimensions/Weight may be updated
+      //</FUNC>
+      IF isPalletEntry THEN ERROR('The document has pallet detail, Cannot open package.');//TPZ2922
+      lrecLPHeader.SETFILTER("No.", cuPackMgmt.CreateLPNoFilterWithDShipDocType(poptDocType, pcodDocNo));
+      IF (lrecLPHeader.FINDSET(TRUE)) THEN BEGIN
+        PAGE.RUN(PAGE::"DSHIP Package Details List", lrecLPHeader);
+      END;
+    END;
+
+    LOCAL PROCEDURE setUnpackedStatus@1000000017();
+    BEGIN
+      bIsUnpacked := "License Plate No." = '';
+      IF (bIsUnpacked) THEN
+        bUnpackedLines := TRUE;
+    END;
+
+    LOCAL PROCEDURE "//Vaseem"@1000000043();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE UpdateQtyToShip@1000000049();
+    VAR
+      WarehouseShipmentLine@1000000000 : Record 7321;
+      SalesLine@1000000001 : Record 37;
+    BEGIN
+      //<vaseem>
+      IF FINDSET THEN
+        REPEAT
+          IF "Packed Qty." <> 0 THEN BEGIN
+            IF "Document Type" = "Document Type"::"Warehouse Shipment" THEN BEGIN
+              WarehouseShipmentLine.RESET;
+              WarehouseShipmentLine.SETRANGE("No.","Document No.");
+              WarehouseShipmentLine.SETRANGE("Item No.","Item No.");
+              //>>TPZ2895 Pankaj
+              WarehouseShipmentLine.SETRANGE("Source No.","Source ID");
+              WarehouseShipmentLine.SETRANGE("Source Line No.","Source Ref. No.");//vaseem
+              //<<TPZ2895
+              IF WarehouseShipmentLine.FINDFIRST THEN BEGIN
+                IF SalesLine.GET(WarehouseShipmentLine."Source Document",WarehouseShipmentLine."Source No.",WarehouseShipmentLine."Source Line No.") THEN BEGIN
+                  //SalesLine.VALIDATE("Qty. to Ship","Packed Qty.");
+                  //-->TPZ3292
+                  {
+                  SalesLine."Qty. to Ship" += "Packed Qty.";
+                  IF SalesLine."Qty. to Ship" > SalesLine.Quantity THEN
+                    SalesLine."Qty. to Ship" := SalesLine.Quantity;
+                  }
+                  SalesLine.VALIDATE("Qty. to Ship",WarehouseShipmentLine."Qty. to Ship");
+                  //<--TPZ3292
+                  SalesLine.MODIFY;
+                END;
+              END;
+
+            END;
+          END;
+        UNTIL NEXT=0;
+      //</vaseem>
+    END;
+
+    LOCAL PROCEDURE GetLine@1000000054(DocNoPara@1000000000 : Code[20]) : Integer;
+    VAR
+      WarehouseShipmentLineLoc@1000000001 : Record 7321;
+    BEGIN
+      WarehouseShipmentLineLoc.RESET;
+      WarehouseShipmentLineLoc.SETRANGE("No.",DocNoPara);
+      IF WarehouseShipmentLineLoc.FINDLAST THEN
+        EXIT(WarehouseShipmentLineLoc."Line No." + 10000)
+      ELSE
+        EXIT(10000);
+    END;
+
+    LOCAL PROCEDURE doPackageDetailsPS@1000000055(poptDocType@1000000000 : Option;pcodNo@1000000001 : Code[50]);
+    VAR
+      lrecLPHeader@1000000002 : Record 23044505;
+    BEGIN
+      //TPZ3143
+      cuPackMgmt.getLPSrcTypeFromDShipDocType(poptDocType, poptDocType);
+      lrecLPHeader.SETRANGE("No.", pcodNo);
+      IF (lrecLPHeader.FINDSET(TRUE)) THEN BEGIN
+        PAGE.RUN(PAGE::"DSHIP Package Details List", lrecLPHeader);
+      END;
+    END;
+
+    LOCAL PROCEDURE GetWHI@1000000063(psScan@1000000000 : Text) : Boolean;
+    VAR
+      lrecWhseShipHeader@1000000003 : Record 7320;
+      RegisteredWhseActivityHdr@1000000002 : Record 5772;
+      RegisteredWhseActivityLine@1000000001 : Record 5773;
+    BEGIN
+      //004 TPZ3143
+      RegisteredWhseActivityHdr.SETRANGE("Whse. Activity No.",psScan);
+      IF RegisteredWhseActivityHdr.FINDFIRST THEN;
+      RegisteredWhseActivityLine.SETRANGE("No.",RegisteredWhseActivityHdr."No.");
+      IF RegisteredWhseActivityLine.FINDFIRST THEN;
+      IF lrecWhseShipHeader.GET(RegisteredWhseActivityLine."Whse. Document No.") THEN
+        EXIT(TRUE);
+      EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE DoNotPostWithoutLPandLabel@1000000052();
+    VAR
+      LPExist@1000000000 : Boolean;
+      LabelCreated@1000000001 : Boolean;
+      LPRec@1000000002 : Record 23044505;
+    BEGIN
+      //TPZ3205
+      LPExist := FALSE; LabelCreated := FALSE;
+      IF ( Rec.FINDSET(FALSE) ) THEN
+        REPEAT
+          IF Rec."License Plate No." <> '' THEN BEGIN
+            LPExist := TRUE;
+            IF LPRec.GET(Rec."License Plate No.") THEN BEGIN
+              IF (LPRec."Package Tracking Number" <> '') THEN
+                LabelCreated := TRUE;
+              IF LPRec."Has Carrier Label" THEN
+              LabelCreated := TRUE;
+          END;
+          END;
+        UNTIL Rec.NEXT = 0;
+      IF NOT LPExist THEN ERROR(Text0001);
+      //IF NOT LabelCreated THEN ERROR(Text0002);
+    END;
+
+    PROCEDURE CheckSalesLineQuantityPack@1000000051(DOCNO@1000000001 : Text[250]);
+    VAR
+      SalesHeader@1000000004 : Record 36;
+      SalesLine@1000000005 : Record 37;
+      Package@1000000007 : Record 14000701;
+      RegisteredPickLines@1000000009 : Record 5773;
+      TotalSaleLineQty@1000000006 : Decimal;
+      TotalRegisteredPickLineQty@1000000008 : Decimal;
+      Page46EventPublishers@1000000002 : Codeunit 51805;
+      QtyAvailQtyAvailToPick@1000000003 : Decimal;
+      RegisteredWhseActivityLine@1000000000 : Record 5773;
+      RegisteredWhseActivityHdr@1000000010 : Record 5772;
+      SalesHeader1@1000000011 : Record 36;
+    BEGIN
+      //>>008 TPZ3238
+      SalesHeader.RESET;
+      IF NOT SalesHeader1.GET(SalesHeader1."Document Type"::Order,DOCNO) THEN BEGIN
+        RegisteredWhseActivityHdr.SETRANGE(Type,RegisteredWhseActivityHdr.Type::Pick);
+        RegisteredWhseActivityHdr.SETRANGE("Whse. Activity No.",DOCNO);
+        IF RegisteredWhseActivityHdr.FINDFIRST THEN BEGIN
+          RegisteredWhseActivityLine.SETRANGE("Action Type",RegisteredWhseActivityLine."Activity Type"::Pick);
+          RegisteredWhseActivityLine.SETRANGE("No.",RegisteredWhseActivityHdr."No.");
+          IF RegisteredWhseActivityLine.FINDFIRST THEN BEGIN
+            IF RegisteredWhseActivityLine."Source No." <> '' THEN
+              DOCNO := RegisteredWhseActivityLine."Source No.";
+          END;
+        END;
+      END;
+
+      IF SalesHeader.GET(SalesHeader."Document Type"::Order,DOCNO) THEN BEGIN
+        IF SalesHeader."Shipping Advice" = SalesHeader."Shipping Advice"::Complete THEN BEGIN
+          SalesLine.RESET;
+          SalesLine.SETRANGE("Document Type",SalesHeader."Document Type");
+          SalesLine.SETRANGE("Document No.",SalesHeader."No.");
+          SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+          IF SalesLine.FINDSET THEN
+                REPEAT
+                 TotalSaleLineQty := TotalSaleLineQty + SalesLine."Outstanding Quantity";
+              UNTIL SalesLine.NEXT = 0;
+
+            RegisteredPickLines.RESET;
+            RegisteredPickLines.SETRANGE("Source Type",37);
+            RegisteredPickLines.SETRANGE("Source Subtype",RegisteredPickLines."Source Subtype"::"1");
+            RegisteredPickLines.SETRANGE(RegisteredPickLines."Source No.",DOCNO);
+            RegisteredPickLines.SETRANGE("Bin Code",'SHIPMENT');
+            IF RegisteredPickLines.FINDSET THEN
+              REPEAT
+                 TotalRegisteredPickLineQty := TotalRegisteredPickLineQty + RegisteredPickLines.Quantity;
+              UNTIL RegisteredPickLines.NEXT = 0;
+
+          IF TotalRegisteredPickLineQty <  TotalSaleLineQty THEN
+            ERROR('Sales Order %1 cannot be packed because Shipping Advice = Complete.',SalesHeader."No.");
+        END;
+      END;
+      //<<008 TPZ3238
+    END;
+
+    LOCAL PROCEDURE doPalletDetailsPS@1000000056(LPPara@1000000001 : Code[20]);
+    VAR
+      PalletEntry@1000000000 : Record 50068;
+      PalletEntry1@1000000002 : Record 50068;
+      WarehouseShipmentHeader@1000000003 : Record 7320;
+      PalletDimension@1000000004 : Page 50090;
+    BEGIN
+      //TPZ3299
+      PalletEntry1.RESET;
+      PalletEntry1.SETRANGE("Order No.","Source ID");
+      //PalletEntry1.SETRANGE("License Plate No.",PalletEntry."License Plate No.");
+      WarehouseShipmentHeader.RESET;
+      WarehouseShipmentHeader.SETRANGE("Source No.","Source ID");
+      IF WarehouseShipmentHeader.FINDFIRST THEN
+      PalletEntry1.SETRANGE("Warehouse Shipment No.",WarehouseShipmentHeader."No.");
+      PalletEntry1.SETRANGE(Status,PalletEntry1.Status::Released);
+      IF PalletEntry1.FINDFIRST THEN
+        PalletEntry1.DELETEALL;
+
+      PalletEntry.INIT;
+      PalletEntry."License Plate No." := LPPara;
+      PalletEntry."Order No." := "Source ID";
+      WarehouseShipmentHeader.RESET;
+      WarehouseShipmentHeader.SETRANGE("Source No.","Source ID");
+      IF WarehouseShipmentHeader.FINDFIRST THEN
+        PalletEntry."Warehouse Shipment No." := WarehouseShipmentHeader."No.";
+      PalletEntry.Status := PalletEntry.Status::Released;
+      PalletEntry.INSERT(TRUE);
+      COMMIT;
+      PalletEntry1.RESET;
+      PalletEntry1.SETRANGE("Order No.",PalletEntry."Order No.");
+      PalletEntry1.SETRANGE("License Plate No.",PalletEntry."License Plate No.");
+      PalletEntry1.SETRANGE("Warehouse Shipment No.",PalletEntry."Warehouse Shipment No.");
+      PalletEntry1.SETRANGE(Status,PalletEntry1.Status::Released);
+      IF PalletEntry1.FINDFIRST THEN;
+      //PAGE.RUNMODAL(50090,PalletEntry1);
+      PalletDimension.SetValues(PalletEntry1."License Plate No.",PalletEntry1."Warehouse Shipment No.",PalletEntry1."Order No.");
+      PalletDimension.SETTABLEVIEW(PalletEntry1);
+      PalletDimension.RUNMODAL;
+    END;
+
+    LOCAL PROCEDURE GetPalletDetailsPS@1000000064();
+    VAR
+      PalletEntry1@1000000002 : Record 50068;
+      WarehouseShipmentHeader@1000000003 : Record 7320;
+      PalletDimension@1000000000 : Page 50090;
+    BEGIN
+      //TPZ3299
+      WarehouseShipmentHeader.RESET;
+      WarehouseShipmentHeader.SETRANGE("Source No.","Source ID");
+      IF WarehouseShipmentHeader.FINDFIRST THEN;
+      PalletEntry1.RESET;
+      PalletEntry1.SETFILTER("Order No.","Source ID");
+      IF "License Plate No." <> '' THEN
+        PalletEntry1.SETRANGE("License Plate No.","License Plate No.")
+      ELSE
+        PalletEntry1.SETRANGE("License Plate No.",sLastScan);
+      PalletEntry1.SETRANGE("Warehouse Shipment No.",WarehouseShipmentHeader."No.");
+      PalletEntry1.SETRANGE(Status,PalletEntry1.Status::Released);
+      //PAGE.RUNMODAL(50090,PalletEntry1);
+      IF PalletEntry1.FINDFIRST THEN;
+      IF "License Plate No." <>'' THEN
+        PalletDimension.SetValues("License Plate No.",WarehouseShipmentHeader."No.","Source ID")
+      ELSE
+        PalletDimension.SetValues(sLastScan,WarehouseShipmentHeader."No.","Source ID");
+      PalletDimension.SETTABLEVIEW(PalletEntry1);
+      PalletDimension.RUNMODAL;
+    END;
+
+    LOCAL PROCEDURE isPalletEntry@1000000059() : Boolean;
+    VAR
+      PalletEntry1@1000000000 : Record 50068;
+    BEGIN
+      //TPZ3299
+      PalletEntry1.RESET;
+      PalletEntry1.SETFILTER("Order No.","Source ID");
+      PalletEntry1.SETRANGE("License Plate No.","License Plate No.");
+      PalletEntry1.SETRANGE(Status,PalletEntry1.Status::Released);
+      IF PalletEntry1.FINDFIRST THEN
+        EXIT(TRUE)
+      ELSE
+        EXIT(FALSE);
+    END;
+
+    LOCAL PROCEDURE CheckifAlreadyPackedUsingEship@1000000060();
+    VAR
+      PackageLoc@1000000000 : Record 14000701;
+      PackageLineLoc@1000000001 : Record 14000702;
+    BEGIN
+      //TPZ3304
+      PackageLoc.RESET;
+      PackageLoc.SETRANGE("Source ID","Source ID");
+      PackageLoc.SETRANGE("Packing Date",WORKDATE);
+      IF PackageLoc.FINDFIRST THEN
+        ERROR('The Document No. %1 already packed using Package %2 at Packing Date %3',"Source ID",PackageLoc."No.",PackageLoc."Packing Date");
+      PackageLoc.RESET;
+      PackageLoc.SETRANGE("Source ID","Source ID");
+      PackageLoc.SETRANGE(Closed,FALSE);
+      IF PackageLoc.FINDFIRST THEN BEGIN
+        PackageLineLoc.RESET;
+        PackageLineLoc.SETRANGE("Package No.",PackageLoc."No.");
+        PackageLineLoc.SETFILTER(Quantity,'>%1',0);
+        IF PackageLineLoc.FINDFIRST THEN
+          ERROR('The Document No. %1 already packed using Package %2.',"Source ID",PackageLoc."No.",PackageLoc."Packing Date");
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateShiptoInfoMOP@1000000061(SOPara@1000000000 : Code[20]);
+    VAR
+      lrecSalesHeader@1000000001 : Record 36;
+      lrecTransferHeader@1000000002 : Record 5740;
+      SHLoc@1000000003 : Record 36;
+    BEGIN
+      //TPZ3336 PKS
+      IF SHLoc.GET(SHLoc."Document Type"::Order,"Source ID") THEN;
+      IF lrecSalesHeader.GET(lrecSalesHeader."Document Type"::Order, SOPara) THEN BEGIN
+        lrecSalesHeader."Shipping Agent Code" := SHLoc."Shipping Agent Code";
+        lrecSalesHeader."Shipping Agent Service Code" := SHLoc."Shipping Agent Service Code";
+        lrecSalesHeader."Shipment Method Code" := SHLoc."Shipment Method Code";
+        lrecSalesHeader."E-Ship Agent Service" := SHLoc."E-Ship Agent Service"; //PKS
+        lrecSalesHeader.MODIFY(FALSE);
+      {END ELSE IF ( lrecTransferHeader.GET(WhseShipLineLoc."Source No.")) THEN BEGIN
+        lrecTransferHeader."Shipping Agent Code" := Rec."Shipping Agent Code";
+        lrecTransferHeader."Shipping Agent Service Code" := Rec."Shipping Agent Service Code";
+        lrecTransferHeader."Shipment Method Code" := Rec."Shipment Method Code";
+        lrecTransferHeader."E-Ship Agent Service" := Rec."E-Ship Agent Service";
+        lrecTransferHeader.MODIFY(FALSE);}
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckSameShiptoInfoMOP@1000000062();
+    VAR
+      SHLoc@1000000000 : Record 36;
+      ShippingACode@1000000001 : Code[30];
+      EShipASCode@1000000002 : Code[30];
+    BEGIN
+      //TPZ3336 PKS
+      IF Rec.FINDSET(FALSE) THEN BEGIN
+        IF SHLoc.GET(SHLoc."Document Type"::Order,"Source ID") THEN BEGIN
+          ShippingACode := SHLoc."Shipping Agent Code";
+          EShipASCode := SHLoc."E-Ship Agent Service";
+        END;
+        REPEAT
+          IF SHLoc.GET(SHLoc."Document Type"::Order,"Source ID") THEN BEGIN
+            IF ShippingACode <> SHLoc."Shipping Agent Code" THEN
+              ERROR('The order %1 has different shipping agent code',SHLoc."No.");
+            IF EShipASCode <> SHLoc."E-Ship Agent Service" THEN
+              ERROR('The order %1 has different ship agent service code',SHLoc."No.");
+          END;
+        UNTIL Rec.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CheckFirstPackedMOP@1000000066() : Code[20];
+    BEGIN
+      //TPZ3353
+      IF ( Rec.FINDSET(FALSE) ) THEN BEGIN
+        REPEAT
+          IF (Rec."License Plate No." <> '') AND (Rec."Packed Qty." <> 0) THEN
+            EXIT(Rec."Source ID");
+        UNTIL Rec.NEXT = 0;
+      END;
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+      001 TPZ2895 PKS  Added new action Combine Shipment, function to update qty. and delete combined shipment on post.
+      002 TPZ3142 PKS  Added code to update qty. to ship in sales line
+      003 TPZ3143 PKS  Added code in function processPackAllScan to open package for location 80, 25, 30 and print label on specific printer
+      004 TPZ3143 PKS  Added new functins to allow to scan pick ticket for sales order
+      005 TPZ3143 PKS  Added code to not close page on post for location 80, 30, 25
+      006 TPZ3210 PKS  Added new action to show registered pick
+      007 TPZ3205 PKS  Added validation to not post without LP
+      008 TPZ3238 RPS 06282021 - Prevent Partial order shipping for Complete Orders in DSHIP
+      009 TPZ3292 PKS 07272021 Added new code to update sales line quantity from warehouse shipment line
+      010 TPZ3187 PKS 07202021 Added validation on getlabel to not allow if already created BOL
+      011 TPZ3299 PKS 08042021 Added function for pallet management
+      010 TPZ3268 VAH 08102021 Added function call in function in doPost function
+      012 TPZ3304 PKS 08232021 Added function and code to show error if document already packed using eship
+      013 TPZ3336 PKS 08302021 Added function to update shipping agent code same in allorder in MOP
+      014 TPZ3297 UTK 09102021 Added code to ask confirmation to register pick
+      015 TPZ3346 PKS 09032021 Added validation to unpackall MOP orders before undo MOP
+      016 TPZ3353 PKS 09152021 Added code to check first order which is packed
+    }
+    END.
+  }
+}
+

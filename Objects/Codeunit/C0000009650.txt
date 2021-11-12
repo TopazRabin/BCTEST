@@ -1,0 +1,89 @@
+OBJECT Codeunit 9650 Edit MS Word Report Layout
+{
+  OBJECT-PROPERTIES
+  {
+    Date=12/20/18;
+    Time=12:00:00 PM;
+    Version List=NAVW111.00.00.26893;
+  }
+  PROPERTIES
+  {
+    TableNo=9650;
+    OnRun=BEGIN
+            EditReportLayout(Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      LoadDocQst@1000 : TextConst 'ENU=The report layout document has been edited in Word.\\Do you want to import the changes?;ESM=El documento de dise¤o de informe se ha editado en Word.\\¨Desea importar los cambios?;FRC=Le document de pr‚sentation du rapport a ‚t‚ modifi‚ dans Word.\\Voulez-vous importer les modifications?;ENC=The report layout document has been edited in Word.\\Do you want to import the changes?';
+      WordNotFoundErr@1003 : TextConst 'ENU=You cannot edit the report layout because Microsoft Word is not available on your computer. To edit the report layout, you must install a supported version of Word.;ESM=No se puede editar el dise¤o de informe porque Microsoft Word no est  disponible en el equipo. Para editar el dise¤o de informe, debe instalar una versi¢n compatible de Word.;FRC=Vous ne pouvez pas modifier la pr‚sentation du rapport car Microsoft Word n''est pas install‚ sur votre ordinateur. Pour modifier la pr‚sentation du rapport, vous devez installer une version de Word prise en charge.;ENC=You cannot edit the report layout because Microsoft Word is not available on your computer. To edit the report layout, you must install a supported version of Word.';
+      WaitMsg@1001 : TextConst 'ENU=Please wait while the report layout opens in Word.\After the report layout opens in Word, make changes to the layout,\and then close the Word document to continue.;ESM=Espere mientras el dise¤o de informe se abre en Word.\Una vez abierto el dise¤o del informe en Word, haga los cambios en el dise¤o\y luego cierre el documento de Word para continuar.;FRC=Patientez pendant que la pr‚sentation du rapport s''ouvre dans Word.\Une fois la pr‚sentation du rapport ouverte dans Word, apportez les modifications souhait‚es,\puis fermez le document Word pour continuer.;ENC=Please wait while the report layout opens in Word.\After the report layout opens in Word, make changes to the layout,\and then close the Word document to continue.';
+      Window@1002 : Dialog;
+
+    LOCAL PROCEDURE EditReportLayout@4(VAR CustomReportLayout@1015 : Record 9650);
+    VAR
+      TempBlob@1009 : Record 99008535;
+      FileMgt@1005 : Codeunit 419;
+      WordManagement@1010 : Codeunit 5054;
+      WordApplicationHandler@1011 : Codeunit 5068;
+      WordApplication@1001 : DotNet "'Microsoft.Office.Interop.Word, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c'.Microsoft.Office.Interop.Word.ApplicationClass" RUNONCLIENT;
+      WordDocument@1000 : DotNet "'Microsoft.Office.Interop.Word, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c'.Microsoft.Office.Interop.Word.Document" RUNONCLIENT;
+      WdWindowState@1006 : DotNet "'Microsoft.Office.Interop.Word, Version=15.0.0.0, Culture=neutral, PublicKeyToken=71e9bce111e9429c'.Microsoft.Office.Interop.Word.WdWindowState" RUNONCLIENT;
+      WordHelper@1016 : DotNet "'Microsoft.Dynamics.Nav.Integration.Office, Version=11.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.Integration.Office.Word.WordHelper" RUNONCLIENT;
+      WordHandler@1007 : DotNet "'Microsoft.Dynamics.Nav.Integration.Office, Version=11.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Dynamics.Nav.Integration.Office.Word.WordHandler" RUNONCLIENT;
+      FileName@1003 : Text;
+      NewFileName@1008 : Text;
+      LoadModifiedDoc@1002 : Boolean;
+    BEGIN
+      CustomReportLayout.TestLayout;
+
+      WordManagement.Activate(WordApplicationHandler,9650);
+      IF NOT WordManagement.TryGetWord(WordApplication) THEN BEGIN
+        WordManagement.Deactivate(9650);
+        ERROR(WordNotFoundErr);
+      END;
+
+      Window.OPEN(WaitMsg);
+
+      CustomReportLayout.GetLayoutBlob(TempBlob);
+      FileName := FileMgt.BLOBExport(TempBlob,FileName,FALSE);
+
+      // Open word and wait for the document to be closed
+      WordHandler := WordHandler.WordHandler;
+      WordDocument := WordHelper.CallOpen(WordApplication,FileName,FALSE,FALSE);
+      WordDocument.ActiveWindow.Caption := CustomReportLayout."Report Name" + ' ' + CustomReportLayout.Description;
+      WordDocument.Application.Visible := TRUE; // Visible before WindowState KB176866 - http://support.microsoft.com/kb/176866
+      WordDocument.ActiveWindow.WindowState := WdWindowState.wdWindowStateNormal;
+
+      // Push the word app to foreground
+      WordApplication.WindowState := WdWindowState.wdWindowStateMinimize;
+      WordApplication.Visible := TRUE;
+      WordApplication.Activate;
+      WordApplication.WindowState := WdWindowState.wdWindowStateNormal;
+
+      WordDocument.Saved := TRUE;
+      WordDocument.Application.Activate;
+
+      NewFileName := WordHandler.WaitForDocument(WordDocument);
+      Window.CLOSE;
+      WordManagement.Deactivate(9650);
+
+      LoadModifiedDoc := CONFIRM(LoadDocQst);
+
+      IF LoadModifiedDoc THEN BEGIN
+        FileMgt.BLOBImport(TempBlob,NewFileName);
+        CustomReportLayout.ImportLayoutBlob(TempBlob,'');
+      END;
+
+      FileMgt.DeleteClientFile(FileName);
+      IF FileName <> NewFileName THEN
+        FileMgt.DeleteClientFile(NewFileName);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,1152 @@
+OBJECT Codeunit 11123317 SC - Product Functions
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/31/21;
+    Time=[ 6:40:27 AM];
+    Modified=Yes;
+    Version List=SCW19.2.0,001,TPZ3109;
+  }
+  PROPERTIES
+  {
+    TableNo=11123302;
+    OnRun=VAR
+            RequestBuff@11123304 : TEMPORARY Record 11123303;
+            ResponseBuff@11123302 : TEMPORARY Record 11123303;
+            Params@11123305 : TEMPORARY Record 11123310;
+            Context@11123303 : Codeunit 11123305;
+          BEGIN
+            Context.GetRequestBuff(RequestBuff);
+            Context.GetResponseBuff(ResponseBuff);
+            Context.GetParams(Params);
+
+            CASE Code OF
+              UPPERCASE('GetProducts') : GetProducts(RequestBuff,ResponseBuff);
+              UPPERCASE('GetProductCategories') : GetProductCategories(RequestBuff,ResponseBuff);
+              UPPERCASE('GetUnitsOfMeasure') : GetUnitsOfMeasure(RequestBuff,ResponseBuff);
+              UPPERCASE('GetVariantComponents') : GetVariantComponents(RequestBuff,ResponseBuff);
+              UPPERCASE('GetVariantComponentGroups') : GetVariantComponentGroups(RequestBuff,ResponseBuff);
+              UPPERCASE('GetPriceInfo') : GetPriceInfo(RequestBuff,ResponseBuff);
+              UPPERCASE('GetStockInfo') : GetStockInfo(RequestBuff,ResponseBuff);
+              UPPERCASE('GetVolumePrices') : GetVolumePrices(RequestBuff,ResponseBuff);
+              UPPERCASE('HasVolumePrices') : HasVolumePrices(RequestBuff,ResponseBuff);
+              UPPERCASE('GetRetailOffers') : GetRetailOffers(RequestBuff,ResponseBuff);
+              UPPERCASE('GetProductSuggestions') : GetProductSuggestions(RequestBuff,ResponseBuff);
+              UPPERCASE('GetProductImages') : GetProductImages(RequestBuff,ResponseBuff);
+              UPPERCASE('GetProductImageFile') : GetProductImageFile(RequestBuff,ResponseBuff);
+            END;
+
+            Context.SetParams(Params);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text11123308@11123302 : TextConst 'ENU=ProductId %1';
+
+    PROCEDURE GetProducts@11123316(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      Item@11123304 : Record 27;
+      CountNodeBuff@11123307 : TEMPORARY Record 11123303;
+      Params@11123305 : TEMPORARY Record 11123310;
+      TempIdList@11123314 : TEMPORARY Record 11123330;
+      FilterHelper@11123306 : Codeunit 11123321;
+      Validation@11123308 : Codeunit 11123310;
+      EventMgt@11123309 : Codeunit 11123331;
+      ItemNo@11123317 : Code[20];
+      Position@11123316 : Integer;
+      Counter@11123313 : Integer;
+      CountOfRecords@11123312 : Integer;
+      RecordAvailable@11123311 : Boolean;
+      IdListExists@11123310 : Boolean;
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::Item);
+
+      Validation.ValidatePageParameters(Params.PageIndex,Params.PageSize);
+
+      FilterHelper.SetItemWebshopFilter(Item,Params);
+
+      ApplyItemFilters(Item,Params);
+      ApplyItemVisibleFilter(Item,Params);
+      ApplyItemSorting(Item,Params);
+
+      EventMgt.OnBeforeGetProducts(OutXMLBuff,Item,Params);
+
+      Params.GetIdList(TempIdList);
+
+      IdListExists := TempIdList.FINDSET;
+
+      IF IdListExists THEN BEGIN
+        REPEAT
+          ItemNo := TempIdList.Value;
+          IF ItemNo <> '' THEN BEGIN
+            Item.SETRANGE("No.",ItemNo);
+            IF Item.FINDFIRST THEN
+              Item.MARK(TRUE);
+          END;
+        UNTIL TempIdList.NEXT = 0;
+
+        Item.SETRANGE("No.");
+        Item.MARKEDONLY(TRUE);
+      END;
+
+        IF (Params.PageIndex <> 0) AND (Params.PageSize <> 0) THEN
+          Position := Params.PageIndex * Params.PageSize;
+
+      IF Params.IndexRecords <> 0 THEN
+        CountOfRecords := Params.IndexRecords
+      ELSE
+        CountOfRecords := Item.COUNT;
+
+        OutXMLBuff.AddElement(CountNodeBuff,'TotalCount',FORMAT(CountOfRecords));
+
+        IF (CountOfRecords > 0) AND (CountOfRecords >= Position) THEN BEGIN
+          IF Params.SortAscending THEN
+            RecordAvailable := Item.FINDSET
+          ELSE
+            RecordAvailable := Item.FIND('-');
+
+          IF Position > 0 THEN
+            RecordAvailable := Item.NEXT(Position) <> 0;
+
+          WHILE RecordAvailable AND ((Params.PageSize = 0) OR (Counter < Params.PageSize)) DO BEGIN
+            BuildProductXML(OutXMLBuff,Item,Params);
+
+            Counter := Counter + 1;
+            RecordAvailable := Item.NEXT <> 0;
+          END;
+        END;
+    END;
+
+    PROCEDURE GetProductCategories@11123308(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      TempNodeBuff@11123312 : TEMPORARY Record 11123303;
+      ResultNodeBuff@11123311 : TEMPORARY Record 11123303;
+      Category@11123305 : Record 5722;
+      ProductGroup@11123306 : Record 5723;
+      Params@11123308 : TEMPORARY Record 11123310;
+      CatalogHelper@11123309 : Codeunit 11123318;
+    BEGIN
+      Params.InitParams(InXMLBuff,0);
+
+      IF HasChildCategories THEN BEGIN
+        GetProductCategoriesHierarchy(InXMLBuff,OutXMLBuff,Params);
+        EXIT;
+      END;
+
+      Category.RESET;
+      ProductGroup.RESET;
+
+      IF Params.VisibleOnly THEN BEGIN
+        Category.SETRANGE("Visible in Webshop",TRUE);
+        ProductGroup.SETRANGE("Visible in Webshop",TRUE);
+      END;
+
+      IF Category.FINDSET THEN
+        REPEAT
+          CatalogHelper.CreateCategoryXML(Category,OutXMLBuff,ResultNodeBuff,Params);
+
+          ProductGroup.SETRANGE("Item Category Code",Category.Code);
+          IF ProductGroup.FINDSET THEN
+            REPEAT
+              CatalogHelper.CreateProductGroupXML(ProductGroup,ResultNodeBuff,TempNodeBuff,Params);
+            UNTIL ProductGroup.NEXT = 0;
+        UNTIL Category.NEXT = 0;
+    END;
+
+    PROCEDURE GetUnitsOfMeasure@11123312(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      UnitOfMeasure@11123304 : Record 204;
+      ResultNodeBuff@11123306 : TEMPORARY Record 11123303;
+      CatalogHelper@11123307 : Codeunit 11123318;
+    BEGIN
+      IF UnitOfMeasure.FINDSET THEN BEGIN
+        REPEAT
+          OutXMLBuff.AddElement(ResultNodeBuff,'UnitOfMeasure','');
+
+          ResultNodeBuff.AddFieldElement('Id',UnitOfMeasure.Code);
+          ResultNodeBuff.AddFieldElement('Description',UnitOfMeasure.Description);
+          CatalogHelper.AddUOMTranslations(ResultNodeBuff,UnitOfMeasure.Code,'Description');
+        UNTIL UnitOfMeasure.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE GetPriceInfo@11123331(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      Params@11123304 : TEMPORARY Record 11123310;
+      TempItem@11123314 : TEMPORARY Record 27;
+      TempCurrencyList@11123318 : TEMPORARY Record 11123330;
+      TempCalcValuesInfo@11123320 : TEMPORARY Record 11123319;
+      DummyItemVariant@11123312 : Record 5401;
+      CatalogHelper@11123309 : Codeunit 11123318;
+      Settings@11123310 : Codeunit 11123311;
+      NonOrderableReason@11123311 : Text[250];
+      UOMCode@11123307 : Code[10];
+      Orderable@11123308 : Boolean;
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::Item);
+      Settings.GetCurrencyList(TempCurrencyList);
+      GetItemIdList(TempItem,Params);
+      IF TempItem.FINDSET THEN
+        REPEAT
+          Params.ProductId := TempItem."No.";
+          UOMCode := TempItem."Purch. Unit of Measure";
+          Orderable := CatalogHelper.IsItemOrderable(TempItem,TRUE,Params);
+
+          IF Orderable THEN
+            IF UOMCode <> Params.UnitOfMeasureId THEN BEGIN
+              Params.UnitOfMeasureId := UOMCode;
+              TempItem."Sales Unit of Measure" := UOMCode;
+              Orderable := CatalogHelper.TestItem(TempItem,NonOrderableReason,FALSE);
+            END;
+
+          Params.ProductOrderable := Orderable;
+          Params.CalcErrorText := NonOrderableReason;
+
+          CatalogHelper.GetCalcValues(TempCalcValuesInfo,TempCurrencyList,DummyItemVariant,Params);
+
+          GetVariantsCalcValues(TempCalcValuesInfo,TempCurrencyList,Params);
+          CheckOrderabilityByVariants(TempCalcValuesInfo,Params);
+
+          GetPrepacksPrices(TempCalcValuesInfo,TempCurrencyList,Orderable,Params);
+
+          BuildPriceInfoXML(OutXMLBuff,TempCalcValuesInfo,Params);
+          TempCalcValuesInfo.DELETEALL;
+        UNTIL TempItem.NEXT = 0;
+    END;
+
+    PROCEDURE GetPrepacksPrices@11123368(VAR CalcValuesInfo@11123313 : Record 11123319;VAR CurrencyList@11123302 : Record 11123330;ItemOrderable@11123304 : Boolean;VAR Params@11123305 : Record 11123310);
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE AddCalcValuesPrepackPrice@11123328(VAR CalcValuesInfo@11123319 : Record 11123319;VAR CurrencyList@11123304 : Record 11123330;VAR PrepackVariant@11123303 : Record 5401;VAR Params@11123302 : Record 11123310);
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE GetVariantsCalcValues@11123314(VAR CalcValuesInfo@11123309 : Record 11123319;VAR CurrencyList@11123305 : Record 11123330;VAR Params@11123302 : Record 11123310);
+    VAR
+      Item@11123310 : Record 27;
+      ItemVariant@11123304 : Record 5401;
+      RecMgt@11123306 : Codeunit 11123326;
+      CatalogHelper@11123303 : Codeunit 11123318;
+      VariantOrderable@11123313 : Boolean;
+    BEGIN
+      IF NOT Params.LoadRelatedSkus THEN
+        EXIT;
+
+      RecMgt.GetItem(Params.ProductId,Item,TRUE);
+      ItemVariant.SETRANGE("Item No.",Params.ProductId);
+      ItemVariant.SETRANGE("Visible in Webshop",TRUE);
+      IF ItemVariant.FINDSET THEN
+        REPEAT
+          VariantOrderable := FALSE;
+          Params.ProductId := ItemVariant."Item No.";
+          Params.VariantId := ItemVariant.Code;
+          VariantOrderable := CatalogHelper.IsItemVariantOrderable(ItemVariant,FALSE,Params);
+          Params.ProductOrderable := VariantOrderable;
+
+          CatalogHelper.GetCalcValues(CalcValuesInfo,CurrencyList,ItemVariant,Params)
+        UNTIL ItemVariant.NEXT = 0;
+
+      Params.VariantId := '';
+    END;
+
+    PROCEDURE GetStockInfo@11123367(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      TempItem@11123305 : TEMPORARY Record 27;
+      Params@11123304 : TEMPORARY Record 11123310;
+      StockNodeBuff@11123306 : TEMPORARY Record 11123303;
+      CatalogHelper@11123307 : Codeunit 11123318;
+      Dispatcher@11123321 : Codeunit 11123306;
+      UOMCode@11123311 : Code[10];
+      Inventory@11123314 : Decimal;
+      Orderable@11123315 : Boolean;
+      EvenOneVariantOrderable@11123316 : Boolean;
+      CalcOrderable@11123317 : Boolean;
+      CalcNonOrderableReason@11123318 : Text[250];
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::Item);
+
+      GetItemIdList(TempItem,Params);
+
+      IF TempItem.FINDSET THEN
+        REPEAT
+          UOMCode := TempItem."Purch. Unit of Measure";
+          Inventory := 0;
+          Params.ProductId := TempItem."No.";
+
+          Orderable := CatalogHelper.IsItemOrderable(TempItem,FALSE,Params);
+
+          OutXMLBuff.AddElement(StockNodeBuff,'Stock','');
+
+          IF Orderable THEN BEGIN
+
+            CalcOrderable := TRUE;
+
+            IF UOMCode <> Params.UnitOfMeasureId THEN BEGIN
+              Params.UnitOfMeasureId := UOMCode;
+              TempItem."Sales Unit of Measure" := UOMCode;
+
+              CalcOrderable := CatalogHelper.TestItem(TempItem,CalcNonOrderableReason,FALSE);
+
+              Params.CalcOrderable := CalcOrderable;
+              Params.CalcErrorText := CalcNonOrderableReason;
+            END;
+
+            IF CalcOrderable THEN BEGIN
+              Dispatcher.DispatchInternal('GetAvailableStockForItem',Params);
+              Inventory := Params.Inventory;
+
+              CatalogHelper.IsOrderableByStock(Inventory,CalcOrderable,CalcNonOrderableReason,Params);
+
+              Params.CalcOrderable := CalcOrderable;
+              Params.CalcErrorText := CalcNonOrderableReason;
+
+              EvenOneVariantOrderable := GetVariantsStock(OutXMLBuff,Params);
+              Orderable := EvenOneVariantOrderable;
+            END;
+          END;
+
+          AddFieldsElements(StockNodeBuff,TempItem."No.",'','','',Inventory,0,0,'',Params.UnitOfMeasureId);
+
+          GetPrepacksStock(OutXMLBuff,Orderable AND CalcOrderable,Params);
+
+          CatalogHelper.AddOrderableFieldElementsToXml(
+            StockNodeBuff,TempItem."No.",'',Orderable,CalcOrderable,CalcNonOrderableReason);
+
+          CatalogHelper.AddStockInfoFieldElementsToXmlTPZ(StockNodeBuff,Params);//<TPZ3109>
+        UNTIL TempItem.NEXT =0;
+    END;
+
+    PROCEDURE GetVariantsStock@11123343(VAR StockInfoNodeBuff@11123302 : Record 11123303;VAR Params@11123305 : Record 11123310) : Boolean;
+    VAR
+      Item@11123319 : Record 27;
+      ItemVariant@11123306 : Record 5401;
+      StockNodeBuff@11123310 : TEMPORARY Record 11123303;
+      CatalogHelper@11123307 : Codeunit 11123318;
+      RecMgt@11123320 : Codeunit 11123326;
+      Dispatcher@11123309 : Codeunit 11123306;
+      Inventory@11123303 : Decimal;
+      VariantOrderable@11123313 : Boolean;
+      EvenOneVariantOrderable@11123314 : Boolean;
+      VariantCode@11123315 : Code[10];
+      VATProdPostingGroup@11123308 : Code[10];
+      CalcOrderable@11123316 : Boolean;
+      CalcNonOrderableReason@11123317 : Text[250];
+    BEGIN
+      IF NOT Params.LoadRelatedSkus THEN
+        EXIT(TRUE);
+
+      RecMgt.GetItem(Params.ProductId,Item,TRUE);
+
+      ItemVariant.SETRANGE("Item No.",Item."No.");
+      ItemVariant.SETRANGE("Visible in Webshop",TRUE);
+      IF ItemVariant.FINDSET THEN BEGIN
+        REPEAT
+          VariantCode := ItemVariant.Code;;
+          VariantOrderable := FALSE;
+          Inventory := 0;
+
+          StockInfoNodeBuff.AddElement(StockNodeBuff,'Stock','');
+
+          Params.ProductId := ItemVariant."Item No.";
+          Params.VariantId := ItemVariant.Code;
+          VariantOrderable := CatalogHelper.IsItemVariantOrderable(ItemVariant,FALSE,Params);
+          CalcOrderable := VariantOrderable;
+          CalcNonOrderableReason := Params.CalcErrorText;
+          IF VariantOrderable THEN BEGIN
+            VATProdPostingGroup := Item."VAT Prod. Posting Group";
+
+            Dispatcher.DispatchInternal('GetAvailableStockForVariant',Params);
+            Inventory := Params.Inventory;
+            CatalogHelper.IsOrderableByStock(Inventory,CalcOrderable,CalcNonOrderableReason,Params);
+          END;
+
+          AddFieldsElements(StockNodeBuff,Item."No.",VariantCode,'','',Inventory,0,0,'','');
+
+          CatalogHelper.AddOrderableFieldElementsToXml(
+            StockNodeBuff,Item."No.",VariantCode,VariantOrderable,CalcOrderable,CalcNonOrderableReason);
+
+          IF VariantOrderable AND CalcOrderable THEN
+            EvenOneVariantOrderable := TRUE;
+        UNTIL ItemVariant.NEXT = 0;
+      END ELSE
+        EvenOneVariantOrderable := TRUE;
+
+      EXIT(EvenOneVariantOrderable);
+    END;
+
+    PROCEDURE GetPrepacksStock@11123346(VAR StockInfoNodeBuff@11123302 : Record 11123303;ItemOrderable@11123304 : Boolean;VAR Params@11123305 : Record 11123310);
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    LOCAL PROCEDURE ApplyItemSorting@11123317(VAR Item@11123302 : Record 27;VAR Params@11123303 : Record 11123310) : Boolean;
+    BEGIN
+      IF Params.SortField <> '' THEN BEGIN
+        CASE Params.SortField OF
+          'No.' : Item.SETCURRENTKEY("No.");
+          'Description' : Item.SETCURRENTKEY(Description);
+          'Id' : Item.SETCURRENTKEY("No.");
+          'Title' : Item.SETCURRENTKEY(Description);
+        END;
+      END;
+      IF NOT Params.SortAscending THEN
+        Item.ASCENDING(FALSE);
+    END;
+
+    PROCEDURE ApplyItemFilters@11123326(VAR Item@11123303 : Record 27;VAR Params@11123302 : Record 11123310);
+    VAR
+      TempFilterList@11123305 : TEMPORARY Record 11123330;
+      FilterHelper@11123304 : Codeunit 11123321;
+    BEGIN
+      Params.GetFilterList(TempFilterList);
+      IF NOT TempFilterList.ISEMPTY THEN
+        FilterHelper.SetItemFilter(Item,TempFilterList,Params);
+    END;
+
+    LOCAL PROCEDURE ApplyItemVisibleFilter@11123327(VAR Item@11123302 : Record 27;VAR Params@11123303 : Record 11123310);
+    BEGIN
+      IF Params.VisibleOnly THEN
+        Item.SETRANGE("Visible in Webshop",TRUE);
+    END;
+
+    PROCEDURE GetVariantComponents@11123329(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE GetVariantComponentGroups@11123324(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      Params@11123305 : TEMPORARY Record 11123310;
+      GroupNodeBuff@11123304 : TEMPORARY Record 11123303;
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE GetVolumePrices@11123330(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      Item@11123313 : Record 27;
+      TempSalesHeader@11123309 : TEMPORARY Record 36;
+      TempSalesLine@11123307 : TEMPORARY Record 37;
+      TempVolumePriceDiscount@11123305 : TEMPORARY Record 11123328;
+      Params@11123304 : TEMPORARY Record 11123310;
+      CatalogHelper@11123308 : Codeunit 11123318;
+      RecMgt@11123306 : Codeunit 11123326;
+    BEGIN
+      Params.InitParams(InXMLBuff,0);
+
+      Params.ProductId := InXMLBuff.SelectSingleNodeText('ProductId');
+      IF Params.ProductId = '' THEN
+        EXIT;
+
+      RecMgt.GetItem(Params.ProductId,Item,TRUE);
+
+      FindVolumePriceDiscount(TempVolumePriceDiscount,TempSalesHeader,Item,Params);
+
+      IF NOT TempVolumePriceDiscount.ISEMPTY THEN BEGIN
+        CalculateVolumePriceDiscount(TempVolumePriceDiscount,TempSalesHeader,TempSalesLine,Item,Params);
+        CatalogHelper.CreateVolumePricesXML(OutXMLBuff,TempVolumePriceDiscount,Params);
+      END;
+    END;
+
+    PROCEDURE FindVolumePriceDiscount@11123303(VAR VolumePriceDiscount@11123302 : Record 11123328;VAR SalesHeader@11123304 : Record 36;Item@11123303 : Record 27;VAR Params@11123313 : Record 11123310);
+    VAR
+      ItemVariant@11123305 : Record 5401;
+      TempSalesLine@11123306 : TEMPORARY Record 37;
+      CalcMgt@11123307 : Codeunit 11123325;
+      OrderBasketFunc@11123309 : Codeunit 11123320;
+      CatalogHelper@11123310 : Codeunit 11123318;
+      RecMgt@11123312 : Codeunit 11123326;
+      CustomerFunc@11123308 : Codeunit 11123313;
+      ErrorText@11123311 : Text[1024];
+    BEGIN
+      VolumePriceDiscount.DELETEALL;
+
+      IF NOT CustomerFunc.CheckAccountCode(Params) THEN
+        EXIT;
+
+      CalcMgt.InitSalesHeader(SalesHeader,Params);
+      CalcMgt.FillAccountInfo(SalesHeader,Params);
+      OrderBasketFunc.SetDocumentCurrency(SalesHeader,Params);
+
+      CalcMgt.CreateTempSalesLine(
+        SalesHeader,TempSalesLine,Item,
+        '','',Params.AccountType,FALSE,'',1);
+
+      FindSalesPrices(SalesHeader,TempSalesLine,Item,VolumePriceDiscount);
+      FindSalesDiscounts(SalesHeader,TempSalesLine,Item,VolumePriceDiscount);
+
+      ItemVariant.SETRANGE("Item No.",Item."No.");
+      ItemVariant.SETRANGE("Visible in Webshop",TRUE);
+      IF ItemVariant.FINDSET THEN
+        REPEAT
+          TempSalesLine.DELETEALL;
+
+          IF CatalogHelper.TestVariant(ItemVariant,ErrorText,FALSE) THEN BEGIN
+            RecMgt.AddVariantToCache(ItemVariant);
+            CalcMgt.CreateTempSalesLine(
+              SalesHeader,TempSalesLine,Item,
+              ItemVariant.Code,Item."VAT Prod. Posting Group",
+              Params.AccountType,FALSE,'',1);
+
+            FindSalesPrices(SalesHeader,TempSalesLine,Item,VolumePriceDiscount);
+            FindSalesDiscounts(SalesHeader,TempSalesLine,Item,VolumePriceDiscount);
+          END;
+        UNTIL ItemVariant.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE FindSalesPrices@11123337(SalesHeader@11123302 : Record 36;SalesLine@11123303 : Record 37;Item@11123305 : Record 27;VAR TempVolumePriceDiscount@11123306 : Record 11123328);
+    VAR
+      TempSalesPrice@11123307 : TEMPORARY Record 7002;
+      ItemUOM@11123310 : Record 5404;
+      SalesPriceCalcMgt@11123304 : Codeunit 7000;
+      CatalogHelper@11123308 : Codeunit 11123318;
+      RecMgt@11123309 : Codeunit 11123326;
+    BEGIN
+      SalesPriceCalcMgt.FindSalesPrice(
+        TempSalesPrice,SalesLine."Bill-to Customer No.",SalesHeader."Bill-to Contact No.",
+        SalesLine."Customer Price Group",'',SalesLine."No.",SalesLine."Variant Code",SalesLine."Unit of Measure Code",
+        SalesHeader."Currency Code",SalesHeader."Order Date",FALSE);
+
+      IF TempSalesPrice.FINDSET THEN
+        REPEAT
+          RecMgt.GetItemSalesUOM(Item."No.",TempSalesPrice."Unit of Measure Code",ItemUOM,FALSE);
+
+          IF (TempSalesPrice."Unit of Measure Code" = '') OR
+             (TempSalesPrice."Unit of Measure Code" = CatalogHelper.GetItemUOM(Item)) OR
+             ItemUOM."Visible in Webshop"
+          THEN BEGIN
+            TempVolumePriceDiscount.INIT;
+            TempVolumePriceDiscount."Item No." := SalesLine."No.";
+            TempVolumePriceDiscount."Variant Code" := SalesLine."Variant Code";
+            TempVolumePriceDiscount."Unit of Measure Code" := TempSalesPrice."Unit of Measure Code";
+            TempVolumePriceDiscount."Minimum Quantity" := TempSalesPrice."Minimum Quantity";
+            IF TempVolumePriceDiscount."Minimum Quantity" = 0 THEN
+              TempVolumePriceDiscount."Minimum Quantity" := 1;
+            IF TempVolumePriceDiscount.INSERT THEN;
+          END;
+        UNTIL TempSalesPrice.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE FindSalesDiscounts@11123338(SalesHeader@11123303 : Record 36;SalesLine@11123302 : Record 37;Item@11123304 : Record 27;VAR TempVolumePriceDiscount@11123306 : Record 11123328);
+    VAR
+      TempSalesLineDisc@11123307 : TEMPORARY Record 7004;
+      ItemUOM@11123310 : Record 5404;
+      SalesPriceCalcMgt@11123305 : Codeunit 7000;
+      CatalogHelper@11123309 : Codeunit 11123318;
+      RecMgt@11123308 : Codeunit 11123326;
+    BEGIN
+      SalesPriceCalcMgt.FindSalesLineDisc(
+        TempSalesLineDisc,SalesLine."Bill-to Customer No.",SalesHeader."Bill-to Contact No.",
+        SalesLine."Customer Disc. Group",'',SalesLine."No.",Item."Item Disc. Group",
+        SalesLine."Variant Code",SalesLine."Unit of Measure Code",
+        SalesHeader."Currency Code",SalesHeader."Order Date",FALSE);
+
+      IF TempSalesLineDisc.FINDSET THEN
+        REPEAT
+          RecMgt.GetItemSalesUOM(Item."No.",TempSalesLineDisc."Unit of Measure Code",ItemUOM,FALSE);
+
+          IF (TempSalesLineDisc."Unit of Measure Code" = '') OR
+             (TempSalesLineDisc."Unit of Measure Code" = CatalogHelper.GetItemUOM(Item)) OR
+             ItemUOM."Visible in Webshop"
+          THEN BEGIN
+            TempVolumePriceDiscount.INIT;
+            TempVolumePriceDiscount."Item No." := SalesLine."No.";
+            TempVolumePriceDiscount."Variant Code" := SalesLine."Variant Code";
+            TempVolumePriceDiscount."Unit of Measure Code" := TempSalesLineDisc."Unit of Measure Code";
+            TempVolumePriceDiscount."Minimum Quantity" := TempSalesLineDisc."Minimum Quantity";
+            IF TempVolumePriceDiscount."Minimum Quantity" = 0 THEN
+              TempVolumePriceDiscount."Minimum Quantity" := 1;
+            IF TempVolumePriceDiscount.INSERT THEN;
+          END;
+        UNTIL TempSalesLineDisc.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE CalculateVolumePriceDiscount@11123333(VAR VolumePriceDiscount@11123302 : Record 11123328;VAR SalesHeader@11123307 : Record 36;VAR SalesLine@11123303 : Record 37;VAR Item@11123308 : Record 27;VAR Params@11123309 : Record 11123310);
+    VAR
+      ItemVariant@11123305 : Record 5401;
+      GLSetup@11123312 : Record 98;
+      Currency@11123313 : Record 4;
+      SalesPriceCalcMgt@11123310 : Codeunit 7000;
+      RecMgt@11123304 : Codeunit 11123326;
+      CalcMgt@11123306 : Codeunit 11123325;
+      CatalogHelper@11123315 : Codeunit 11123318;
+      RoundingPrecision@11123311 : Decimal;
+      ListPrice@11123314 : Decimal;
+    BEGIN
+      IF VolumePriceDiscount.FINDSET(TRUE,FALSE) THEN
+        REPEAT
+          SalesLine.DELETEALL;
+
+         Params.UnitOfMeasureId := VolumePriceDiscount."Unit of Measure Code";
+
+          ListPrice :=
+            CatalogHelper.GetUnitPriceByCurrencyAndVAT(
+              Item."No.",
+              Item."Unit Price",
+              Item."Price Includes VAT",
+              Item."VAT Prod. Posting Group",
+              Item."VAT Bus. Posting Gr. (Price)",
+              Params);
+
+          RecMgt.GetItemVariant(
+            VolumePriceDiscount."Item No.",VolumePriceDiscount."Variant Code",ItemVariant,FALSE);
+
+          CalcMgt.CreateTempSalesLine(
+            SalesHeader,SalesLine,Item,
+            VolumePriceDiscount."Variant Code",
+            Item."VAT Prod. Posting Group",
+            Params.AccountType,FALSE,
+            VolumePriceDiscount."Unit of Measure Code",
+            VolumePriceDiscount."Minimum Quantity");
+
+          SalesPriceCalcMgt.FindSalesLineLineDisc(SalesHeader,SalesLine);
+          SalesPriceCalcMgt.FindSalesLinePrice(SalesHeader,SalesLine,SalesLine.FIELDNO("No."));
+
+          VolumePriceDiscount."Unit Price" := SalesLine."Unit Price";
+
+          IF SalesLine."Line Discount %" <> 0 THEN BEGIN
+            RoundingPrecision := 0.01;
+
+            RecMgt.GetGLSetup(GLSetup,TRUE);
+            IF GLSetup."Inv. Rounding Precision (LCY)" <> 0 THEN
+              RoundingPrecision := GLSetup."Inv. Rounding Precision (LCY)";
+
+            IF RecMgt.GetCurrency(Params.CurrentCurrencyId,Currency,FALSE) THEN
+              RoundingPrecision := Currency."Amount Rounding Precision";
+
+            VolumePriceDiscount."Unit Price" :=
+              VolumePriceDiscount."Unit Price" -
+                ROUND(SalesLine."Unit Price" * SalesLine."Line Discount %" / 100,RoundingPrecision);
+          END;
+
+          IF ListPrice <> 0 THEN
+            VolumePriceDiscount."Line Discount %" :=
+              ROUND(100 - (100 / ListPrice) * VolumePriceDiscount."Unit Price",0.01);
+
+          VolumePriceDiscount.MODIFY;
+        UNTIL VolumePriceDiscount.NEXT = 0;
+    END;
+
+    PROCEDURE IdentifyDefaultCurrency@11123348(VAR Params@11123303 : Record 11123310);
+    VAR
+      Customer@11123304 : Record 18;
+      GLSetup@11123307 : Record 98;
+      RecMgt@11123305 : Codeunit 11123326;
+      CustomerHelper@11123306 : Codeunit 11123314;
+      CurrencyId@11123302 : Code[10];
+    BEGIN
+      CurrencyId := Params.CurrentCurrencyId;
+      IF CurrencyId = '' THEN BEGIN
+        IF RecMgt.GetCustomer(Params.AccountId,Customer,FALSE) THEN
+          CurrencyId := CustomerHelper.GetCustomerCurrency(Customer);
+        IF CurrencyId = '' THEN BEGIN
+          RecMgt.GetGLSetup(GLSetup,TRUE);
+          CurrencyId := GLSetup."LCY Code";
+        END;
+        Params.CurrentCurrencyId := CurrencyId;
+      END;
+    END;
+
+    PROCEDURE AddMultiCurrencyElements@11123358(VAR XMLNodeBuff@11123302 : Record 11123303;Item@11123303 : Record 27;VAR Params@11123304 : Record 11123310);
+    VAR
+      Currency@11123305 : Record 4;
+      GLSetup@11123312 : Record 98;
+      ItemVariant@11123311 : Record 5401;
+      CollectionNodeBuff@11123309 : TEMPORARY Record 11123303;
+      TempKeyValue@11123315 : TEMPORARY Record 11123330;
+      CatalogHelper@11123307 : Codeunit 11123318;
+      Settings@11123316 : Codeunit 11123311;
+      UnitPrice@11123306 : Decimal;
+      ListPrice@11123308 : Decimal;
+      CurrencyCode@11123313 : Code[10];
+      CurrencyISOCode@11123317 : Code[10];
+      VariantCode@11123314 : Code[10];
+    BEGIN
+      IF NOT (Params.MultiCurrency  AND Params.ProductOrderable) THEN
+        EXIT;
+
+      GLSetup.GET;
+
+      CurrencyCode := Params.CurrentCurrencyId;
+      CurrencyISOCode := Settings.DefineCurrencyISOCode(Params.CurrentCurrencyId);
+
+      Params.PrepackSpecific := FALSE;
+      VariantCode := Params.VariantId;
+      TempKeyValue.Add(CurrencyISOCode,'');
+
+
+      IF (GLSetup."LCY Code" <> CurrencyCode) AND
+         (GLSetup."LCY Code" <> CurrencyISOCode)
+      THEN BEGIN
+        XMLNodeBuff.AddElement(CollectionNodeBuff,'Price','');
+        Params.UnitOfMeasureId := CatalogHelper.GetItemUOM(Item);
+
+        Params.CurrentCurrencyId := GLSetup."LCY Code";
+        CurrencyISOCode := Settings.DefineCurrencyISOCode(Params.CurrentCurrencyId);
+
+        UnitPrice := CatalogHelper.GetSalesPrice(Item,ItemVariant,Params);
+        ListPrice := UnitPrice;
+
+        IF NOT TempKeyValue.GET(CurrencyISOCode) THEN BEGIN
+          TempKeyValue.Add(CurrencyISOCode,'');
+          AddFieldsElements(CollectionNodeBuff,Item."No.",VariantCode,'','',0,UnitPrice,ListPrice,CurrencyISOCode,'');
+          CatalogHelper.AddOrderableFieldElementsToXml(CollectionNodeBuff,Item."No.",VariantCode,
+            Params.ProductOrderable,TRUE,'');
+        END;
+      END;
+
+      Currency.RESET;
+      Currency.SETRANGE("Visible in Webshop",TRUE);
+      Currency.SETFILTER(Code,'<>%1&<>%2',GLSetup."LCY Code",CurrencyCode);
+      IF Currency.FINDSET THEN
+        REPEAT
+          XMLNodeBuff.AddElement(CollectionNodeBuff,'Price','');
+          Params.UnitOfMeasureId := CatalogHelper.GetItemUOM(Item);
+
+          Params.CurrentCurrencyId := Currency.Code;
+          CurrencyISOCode := Settings.DefineCurrencyISOCode(Params.CurrentCurrencyId);
+
+          UnitPrice := CatalogHelper.GetSalesPrice(Item,ItemVariant,Params);
+          ListPrice := UnitPrice;
+
+          IF NOT TempKeyValue.GET(CurrencyISOCode) THEN BEGIN
+            TempKeyValue.Add(CurrencyISOCode,'');
+
+            AddFieldsElements(CollectionNodeBuff,Item."No.",VariantCode,'','',0,UnitPrice,ListPrice,CurrencyISOCode,'');
+            CatalogHelper.AddOrderableFieldElementsToXml(CollectionNodeBuff,Item."No.",VariantCode,
+              Params.ProductOrderable,TRUE,'');
+          END;
+        UNTIL Currency.NEXT = 0;
+
+      Params.CurrentCurrencyId := CurrencyCode;
+    END;
+
+    PROCEDURE CreatePricePrepackVariant@11123352(VAR XMLNodeBuff@11123304 : Record 11123303;Item@11123317 : Record 27;PrepackVariant@11123303 : Record 5401;VAR Params@11123302 : Record 11123310);
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE CreateStockPrepackVariant@11123360(VAR XMLNodeBuff@11123305 : Record 11123303;PrepackVariant@11123303 : Record 5401;VAR Params@11123302 : Record 11123310);
+    BEGIN
+      EXIT; // NOT IMPLEMENTED IN CURRENT VERSION
+    END;
+
+    PROCEDURE GetItemIdList@11123365(VAR Item@11123304 : Record 27;VAR Params@11123303 : Record 11123310);
+    VAR
+      RecMgt@11123309 : Codeunit 11123326;
+      CatalogHelper@11123310 : Codeunit 11123318;
+      TempIdList@11123302 : TEMPORARY Record 11123330;
+      Item2@11123308 : Record 27;
+      ItemNo@11123305 : Code[20];
+      UOMCode@11123306 : Code[10];
+    BEGIN
+      Params.GetIdList(TempIdList);
+
+      IF TempIdList.FINDSET THEN
+        REPEAT
+          ItemNo := TempIdList.Value;
+          UOMCode := TempIdList."Extra Value";
+
+          IF RecMgt.GetItem(ItemNo,Item2,FALSE) THEN BEGIN
+            IF UOMCode = '' THEN
+              UOMCode := CatalogHelper.GetItemUOM(Item2);
+
+            Item.INIT;
+            Item := Item2;
+            Item."Purch. Unit of Measure" := UOMCode; // Workaround
+            IF Item.INSERT THEN;
+          END;
+        UNTIL TempIdList.NEXT = 0;
+    END;
+
+    PROCEDURE BuildProductXML@11123361(VAR OutXMLBuff@11123304 : Record 11123303;Item@11123303 : Record 27;VAR Params@11123302 : Record 11123310);
+    VAR
+      ResultNodeBuff@11123305 : TEMPORARY Record 11123303;
+      Context@11123308 : Codeunit 11123305;
+      CatalogHelper@11123306 : Codeunit 11123318;
+      EventMgt@11123307 : Codeunit 11123331;
+    BEGIN
+      OutXMLBuff.AddElement(ResultNodeBuff,'Product','');
+      Context.SetErrorExtraInfo(STRSUBSTNO(Text11123308,Item."No."),1);
+      CatalogHelper.CreateProductXML(ResultNodeBuff,Item,Params);
+
+      EventMgt.OnAfterGetProduct(ResultNodeBuff,Item,Params);
+    END;
+
+    PROCEDURE BuildPriceInfoXML@11123304(VAR OutXMLBuff@11123304 : Record 11123303;VAR CalcValuesInfo@11123303 : Record 11123319;VAR Params@11123302 : Record 11123310);
+    VAR
+      ResultNodeBuff@11123305 : TEMPORARY Record 11123303;
+      Item@11123310 : Record 27;
+      Context@11123308 : Codeunit 11123305;
+      RecMgt@11123309 : Codeunit 11123326;
+    BEGIN
+      CalcValuesInfo.RESET;
+      IF CalcValuesInfo.ISEMPTY THEN BEGIN
+        OutXMLBuff.AddElement(ResultNodeBuff,'Price','');
+        EXIT;
+      END;
+
+      Context.SetErrorExtraInfo(STRSUBSTNO(Text11123308,Params.ProductId),1);
+      IF CalcValuesInfo.FINDSET THEN
+        REPEAT
+          OutXMLBuff.AddElement(ResultNodeBuff,'Price','');
+          AddPriceInfoElements(ResultNodeBuff,CalcValuesInfo,Params);
+        UNTIL CalcValuesInfo.NEXT = 0;
+
+      RecMgt.GetItem(Params.ProductId,Item,TRUE);
+    END;
+
+    PROCEDURE AddPriceInfoElements@11123332(VAR ResultNodeBuff@11123302 : Record 11123303;VAR CalcValuesInfo@11123303 : Record 11123319;VAR Params@11123304 : Record 11123310);
+    BEGIN
+      WITH CalcValuesInfo DO BEGIN
+        ResultNodeBuff.AddFieldElement('ProductId',"Item No.");
+        IF "Variant Code" <> '' THEN
+          ResultNodeBuff.AddFieldElement('VariantId',"Variant Code");
+        IF "Prepack Code" <> '' THEN
+          ResultNodeBuff.AddFieldElement('PrepackId',"Prepack Code");
+        IF "Vertical Component Code" <> '' THEN
+          ResultNodeBuff.AddFieldElement('VerticalId',"Vertical Component Code");
+
+        ResultNodeBuff.AddFieldElement('Price',FORMAT("Unit Price"));
+        ResultNodeBuff.AddFieldElement('ListPrice',FORMAT("Unit List Price"));
+        ResultNodeBuff.AddFieldElement('CurrencyId',FORMAT("Currency ISO Code"));
+        IF "Unit of Measure Code" <> '' THEN
+          ResultNodeBuff.AddFieldElement('UnitOfMeasureId',"Unit of Measure Code");
+
+        ResultNodeBuff.AddFieldElement('IsOrderable',FORMAT(Orderable,0,2));
+        IF NOT Orderable AND ("Non Orderable Reason" <> '') THEN
+          ResultNodeBuff.AddFieldElement('NonOrderableReason',"Non Orderable Reason");
+      END;
+    END;
+
+    PROCEDURE AddFieldsElements@11123313(VAR ProductNodeBuff@11123302 : Record 11123303;ItemNo@11123303 : Code[20];VariantCode@11123304 : Code[10];PrepackCode@11123305 : Code[10];VerticalComponentCode@11123306 : Code[10];Inventory@11123307 : Decimal;UnitPrice@11123308 : Decimal;ListPrice@11123309 : Decimal;CurrencyId@11123311 : Code[10];UOMCode@11123310 : Code[10]);
+    BEGIN
+      IF ItemNo <> '' THEN
+        ProductNodeBuff.AddFieldElement('ProductId',ItemNo);
+      IF VariantCode <> '' THEN
+        ProductNodeBuff.AddFieldElement('VariantId',VariantCode);
+      IF PrepackCode <> '' THEN
+        ProductNodeBuff.AddFieldElement('PrepackId',PrepackCode);
+      IF VerticalComponentCode <> '' THEN
+        ProductNodeBuff.AddFieldElement('VerticalId',VerticalComponentCode);
+
+      IF ProductNodeBuff.NodeName = 'Price' THEN BEGIN
+        ProductNodeBuff.AddFieldElement('Price',FORMAT(UnitPrice));
+        ProductNodeBuff.AddFieldElement('ListPrice',FORMAT(ListPrice));
+        ProductNodeBuff.AddFieldElement('CurrencyId',FORMAT(CurrencyId));
+      END;
+
+      IF ProductNodeBuff.NodeName = 'Stock' THEN
+        ProductNodeBuff.AddFieldElement('Inventory',FORMAT(Inventory));
+
+      IF UOMCode <> '' THEN
+        ProductNodeBuff.AddFieldElement('UnitOfMeasureId',UOMCode);
+    END;
+
+    PROCEDURE CheckOrderabilityByVariants@11123350(VAR CalcValuesInfo@11123302 : Record 11123319;VAR Params@11123303 : Record 11123310);
+    VAR
+      VariantsExist@11123304 : Boolean;
+      AtLeastOneOrderable@11123305 : Boolean;
+    BEGIN
+      IF NOT Params.LoadRelatedSkus THEN
+        EXIT;
+
+      CalcValuesInfo.SETRANGE("Item No.",Params.ProductId);
+      CalcValuesInfo.SETRANGE("Currency Code",Params.BaseCurrencyId);
+      CalcValuesInfo.SETFILTER("Variant Code",'<>%1','');
+
+      VariantsExist := NOT CalcValuesInfo.ISEMPTY;
+
+      IF VariantsExist THEN BEGIN
+        CalcValuesInfo.SETRANGE(Orderable,TRUE);
+        AtLeastOneOrderable := NOT CalcValuesInfo.ISEMPTY;
+      END ELSE
+        AtLeastOneOrderable := TRUE;
+
+      IF NOT AtLeastOneOrderable THEN
+        ModifyItemOrderbility(CalcValuesInfo,Params);
+
+      CalcValuesInfo.SETRANGE("Item No.");
+      CalcValuesInfo.SETRANGE("Currency Code");
+      CalcValuesInfo.SETRANGE("Variant Code");
+    END;
+
+    PROCEDURE ModifyItemOrderbility@11123309(VAR CalcValuesInfo@11123303 : Record 11123319;VAR Params@11123302 : Record 11123310);
+    BEGIN
+      WITH CalcValuesInfo DO BEGIN
+        RESET;
+        SETRANGE("Item No.",Params.ProductId);
+        SETRANGE("Currency Code",Params.BaseCurrencyId);
+        SETRANGE("Variant Code",'');
+        MODIFYALL(Orderable,FALSE);
+      END;
+    END;
+
+    PROCEDURE HasVolumePrices@11123396(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      Params@11123305 : TEMPORARY Record 11123310;
+      CatalogHelper@11123304 : Codeunit 11123318;
+      VolumePriceExists@11123306 : Boolean;
+    BEGIN
+      Params.InitParams(InXMLBuff,0);
+
+      Params.ProductId := InXMLBuff.SelectSingleNodeText('ProductId');
+      IF Params.ProductId = '' THEN
+        EXIT;
+
+      VolumePriceExists := CatalogHelper.HasVolumePrice(Params);
+      OutXMLBuff.AddElementEx('HasVolumePrices',FORMAT(VolumePriceExists,0,2));
+    END;
+
+    PROCEDURE GetRetailOffers@11123385(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      Params@11123305 : TEMPORARY Record 11123310;
+      ResultNodeBuff@11123304 : TEMPORARY Record 11123303;
+    BEGIN
+      Params.InitParams(InXMLBuff,0);
+      OutXMLBuff.AddElement(ResultNodeBuff,'RetailOffer','');
+    END;
+
+    PROCEDURE GetProductSuggestions@11123305(VAR InXMLBuff@11123303 : Record 11123303;VAR OutXMLBuff@11123302 : Record 11123303);
+    VAR
+      Customer@11123308 : Record 18;
+      Contact@11123306 : Record 5050;
+      Params@11123304 : TEMPORARY Record 11123310;
+      Webshop@11123324 : Record 11123313;
+      ItemSalesList@11123311 : TEMPORARY Record 11123330;
+      RecMgt@11123307 : Codeunit 11123326;
+      CustomerFunc@11123312 : Codeunit 11123313;
+      Validation@11123305 : Codeunit 11123310;
+      MinDate@11123314 : Date;
+      MaxDate@11123313 : Date;
+      LookbackYears@11123318 : Integer;
+      DayRange@11123317 : Integer;
+      DateRangeFilter@11123316 : Text[1024];
+    BEGIN
+      Params.InitParams(InXMLBuff,0);
+      Validation.ValidatePageParameters(Params.PageIndex,Params.PageSize);
+
+      IF Params.ContactId <> '' THEN BEGIN
+        RecMgt.GetContact(Params.ContactId,Contact,TRUE);
+        Params.CustomerId := CustomerFunc.GetCustomerByCompanyContact(Contact."No.");
+      END ELSE
+        RecMgt.GetCustomer(Params.CustomerId,Customer,TRUE);
+
+      RecMgt.GetWebshop(Params.WebsiteId,Webshop,TRUE);
+      LookbackYears := Webshop."Lookback Years";
+      DayRange := Webshop."Day Range";
+
+      MinDate := CALCDATE('<CD-' + FORMAT(DayRange) + 'D>');
+      MaxDate := TODAY;
+      DateRangeFilter := STRSUBSTNO('%1..%2',MinDate,MaxDate);
+      CalcCustomerItemSales(ItemSalesList,DateRangeFilter,Params);
+
+      WHILE LookbackYears <> 0 DO BEGIN
+        MinDate := CALCDATE('<CD-' + FORMAT(LookbackYears) + 'Y-' + FORMAT(DayRange) + 'D>');
+        MaxDate := CALCDATE('<CD-' + FORMAT(LookbackYears) + 'Y+' + FORMAT(DayRange) + 'D>');
+        DateRangeFilter := STRSUBSTNO('%1..%2',MinDate,MaxDate);
+        CalcCustomerItemSales(ItemSalesList,DateRangeFilter,Params);
+        LookbackYears := LookbackYears - 1;
+      END;
+
+      BuildShoppingSuggestionXML(OutXMLBuff,ItemSalesList,Params);
+    END;
+
+    PROCEDURE CalcCustomerItemSales@11123319(VAR ItemSalesList@11123304 : TEMPORARY Record 11123330;DateRangeFilter@11123302 : Text[1024];VAR Params@11123305 : Record 11123310);
+    VAR
+      Item@11123312 : Record 27;
+      ValueEntry@11123303 : Record 5802;
+      Webshop@11123307 : Record 11123313;
+      RecMgt@11123309 : Codeunit 11123326;
+      FilterHelper@11123310 : Codeunit 11123321;
+      SortingOption@11123306 : 'Quantity,Revenue';
+      VisibleInWebshop@11123313 : Boolean;
+    BEGIN
+      RecMgt.GetWebshop(Params.WebsiteId,Webshop,TRUE);
+      SortingOption := Webshop."Sorting Option";
+      FilterHelper.SetItemWebshopFilter(Item,Params);
+
+      ValueEntry.SETRANGE("Source No.",Params.CustomerId);
+      ValueEntry.SETFILTER("Document Date",DateRangeFilter);
+      IF ValueEntry.FINDSET THEN REPEAT
+
+        Item.SETRANGE("No.",ValueEntry."Item No.");
+        Item.SETRANGE("Visible in Webshop",TRUE);
+        VisibleInWebshop := NOT Item.ISEMPTY;
+
+        IF VisibleInWebshop THEN BEGIN
+          ItemSalesList.SETRANGE(Key,ValueEntry."Item No.");
+          IF NOT ItemSalesList.FINDFIRST THEN BEGIN
+            ItemSalesList.INIT;
+            ItemSalesList.Key := ValueEntry."Item No.";
+            ItemSalesList.INSERT;
+          END;
+
+          IF SortingOption = SortingOption::Quantity THEN
+            ItemSalesList."Decimal Value" := ItemSalesList."Decimal Value" + 1
+          ELSE
+            ItemSalesList."Decimal Value" := ItemSalesList."Decimal Value" + ValueEntry."Sales Amount (Actual)";
+
+          ItemSalesList.MODIFY;
+        END;
+      UNTIL ValueEntry.NEXT = 0;
+
+      ItemSalesList.RESET;
+    END;
+
+    PROCEDURE BuildShoppingSuggestionXML@11123306(VAR OutXMLBuff@11123302 : Record 11123303;VAR ItemSalesList@11123303 : TEMPORARY Record 11123330;VAR Params@11123304 : Record 11123310);
+    VAR
+      CountNodeBuff@11123309 : TEMPORARY Record 11123303;
+      ResultNodeBuff@11123311 : TEMPORARY Record 11123303;
+      CatalogHelper@11123310 : Codeunit 11123318;
+      CountOfRecords@11123305 : Integer;
+      Position@11123306 : Integer;
+      Counter@11123308 : Integer;
+      RecordAvailable@11123307 : Boolean;
+    BEGIN
+      IF (Params.PageIndex <> 0) AND (Params.PageSize <> 0) THEN
+        Position := Params.PageIndex * Params.PageSize;
+
+      CountOfRecords := ItemSalesList.COUNT;
+
+      OutXMLBuff.AddElement(CountNodeBuff,'TotalCount',FORMAT(CountOfRecords));
+      OutXMLBuff.AddElement(ResultNodeBuff,'Products','');
+
+      ItemSalesList.SETCURRENTKEY("Decimal Value");
+      ItemSalesList.ASCENDING(FALSE);
+
+      IF (CountOfRecords > 0) AND (CountOfRecords >= Position) THEN BEGIN
+        RecordAvailable := ItemSalesList.FIND('-');
+
+        IF Position > 0 THEN
+          RecordAvailable := ItemSalesList.NEXT(Position) <> 0;
+
+        WHILE RecordAvailable AND ((Params.PageSize = 0) OR (Counter < Params.PageSize)) DO BEGIN
+          CatalogHelper.CreateProductSuggestionXML(ResultNodeBuff,ItemSalesList,Params);
+          Counter := Counter + 1;
+          RecordAvailable := ItemSalesList.NEXT <> 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE GetProductImages@11123310(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      Item@11123306 : Record 27;
+      Params@11123304 : TEMPORARY Record 11123310;
+      TempIdList@11123307 : TEMPORARY Record 11123330;
+      FilterHelper@11123305 : Codeunit 11123321;
+      ItemNo@11123308 : Code[20];
+      Count@11123309 : Integer;
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::Item);
+      FilterHelper.SetItemWebshopFilter(Item,Params);
+      Params.GetIdList(TempIdList);
+      IF TempIdList.FINDSET THEN
+        REPEAT
+          ItemNo := TempIdList.Value;
+          IF ItemNo <> '' THEN BEGIN
+            Item.SETRANGE("No.",ItemNo);
+            IF Item.FINDFIRST THEN
+      // START, SC
+      // The code commented below because of changes Item.Picture type in NAV 2017
+      //--------------------------------------------------------------------------
+              IF Item.Picture.COUNT > 0 THEN
+      //        IF Item.Picture.HASVALUE THEN // Default approach
+      //--------------------------------------------------------------------------
+                BuildProductImagesXML(OutXMLBuff,Item,Params);
+          END;
+        UNTIL TempIdList.NEXT = 0;
+    END;
+
+    PROCEDURE BuildProductImagesXML@11123315(VAR OutXMLBuff@11123304 : Record 11123303;Item@11123303 : Record 27;VAR Params@11123302 : Record 11123310);
+    VAR
+      CatalogHelper@11123306 : Codeunit 11123318;
+    BEGIN
+      CatalogHelper.CreateProductImagesXML(OutXMLBuff,Item,Params);
+    END;
+
+    PROCEDURE GetProductImageFile@11123307(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303);
+    VAR
+      Item@11123306 : Record 27;
+      Params@11123304 : TEMPORARY Record 11123310;
+      FilterHelper@11123305 : Codeunit 11123321;
+      RecMgt@11123307 : Codeunit 11123326;
+    BEGIN
+      Params.InitParams(InXMLBuff,DATABASE::Item);
+      RecMgt.GetItem(Params.ProductId,Item,FALSE);
+      FilterHelper.SetItemWebshopFilter(Item,Params);
+      BuildProductImageFileXML(OutXMLBuff,Item,Params);
+    END;
+
+    PROCEDURE BuildProductImageFileXML@11123311(VAR OutXMLBuff@11123304 : Record 11123303;Item@11123303 : Record 27;VAR Params@11123302 : Record 11123310);
+    VAR
+      CatalogHelper@11123306 : Codeunit 11123318;
+    BEGIN
+      CatalogHelper.CreateProductImageFileXML(OutXMLBuff,Item,Params);
+    END;
+
+    PROCEDURE GetProductCategoriesHierarchy@11123320(VAR InXMLBuff@11123302 : Record 11123303;VAR OutXMLBuff@11123303 : Record 11123303;VAR Params@11123304 : Record 11123310);
+    VAR
+      TempNodeBuff@11123312 : TEMPORARY Record 11123303;
+      ResultNodeBuff@11123311 : TEMPORARY Record 11123303;
+      Category@11123305 : Record 5722;
+      CatalogHelper@11123309 : Codeunit 11123318;
+    BEGIN
+      {Category.RESET;
+      IF Params.VisibleOnly THEN
+        Category.SETRANGE("Visible in Webshop",TRUE);
+      Category.SETRANGE(Indentation,0);
+      IF Category.FINDSET THEN
+        REPEAT
+          CatalogHelper.CreateCategoryXML(Category,OutXMLBuff,ResultNodeBuff,Params);
+          GetChildProdCategories(Category,Category.Code,ResultNodeBuff,TempNodeBuff,Params);
+        UNTIL Category.NEXT = 0;
+      }
+    END;
+
+    LOCAL PROCEDURE GetChildProdCategories@11123339(Category@11123305 : Record 5722;ParentCategoryId@11123311 : Text;VAR ResultNodeBuff@11123303 : TEMPORARY Record 11123303;VAR ReturnNodeBuff@11123304 : TEMPORARY Record 11123303;VAR Params@11123302 : Record 11123310);
+    VAR
+      TempNodeBuff@11123310 : TEMPORARY Record 11123303;
+      CatalogHelper@11123308 : Codeunit 11123318;
+      ParentCategory@11123306 : Code[20];
+      ChildCategoryId@11123307 : Text;
+    BEGIN
+      {ParentCategory := Category.Code;
+
+      Category.RESET;
+      IF Params.VisibleOnly THEN
+        Category.SETRANGE("Visible in Webshop",TRUE);
+      Category.SETRANGE("Parent Category",ParentCategory);
+      IF NOT Category.FINDSET THEN
+        EXIT
+      ELSE
+        REPEAT
+          ChildCategoryId := ParentCategoryId;
+          CatalogHelper.CreateProductCategoryXML(Category,ChildCategoryId,ResultNodeBuff,ReturnNodeBuff,Params);
+          GetChildProdCategories(Category,ChildCategoryId,ReturnNodeBuff,TempNodeBuff,Params);
+        UNTIL Category.NEXT = 0;
+        }
+    END;
+
+    PROCEDURE HasChildCategories@11123302() : Boolean;
+    VAR
+      RecRef@11123301 : RecordRef;
+    BEGIN
+      {RecRef.OPEN(DATABASE::"Item Category");
+      EXIT(RecRef.FIELDEXIST(11)); // "Has Children"
+      }//EB
+    END;
+
+    BEGIN
+    {
+      001 TPZ3109 UTK 03312021 - Added code for Sana Stock message logic.
+    }
+    END.
+  }
+}
+

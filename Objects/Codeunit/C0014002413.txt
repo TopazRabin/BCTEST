@@ -1,0 +1,720 @@
+OBJECT Codeunit 14002413 Send E.D.I. Inventory Document
+{
+  OBJECT-PROPERTIES
+  {
+    Date=08/15/17;
+    Time=12:00:00 PM;
+    Version List=SE0.60.14.02;
+  }
+  PROPERTIES
+  {
+    TableNo=14002413;
+    OnRun=BEGIN
+            IF NOT ExportInventoryAdvice(Rec,TRUE) THEN
+              ERROR(Text001,"No.");
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      CompanyInformation@1240030031 : Record 79;
+      EDITemplate@1240030000 : Record 14002350;
+      InventoryAdviceHdr@1240030004 : Record 14002413;
+      InventoryAdviceLine@1240030019 : Record 14002414;
+      EDITradePartner@1240030005 : Record 14002360;
+      EDIDocument@1240030008 : Record 14002353;
+      ItemCrossReference@1240030001 : Record 5717;
+      EDISegment@1240030012 : Record 14002354;
+      EDISegment2@1240030040 : Record 14002354;
+      EDIElement@1240030013 : Record 14002355;
+      EDISendDocHdr@1240030027 : Record 14002369;
+      EDISetup@1240030020 : Record 14002367;
+      Item@1240030014 : Record 27;
+      ShiptoAddress@1240030015 : Record 222;
+      ItemUnitofMeasure@1240030016 : Record 5404;
+      SelltoCustomer@1240030017 : Record 18;
+      Text001@1240030003 : TextConst 'ENU=Inventory Advice %1 not exported.';
+      Text002@1240030009 : TextConst 'ENU=Customer %1 is not set up as an EDI Trading Partner.';
+      Text003@1240030006 : TextConst 'ENU=Customer %1 is not set up with an Active EDI transaction %2.';
+      Text004@1240030010 : TextConst 'ENU=EDI Document %1 for Trading Partner %2 has a mapping error.';
+      EDIElementArray@1240030036 : ARRAY [100] OF Record 14002355;
+      Location@1240020011 : Record 14;
+      EDITradePtnrUOM@1240020014 : Record 14002365;
+      EDITradePtnrItem@1240020015 : Record 14002364;
+      SelltoCountry@1240020012 : Record 9;
+      EDISend@1240030028 : Codeunit 14002356;
+      EDIFormat@1240030043 : Codeunit 14002351;
+      EDIPackageMapIntegration@1240030002 : Codeunit 14002378;
+      CreateEDIAlert@1240020001 : Codeunit 14000375;
+      EDILoadDBFields@1240020010 : Codeunit 14002392;
+      EDILoadEDIOutFields@1240020025 : Codeunit 14000381;
+      EDIGetReverseCrossRef@1240020006 : Codeunit 14000373;
+      RecRef@1240020024 : RecordRef;
+      TimeVariable@1240020022 : Time;
+      DateTimeVariable@1240020023 : DateTime;
+      DocumentNo@1240030021 : Code[10];
+      LineNumber@1240030011 : Integer;
+      IntegerVariable@1240030026 : Integer;
+      i@1240030024 : Integer;
+      OutLenArray@1240030038 : ARRAY [100] OF Integer;
+      DateVariable@1240030030 : Date;
+      OutputOff@1240030018 : Boolean;
+      BooleanVariable@1240030023 : Boolean;
+      BypassSegment@1240030039 : Boolean;
+      OutErrorArray@1240030037 : ARRAY [100] OF Boolean;
+      ProcessingLines@1240030042 : Boolean;
+      NewSegment@1240030044 : Boolean;
+      DecimalVariable@1240030022 : Decimal;
+      ReverseCrossRefArray@1240020002 : ARRAY [100] OF Text[40];
+      ReverseCrossRefValue@1240020000 : Text[40];
+      ReverseCrossReference@1240020003 : Boolean;
+      OutFldArray@1240030025 : ARRAY [100] OF Text[250];
+      Text005@1240030032 : TextConst 'ENU=Inventory Advice  line not found for Inventory Advice # %1.';
+      Text006@1240030035 : TextConst 'ENU=Unable to find EDI segment definition for Trading Partner %1.';
+      Text007@1240030034 : TextConst 'ENU=LINE END Command found before LINE BEGIN.  Check Segment Definition.';
+      Text008@1240030033 : TextConst 'ENU=Unable to find EDI Segment Elements for the following: %1 - %2 - %3 -%4.';
+      Text009@1240030045 : TextConst 'ENU=Send Document for %1 was generated on %2. \ Do you want to create again?';
+      Text010@1240030046 : TextConst 'ENU=Inventory Advice not created.';
+      InventoryAdvice@1240020018 : Boolean;
+      Text011@1240020008 : TextConst 'ENU=Sales Price Catalog not created.';
+      Text012@1240020009 : TextConst 'ENU=EDI Document not created.';
+      OutError2@1240020005 : Boolean;
+      BypassSegment2@1240020004 : Boolean;
+      XMLDoc@1240020007 : Boolean;
+
+    PROCEDURE ExportInventoryAdvice@1240030001(CurrentInventoryAdvice@1240030000 : Record 14002413;Batch@1240030001 : Boolean) : Boolean;
+    VAR
+      EDIXMLManagement@1240020003 : Codeunit 14099302;
+      ConfirmationMessage@1240030002 : Boolean;
+      ReopenAdvice@1240030003 : Boolean;
+      AdviceLineCounted@1240020000 : Boolean;
+      NodeOnly@1240020001 : Boolean;
+      CreateNode@1240020002 : Boolean;
+    BEGIN
+      CLEAR(EDILoadEDIOutFields);
+      InventoryAdviceHdr.GET(CurrentInventoryAdvice."No.",CurrentInventoryAdvice.Type);
+      IF InventoryAdviceHdr.Released = FALSE THEN
+        EXIT;
+      ReopenAdvice := FALSE;
+
+      EDISetup.LOCKTABLE;
+      EDISetup.GET;
+      IF InventoryAdviceHdr."EDI Internal Doc. No." = '' THEN BEGIN
+        EDISetup."Last Internal Doc. No." := INCSTR(EDISetup."Last Internal Doc. No.");
+        InventoryAdviceHdr."EDI Internal Doc. No." := EDISetup."Last Internal Doc. No.";
+        EDISetup.MODIFY;
+      END;
+      COMMIT;
+
+      EDITradePartner.RESET;
+      EDITradePartner.SETRANGE("No.",InventoryAdviceHdr."Trade Partner No.");
+      IF NOT EDITradePartner.FIND('-') THEN
+        ERROR(
+          Text002,
+          InventoryAdviceHdr."Sell-to Customer No.");
+
+      CASE InventoryAdviceHdr.Type OF
+        InventoryAdviceHdr.Type::"  ":
+          DocumentNo := 'E_INVADV';
+        InventoryAdviceHdr.Type::"Price Catalog":
+          DocumentNo := 'E_PRICAT';
+      END;
+
+      EDIDocument.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+      EDIDocument.SETFILTER(
+        Status,'%1|%2',EDIDocument.Status::Test,EDIDocument.Status::Production);
+      EDIDocument.SETRANGE("Navision Document",DocumentNo);
+      EDIDocument.SETRANGE(Type,EDIDocument.Type::Export);
+      IF NOT EDIDocument.FIND('-') THEN
+        ERROR(
+          Text003,
+          InventoryAdviceHdr."Sell-to Customer No.",DocumentNo);
+      XMLDoc := EDIDocument."XML Document";
+
+      ReopenAdvice := EDIDocument."Auto. Reopen on Send";
+
+      IF NOT Batch THEN
+        IF InventoryAdviceHdr."EDI Inventory Advice Generated" OR
+           InventoryAdviceHdr."EDI Price Catalog Generated"
+        THEN BEGIN
+          ConfirmationMessage := TRUE;
+          IF EDIDocument."Reuse Existing InventoryAdvice" THEN
+            IF EDIDocument."Re-send Confirmation Message" THEN
+              ConfirmationMessage := TRUE
+            ELSE
+              ConfirmationMessage := FALSE;
+          IF ConfirmationMessage THEN
+            IF GUIALLOWED THEN BEGIN
+              CASE EDIDocument."Navision Document" OF
+                'E_INVADV':
+                  BEGIN
+                    IF NOT CONFIRM(Text009,FALSE,InventoryAdviceHdr."No.",
+                      InventoryAdviceHdr."Generated Date")
+                    THEN
+                    ERROR(Text010);
+                  END;
+                'E_PRICAT':
+                  BEGIN
+                    IF NOT CONFIRM(Text009,FALSE,InventoryAdviceHdr."No.",
+                      InventoryAdviceHdr."Generated Date")
+                    THEN
+                    ERROR(Text011);
+                  END;
+              END;
+            END ELSE
+              ERROR(Text012);
+        END;
+
+      IF EDIDocument."Packaged Map" THEN
+        IF EDIPackageMapIntegration.EDISendInventoryAdvice(InventoryAdviceHdr) THEN
+          EXIT(TRUE)
+        ELSE
+          EXIT(FALSE);
+
+      EDIDocument.CALCFIELDS("Element Mapping Error","Conditional Mapping Error");
+      IF EDIDocument."Element Mapping Error" OR EDIDocument."Conditional Mapping Error" THEN
+        ERROR(
+          Text004,
+          EDIDocument."Navision Document",EDIDocument."Trade Partner No.");
+
+      EDITemplate.GET(EDIDocument."EDI Template Code");
+
+      EDISendDocHdr."Internal Doc No." := InventoryAdviceHdr."EDI Internal Doc. No.";
+      EDISendDocHdr."Navision Document" := DocumentNo;
+      EDISendDocHdr."Document No." := InventoryAdviceHdr."No.";
+      EDISend.CreateSendHdr(EDITradePartner,EDIDocument,EDISendDocHdr);
+
+      ReadHdrAssocTables;
+
+      LineNumber := 0;
+      AdviceLineCounted := FALSE;
+
+      InventoryAdviceLine.RESET;
+      InventoryAdviceLine.SETRANGE("Inventory Advice No.",InventoryAdviceHdr."No.");
+      IF DocumentNo = 'E_INVADV' THEN
+        InventoryAdviceLine.SETRANGE(Type,InventoryAdviceHdr.Type::"  ");
+      IF DocumentNo = 'E_PRICAT' THEN
+        InventoryAdviceLine.SETRANGE(Type,InventoryAdviceHdr.Type::"Price Catalog");
+      IF NOT InventoryAdviceLine.FIND('-') THEN
+        ERROR(Text005,InventoryAdviceHdr."No.");
+
+      OutputOff := FALSE;
+
+      ReadLineAssocTables;
+
+      // Create Line Segments
+      EDISegment.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+      EDISegment.SETRANGE("Navision Document",EDIDocument."Navision Document");
+      EDISegment.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+      EDISegment.SETRANGE(Version,EDIDocument.Version);
+      EDISegment.SETRANGE(Type,EDIDocument.Type);
+      IF NOT EDISegment.FIND('-') THEN
+        ERROR(
+          Text006,
+          EDIDocument."Trade Partner No.");
+      REPEAT
+        CASE EDISegment."Segment Type" OF
+          EDISegment."Segment Type"::Command:
+            BEGIN
+              IF (EDISegment.Segment = 'LINE BEGIN') OR
+                 (EDISegment."Node Name" = 'LINE BEGIN')
+               THEN BEGIN
+                EDISegment2.COPY(EDISegment);
+                ProcessingLines := TRUE;
+              END;
+              IF (EDISegment.Segment = 'LINE END') OR
+                 (EDISegment."Node Name" = 'LINE END')
+              THEN BEGIN
+                OutputOff := FALSE;
+                IF NOT ProcessingLines THEN
+                  ERROR(Text007);
+                IF InventoryAdviceLine.NEXT <> 0 THEN BEGIN
+                  ReadLineAssocTables;
+                  EDISegment.GET(
+                    EDISegment2."Trade Partner No.",EDISegment2."Navision Document",
+                    EDISegment2."EDI Document No.",EDISegment2.Version,
+                    EDISegment2.Type,EDISegment2."Processing Sequence",EDISegment2.Segment);
+                END ELSE
+                  ProcessingLines := FALSE;
+              END;
+            END;
+          EDISegment."Segment Type"::Segment:
+            BEGIN
+              ReverseCrossRefValue := '';
+              BypassSegment := FALSE;
+              NodeOnly := FALSE;
+              CreateNode := TRUE;
+              EDIElement.SETRANGE("Trade Partner No.",EDISegment."Trade Partner No.");
+              EDIElement.SETRANGE("Navision Document",EDISegment."Navision Document");
+              EDIElement.SETRANGE("EDI Document No.",EDISegment."EDI Document No.");
+              EDIElement.SETRANGE(Version,EDISegment.Version);
+              EDIElement.SETRANGE(Type,EDISegment.Type);
+              EDIElement.SETRANGE(Segment,EDISegment.Segment);
+              IF NOT EDIElement.FIND('-') THEN BEGIN
+                IF XMLDoc THEN BEGIN
+                  EDISegment.CALCFIELDS("Has Attributes","Node Text");
+                  IF EDISegment."Node Text" OR EDISegment."Has Attributes" THEN
+                    ERROR(
+                      Text008,
+                        EDISegment."Trade Partner No.",EDISegment."Navision Document",
+                        EDISegment.Version,EDISegment."Node Name")
+                  ELSE
+                    NodeOnly := TRUE;
+                END ELSE
+                  ERROR(
+                    Text008,
+                      EDISegment."Trade Partner No.",EDISegment."Navision Document",
+                      EDISegment.Version,EDISegment.Segment);
+              END ELSE
+                IF XMLDoc AND EDIElement."Node Text" THEN
+                  CreateNode := FALSE;
+              IF (XMLDoc = FALSE) OR (XMLDoc AND NodeOnly = FALSE) THEN BEGIN
+                CLEAR(OutFldArray);
+                CLEAR(OutLenArray);
+                CLEAR(OutErrorArray);
+                CLEAR(EDIElementArray);
+                i := 1;
+                REPEAT
+                  ReverseCrossRefArray[i] := '';
+                  ReverseCrossReference := EDIElement."Reverse Cross Reference";
+                  IF ((EDIElement."Fixed Value" <> '') AND (XMLDoc = FALSE)) OR
+                     ((EDIElement."XML Fixed Value" <> '') AND (XMLDoc))
+                  THEN BEGIN
+                    IF XMLDoc THEN
+                      OutFldArray[i] := EDIElement."XML Fixed Value"
+                    ELSE
+                      OutFldArray[i] := EDIElement."Fixed Value";
+                  END ELSE
+                    CASE EDIElement.Origin OF
+                      EDIElement.Origin::Navision:
+                        BEGIN
+                          LoadDBFields;
+                          IF ReverseCrossReference THEN BEGIN
+                            CLEAR(EDIGetReverseCrossRef);
+                            ReverseCrossRefArray[i] :=
+                              EDIGetReverseCrossRef.GetReverseCrossRef(
+                                EDIElement,EDISendDocHdr,OutFldArray[i]);
+                              EDIGetReverseCrossRef.FormatOutput(
+                                EDISendDocHdr,EDIElement,OutError2,ReverseCrossRefArray,BypassSegment2,i);
+                          END;
+                        END;
+                      EDIElement.Origin::"EDI Out":
+                        BEGIN
+                          IF EDIElement."Field Name" = 'Line Number' THEN
+                            IF ProcessingLines THEN BEGIN
+                              LineNumber := LineNumber + 1;
+                              AdviceLineCounted := TRUE;
+                            END;
+                          LoadEDIOutFields;
+                        END;
+                    END;
+                  OutLenArray[i] := EDIElement.Length;
+                  EDIFormat.FormatOutput(
+                    EDITemplate,EDIElement,OutFldArray,OutErrorArray,i,BypassSegment,
+                    BooleanVariable,DateVariable,DecimalVariable,IntegerVariable,TimeVariable,
+                    DateTimeVariable);
+                  EDIElementArray[i].COPY(EDIElement);
+                  i := i + 1;
+                UNTIL EDIElement.NEXT = 0;
+              END;
+              NewSegment := TRUE;
+              i := 1;
+              IF ReverseCrossReference THEN
+                BypassSegment := BypassSegment2;
+              IF (NOT BypassSegment) AND (NOT OutputOff) THEN BEGIN
+                IF XMLDoc AND CreateNode THEN BEGIN
+                  EDISend.CreateSendLine(
+                    EDISendDocHdr,EDIElementArray[i],OutFldArray[i],OutLenArray[i],OutErrorArray[i],
+                    NewSegment,ReverseCrossRefValue,EDIDocument,TRUE,EDISegment);
+                  NewSegment := FALSE;
+                END;
+                IF (XMLDoc = FALSE) OR (XMLDoc AND NodeOnly = FALSE) THEN
+                  REPEAT
+                    ReverseCrossRefValue := ReverseCrossRefArray[i];
+                    EDISend.CreateSendLine(
+                      EDISendDocHdr,EDIElementArray[i],OutFldArray[i],OutLenArray[i],OutErrorArray[i],
+                      NewSegment,ReverseCrossRefValue,EDIDocument,FALSE,EDISegment);
+                    NewSegment := FALSE;
+                    i := i + 1;
+                  UNTIL OutLenArray[i] = 0
+              END ELSE
+                IF AdviceLineCounted THEN
+                  LineNumber := LineNumber - 1;
+            END;
+        END;
+        AdviceLineCounted := FALSE;
+      UNTIL EDISegment.NEXT = 0;
+
+      IF EDISetup."Send Document Error" THEN BEGIN
+        EDISendDocHdr.CALCFIELDS("Data Error");
+        IF EDISendDocHdr."Data Error" THEN BEGIN
+          CLEAR(CreateEDIAlert);
+          CreateEDIAlert.CreateAlertSendDocError(EDISendDocHdr."No.",1,FALSE);
+        END;
+      END;
+
+      CASE InventoryAdviceHdr.Type OF
+        InventoryAdviceHdr.Type::"  ":
+          InventoryAdviceHdr."EDI Inventory Advice Generated" := TRUE;
+        InventoryAdviceHdr.Type::"Price Catalog":
+          InventoryAdviceHdr."EDI Price Catalog Generated" := TRUE;
+      END;
+
+      InventoryAdviceHdr."Generated Date" := TODAY;
+      InventoryAdviceHdr."Generated Time" := TIME;
+      InventoryAdviceHdr.Version := InventoryAdviceHdr.Version + 1;
+      IF ReopenAdvice THEN
+        InventoryAdviceHdr.Released := FALSE;
+      InventoryAdviceHdr.MODIFY;
+
+      IF NOT ReopenAdvice THEN
+        CASE InventoryAdviceHdr.Type OF
+          InventoryAdviceHdr.Type::"  ":
+            IF EDITemplate."Post Inventory Advice on Send" THEN
+              PostInventoryAdvice(InventoryAdviceHdr);
+          InventoryAdviceHdr.Type::"Price Catalog":
+            IF EDITemplate."Post Price Catalog on Send" THEN
+              PostInventoryAdvice(InventoryAdviceHdr);
+        END;
+
+      IF XMLDoc THEN
+        EDIXMLManagement.ResponseIDSubstitution(EDISendDocHdr);
+
+      COMMIT;
+
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE UpdateLineTotals@28();
+    BEGIN
+      IF NOT OutputOff THEN BEGIN
+      // custom values to increment with the export of each inventory advice line
+      END;
+    END;
+
+    PROCEDURE LoadDBFields@23();
+    BEGIN
+      CASE EDIElement."NAV Table No." OF
+        14:
+          BEGIN
+            RecRef.OPEN(14);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(Location);
+          END;
+        27:
+          BEGIN
+            RecRef.OPEN(27);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(Item);
+          END;
+        79:
+          BEGIN
+            RecRef.OPEN(79);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(CompanyInformation);
+          END;
+        222:
+          BEGIN
+            RecRef.OPEN(222);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(ShiptoAddress);
+          END;
+        5404:
+          BEGIN
+            RecRef.OPEN(5404);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(ItemUnitofMeasure);
+          END;
+        5717:
+          BEGIN
+            RecRef.OPEN(5717);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(ItemCrossReference);
+          END;
+        10018:
+          BEGIN
+            RecRef.OPEN(18);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(SelltoCustomer);
+          END;
+          19009:
+          BEGIN
+            RecRef.OPEN(9);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(SelltoCountry);
+          END;
+        14002360:
+          BEGIN
+            RecRef.OPEN(14002360);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDITradePartner);
+          END;
+        14002364:
+          BEGIN
+            RecRef.OPEN(14002364);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDITradePtnrItem);
+          END;
+        14002365:
+          BEGIN
+            RecRef.OPEN(14002365);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDITradePtnrUOM);
+          END;
+          14002369:
+          BEGIN
+            RecRef.OPEN(14002369);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(EDISendDocHdr);
+          END;
+        14002413:
+          BEGIN
+            RecRef.OPEN(14002413);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(InventoryAdviceHdr);
+          END;
+        14002414:
+          BEGIN
+            RecRef.OPEN(14002414);
+            IF RecRef.FIND('-') THEN
+              RecRef.GETTABLE(InventoryAdviceLine);
+          END;
+        ELSE
+          EXIT;
+      END;
+      EDILoadDBFields.LoadDBFields(
+        EDIElement,OutFldArray,DecimalVariable,IntegerVariable,DateVariable,
+        BooleanVariable,TimeVariable,DateTimeVariable,i,RecRef);
+      RecRef.CLOSE;
+    END;
+
+    PROCEDURE ReadHdrAssocTables@26();
+    BEGIN
+      EDITemplate.GET(EDIDocument."EDI Template Code");
+
+      IF NOT Location.GET(InventoryAdviceHdr."Location Code") THEN
+        Location.INIT;
+
+      CompanyInformation.GET;
+
+      IF NOT SelltoCustomer.GET(InventoryAdviceHdr."Sell-to Customer No.") THEN
+        SelltoCustomer.INIT;
+
+      IF NOT ShiptoAddress.GET(
+        InventoryAdviceHdr."Sell-to Customer No.",InventoryAdviceHdr."Ship-to Code") THEN
+          ShiptoAddress.INIT;
+
+      IF InventoryAdviceHdr."Sell-to Country Code" <> '' THEN
+        IF NOT SelltoCountry.GET(InventoryAdviceHdr."Sell-to Country Code") THEN
+          CLEAR(SelltoCountry);
+
+      //
+      // Add any other tables associated with the Inventroy Advice header here.
+      //
+    END;
+
+    PROCEDURE ReadLineAssocTables@27();
+    BEGIN
+      UpdateLineTotals;
+
+      IF NOT Item.GET(InventoryAdviceLine."No.") THEN
+            Item.INIT;
+      IF NOT ItemUnitofMeasure.GET(
+        InventoryAdviceLine."No.",InventoryAdviceLine."Unit of Measure Code")
+      THEN
+        ItemUnitofMeasure.INIT;
+
+      IF InventoryAdviceLine."Cross-Reference No." <> '' THEN BEGIN
+        ItemCrossReference.RESET;
+        ItemCrossReference.SETFILTER(
+          "Cross-Reference Type",'<> %1',ItemCrossReference."Cross-Reference Type"::Vendor);
+        ItemCrossReference.SETFILTER(
+          "Cross-Reference Type No.",'%1|%2',InventoryAdviceHdr."Sell-to Customer No.",'');
+        ItemCrossReference.SETRANGE("Item No.",InventoryAdviceLine."No.");
+        ItemCrossReference.SETRANGE("Cross-Reference No.",InventoryAdviceLine."Cross-Reference No.");
+        IF NOT ItemCrossReference.FIND('-') THEN
+          ItemCrossReference.INIT;
+       END;
+
+      EDITradePtnrUOM.RESET;
+      EDITradePtnrUOM.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+      EDITradePtnrUOM.SETRANGE("Navision Item No.",InventoryAdviceLine."No.");
+      EDITradePtnrUOM.SETRANGE("Navision Variant Code",InventoryAdviceLine."Variant Code");
+      EDITradePtnrUOM.SETRANGE("Order Unit of Measure",InventoryAdviceLine."Unit of Measure Code");
+      IF NOT EDITradePtnrUOM.FIND('-') THEN BEGIN
+        EDITradePtnrUOM.SETFILTER("Navision Item No.",'=%1','');
+        EDITradePtnrUOM.SETFILTER("Navision Variant Code",'=%1','');
+        IF NOT EDITradePtnrUOM.FIND('-') THEN
+          EDITradePtnrUOM.INIT;
+      END;
+
+      EDITradePtnrItem.RESET;
+      EDITradePtnrItem.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+      EDITradePtnrItem.SETRANGE("Navision Item No.",InventoryAdviceLine."No.");
+      EDITradePtnrItem.SETRANGE("Navision Variant Code",InventoryAdviceLine."Variant Code");
+      IF NOT EDITradePtnrItem.FIND('-') THEN
+        EDITradePtnrItem.SETRANGE("Navision Variant Code");
+      IF NOT EDITradePtnrItem.FIND('-') THEN
+        EDITradePtnrItem.INIT;
+
+      //
+      // Add any other tables associated with the Inventroy Advice line here.
+      //
+    END;
+
+    PROCEDURE LoadEDIOutFields@16();
+    BEGIN
+      BooleanVariable := FALSE;
+      DateVariable := 0D;
+      IntegerVariable := 0;
+      DecimalVariable := 0;
+      TimeVariable := 0T;
+      DateTimeVariable := 0DT;
+
+      IF EDIElement.Origin = EDIElement.Origin::"EDI Out" THEN BEGIN
+        CASE EDIElement."Field Name" OF
+          ELSE BEGIN
+            LoadEDIOutVariable;
+            LoadEDIOutRecordRef;
+            EDILoadEDIOutFields.InventoryAdviceSendEDIOut(
+              EDIElement,OutFldArray,DecimalVariable,IntegerVariable,DateVariable,
+              BooleanVariable,TimeVariable,DateTimeVariable,i);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE PostInventoryAdvice@1240030009(VAR CurrentInventoryAdvice@1240030000 : Record 14002413);
+    BEGIN
+      WITH CurrentInventoryAdvice DO BEGIN
+        TESTFIELD(Released,TRUE);
+        CASE EDIDocument."Navision Document" OF
+        'E_INVADV':
+          TESTFIELD("EDI Inventory Advice Generated",TRUE);
+        'E_PRICAT':
+          TESTFIELD("EDI Price Catalog Generated",TRUE);
+        END;
+        Posted := TRUE;
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE LoadEDIOutRecordRef@1240020008();
+    BEGIN
+      RecRef.OPEN(14);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(Location);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(18);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(SelltoCustomer);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'Sell-to Customer');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(27);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(Item);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(79);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(CompanyInformation);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(222);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(ShiptoAddress);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(5404);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(ItemUnitofMeasure);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(5717);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(ItemCrossReference);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002350);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDITemplate);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002353);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDIDocument);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002359);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDISendDocHdr);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002360);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDITradePartner);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002364);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDITradePtnrItem);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002365);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(EDITradePtnrUOM);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002413);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(InventoryAdviceHdr);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+
+      RecRef.OPEN(14002414);
+      IF RecRef.FIND('-') THEN BEGIN
+        RecRef.GETTABLE(InventoryAdviceLine);
+        EDILoadEDIOutFields.SetRecordVariable(RecRef,'');
+      END;
+      RecRef.CLOSE;
+    END;
+
+    PROCEDURE LoadEDIOutVariable@1240020003();
+    BEGIN
+      EDILoadEDIOutFields.SetInventoryAdviceSendVariable(LineNumber);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

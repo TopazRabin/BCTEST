@@ -1,0 +1,166 @@
+OBJECT Table 14002708 Forecast Adjustment Temp
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Forecast Adjustment Temp;
+  }
+  FIELDS
+  {
+    { 1   ;   ;Period              ;Integer       ;CaptionML=ENU=Period }
+    { 2   ;   ;Location Code       ;Code10        ;CaptionML=ENU=Location Code }
+    { 3   ;   ;Item No.            ;Code50        ;CaptionML=ENU=Item No. }
+    { 4   ;   ;Variant Code        ;Code10        ;CaptionML=ENU=Variant Code }
+    { 5   ;   ;Starting Date       ;Date          ;CaptionML=ENU=Starting Date }
+    { 11  ;   ;Forecast Qty.       ;Decimal       ;CaptionML=ENU=Forecast Qty.;
+                                                   Editable=No }
+    { 12  ;   ;Adjustment Qty.     ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("Forecast Adjust".Quantity WHERE (Location Code=FIELD(Location Code),
+                                                                                                     Item No.=FIELD(Item No.),
+                                                                                                     Variant Code=FIELD(Variant Code),
+                                                                                                     Starting Date=FIELD(Starting Date)));
+                                                   CaptionML=ENU=Adjustment Qty. }
+    { 13  ;   ;Adjusted Forecast Qty.;Decimal     ;OnValidate=BEGIN
+                                                                VALIDATE("Adjustment Qty.",("Adjusted Forecast Qty." - "Forecast Qty."));
+                                                              END;
+
+                                                   CaptionML=ENU=Adjusted Forecast Qty. }
+    { 14  ;   ;Adjustment Note     ;Text250       ;CaptionML=ENU=Adjustment Note }
+    { 25  ;   ;Frozen Forecast     ;Boolean       ;CaptionML=ENU=Frozen Forecast }
+    { 26  ;   ;Changed             ;Boolean        }
+    { 27  ;   ;Is Frozen           ;Boolean        }
+  }
+  KEYS
+  {
+    {    ;Period                                  ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+    VAR
+      AdvForSetup@1240030002 : Record 14002651;
+      ForcAdjustmentTmp@1240030009 : Record 14002708;
+      InvMgtSetup@1240030000 : Record 14000551;
+      Location@1240030001 : Record 14;
+      LocInvPeriod@1240030004 : Record 14000553;
+      ForecastAdj@1240030005 : Record 14002707;
+      Forecast@1240030003 : Codeunit 14000567;
+      Text000@1240030006 : TextConst 'ENU=Forecasting not enabled for Location %1';
+      Text001@1240030007 : TextConst 'ENU=A  closed Location Inventory Period could not be found.';
+      ForecastAdjustment@1240030010 : Page 14002714;
+      i@1240030008 : Integer;
+      Text002@1240020000 : TextConst 'ENU=Forecasting not enabled.';
+      Text003@1240020001 : TextConst 'ENU=Advanced Forecasting Setup calculate periods is not set.';
+
+    PROCEDURE SetForecast@1240030000(CurrProcUnit@1240030000 : Record 14000555);
+    VAR
+      UBP@1240020000 : Codeunit 14000564;
+    BEGIN
+      InvMgtSetup.GET;
+      IF InvMgtSetup."Usage Start Date" = 0D THEN
+        ERROR(Text002);
+
+      CLEAR(Forecast);
+      Location.GET(CurrProcUnit."Location Code");
+      IF (NOT Location."Enable Adv. Forecasting") AND
+         (NOT Location."Enable Cust. Forecasting") THEN
+        ERROR(STRSUBSTNO(Text000,Location.Code));
+
+      AdvForSetup.GET;
+
+      IF AdvForSetup."Periods to Calculate" = 0 THEN
+        AdvForSetup."Periods to Calculate" := AdvForSetup."Periods to Forecast";
+
+      IF AdvForSetup."Periods to Calculate" <= 0 THEN
+        ERROR(Text002);
+
+      Forecast.CalcPeriodStartingDates(Location, AdvForSetup."Periods to Calculate");
+      Forecast.CalcForecast(CurrProcUnit,AdvForSetup."Periods to Calculate",'', FALSE, TRUE);
+      Forecast.CalcForecastAdj(CurrProcUnit,AdvForSetup."Periods to Calculate");
+      Forecast.CalcCustForecast(CurrProcUnit,AdvForSetup."Periods to Calculate");
+      Forecast.CalcConsumed(CurrProcUnit,AdvForSetup."Periods to Calculate");
+
+      i := 1;
+      CLEAR(ForecastAdjustment);
+      REPEAT
+        ForcAdjustmentTmp.INIT;
+        ForcAdjustmentTmp.Period := i;
+        ForcAdjustmentTmp."Location Code" := CurrProcUnit."Location Code";
+        ForcAdjustmentTmp."Item No." := CurrProcUnit."Item No.";
+        ForcAdjustmentTmp."Variant Code" := CurrProcUnit."Variant Code";
+        ForcAdjustmentTmp."Starting Date" := Forecast.GetPeriodStartingDate(i);
+        ForcAdjustmentTmp."Forecast Qty." := Forecast.GetPeriodForecastUsage(i);
+        ForcAdjustmentTmp.CALCFIELDS("Adjustment Qty.");
+        ForcAdjustmentTmp."Adjusted Forecast Qty." :=
+          ForcAdjustmentTmp."Forecast Qty." + ForcAdjustmentTmp."Adjustment Qty.";
+        ForcAdjustmentTmp."Is Frozen" := CheckExistingFrozenForecastForPeriod(ForcAdjustmentTmp);
+        ForecastAdjustment.SetForecastAdjTmp(ForcAdjustmentTmp);
+        i := i + 1;
+      UNTIL i > AdvForSetup."Periods to Calculate";
+
+      ForecastAdjustment.RUNMODAL;
+    END;
+
+    PROCEDURE CreateAdjustment@1240030001(VAR CurrForecastAdjTmp@1240030000 : Record 14002708;CurrAdjQty@1240030001 : Decimal);
+    VAR
+      ForecastAdj@1240030002 : Record 14002707;
+      EntryNo@1240030003 : Integer;
+    BEGIN
+      // Delete Frozen Forecast
+      IF CurrForecastAdjTmp."Frozen Forecast" THEN BEGIN
+        ForecastAdj.SETCURRENTKEY("Item No.","Variant Code","Location Code","Starting Date","Promotion Code","Forecast Summary Code");
+        ForecastAdj.SETRANGE("Location Code", CurrForecastAdjTmp."Location Code");
+        ForecastAdj.SETRANGE("Item No.", CurrForecastAdjTmp."Item No.");
+        ForecastAdj.SETRANGE("Starting Date", CurrForecastAdjTmp."Starting Date");
+        ForecastAdj.SETRANGE("Forecast Summary Code", '');
+        ForecastAdj.SETRANGE("Promotion Code", '');
+        IF NOT ForecastAdj.ISEMPTY THEN
+          ForecastAdj.DELETEALL(TRUE);
+      END;
+
+      // get next entry no
+      ForecastAdj.RESET;
+      ForecastAdj.LOCKTABLE;
+      IF ForecastAdj.FIND('+') THEN
+        EntryNo := ForecastAdj."Entry No." + 1
+      ELSE
+        EntryNo := 1;
+
+      // insert adjustment
+      ForecastAdj.INIT;
+      ForecastAdj."Entry No." := EntryNo;
+      ForecastAdj."Location Code" := CurrForecastAdjTmp."Location Code";
+      ForecastAdj."Item No." := CurrForecastAdjTmp."Item No.";
+      ForecastAdj."Variant Code" := CurrForecastAdjTmp."Variant Code";
+      ForecastAdj."Starting Date" := CurrForecastAdjTmp."Starting Date";
+      ForecastAdj."Frozen Forecast" := CurrForecastAdjTmp."Frozen Forecast";
+      ForecastAdj.Quantity := CurrAdjQty;
+      ForecastAdj."Adjustment Note" := CurrForecastAdjTmp."Adjustment Note";
+      ForecastAdj.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE CheckExistingFrozenForecastForPeriod@1240020001(VAR CurrForecastAdjTmp@1240020000 : Record 14002708) : Boolean;
+    BEGIN
+      ForecastAdj.SETCURRENTKEY("Item No.","Variant Code","Location Code","Starting Date","Promotion Code","Forecast Summary Code");
+      ForecastAdj.SETRANGE("Location Code", CurrForecastAdjTmp."Location Code");
+      ForecastAdj.SETRANGE("Item No.", CurrForecastAdjTmp."Item No.");
+      ForecastAdj.SETRANGE("Starting Date", CurrForecastAdjTmp."Starting Date");
+      ForecastAdj.SETRANGE("Forecast Summary Code", '');
+      ForecastAdj.SETRANGE("Promotion Code", '');
+      ForecastAdj.SETRANGE("Frozen Forecast", TRUE);
+
+      EXIT(NOT ForecastAdj.ISEMPTY);
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

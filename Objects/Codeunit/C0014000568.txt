@@ -1,0 +1,286 @@
+OBJECT Codeunit 14000568 DP Single Loc. Calc. Upgrade
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.03;
+  }
+  PROPERTIES
+  {
+    OnRun=VAR
+            UBPLogEntryNo@1240020000 : Integer;
+            Location@1240020001 : Record 14;
+            LocInvPeriod@1240020002 : Record 14000553;
+          BEGIN
+            // loop through closed inventory location periods and update single location period usage
+            // then by procurement unit
+
+            Location.SETRANGE("Enable Adv. Forecasting", TRUE);
+            IF Location.FINDSET THEN BEGIN
+              IF GUIALLOWED THEN BEGIN
+                Window.OPEN(
+                  '#1########################################\' +
+                  PADSTR(Text001,30) + '#2########\' +
+                  PADSTR(Text002,30) + '#3########\');
+              END;
+
+              InvMgmtSetup.GET;
+              AdvForSetup.GET;
+              REPEAT
+                LocInvPeriod.SETFILTER("Starting Date", '%1..', InvMgmtSetup."Usage Start Date");
+                LocInvPeriod.SETRANGE("Location Code", Location.Code);
+                LocInvPeriod.SETRANGE("Period End Closed", TRUE);
+                IF LocInvPeriod.FINDSET THEN BEGIN
+                  REPEAT
+                    IF GUIALLOWED THEN BEGIN
+                      Window.UPDATE(1,STRSUBSTNO(Text000, LocInvPeriod."Starting Date", LocInvPeriod."Ending Date"));
+                      Window.UPDATE(2,FORMAT(LocInvPeriod."Starting Date"));
+                      Window.UPDATE(3, LocInvPeriod."Location Code");
+                    END;
+
+                    InvMgt.CreateLogEntry(Location.Code, STRSUBSTNO(Text000, LocInvPeriod."Starting Date", LocInvPeriod."Ending Date"),UBPLogEntryNo);
+                    Forecast(LocInvPeriod);
+                    InvMgt.CloseLogEntry(UBPLogEntryNo, '');
+                  UNTIL LocInvPeriod.NEXT = 0;
+                END;
+
+                IF LocInvPeriod.FINDLAST THEN BEGIN
+                  IF AdvForSetup."Auto Adj. Unusual Usage" THEN
+                    SmoothSingleLocUsage(LocInvPeriod);
+                END;
+
+              UNTIL Location.NEXT = 0;
+              IF GUIALLOWED THEN
+                Window.CLOSE;
+            END;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text000@14000534 : TextConst 'ENU=Updating Single Location Forecast %1-%2';
+      Text001@14000535 : TextConst 'ENU=Period Starting Date';
+      Text002@14000536 : TextConst 'ENU=Location';
+      Window@1240020000 : Dialog;
+      InvMgt@1240020001 : Codeunit 14000553;
+      InvMgmtSetup@1240020002 : Record 14000551;
+      AdvForSetup@1240020003 : Record 14002651;
+      ItemFilter@1240020004 : Text;
+      counter@1240020005 : Integer;
+
+    PROCEDURE Forecast@1240030006(CurrLocInvPeriod@1240030000 : Record 14000553);
+    VAR
+      ProcUnit@1002 : Record 14000555;
+      ItemUsage@1240020005 : Record 14000557;
+      UnusualUsageAdj@1240020000 : Record 14002658;
+      tempusage@1240020001 : Decimal;
+      modifyrec@1240020002 : Boolean;
+    BEGIN
+      ItemUsage.SETCURRENTKEY("Item No.","Location Code","Variant Code","Starting Date","Ending Date");
+
+      ItemUsage.SETRANGE("Location Code", CurrLocInvPeriod."Location Code");
+      ItemUsage.SETRANGE("Source No.", '');
+      ItemUsage.SETRANGE("Starting Date", CurrLocInvPeriod."Starting Date");
+
+      ProcUnit.RESET;
+      ProcUnit.SETCURRENTKEY("Location Code", "Usage Location Filter String");
+      ProcUnit.SETFILTER("Location Code", CurrLocInvPeriod."Location Code");
+      ProcUnit.SETFILTER("Item No.", ItemFilter);
+      IF ProcUnit.FINDSET THEN BEGIN
+        REPEAT
+          ItemUsage.SETRANGE("Item No.",ProcUnit."Item No.");
+          ItemUsage.SETRANGE("Variant Code",ProcUnit."Variant Code");
+          IF ItemUsage.FINDFIRST THEN BEGIN
+            modifyrec := FALSE;
+            ItemUsage.SETRANGE("Date Filter",CurrLocInvPeriod."Starting Date",CurrLocInvPeriod."Ending Date");
+            // Calc Usage Single Location for Period Usage
+            ItemUsage.SETFILTER("Location Filter", ProcUnit."Location Code");
+            ItemUsage.CALCFIELDS("Usage Quantity","Adjustment Quantity","Exclude Usage Quantity","Transfer Usage","Drop Ship Usage Quantity","Forecast Cust. Actual Usage");
+            tempusage := 0;
+            tempusage := ItemUsage.AdjustedUsage;
+            IF tempusage <> ItemUsage."Single Loc. Per. End Adj. Usg." THEN BEGIN
+              modifyrec := TRUE;
+              ItemUsage."Single Loc. Per. End Adj. Usg." := tempusage;
+            END;
+
+            // single loc average usage
+            tempusage := 0;
+            tempusage := CalculateSingleLocNetAverageUsage(ItemUsage, ItemUsage, ProcUnit)/(CurrLocInvPeriod."Ending Date" - CurrLocInvPeriod."Starting Date" + 1);
+            IF tempusage <> ItemUsage."Single Loc. Avg Usage Per Day" THEN BEGIN
+              modifyrec := TRUE;
+              ItemUsage."Single Loc. Avg Usage Per Day" := tempusage;
+            END;
+
+            IF modifyrec THEN BEGIN
+              ItemUsage.MODIFY(FALSE);
+            END;
+
+            modifyrec := FALSE;
+
+            // find unsual usage adjust and update
+            UnusualUsageAdj.SETRANGE("Location Code", ItemUsage."Location Code");
+            UnusualUsageAdj.SETRANGE("Item No.", ItemUsage."Item No.");
+            UnusualUsageAdj.SETRANGE("Variant Code", ItemUsage."Variant Code");
+            UnusualUsageAdj.SETRANGE("Starting Date", ItemUsage."Starting Date");
+            UnusualUsageAdj.SETRANGE("Ending Date", ItemUsage."Ending Date");
+            UnusualUsageAdj.SETRANGE("Source No.", '');
+            IF UnusualUsageAdj.FINDFIRST THEN BEGIN
+              tempusage := 0;
+              tempusage := ItemUsage."Single Loc. Per. End Adj. Usg."  - ItemUsage."Forecast Cust. Actual Usage";
+              IF (tempusage <> UnusualUsageAdj."Single Loc. Per. End Adj. Usg.") THEN BEGIN
+                 UnusualUsageAdj."Single Loc. Per. End Adj. Usg." := tempusage;
+                 modifyrec := TRUE;
+              END;
+              IF UnusualUsageAdj."Single Loc. Usage" <> UnusualUsageAdj."Single Loc. Per. End Adj. Usg." THEN BEGIN
+                modifyrec := TRUE;
+                UnusualUsageAdj."Single Loc. Usage" := UnusualUsageAdj."Single Loc. Per. End Adj. Usg.";
+              END;
+
+              IF UnusualUsageAdj."Single Loc. Usage Adjustment" <> 0 THEN BEGIN
+                modifyrec := TRUE;
+                UnusualUsageAdj."Single Loc. Usage Adjustment" := 0;
+              END;
+              IF modifyrec THEN
+                UnusualUsageAdj.MODIFY(TRUE);
+
+            END;
+          END;
+          counter := counter + 1;
+          IF (counter/1000) = 1 THEN BEGIN
+             counter := 0;
+             COMMIT;
+          END;
+        UNTIL ProcUnit.NEXT = 0;
+      END;
+    END;
+
+    LOCAL PROCEDURE CalculateSingleLocNetAverageUsage@1240020002(CurrItemUsageCopy@1240020000 : Record 14000557;VAR CurrItemUsage@1240020002 : Record 14000557;VAR CurrProcUnit@1240020001 : Record 14000555) SingleLocAvgUsage : Decimal;
+    BEGIN
+      SingleLocAvgUsage := 0;
+      CurrItemUsageCopy.COPYFILTERS(CurrItemUsage);
+      CurrItemUsageCopy.SETFILTER("Location Filter", CurrItemUsage."Location Code");
+      CurrItemUsageCopy.CALCFIELDS("Usage Quantity","Adjustment Quantity","Exclude Usage Quantity",
+        "Transfer Usage","Drop Ship Usage Quantity","Forecast Cust. Actual Usage");
+      SingleLocAvgUsage :=
+          ((CurrItemUsageCopy."Usage Quantity" + CurrItemUsageCopy."Adjustment Quantity" + CurrItemUsageCopy."Transfer Usage") -
+            CurrItemUsageCopy."Exclude Usage Quantity");
+      IF NOT CurrProcUnit."Include Drop Ship Usage" THEN
+        SingleLocAvgUsage :=
+          SingleLocAvgUsage - CurrItemUsageCopy."Drop Ship Usage Quantity";
+      IF CurrItemUsageCopy."Periods to Average" <> 0 THEN
+        SingleLocAvgUsage := SingleLocAvgUsage / CurrItemUsageCopy."Periods to Average";
+      EXIT(SingleLocAvgUsage);
+    END;
+
+    LOCAL PROCEDURE SmoothSingleLocUsage@1000000000(CurrLocInvPeriod@1240020002 : Record 14000553);
+    VAR
+      ItemUsage@1240020001 : Record 14000557;
+      ProcUnit@1240020003 : Record 14000555;
+      UnusualUsageAdj@1240020009 : Record 14002658;
+      i@1240020000 : Integer;
+      AdjAveUsage@1240020004 : Decimal;
+      AdjZeroEntries@1240020005 : Integer;
+      AdjMax@1240020006 : Decimal;
+      AdjMin@1240020007 : Decimal;
+      Forecast@1240020010 : Codeunit 14000567;
+    BEGIN
+      // Smoothing >>
+      {
+      // loop usage to find (Yearly min/max average)
+      // calculate min & max percents from average from the past year
+      // adjust the usage for all periods by that min/max
+      // store in unusual usage adjust
+      }
+
+      ItemUsage.SETCURRENTKEY("Location Code","Starting Date","Item No.","Variant Code");
+      ItemUsage.SETRANGE("Location Code", CurrLocInvPeriod."Location Code");
+      ItemUsage.SETRANGE("Source No.", '');
+      ItemUsage.SETRANGE("Starting Date", CurrLocInvPeriod."Starting Date");
+
+      ProcUnit.RESET;
+      ProcUnit.SETCURRENTKEY("Location Code", "Usage Location Filter String");
+      ProcUnit.SETFILTER("Location Code", CurrLocInvPeriod."Location Code");
+      ProcUnit.SETFILTER("Item No.", ItemFilter);
+      IF ProcUnit.FINDSET THEN BEGIN
+        counter := 0;
+        REPEAT
+          ItemUsage.SETRANGE("Item No.",ProcUnit."Item No.");
+          ItemUsage.SETRANGE("Variant Code",ProcUnit."Variant Code");
+          IF ItemUsage.FINDFIRST THEN BEGIN
+
+            UnusualUsageAdj.RESET;
+            UnusualUsageAdj.SETCURRENTKEY("Location Code", "Item No.","Variant Code","Starting Date");
+            UnusualUsageAdj.SETRANGE("Location Code", ProcUnit."Location Code");
+            UnusualUsageAdj.SETRANGE("Item No.", ProcUnit."Item No.");
+            UnusualUsageAdj.SETRANGE("Variant Code", ProcUnit."Variant Code");
+            UnusualUsageAdj.SETFILTER("Source No.", ItemUsage."Source No.");
+            UnusualUsageAdj.SETRANGE("Starting Date", InvMgmtSetup."Usage Start Date", CurrLocInvPeriod."Starting Date");
+
+            AdjAveUsage := 0;
+            i:= 0;
+            AdjZeroEntries := 0;
+            AdjMax := 0;
+            AdjMin := 0;
+
+            IF UnusualUsageAdj.FIND('+') THEN BEGIN
+              REPEAT
+                AdjAveUsage := AdjAveUsage + UnusualUsageAdj."Single Loc. Per. End Adj. Usg.";
+                IF UnusualUsageAdj."Single Loc. Per. End Adj. Usg." = 0 THEN
+                  AdjZeroEntries := AdjZeroEntries + 1;
+                i := i + 1;
+             UNTIL (UnusualUsageAdj.NEXT(-1) = 0) OR (i >= InvMgmtSetup."No. of Periods in a Year");
+            END;
+
+            IF i < InvMgmtSetup."No. of Periods in a Year" THEN
+              EXIT;
+
+            // can't qualify a formula no need to smooth usage
+            IF (InvMgmtSetup."No. of Periods in a Year" - AdjZeroEntries) < ROUND(InvMgmtSetup."No. of Periods in a Year" * (AdvForSetup."Pct Year Per. Req. for Formula"),1.0) THEN
+              EXIT;
+
+            IF (InvMgmtSetup."No. of Periods in a Year" - AdjZeroEntries) > 0 THEN BEGIN
+              AdjAveUsage := AdjAveUsage / (InvMgmtSetup."No. of Periods in a Year" - AdjZeroEntries);
+            END;
+
+            AdjMax := AdjAveUsage * (AdvForSetup."Max. Unusual Adj. %" / 100);
+            AdjMin := AdjAveUsage * (AdvForSetup."Min. Unusual Adj. %" / 100);
+            IF UnusualUsageAdj.FIND('+') THEN BEGIN
+              i := 0;
+              REPEAT
+                IF (UnusualUsageAdj."Single Loc. Usage Adjustment" = 0) AND ((UnusualUsageAdj."Single Loc. Usage") <> (UnusualUsageAdj."Single Loc. Per. End Adj. Usg.")) THEN BEGIN
+                  UnusualUsageAdj."Single Loc. Usage" := UnusualUsageAdj."Single Loc. Per. End Adj. Usg.";
+                END;
+
+                IF UnusualUsageAdj."Single Loc. Per. End Adj. Usg." > AdjMax THEN BEGIN
+                  UnusualUsageAdj."Single Loc. Usage Adjustment" := AdjMax - UnusualUsageAdj."Single Loc. Per. End Adj. Usg.";
+                  UnusualUsageAdj."Single Loc. Usage" := AdjMax;
+                  Forecast.RoundValueForForecast(ProcUnit, UnusualUsageAdj."Single Loc. Usage");
+                END;
+                IF UnusualUsageAdj."Single Loc. Per. End Adj. Usg."  < AdjMin THEN BEGIN
+                  UnusualUsageAdj."Single Loc. Usage Adjustment" := AdjMin - UnusualUsageAdj."Single Loc. Per. End Adj. Usg.";
+                  UnusualUsageAdj."Single Loc. Usage" := AdjMin;
+                  Forecast.RoundValueForForecast(ProcUnit, UnusualUsageAdj."Single Loc. Usage");
+                END;
+
+                UnusualUsageAdj.MODIFY(FALSE);
+                i := i + 1;
+              UNTIL (UnusualUsageAdj.NEXT(-1) = 0);
+            END;
+          END;
+          counter := counter + 1;
+          IF (counter/1000) = 1 THEN BEGIN
+             counter := 0;
+             COMMIT;
+          END;
+        UNTIL ProcUnit.NEXT = 0;
+      END;
+      // Smoothing <<
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

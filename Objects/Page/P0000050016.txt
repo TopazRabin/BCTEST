@@ -1,0 +1,1134 @@
+OBJECT Page 50016 Sales Order Statistics by Loc
+{
+  OBJECT-PROPERTIES
+  {
+    Date=10/22/20;
+    Time=[ 4:57:39 AM];
+    Modified=Yes;
+    Version List=TOP210;
+  }
+  PROPERTIES
+  {
+    InsertAllowed=No;
+    DeleteAllowed=No;
+    ModifyAllowed=No;
+    SourceTable=Table36;
+    PageType=List;
+    SourceTableTemporary=Yes;
+    OnOpenPage=BEGIN
+                 //note: run sales and line amount calc routines - see page 10038 (not 402)
+
+                 //sales header - calculate discounts, sales, taxes etc.
+                 //create temp sales header and lines for each location
+                 //do rest of 10038 calculations - may need modified versions of functions used in C80
+                 //create temporary sales lines - 1 per location
+                 //create with them array of fields to be displayed by location and populate the fields to be displayed after each after get record
+                 ShowLocationName := FALSE;
+                 ShowLocationCode := TRUE;
+
+                 DELETEALL;
+                 //SH.FIND('-');
+                 LineNo:=0;
+
+                 //create tempsh and tempsl for each location
+                 SL.RESET;
+                 SL.SETCURRENTKEY("Document Type","Document No.","Location Code");
+                 SL.SETRANGE("Document Type",SH."Document Type");
+                 SL.SETRANGE("Document No.",SH."No.");
+                 SL.SETFILTER("Location Code",'<>''''');
+                 SL.SETRANGE(Type,SL.Type::Item);
+                 SL.SETFILTER(Quantity,'<>0');
+                 IF SL.FINDSET THEN BEGIN
+                   SaveLoc:=SL."Location Code";
+                   TempSH:=SH;
+                   TempSH."Location Code":=SL."Location Code";
+                   TempSH.INSERT;
+
+                   REPEAT
+
+                     IF SL."Location Code" <> SaveLoc THEN BEGIN
+                       TempSH."No.":=INCSTR(TempSH."No.");
+                       TempSH."Location Code":=SL."Location Code";
+                       TempSH.INSERT;
+
+                       SaveLoc:=SL."Location Code";
+                     END;
+                     TempSL:=SL;
+                     TempSL."Document No." := TempSH."No.";
+                     TempSL."Temp Sales Order No." := SH."No."; //TPZ2829 Event Conversion
+                     TempSL.VALIDATE("Qty. to Ship", TempSL."Outstanding Quantity");  //make profit correct
+                     TempSL.INSERT;
+                   UNTIL SL.NEXT = 0;
+                 END;
+
+                 //now calculate statistics for each tempsh
+
+                 TempSH.RESET;
+                 IF NOT TempSH.FINDSET THEN
+                   ERROR('No Statistic lines');
+
+                 SalesSetup.GET;
+                 AllowInvDisc := NOT (SalesSetup."Calc. Inv. Discount" AND CustInvDiscRecExists(SH."Invoice Disc. Code"));
+                 AllowVATDifference :=
+                   SalesSetup."Allow VAT Difference" AND
+                   NOT (SH."Document Type" IN ["Document Type"::Quote,"Document Type"::"Blanket Order"]);
+
+                 IF SH."Tax Area Code" <> '' THEN
+                   TaxArea.GET(SH."Tax Area Code");
+                 IF SH."Currency Factor" = 0 THEN
+                   ExchangeFactor := 1
+                 ELSE
+                   ExchangeFactor := SH."Currency Factor";
+
+                 REPEAT
+                   Rec:=TempSH;
+                   INSERT;
+                 UNTIL TempSH.NEXT = 0;
+
+                 {
+                   INIT;
+                   "Document Type":=SL."Document Type";
+                   "Document No.":=SL."Document No.";
+                   LineNo+=1;
+                   "Line No.":=LineNo * 10000;
+                   "Location Code":=SL."Location Code";
+
+
+
+
+                       INSERT;
+                       INIT;
+                       "Document Type":=SL."Document Type";
+                       "Document No.":=SL."Document No.";
+                       LineNo+=1;
+                       "Line No.":=LineNo * 10000;
+                       "Location Code":=SL."Location Code";
+
+
+
+                     Quantity += SL.Quantity;
+                     "Line Amount" += SL."Line Amount";
+                     "Inv. Discount Amount" += SL."Inv. Discount Amount";
+                 }
+                 FIND('-');
+                 ;ESACC_EasySecurity(TRUE);
+               END;
+
+    OnAfterGetRecord=VAR
+                       SalesLine@1000000005 : Record 37;
+                       TempSalesLine@1000000004 : TEMPORARY Record 37;
+                       SalesPostPrepmt@1000000003 : Codeunit 442;
+                       TempSalesTaxAmtLine@1000000002 : TEMPORARY Record 10011;
+                       PrevPrintOrder@1000000001 : Integer;
+                       PrevTaxPercent@1000000000 : Decimal;
+                       Codeunit398EventSubscriber@1000000006 : Codeunit 51944;
+                     BEGIN
+                       //PrevNo := "No.";
+                       //FILTERGROUP(2);
+                       //SETRANGE("No.",PrevNo);
+                       //FILTERGROUP(0);
+
+                       CLEAR(SalesLine);
+                       CLEAR(TotalSalesLine);
+                       CLEAR(TotalSalesLineLCY);
+                       CLEAR(BreakdownLabel);
+                       CLEAR(BreakdownAmt);
+
+                       //TOP150 - KT ABCSI Sales Order Margin Review 04072015 Start
+                       CLEAR(VendorCostSum);
+                       CLEAR(TotalVendorCost);
+                       CLEAR(VendorPft);
+                       CLEAR("VendorPft%");
+                       GetVendorCost(VendorCostSum,TotalVendorCost,Rec);
+                       //TOP150 - KT ABCSI Sales Order Margin Review 04072015 End
+
+                       LocName:='';
+                       IF LocationRec.GET("Location Code") THEN
+                         LocName:= LocationRec.Name;
+
+                       SalesLine.RESET;
+                       TempSL.SETRANGE("Document Type","Document Type");
+                       TempSL.SETRANGE("Document No.","No.");
+                       TempSL.FIND('-');
+
+                       FOR i := 1 TO 3 DO BEGIN
+                         TempSalesLine.DELETEALL;
+                         CLEAR(TempSalesLine);
+                         CLEAR(Codeunit80EventSubscriber);
+                         Codeunit80EventSubscriber.CU80_GetSalesLines_ABCSI(Rec,TempSalesLine,i - 1,TempSL);
+                         CLEAR(Codeunit80EventSubscriber);
+
+                         IF TempSH."Tax Area Code" = '' THEN BEGIN
+                           CASE i OF
+                             1:
+                               SalesLine.CalcVATAmountLines(0,Rec,TempSalesLine,TempVATAmountLine1);
+                             2:
+                               SalesLine.CalcVATAmountLines(0,Rec,TempSalesLine,TempVATAmountLine2);
+                             3:
+                               SalesLine.CalcVATAmountLines(0,Rec,TempSalesLine,TempVATAmountLine3);
+                           END;
+                         END ELSE BEGIN
+                         { sales tax }
+                         SalesTaxCalculate.StartSalesTaxCalculation;
+                         Codeunit398EventSubscriber.CU398_SetSalesHeader(TempSH); //TPZ2829 Event Conversion
+                         TempSalesLine.SETFILTER(Type,'>0');
+                         TempSalesLine.SETFILTER(Quantity,'<>0');
+                         IF TempSalesLine.FIND('-') THEN
+                           REPEAT
+                             SalesTaxCalculate.AddSalesLine(TempSalesLine);
+                           UNTIL TempSalesLine.NEXT = 0;
+                         TempSalesLine.RESET;
+                         CASE i OF
+                           1:
+                             BEGIN
+                               TempSalesTaxLine1.DELETEALL;
+                               SalesTaxCalculate.EndSalesTaxCalculation("Posting Date");
+                               SalesTaxCalculate.GetSalesTaxAmountLineTable(TempSalesTaxLine1);
+                             END;
+                           2:
+                             BEGIN
+                               TempSalesTaxLine2.DELETEALL;
+                               SalesTaxCalculate.EndSalesTaxCalculation("Posting Date");
+                               SalesTaxCalculate.GetSalesTaxAmountLineTable(TempSalesTaxLine2);
+                             END;
+                           3:
+                             BEGIN
+                               TempSalesTaxLine3.DELETEALL;
+                               SalesTaxCalculate.EndSalesTaxCalculation("Posting Date");
+                               SalesTaxCalculate.GetSalesTaxAmountLineTable(TempSalesTaxLine3);
+                             END;
+                         END;
+                         END;  //end sales tax
+
+                         IF Status = Status::Open THEN
+                           //SalesTaxCalculate.DistTaxOverSalesLinesTemp(TempSalesLine);  //does not validate outstanding amount which gets non temp sales header
+                           SalesTaxCalculate.DistTaxOverSalesLines(TempSalesLine);
+                         SalesPost.SumSalesLinesTemp(
+                           Rec,TempSalesLine,i - 1,TotalSalesLine[i],TotalSalesLineLCY[i],
+                           VATAmount[i],VATAmountText[i],ProfitLCY[i],ProfitPct[i],TotalAdjCostLCY[i]);
+                         IF i = 3 THEN
+                           TotalAdjCostLCY[i] := TotalSalesLineLCY[i]."Unit Cost (LCY)";
+
+                         AdjProfitLCY[i] := TotalSalesLineLCY[i].Amount - TotalAdjCostLCY[i];
+                         IF TotalSalesLineLCY[i].Amount <> 0 THEN
+                           AdjProfitPct[i] := ROUND(AdjProfitLCY[i] / TotalSalesLineLCY[i].Amount * 100,0.1);
+                         TotalAmount1[i] := TotalSalesLine[i].Amount;
+                         TotalAmount2[i] := TotalAmount1[i];
+                         VATAmount[i] := 0;
+
+                         SalesTaxCalculate.GetSummarizedSalesTaxTable(TempSalesTaxAmtLine);
+                         BrkIdx := 0;
+                         PrevPrintOrder := 0;
+                         PrevTaxPercent := 0;
+                         IF TaxArea."Country/Region" = TaxArea."Country/Region"::CA THEN
+                           BreakdownTitle := Text1020010
+                         ELSE
+                           BreakdownTitle := Text1020011;
+                         WITH TempSalesTaxAmtLine DO BEGIN
+                           RESET;
+                           SETCURRENTKEY("Print Order","Tax Area Code for Key","Tax Jurisdiction Code");
+                           IF FIND('-') THEN
+                             REPEAT
+                               IF ("Print Order" = 0) OR
+                                  ("Print Order" <> PrevPrintOrder) OR
+                                  ("Tax %" <> PrevTaxPercent)
+                               THEN BEGIN
+                                 BrkIdx := BrkIdx + 1;
+                                 IF BrkIdx > ARRAYLEN(BreakdownAmt) THEN BEGIN
+                                   BrkIdx := BrkIdx - 1;
+                                   BreakdownLabel[i,BrkIdx] := Text1020012;
+                                 END ELSE
+                                   BreakdownLabel[i,BrkIdx] := STRSUBSTNO("Print Description","Tax %");
+                               END;
+                               BreakdownAmt[i,BrkIdx] := BreakdownAmt[i,BrkIdx] + "Tax Amount";
+                               VATAmount[i] := VATAmount[i] + "Tax Amount";
+                             UNTIL NEXT = 0;
+                           TotalAmount2[i] := TotalAmount2[i] + VATAmount[i];
+                         END;
+                       END;
+                       TempSalesLine.DELETEALL;
+                       CLEAR(TempSalesLine);
+                       SalesPostPrepmt.GetSalesLines(Rec,0,TempSalesLine);
+                       SalesPostPrepmt.SumPrepmt(
+                         Rec,TempSalesLine,TempVATAmountLine4,PrepmtTotalAmount,PrepmtVATAmount,PrepmtVATAmountText);
+                       PrepmtInvPct :=
+                         Pct(TotalSalesLine[1]."Prepmt. Amt. Inv.",PrepmtTotalAmount);
+                       PrepmtDeductedPct :=
+                         Pct(TotalSalesLine[1]."Prepmt Amt Deducted",TotalSalesLine[1]."Prepmt. Amt. Inv.");
+                       IF "Prices Including VAT" THEN BEGIN
+                         PrepmtTotalAmount2 := PrepmtTotalAmount;
+                         PrepmtTotalAmount := PrepmtTotalAmount + PrepmtVATAmount;
+                       END ELSE
+                         PrepmtTotalAmount2 := PrepmtTotalAmount + PrepmtVATAmount;
+
+                       IF Cust.GET("Bill-to Customer No.") THEN
+                         Cust.CALCFIELDS("Balance (LCY)")
+                       ELSE
+                         CLEAR(Cust);
+                       CASE TRUE OF
+                         Cust."Credit Limit (LCY)" = 0:
+                           CreditLimitLCYExpendedPct := 0;
+                         Cust."Balance (LCY)" / Cust."Credit Limit (LCY)" < 0:
+                           CreditLimitLCYExpendedPct := 0;
+                         Cust."Balance (LCY)" / Cust."Credit Limit (LCY)" > 1:
+                           CreditLimitLCYExpendedPct := 10000;
+                         ELSE
+                           CreditLimitLCYExpendedPct := ROUND(Cust."Balance (LCY)" / Cust."Credit Limit (LCY)" * 10000,1);
+                       END;
+
+                       TempSalesTaxLine1.MODIFYALL(Modified,FALSE);
+                       TempSalesTaxLine2.MODIFYALL(Modified,FALSE);
+                       TempSalesTaxLine3.MODIFYALL(Modified,FALSE);
+                       // TempSalesTaxLine4.MODIFYALL(Modified,FALSE);
+
+                       PrevTab := -1;
+
+                       //TOP150 - KT ABCSI Sales Order Margin Review 04072015 Start
+                       VendorPft := TotalSalesLineLCY[1].Amount - TotalVendorCost;
+                       IF TotalSalesLineLCY[1].Amount <> 0 THEN
+                         "VendorPft%" := ROUND( ( VendorPft * 100) / TotalSalesLineLCY[1].Amount, 0.1);
+                       //TOP150 - KT ABCSI Sales Order Margin Review 04072015 Start
+                     END;
+
+    ActionList=ACTIONS
+    {
+      { 1000000030;  ;ActionContainer;
+                      Name=options;
+                      ActionContainerType=NewDocumentItems }
+      { 1000000032;1 ;ActionGroup }
+      { 1000000033;2 ;Action    ;
+                      Name=ShowLocName;
+                      CaptionML=ENU=Show Location Name;
+                      Promoted=Yes;
+                      Visible=ESACC_C1000000033_Visible;
+                      Enabled=ESACC_C1000000033_Enabled;
+                      PromotedIsBig=Yes;
+                      OnAction=BEGIN
+                                 IF ShowLocationName THEN BEGIN
+                                   ShowLocationName := FALSE;
+                                   ShowLocationCode := TRUE;
+                                 END ELSE BEGIN
+                                   ShowLocationName := TRUE;
+                                   ShowLocationCode := FALSE;
+                                 END;
+
+                                 CurrPage.UPDATE;
+                               END;
+                                }
+      { 1000000034;2 ;Action    ;
+                      Name=Refresh;
+                      ShortCutKey=F5;
+                      CaptionML=ENU=Refresh Statistics;
+                      Promoted=Yes;
+                      Visible=FALSE;
+                      Enabled=FALSE;
+                      PromotedIsBig=Yes;
+                      OnAction=BEGIN
+                                 DELETEALL;
+                                 TempSH.DELETEALL;
+                                 TempSL.DELETEALL;
+                                 //SH.FIND('-');
+                                 LineNo:=0;
+
+                                 //create tempsh and tempsl for each location
+                                 SL.RESET;
+                                 SL.SETCURRENTKEY("Document Type","Document No.","Location Code");
+                                 SL.SETRANGE("Document Type",SH."Document Type");
+                                 SL.SETRANGE("Document No.",SH."No.");
+                                 SL.SETFILTER("Location Code",'<>''''');
+                                 SL.SETRANGE(Type,SL.Type::Item);
+                                 SL.SETFILTER(Quantity,'<>0');
+                                 IF SL.FINDSET THEN BEGIN
+                                   SaveLoc:=SL."Location Code";
+                                   TempSH:=SH;
+                                   TempSH."Location Code":=SL."Location Code";
+                                   TempSH.INSERT;
+
+                                   REPEAT
+
+                                     IF SL."Location Code" <> SaveLoc THEN BEGIN
+                                       TempSH."No.":=INCSTR(TempSH."No.");
+                                       TempSH."Location Code":=SL."Location Code";
+                                       TempSH.INSERT;
+
+                                       SaveLoc:=SL."Location Code";
+                                     END;
+                                     TempSL:=SL;
+                                     TempSL."Document No." := TempSH."No.";
+                                     TempSL.INSERT;
+                                   UNTIL SL.NEXT = 0;
+                                 END;
+
+                                 //now calculate statistics for each tempsh
+
+                                 TempSH.RESET;
+                                 IF NOT TempSH.FINDSET THEN
+                                   ERROR('No Statistic lines');
+
+                                 SalesSetup.GET;
+                                 AllowInvDisc := NOT (SalesSetup."Calc. Inv. Discount" AND CustInvDiscRecExists(SH."Invoice Disc. Code"));
+                                 AllowVATDifference :=
+                                   SalesSetup."Allow VAT Difference" AND
+                                   NOT (SH."Document Type" IN ["Document Type"::Quote,"Document Type"::"Blanket Order"]);
+
+                                 IF SH."Tax Area Code" <> '' THEN
+                                   TaxArea.GET(SH."Tax Area Code");
+                                 IF SH."Currency Factor" = 0 THEN
+                                   ExchangeFactor := 1
+                                 ELSE
+                                   ExchangeFactor := SH."Currency Factor";
+
+                                 REPEAT
+                                   Rec:=TempSH;
+                                   INSERT;
+                                 UNTIL TempSH.NEXT = 0;
+
+                                 FIND('-');
+                                 CurrPage.UPDATE;
+                               END;
+                                }
+    }
+  }
+  CONTROLS
+  {
+    { 1000000000;0;Container;
+                ContainerType=ContentArea }
+
+    { 1000000001;1;Group  ;
+                Name=Group;
+                GroupType=Repeater }
+
+    { 1000000002;2;Field  ;
+                SourceExpr="Document Type";
+                Visible=false;
+                Editable=ESACC_F1_Editable;
+                HideValue=ESACC_F1_HideValue }
+
+    { 1000000003;2;Field  ;
+                CaptionML=ENU=Order No.;
+                SourceExpr=SH."No.";
+                Visible=false }
+
+    { 1000000004;2;Field  ;
+                SourceExpr="Location Code";
+                Visible=ESACC_F28_Visible AND (ShowLocationCode);
+                Editable=ESACC_F28_Editable;
+                HideValue=ESACC_F28_HideValue }
+
+    { 1000000017;2;Field  ;
+                CaptionML=ENU=Location Name;
+                SourceExpr=LocName;
+                Visible=ShowLocationName }
+
+    { 1000000005;2;Field  ;
+                CaptionML=[ENU=Quantity;
+                           ESM=Cantidad;
+                           FRC=Quantit‚;
+                           ENC=Quantity];
+                DecimalPlaces=0:5;
+                SourceExpr=TotalSalesLine[1].Quantity;
+                Editable=FALSE }
+
+    { 1000000011;2;Field  ;
+                SourceExpr=TotalSalesLine[1]."Line Amount";
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code";
+                CaptionClass=GetCaptionClass(Text002,FALSE);
+                Editable=FALSE }
+
+    { 1000000010;2;Field  ;
+                CaptionML=[ENU=Inv. Discount Amount;
+                           ESM=Importe dto. factura;
+                           FRC=Montant d'escompte sur facture;
+                           ENC=Inv. Discount Amount];
+                SourceExpr=TotalSalesLine[1]."Inv. Discount Amount";
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code";
+                Editable=FALSE;
+                OnValidate=BEGIN
+                             UpdateInvDiscAmount(1);
+                           END;
+                            }
+
+    { 1000000009;2;Field  ;
+                SourceExpr=TotalAmount1[1];
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code";
+                CaptionClass=GetCaptionClass(Text001,FALSE);
+                Editable=FALSE;
+                OnValidate=BEGIN
+                             UpdateTotalAmount(1);
+                           END;
+                            }
+
+    { 1000000008;2;Field  ;
+                Name=TaxAmount;
+                CaptionML=[ENU=Tax Amount;
+                           ESM=Imp. impto.;
+                           FRC=Montant de la taxe;
+                           ENC=Tax Amount];
+                SourceExpr=VATAmount[1];
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code";
+                Editable=FALSE }
+
+    { 1000000007;2;Field  ;
+                SourceExpr=TotalAmount2[1];
+                AutoFormatType=1;
+                AutoFormatExpr="Currency Code";
+                CaptionClass=GetCaptionClass(Text001,TRUE);
+                Editable=FALSE;
+                OnValidate=BEGIN
+                             TotalAmount21OnAfterValidate;
+                           END;
+                            }
+
+    { 1000000006;2;Field  ;
+                CaptionML=[ENU=Sales ($);
+                           ESM=Ventas ($);
+                           FRC=Ventes ($);
+                           ENC=Sales ($)];
+                SourceExpr=TotalSalesLineLCY[1].Amount;
+                AutoFormatType=1;
+                Editable=FALSE }
+
+    { 1000000012;2;Field  ;
+                CaptionML=[ENU=Original Profit ($);
+                           ESM=Bf§ original ($);
+                           FRC=Profit initial ($);
+                           ENC=Original Profit ($)];
+                SourceExpr=ProfitLCY[2];
+                AutoFormatType=1;
+                Editable=FALSE }
+
+    { 1000000015;2;Field  ;
+                CaptionML=[ENU=Adjusted Profit ($);
+                           ESM=Beneficio ajustado ($);
+                           FRC=Profit ajust‚ ($);
+                           ENC=Adjusted Profit ($)];
+                SourceExpr=AdjProfitLCY[1];
+                AutoFormatType=1;
+                Editable=FALSE }
+
+    { 1000000014;2;Field  ;
+                CaptionML=[ENU=Original Profit %;
+                           ESM=% Bf§ original;
+                           FRC=% profit initial;
+                           ENC=Original Profit %];
+                DecimalPlaces=1:1;
+                SourceExpr=ProfitPct[1];
+                Editable=FALSE }
+
+    { 1000000013;2;Field  ;
+                CaptionML=[ENU=Adjusted Profit %;
+                           ESM=% beneficio ajustado;
+                           FRC=% profit ajust‚;
+                           ENC=Adjusted Profit %];
+                DecimalPlaces=1:1;
+                SourceExpr=AdjProfitPct[1];
+                Editable=FALSE }
+
+    { 1000000023;2;Field  ;
+                CaptionML=[ENU=Parcels;
+                           ESM=Lotes;
+                           FRC=Colis;
+                           ENC=Parcels];
+                DecimalPlaces=0:5;
+                SourceExpr=TotalSalesLine[1]."Units per Parcel";
+                Editable=FALSE }
+
+    { 1000000022;2;Field  ;
+                CaptionML=[ENU=Net Weight;
+                           ESM=Peso neto;
+                           FRC=Poids net;
+                           ENC=Net Weight];
+                DecimalPlaces=0:5;
+                SourceExpr=TotalSalesLine[1]."Net Weight";
+                Editable=FALSE }
+
+    { 1000000021;2;Field  ;
+                CaptionML=[ENU=Gross Weight;
+                           ESM=Peso bruto;
+                           FRC=Poids brut;
+                           ENC=Gross Weight];
+                DecimalPlaces=0:5;
+                SourceExpr=TotalSalesLine[1]."Gross Weight";
+                Editable=FALSE }
+
+    { 1000000020;2;Field  ;
+                CaptionML=[ENU=Volume;
+                           ESM=Volumen;
+                           FRC=Volume;
+                           ENC=Volume];
+                DecimalPlaces=0:5;
+                SourceExpr=TotalSalesLine[1]."Unit Volume";
+                Editable=FALSE }
+
+    { 1000000019;2;Field  ;
+                CaptionML=[ENU=Original Cost ($);
+                           ESM=Costo original ($);
+                           FRC=Co–t initial ($);
+                           ENC=Original Cost ($)];
+                SourceExpr=TotalSalesLineLCY[1]."Unit Cost (LCY)";
+                AutoFormatType=1;
+                Editable=FALSE }
+
+    { 1000000018;2;Field  ;
+                CaptionML=[ENU=Adjusted Cost ($);
+                           ESM=Costo ajustado ($);
+                           FRC=Co–t ajust‚ ($);
+                           ENC=Adjusted Cost ($)];
+                SourceExpr=TotalAdjCostLCY[1];
+                AutoFormatType=1;
+                Editable=FALSE }
+
+    { 1000000016;2;Field  ;
+                CaptionML=[ENU=Cost Adjmt. Amount ($);
+                           ESM=Importe costo ajustado ($);
+                           FRC=Montant ajustement co–t ($);
+                           ENC=Cost Adjmt. Amount ($)];
+                SourceExpr=TotalAdjCostLCY[1] - TotalSalesLineLCY[1]."Unit Cost (LCY)";
+                AutoFormatType=1;
+                Editable=FALSE;
+                OnLookup=BEGIN
+                           LookupAdjmtValueEntries(0);
+                         END;
+                          }
+
+    { 1000000024;2;Field  ;
+                Name=NoOfVATLines_General;
+                DrillDown=Yes;
+                CaptionML=[ENU=No. of Tax Lines;
+                           ESM=N§ de l¡neas de IVA;
+                           FRC=Nombre de lignes TVA;
+                           ENC=No. of Tax Lines];
+                SourceExpr=TempSalesTaxLine1.COUNT;
+                OnDrillDown=BEGIN
+                              VATLinesDrillDown(TempSalesTaxLine1,FALSE,ActiveTab::General);
+                              UpdateHeaderInfo(1,TempSalesTaxLine1);
+                            END;
+                             }
+
+    { 1000000025;2;Field  ;
+                CaptionML=ENU=Item Card Unit Cost;
+                SourceExpr=ItemCardUnitCost }
+
+    { 1000000031;2;Field  ;
+                CaptionML=[ENU=Sales Order Profit $;
+                           ESM=Bf§ bruto ($);
+                           FRC=Profit ($);
+                           ENC=Profit ($)];
+                SourceExpr=ProfitLCY[1];
+                AutoFormatType=1;
+                Editable=FALSE }
+
+    { 1000000029;2;Field  ;
+                Name=VendorCostSum;
+                CaptionML=ENU=Total Cost ($);
+                SourceExpr=VendorCostSum;
+                Editable=FALSE }
+
+    { 1000000028;2;Field  ;
+                Name=TotalVendorCost;
+                CaptionML=ENU=Cost ($);
+                SourceExpr=TotalVendorCost;
+                Editable=FALSE }
+
+    { 1000000027;2;Field  ;
+                Name=VendorPft;
+                CaptionML=ENU=Profit ($);
+                SourceExpr=VendorPft;
+                Editable=FALSE }
+
+    { 1000000026;2;Field  ;
+                Name="VendorPft%";
+                CaptionML=ENU=Profit (%);
+                SourceExpr="VendorPft%";
+                Editable=FALSE }
+
+  }
+  CODE
+  {
+    VAR
+      ESACC_ESFLADSMgt@14123801 : Codeunit 14123801;
+      ESACC_C1000000033_Visible@915000330 : Boolean INDATASET;
+      ESACC_C1000000033_Enabled@915000333 : Boolean INDATASET;
+      ESACC_C1000000034_Visible@915000340 : Boolean INDATASET;
+      ESACC_C1000000034_Enabled@915000343 : Boolean INDATASET;
+      ESACC_F1_Visible@900000010 : Boolean INDATASET;
+      ESACC_F1_Editable@900000011 : Boolean INDATASET;
+      ESACC_F1_HideValue@900000012 : Boolean INDATASET;
+      ESACC_F28_Visible@900000280 : Boolean INDATASET;
+      ESACC_F28_Editable@900000281 : Boolean INDATASET;
+      ESACC_F28_HideValue@900000282 : Boolean INDATASET;
+      SH@1000000000 : Record 36;
+      SL@1000000001 : Record 37;
+      SaveLoc@1000000002 : Code[10];
+      LineNo@1000000003 : Integer;
+      LOCi@1000000005 : Integer;
+      LocName@1000000051 : Text;
+      Text000@1000000053 : TextConst 'ENU=Sales %1 Statistics;ESM=Estad¡sticas %1 ventas;FRC=Statistiques %1 vente;ENC=Sales %1 Statistics';
+      Text001@1000000052 : TextConst 'ENU=Total;ESM=Total;FRC=Total;ENC=Total';
+      Text002@1000000050 : TextConst 'ENU=Amount;ESM=Importe;FRC=Montant;ENC=Amount';
+      Text003@1000000049 : TextConst 'ENU=%1 must not be 0.;ESM=%1 no debe ser 0.;FRC=%1 ne doit pas ˆtre 0.;ENC=%1 must not be 0.';
+      Text004@1000000048 : TextConst 'ENU=%1 must not be greater than %2.;ESM=%1 no debe ser m s grande que %2.;FRC=%1 ne doit pas ˆtre sup‚rieur(e) … %2.;ENC=%1 must not be greater than %2.';
+      Text005@1000000047 : TextConst 'ENU=You cannot change the invoice discount because there is a %1 record for %2 %3.;ESM=No puede cambiar el dto. factura porque hay un %1 registro para %2 %3.;FRC=Vous ne pouvez pas modifier l''escompte de la facture car il existe un enregistrement %1 pour %2 %3.;ENC=You cannot change the invoice discount because there is a %1 record for %2 %3.';
+      Text006@1000000046 : TextConst 'ENU=Prepmt. Amount;ESM=Imp. prepago;FRC=Montant de paiement anticip‚;ENC=Prepmt. Amount';
+      Text007@1000000045 : TextConst 'ENU=Prepmt. Amt. Invoiced;ESM=Imp. prepago facturado;FRC=Montant de paiement anticip‚ factur‚;ENC=Prepmt. Amt. Invoiced';
+      Text008@1000000044 : TextConst 'ENU=Prepmt. Amt. Deducted;ESM=Imp. prepago descontado;FRC=Montant de paiement anticip‚ d‚duit;ENC=Prepmt. Amt. Deducted';
+      Text009@1000000043 : TextConst 'ENU=Prepmt. Amt. to Deduct;ESM=Imp. prepago que se debe descontar;FRC=Montant de paiement anticip‚ … d‚duire;ENC=Prepmt. Amt. to Deduct';
+      Text1020010@1000000042 : TextConst 'ENU=Tax Breakdown:;ESM=Desglose imptos.:;FRC=Ventilation fiscale :;ENC=Tax Breakdown:';
+      Text1020011@1000000041 : TextConst 'ENU=Sales Tax Breakdown:;ESM=An lisis impto. vtas.:;FRC=Ventilation de la taxe de vente :;ENC=Sales Tax Breakdown:';
+      Text1020012@1000000040 : TextConst 'ENU=Other Taxes;ESM=Otros impuestos;FRC=Autres taxes;ENC=Other Taxes';
+      TempSH@1000000061 : TEMPORARY Record 36;
+      TempSL@1000000062 : TEMPORARY Record 37;
+      "//"@1000000004 : Integer;
+      TotalSalesLine@1000000060 : ARRAY [3] OF Record 37;
+      TotalSalesLineLCY@1000000059 : ARRAY [3] OF Record 37;
+      Cust@1000000058 : Record 18;
+      TempSalesTaxLine1@1000000057 : TEMPORARY Record 10011;
+      TempSalesTaxLine2@1000000056 : TEMPORARY Record 10011;
+      TempSalesTaxLine3@1000000055 : TEMPORARY Record 10011;
+      TempVATAmountLine4@1000000054 : TEMPORARY Record 290;
+      SalesSetup@1000000039 : Record 311;
+      SalesTaxDifference@1000000038 : Record 10012;
+      TaxArea@1000000037 : Record 318;
+      SalesPost@1000000036 : Codeunit 80;
+      SalesTaxCalculate@1000000035 : Codeunit 398;
+      TotalAmount1@1000000034 : ARRAY [3] OF Decimal;
+      TotalAmount2@1000000033 : ARRAY [3] OF Decimal;
+      VATAmount@1000000032 : ARRAY [3] OF Decimal;
+      PrepmtTotalAmount@1000000031 : Decimal;
+      PrepmtVATAmount@1000000030 : Decimal;
+      PrepmtTotalAmount2@1000000029 : Decimal;
+      VATAmountText@1000000028 : ARRAY [3] OF Text[30];
+      PrepmtVATAmountText@1000000027 : Text[30];
+      ProfitLCY@1000000026 : ARRAY [3] OF Decimal;
+      ProfitPct@1000000025 : ARRAY [3] OF Decimal;
+      AdjProfitLCY@1000000024 : ARRAY [3] OF Decimal;
+      AdjProfitPct@1000000023 : ARRAY [3] OF Decimal;
+      TotalAdjCostLCY@1000000022 : ARRAY [3] OF Decimal;
+      CreditLimitLCYExpendedPct@1000000021 : Decimal;
+      ExchangeFactor@1000000020 : Decimal;
+      PrepmtInvPct@1000000019 : Decimal;
+      PrepmtDeductedPct@1000000018 : Decimal;
+      i@1000000017 : Integer;
+      PrevNo@1000000016 : Code[20];
+      ActiveTab@1000000015 : 'General,Invoicing,Shipping,Prepayment';
+      PrevTab@1000000014 : 'General,Invoicing,Shipping,Prepayment';
+      VATLinesFormIsEditable@1000000013 : Boolean;
+      AllowInvDisc@1000000012 : Boolean;
+      AllowVATDifference@1000000011 : Boolean;
+      VATLinesForm@1000000010 : Page 36740;
+      BreakdownTitle@1000000009 : Text[35];
+      BreakdownLabel@1000000008 : ARRAY [3,4] OF Text[30];
+      BreakdownAmt@1000000007 : ARRAY [3,4] OF Decimal;
+      BrkIdx@1000000006 : Integer;
+      "//TOP150"@1000000063 : Integer;
+      ItemCardUnitCost@1000000064 : Decimal;
+      SalesOrderProfitAmt@1000000065 : Decimal;
+      ProfitMarginPct@1000000066 : Decimal;
+      "***ABCSI Globals***"@1000000071 : Integer;
+      TotalVendorCost@1000000070 : Decimal;
+      VendorCostSum@1000000069 : Decimal;
+      VendorPft@1000000068 : Decimal;
+      "VendorPft%"@1000000067 : Decimal;
+      "//VAT"@1000000072 : Integer;
+      TempVATAmountLine1@1000000076 : TEMPORARY Record 290;
+      TempVATAmountLine2@1000000075 : TEMPORARY Record 290;
+      TempVATAmountLine3@1000000074 : TEMPORARY Record 290;
+      ShowLocationName@1000000073 : Boolean;
+      ShowLocationCode@1000000077 : Boolean;
+      LocationRec@1000000078 : Record 14;
+      Codeunit80EventSubscriber@1000000079 : Codeunit 51787;
+
+    LOCAL PROCEDURE ESACC_EasySecurity@14123801(OpenObject@14123801 : Boolean);
+    VAR
+      SetFilters@14123802 : Codeunit 14123812;
+      TempBoolean@14123803 : Boolean;
+    BEGIN
+      IF OpenObject THEN BEGIN
+        SetFilters.Filter36(Rec,8,50016);
+
+        TempBoolean := CurrPage.EDITABLE;
+        IF ESACC_ESFLADSMgt.PageGeneral(36,50016,TempBoolean) THEN
+          CurrPage.EDITABLE := TempBoolean;
+      END;
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,50016,1,1000000033,
+        ESACC_C1000000033_Visible,ESACC_C1000000033_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,50016,1,1000000034,
+        ESACC_C1000000034_Visible,ESACC_C1000000034_Enabled,TempBoolean);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,50016,0,1,
+        ESACC_F1_Visible,ESACC_F1_Editable,ESACC_F1_HideValue);
+
+      ESACC_ESFLADSMgt.PageControl(
+        36,50016,0,28,
+        ESACC_F28_Visible,ESACC_F28_Editable,ESACC_F28_HideValue);
+
+      ESACC_EasySecurityManual(OpenObject);
+    END;
+
+    LOCAL PROCEDURE ESACC_EasySecurityManual@14123811(OpenObject@14123811 : Boolean);
+    BEGIN
+    END;
+
+    PROCEDURE SetSalesOrder@1000000002(SalesOrder@1000000000 : Record 36);
+    BEGIN
+      SH:=SalesOrder;
+    END;
+
+    PROCEDURE "//10038"@1000000000();
+    BEGIN
+    END;
+
+    LOCAL PROCEDURE UpdateHeaderInfo@5(IndexNo@1000 : Integer;VAR SalesTaxAmountLine@1001 : TEMPORARY Record 10011);
+    VAR
+      CurrExchRate@1002 : Record 330;
+      UseDate@1003 : Date;
+    BEGIN
+      WITH TempSH DO BEGIN
+
+      TotalSalesLine[IndexNo]."Inv. Discount Amount" := SalesTaxAmountLine.GetTotalInvDiscAmount;
+      TotalAmount1[IndexNo] :=
+        TotalSalesLine[IndexNo]."Line Amount" - TotalSalesLine[IndexNo]."Inv. Discount Amount";
+      VATAmount[IndexNo] := SalesTaxAmountLine.GetTotalTaxAmountFCY;
+      IF "Prices Including VAT" THEN
+        TotalAmount2[IndexNo] := TotalSalesLine[IndexNo].Amount
+      ELSE
+        TotalAmount2[IndexNo] := TotalAmount1[IndexNo] + VATAmount[IndexNo];
+
+      IF "Prices Including VAT" THEN
+        TotalSalesLineLCY[IndexNo].Amount := TotalAmount2[IndexNo]
+      ELSE
+        TotalSalesLineLCY[IndexNo].Amount := TotalAmount1[IndexNo];
+      IF "Currency Code" <> '' THEN
+        IF ("Document Type" IN ["Document Type"::"Blanket Order","Document Type"::Quote]) AND
+           ("Posting Date" = 0D)
+        THEN
+          UseDate := WORKDATE
+        ELSE
+          UseDate := "Posting Date";
+
+      TotalSalesLineLCY[IndexNo].Amount :=
+        CurrExchRate.ExchangeAmtFCYToLCY(
+          UseDate,"Currency Code",TotalSalesLineLCY[IndexNo].Amount,"Currency Factor");
+
+      ProfitLCY[IndexNo] := TotalSalesLineLCY[IndexNo].Amount - TotalSalesLineLCY[IndexNo]."Unit Cost (LCY)";
+      IF TotalSalesLineLCY[IndexNo].Amount = 0 THEN
+        ProfitPct[IndexNo] := 0
+      ELSE
+        ProfitPct[IndexNo] := ROUND(100 * ProfitLCY[IndexNo] / TotalSalesLineLCY[IndexNo].Amount,0.01);
+
+      AdjProfitLCY[IndexNo] := TotalSalesLineLCY[IndexNo].Amount - TotalAdjCostLCY[IndexNo];
+      IF TotalSalesLineLCY[IndexNo].Amount = 0 THEN
+        AdjProfitPct[IndexNo] := 0
+      ELSE
+        AdjProfitPct[IndexNo] := ROUND(100 * AdjProfitLCY[IndexNo] / TotalSalesLineLCY[IndexNo].Amount,0.01);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE GetVATSpecification@21(StatisticsTab@1000 : 'General,Invoicing,Shipping');
+    BEGIN
+      CASE StatisticsTab OF
+        StatisticsTab::General:
+          BEGIN
+            VATLinesForm.GetTempTaxAmountLine(TempSalesTaxLine1);
+            UpdateHeaderInfo(1,TempSalesTaxLine1);
+          END;
+        StatisticsTab::Invoicing:
+          BEGIN
+            VATLinesForm.GetTempTaxAmountLine(TempSalesTaxLine2);
+            UpdateHeaderInfo(2,TempSalesTaxLine2);
+          END;
+        StatisticsTab::Shipping:
+          VATLinesForm.GetTempTaxAmountLine(TempSalesTaxLine3);
+      END;
+    END;
+
+    LOCAL PROCEDURE SetEditableForVATLinesForm@11(StatisticsTab@1000 : 'General,Invoicing,Shipping,Prepayment');
+    BEGIN
+      {
+      CASE StatisticsTab OF
+        StatisticsTab::General,StatisticsTab::Invoicing:
+          IF Status = Status::Open THEN
+            VATLinesForm.EDITABLE := FALSE
+          ELSE
+            VATLinesForm.EDITABLE := VATLinesFormIsEditable;
+        StatisticsTab::Shipping:
+          VATLinesForm.EDITABLE := FALSE;
+        StatisticsTab::Prepayment:
+          VATLinesForm.EDITABLE := VATLinesFormIsEditable;
+      END;
+      }
+    END;
+
+    LOCAL PROCEDURE UpdateTotalAmount@16(IndexNo@1000 : Integer);
+    VAR
+      SaveTotalAmount@1001 : Decimal;
+    BEGIN
+      WITH SH DO BEGIN
+
+      CheckAllowInvDisc;
+      IF "Prices Including VAT" THEN BEGIN
+        SaveTotalAmount := TotalAmount1[IndexNo];
+        UpdateInvDiscAmount(IndexNo);
+        TotalAmount1[IndexNo] := SaveTotalAmount;
+      END;
+
+      WITH TotalSalesLine[IndexNo] DO
+        "Inv. Discount Amount" := "Line Amount" - TotalAmount1[IndexNo];
+      UpdateInvDiscAmount(IndexNo);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE UpdateInvDiscAmount@3(ModifiedIndexNo@1000 : Integer);
+    VAR
+      PartialInvoicing@1001 : Boolean;
+      MaxIndexNo@1002 : Integer;
+      IndexNo@1003 : ARRAY [2] OF Integer;
+      i@1004 : Integer;
+      InvDiscBaseAmount@1005 : Decimal;
+    BEGIN
+      WITH SH DO BEGIN
+
+      CheckAllowInvDisc;
+      IF NOT (ModifiedIndexNo IN [1,2]) THEN
+        EXIT;
+
+      IF ModifiedIndexNo = 1 THEN
+        InvDiscBaseAmount := TempSalesTaxLine1.GetTotalInvDiscBaseAmount(FALSE,"Currency Code")
+      ELSE
+        InvDiscBaseAmount := TempSalesTaxLine2.GetTotalInvDiscBaseAmount(FALSE,"Currency Code");
+
+      IF InvDiscBaseAmount = 0 THEN
+        ERROR(Text003,TempSalesTaxLine2.FIELDCAPTION("Inv. Disc. Base Amount"));
+
+      IF TotalSalesLine[ModifiedIndexNo]."Inv. Discount Amount" / InvDiscBaseAmount > 1 THEN
+        ERROR(
+          Text004,
+          TotalSalesLine[ModifiedIndexNo].FIELDCAPTION("Inv. Discount Amount"),
+          TempSalesTaxLine2.FIELDCAPTION("Inv. Disc. Base Amount"));
+
+      PartialInvoicing := (TotalSalesLine[1]."Line Amount" <> TotalSalesLine[2]."Line Amount");
+
+      IndexNo[1] := ModifiedIndexNo;
+      IndexNo[2] := 3 - ModifiedIndexNo;
+      IF (ModifiedIndexNo = 2) AND PartialInvoicing THEN
+        MaxIndexNo := 1
+      ELSE
+        MaxIndexNo := 2;
+
+      IF NOT PartialInvoicing THEN
+        IF ModifiedIndexNo = 1 THEN
+          TotalSalesLine[2]."Inv. Discount Amount" := TotalSalesLine[1]."Inv. Discount Amount"
+        ELSE
+          TotalSalesLine[1]."Inv. Discount Amount" := TotalSalesLine[2]."Inv. Discount Amount";
+
+      FOR i := 1 TO MaxIndexNo DO
+        WITH TotalSalesLine[IndexNo[i]] DO BEGIN
+          IF (i = 1) OR NOT PartialInvoicing THEN
+            IF IndexNo[i] = 1 THEN BEGIN
+              TempSalesTaxLine1.SetInvoiceDiscountAmount(
+                "Inv. Discount Amount","Currency Code","Prices Including VAT","VAT Base Discount %");
+            END ELSE
+              TempSalesTaxLine2.SetInvoiceDiscountAmount(
+                "Inv. Discount Amount","Currency Code","Prices Including VAT","VAT Base Discount %");
+
+          IF (i = 2) AND PartialInvoicing THEN
+            IF IndexNo[i] = 1 THEN BEGIN
+              InvDiscBaseAmount := TempSalesTaxLine2.GetTotalInvDiscBaseAmount(FALSE,"Currency Code");
+              IF InvDiscBaseAmount = 0 THEN
+                TempSalesTaxLine1.SetInvoiceDiscountPercent(
+                  0,"Currency Code","Prices Including VAT",FALSE,"VAT Base Discount %")
+              ELSE
+                TempSalesTaxLine1.SetInvoiceDiscountPercent(
+                  100 * TempSalesTaxLine2.GetTotalInvDiscAmount / InvDiscBaseAmount,
+                  "Currency Code","Prices Including VAT",FALSE,"VAT Base Discount %");
+            END ELSE BEGIN
+              InvDiscBaseAmount := TempSalesTaxLine1.GetTotalInvDiscBaseAmount(FALSE,"Currency Code");
+              IF InvDiscBaseAmount = 0 THEN
+                TempSalesTaxLine2.SetInvoiceDiscountPercent(
+                  0,"Currency Code","Prices Including VAT",FALSE,"VAT Base Discount %")
+              ELSE
+                TempSalesTaxLine2.SetInvoiceDiscountPercent(
+                  100 * TempSalesTaxLine1.GetTotalInvDiscAmount / InvDiscBaseAmount,
+                  "Currency Code","Prices Including VAT",FALSE,"VAT Base Discount %");
+            END;
+        END;
+
+      UpdateHeaderInfo(1,TempSalesTaxLine1);
+      UpdateHeaderInfo(2,TempSalesTaxLine2);
+
+      IF ModifiedIndexNo = 1 THEN
+        VATLinesForm.SetTempTaxAmountLine(TempSalesTaxLine1)
+      ELSE
+        VATLinesForm.SetTempTaxAmountLine(TempSalesTaxLine2);
+
+      "Invoice Discount Calculation" := "Invoice Discount Calculation"::Amount;
+      "Invoice Discount Value" := TotalSalesLine[1]."Inv. Discount Amount";
+      MODIFY;
+
+      UpdateTaxOnSalesLines;
+
+      END;
+    END;
+
+    LOCAL PROCEDURE GetCaptionClass@2(FieldCaption@1000 : Text[100];ReverseCaption@1001 : Boolean) : Text[80];
+    BEGIN
+      //WITH SH DO BEGIN
+
+      IF SH."Prices Including VAT" XOR ReverseCaption THEN
+        EXIT('2,1,' + FieldCaption);
+      EXIT('2,0,' + FieldCaption);
+
+      //END;
+    END;
+
+    LOCAL PROCEDURE UpdateTaxOnSalesLines@1();
+    VAR
+      SalesLine@1000 : Record 37;
+    BEGIN
+      GetVATSpecification(ActiveTab);
+
+      SalesLine.RESET;
+      SalesLine.SETRANGE("Document Type","Document Type");
+      SalesLine.SETRANGE("Document No.","No.");
+      SalesLine.FINDFIRST;
+
+      IF TempSalesTaxLine1.GetAnyLineModified THEN BEGIN
+        SalesTaxCalculate.StartSalesTaxCalculation;
+        SalesTaxCalculate.PutSalesTaxAmountLineTable(
+          TempSalesTaxLine1,
+          SalesTaxDifference."Document Product Area"::Sales,
+          "Document Type","No.");
+        SalesTaxCalculate.DistTaxOverSalesLines(SalesLine);
+        SalesTaxCalculate.SaveTaxDifferences;
+      END;
+      IF TempSalesTaxLine2.GetAnyLineModified THEN BEGIN
+        SalesTaxCalculate.StartSalesTaxCalculation;
+        SalesTaxCalculate.PutSalesTaxAmountLineTable(
+          TempSalesTaxLine2,
+          SalesTaxDifference."Document Product Area"::Sales,
+          "Document Type","No.");
+        SalesTaxCalculate.DistTaxOverSalesLines(SalesLine);
+        SalesTaxCalculate.SaveTaxDifferences;
+      END;
+
+      PrevNo := '';
+    END;
+
+    LOCAL PROCEDURE CustInvDiscRecExists@4(InvDiscCode@1000 : Code[20]) : Boolean;
+    VAR
+      CustInvDisc@1001 : Record 19;
+    BEGIN
+      CustInvDisc.SETRANGE(Code,InvDiscCode);
+      EXIT(CustInvDisc.FINDFIRST);
+    END;
+
+    LOCAL PROCEDURE CheckAllowInvDisc@8();
+    VAR
+      CustInvDisc@1000 : Record 19;
+    BEGIN
+      WITH SH DO BEGIN
+      IF NOT AllowInvDisc THEN
+        ERROR(
+          Text005,
+          CustInvDisc.TABLECAPTION,FIELDCAPTION("Invoice Disc. Code"),"Invoice Disc. Code");
+      END;
+    END;
+
+    LOCAL PROCEDURE Pct@6(Numerator@1001 : Decimal;Denominator@1000 : Decimal) : Decimal;
+    BEGIN
+      IF Denominator = 0 THEN
+        EXIT(0);
+      EXIT(ROUND(Numerator / Denominator * 10000,1));
+    END;
+
+    PROCEDURE VATLinesDrillDown@7(VAR VATLinesToDrillDown@1000 : Record 10011;ThisTabAllowsVATEditing@1001 : Boolean;ActiveTab@1002 : 'General,Invoicing,Shipping,Prepayment');
+    BEGIN
+      WITH SH DO BEGIN
+
+      CLEAR(VATLinesForm);
+      VATLinesForm.SetTempTaxAmountLine(VATLinesToDrillDown);
+      VATLinesForm.InitGlobals(
+        "Currency Code",AllowVATDifference,AllowVATDifference AND ThisTabAllowsVATEditing,
+        "Prices Including VAT",AllowInvDisc,"VAT Base Discount %");
+      SetEditableForVATLinesForm(ActiveTab);
+      VATLinesForm.RUNMODAL;
+      VATLinesForm.GetTempTaxAmountLine(VATLinesToDrillDown);
+
+      END;
+    END;
+
+    LOCAL PROCEDURE TotalAmount21OnAfterValidate@19074760();
+    BEGIN
+      WITH TempSH DO BEGIN
+
+      WITH TotalSalesLine[1] DO BEGIN
+        IF "Prices Including VAT" THEN
+          "Inv. Discount Amount" := "Line Amount" - "Amount Including VAT"
+        ELSE
+          "Inv. Discount Amount" := "Line Amount" - Amount;
+      END;
+      UpdateInvDiscAmount(1);
+
+      END;
+    END;
+
+    PROCEDURE "//150"@1000000001();
+    BEGIN
+    END;
+
+    PROCEDURE GetVendorCost@1000000006(VAR VendorCost@1000000000 : Decimal;VAR TotVendorCost@1000000006 : Decimal;SalesHeader@1000000002 : Record 36);
+    VAR
+      Item@1000000004 : Record 27;
+      Vendor@1000000003 : Record 23;
+      SalesLine@1000000001 : Record 37;
+      PurchPrice@1000000005 : Record 7012;
+    BEGIN
+      //TOP150 - KT ABCSI Sales Order Margin Review 04072015 Start
+      SalesLine.RESET;
+      SalesLine.SETCURRENTKEY("Document Type","Document No.","Line No.");
+      SalesLine.SETRANGE("Document Type",SH."Document Type");
+      SalesLine.SETRANGE("Document No.",SH."No.");
+      SalesLine.SETRANGE("Location Code",Rec."Location Code");
+      SalesLine.SETRANGE(Type,SalesLine.Type::Item);
+      IF SalesLine.FIND('-') THEN REPEAT
+        IF Item.GET(SalesLine."No.") AND Vendor.GET(Item."Vendor No.") THEN BEGIN
+          PurchPrice.RESET;
+          PurchPrice.SETCURRENTKEY("Item No.","Vendor No.","Unit of Measure Code");
+          PurchPrice.SETRANGE("Item No.",Item."No.");
+          PurchPrice.SETRANGE("Vendor No.",Vendor."No.");
+          PurchPrice.SETRANGE("Unit of Measure Code",'PCS');
+          IF PurchPrice.FIND('-') AND ( PurchPrice."Direct Unit Cost" <> 0) THEN BEGIN
+            VendorCost += PurchPrice."Direct Unit Cost" * (( 100 + Item."Indirect Cost %") / 100);
+            TotVendorCost += SalesLine."Quantity (Base)" * PurchPrice."Direct Unit Cost" * (( 100 + Item."Indirect Cost %") / 100);
+          END ELSE BEGIN
+            VendorCost += SalesLine."Unit Cost (LCY)";
+            TotVendorCost += SalesLine."Quantity (Base)" * SalesLine."Unit Cost (LCY)";
+          END;
+        END ELSE BEGIN
+          VendorCost += SalesLine."Unit Cost (LCY)";
+          TotVendorCost += SalesLine."Quantity (Base)" * SalesLine."Unit Cost (LCY)";
+        END;
+      UNTIL SalesLine.NEXT = 0;
+      //TOP150 - KT ABCSI Sales Order Margin Review 04072015 End
+    END;
+
+    BEGIN
+    {
+      TOP210 DM ABCSI Sales Order Statistics by Location 04072015
+        - Created this Page as part of this SMT
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,974 @@
+OBJECT Report 14000582 Initial ILE Update
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/01/20;
+    Time=12:00:00 PM;
+    Version List=UBP3.02;
+  }
+  PROPERTIES
+  {
+    Permissions=TableData 32=rimd;
+    CaptionML=ENU=Initial ILE Update;
+    OnPreReport=BEGIN
+                  IF NOT CONFIRM(
+                    'This program is used at initial startup to populate information in Item Ledger Entry.  This process can take some time.\' +
+                    'Do you wish to continue?',FALSE)
+                  THEN
+                    ERROR('Program End.');
+                  InvMgtSetup.GET;
+                END;
+
+  }
+  DATASET
+  {
+    { 1240020010;;DataItem;                  ;
+               DataItemTable=Table14;
+               DataItemTableView=WHERE(Enable Adv. Forecasting=CONST(Yes));
+               ReqFilterFields=Code }
+
+    { 7209;1   ;DataItem;                    ;
+               DataItemTable=Table32;
+               DataItemTableView=SORTING(Item No.,Variant Code,Location Code,Posting Date);
+               OnPreDataItem=VAR
+                               ILEFilter@1240020000 : Text[250];
+                             BEGIN
+                               SETFILTER("Posting Date", '%1..', InvMgtSetup."Usage Start Date");
+                               IF InvMgtSetup."Roll Up Via Repl. Path" THEN
+                                 ILEFilter := FORMAT("Entry Type"::Sale)
+                               ELSE
+                                 ILEFilter := FORMAT("Entry Type"::Sale) + '|' + FORMAT("Entry Type"::Transfer);
+                               ILEFilter := ILEFilter + '|' + FORMAT("Entry Type"::"Negative Adjmt.");
+                               ILEFilter := ILEFilter + '|' + FORMAT("Entry Type"::Consumption);
+                               ILEFilter := ILEFilter + '|' + FORMAT("Entry Type"::"Assembly Consumption");
+                               SETFILTER("Entry Type", ILEFilter);
+                               SETFILTER("Item No.",'<>%1','');
+                               SETRANGE(Correction, FALSE);
+                             END;
+
+               OnAfterGetRecord=VAR
+                                  UsageLedgerEntry@1240020000 : Record 14000556;
+                                  ProcUnit@1240020001 : Record 14000555;
+                                  IncludeDrops@1240020002 : Boolean;
+                                BEGIN
+                                  // if item ledger entry posting date is greater than usage start date do not include in usage
+                                  CASE "Entry Type" OF
+                                    "Entry Type"::Transfer:
+                                    BEGIN
+                                      // not used with roll-up.
+                                      //InsertTransferUsage;
+                                    END;
+                                    "Entry Type"::Sale:
+                                    BEGIN
+                                      CASE "Document Type" OF
+                                        "Document Type"::"Sales Shipment":
+                                         BEGIN
+                                           InsertSalesUsageFromShipment("Item Ledger Entry");
+                                         END;
+                                        "Document Type"::"Sales Invoice":
+                                        BEGIN
+                                           InsertSalesUsageFromInvoice("Item Ledger Entry");
+                                         END;
+                                         "Document Type"::"Service Shipment","Document Type"::"Service Invoice","Document Type"::"Service Credit Memo":
+                                         BEGIN
+                                           IF NOT Location."Include Service Usage" THEN
+                                    CurrReport.SKIP;
+
+                                           InsertSalesUsageFromService("Item Ledger Entry");
+                                    END;
+                                         ELSE BEGIN
+                                           InsertSalesUsageFromOther("Item Ledger Entry");
+
+
+                                  END;
+
+
+                                    END;
+                                  END;
+
+                                    "Entry Type"::"Negative Adjmt.":
+                                    BEGIN
+                                      InsertSalesUsageFromNegAdj("Item Ledger Entry");
+                                  END;
+                                    "Entry Type"::Consumption,"Entry Type"::"Assembly Consumption":
+                                    BEGIN
+                                      InsertSalesUsageFromConsumption("Item Ledger Entry");
+                                    END;
+                                  END;
+
+                                  IF UsageLedgerEntry.GET("Item Ledger Entry"."Entry No.") THEN BEGIN
+                                    UsageLedgerEntry."Ship-To Code" := "Item Ledger Entry"."Ship-to Code";
+                                    UsageLedgerEntry."Original Ship-To code" := "Item Ledger Entry"."Ship-to Code";
+                                    UsageLedgerEntry."Requested Delivery Date" := "Item Ledger Entry"."Requested Delivery Date";
+                                    UsageLedgerEntry."Shipment Date" := "Item Ledger Entry"."Shipment Date";
+                                    UsageLedgerEntry."First Shipment" := "Item Ledger Entry"."First Shipment";
+                                    UsageLedgerEntry."Usage Hit" := "Item Ledger Entry"."Usage Hit";
+                                    UsageLedgerEntry."Drop Shipment" := "Item Ledger Entry"."Drop Shipment";
+                                    UsageLedgerEntry."Exclude from Usage" := "Item Ledger Entry"."Exclude from Usage";
+                                    IncludeDrops := FALSE;
+                                    IF (UsageLedgerEntry."Drop Shipment") AND (NOT "Item Ledger Entry".Positive) THEN BEGIN
+                                      IF NOT ProcUnit.GET(UsageLedgerEntry."Location Code", UsageLedgerEntry."Item No.", UsageLedgerEntry."Variant Code") THEN
+                                        IncludeDrops := Location."Def. Include Drop Ship Usage"
+                                      ELSE
+                                        IncludeDrops := ProcUnit."Include Drop Ship Usage";
+                                      IF (IncludeDrops) AND (UsageLedgerEntry."First Shipment") AND (NOT UsageLedgerEntry."Exclude from Usage") THEN
+                                        UsageLedgerEntry."Usage Hit" := 1
+                                      ELSE
+                                        UsageLedgerEntry."Usage Hit" := 0;
+                                    END;
+                                    UsageLedgerEntry.MODIFY;
+                                  END;
+                                END;
+
+               ReqFilterFields=Entry No.;
+               DataItemLink=Location Code=FIELD(Code) }
+
+    { 1240020000;2;Column;Item_Ledger_Entry__Entry_No__;
+               SourceExpr="Entry No." }
+
+    { 1240020002;2;Column;Item_Ledger_Entry__Posting_Date_;
+               SourceExpr="Posting Date" }
+
+    { 1240020004;2;Column;Item_Ledger_Entry__Document_Date_;
+               SourceExpr="Document Date" }
+
+    { 1240020006;2;Column;Item_Ledger_Entry__Requested_Delivery_Date_;
+               SourceExpr="Requested Delivery Date" }
+
+    { 1240020008;2;Column;Item_Ledger_Entry__Shipment_Date_;
+               SourceExpr="Shipment Date" }
+
+    { 1240020012;2;Column;Item_Ledger_Entry__First_Shipment_;
+               SourceExpr="First Shipment" }
+
+    { 1240020001;2;Column;Item_Ledger_Entry__Entry_No__Caption;
+               SourceExpr=FIELDCAPTION("Entry No.") }
+
+    { 1240020003;2;Column;Item_Ledger_Entry__Posting_Date_Caption;
+               SourceExpr=FIELDCAPTION("Posting Date") }
+
+    { 1240020005;2;Column;Item_Ledger_Entry__Document_Date_Caption;
+               SourceExpr=FIELDCAPTION("Document Date") }
+
+    { 1240020007;2;Column;Item_Ledger_Entry__Requested_Delivery_Date_Caption;
+               SourceExpr=FIELDCAPTION("Requested Delivery Date") }
+
+    { 1240020009;2;Column;Item_Ledger_Entry__Shipment_Date_Caption;
+               SourceExpr=FIELDCAPTION("Shipment Date") }
+
+    { 1240020013;2;Column;Item_Ledger_Entry__First_Shipment_Caption;
+               SourceExpr=FIELDCAPTION("First Shipment") }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      InvMgtSetup@1240020003 : Record 14000551;
+
+    LOCAL PROCEDURE InsertSalesUsageFromShipment@1240020007(VAR CurrItemLedgEntry@1240020000 : Record 32);
+    VAR
+      ShipmentFound@1240020001 : Boolean;
+      SalesShipmentLine@1240020002 : Record 111;
+      SalesShipmentLine2@1240020004 : Record 111;
+      SalesShipmentHdr@1240020003 : Record 110;
+    BEGIN
+      IF ((CurrItemLedgEntry."Lot No." <> '') OR (CurrItemLedgEntry."Serial No." <> '')) THEN BEGIN
+        SalesShipmentLine.RESET;
+        SalesShipmentLine.SETCURRENTKEY("Document No.","Line No.");
+        SalesShipmentLine.SETRANGE("Document No.",CurrItemLedgEntry."Document No.");
+        SalesShipmentLine.SETRANGE("Line No.",CurrItemLedgEntry."Document Line No.");
+        SalesShipmentLine.SETRANGE(Type,SalesShipmentLine.Type::Item);
+        SalesShipmentLine.SETRANGE("No.",CurrItemLedgEntry."Item No.");
+        SalesShipmentLine.SETRANGE("Variant Code",CurrItemLedgEntry."Variant Code");
+        SalesShipmentLine.SETRANGE("Location Code",CurrItemLedgEntry."Location Code");
+        SalesShipmentLine.SETFILTER("Quantity (Base)",'<>%1',0);
+      END ELSE BEGIN
+        SalesShipmentLine.SETCURRENTKEY("Item Shpt. Entry No.");
+        SalesShipmentLine.SETRANGE("Item Shpt. Entry No.",CurrItemLedgEntry."Entry No.");
+      END;
+      IF SalesShipmentLine.FINDFIRST THEN BEGIN
+        ShipmentFound := TRUE;
+      END;
+      IF ShipmentFound THEN BEGIN
+        IF SalesShipmentHdr.GET(SalesShipmentLine."Document No.") THEN
+          CurrItemLedgEntry."Ship-to Code" := SalesShipmentHdr."Ship-to Code";
+        SalesShipmentLine2.SETCURRENTKEY("Order No.","Order Line No.");
+        SalesShipmentLine2.SETRANGE("Order No.",SalesShipmentLine."Order No.");
+        SalesShipmentLine2.SETRANGE("Order Line No.",SalesShipmentLine."Order Line No.");
+        SalesShipmentLine2.SETFILTER("Quantity (Base)",'<>%1',0);
+        SalesShipmentLine2.FINDFIRST;
+        IF SalesShipmentLine2."Document No." = SalesShipmentLine."Document No." THEN
+          CurrItemLedgEntry."First Shipment" := TRUE
+        ELSE
+          CurrItemLedgEntry."First Shipment" := FALSE;
+      END ELSE BEGIN
+        CurrItemLedgEntry."First Shipment" := TRUE;
+      END;
+      IF CurrItemLedgEntry."First Shipment" THEN
+        CurrItemLedgEntry."Usage Hit" := 1;
+      IF ((CurrItemLedgEntry."Lot No." <> '') OR (CurrItemLedgEntry."Serial No." <> '')) AND (CurrItemLedgEntry."Usage Hit" >= 0) THEN BEGIN
+        IF UsageHitIsADuplicateFromItemTracking(CurrItemLedgEntry) THEN
+          CurrItemLedgEntry."Usage Hit" := 0;
+      END;
+      IF SalesShipmentLine."Requested Delivery Date" <> 0D THEN
+        CurrItemLedgEntry."Requested Delivery Date" := SalesShipmentLine."Requested Delivery Date"
+      ELSE
+        CurrItemLedgEntry."Requested Delivery Date" := CurrItemLedgEntry."Posting Date";
+      IF SalesShipmentLine."Shipment Date" <> 0D THEN
+        CurrItemLedgEntry."Shipment Date" := SalesShipmentLine."Shipment Date"
+      ELSE
+        CurrItemLedgEntry."Requested Delivery Date" := CurrItemLedgEntry."Posting Date";
+      CurrItemLedgEntry."Posted at Date" := CurrItemLedgEntry."Posting Date";
+      CurrItemLedgEntry.MODIFY;
+    END;
+
+    LOCAL PROCEDURE InsertSalesUsageFromInvoice@1240020080(VAR CurrItemLedgEntry@1240020000 : Record 32);
+    VAR
+      InvoiceFound@1240020001 : Boolean;
+      SalesInvoiceLine@1240020002 : Record 113;
+      SalesInvoiceLine2@1240020004 : Record 113;
+      SalesInvoiceHdr@1240020003 : Record 112;
+    BEGIN
+       SalesInvoiceLine.RESET;
+       SalesInvoiceLine.SETCURRENTKEY("Document No.","Line No.");
+       SalesInvoiceLine.SETRANGE("Document No.",CurrItemLedgEntry."Document No.");
+       SalesInvoiceLine.SETRANGE("Line No.",CurrItemLedgEntry."Document Line No.");
+       SalesInvoiceLine.SETRANGE(Type,SalesInvoiceLine.Type::Item);
+       SalesInvoiceLine.SETRANGE("No.",CurrItemLedgEntry."Item No.");
+       SalesInvoiceLine.SETRANGE("Variant Code",CurrItemLedgEntry."Variant Code");
+       SalesInvoiceLine.SETRANGE("Location Code",CurrItemLedgEntry."Location Code");
+       SalesInvoiceLine.SETFILTER("Quantity (Base)",'<>%1',0);
+      IF SalesInvoiceLine.FINDFIRST THEN BEGIN
+        InvoiceFound := TRUE;
+      END;
+      IF InvoiceFound THEN BEGIN
+        IF SalesInvoiceHdr.GET(SalesInvoiceLine."Document No.") THEN
+          CurrItemLedgEntry."Ship-to Code" := SalesInvoiceHdr."Ship-to Code";
+        CurrItemLedgEntry."First Shipment" := TRUE;
+      END;
+      IF CurrItemLedgEntry."First Shipment" THEN
+        CurrItemLedgEntry."Usage Hit" := 1;
+      IF ((CurrItemLedgEntry."Lot No." <> '') OR (CurrItemLedgEntry."Serial No." <> '')) AND (CurrItemLedgEntry."Usage Hit" >= 0) THEN BEGIN
+        IF UsageHitIsADuplicateFromItemTracking(CurrItemLedgEntry) THEN
+          CurrItemLedgEntry."Usage Hit" := 0;
+      END;
+        CurrItemLedgEntry."Requested Delivery Date" := CurrItemLedgEntry."Posting Date";
+      IF SalesInvoiceLine."Shipment Date" <> 0D THEN
+        CurrItemLedgEntry."Shipment Date" := SalesInvoiceLine."Shipment Date"
+      ELSE
+        CurrItemLedgEntry."Requested Delivery Date" := CurrItemLedgEntry."Posting Date";
+      CurrItemLedgEntry."Posted at Date" := CurrItemLedgEntry."Posting Date";
+      CurrItemLedgEntry.MODIFY;
+    END;
+
+    LOCAL PROCEDURE InsertSalesUsageFromOther@1240020050(VAR CurrItemLedgEntry@1240020000 : Record 32);
+    VAR
+      ReturnReceiptLine@1240020002 : Record 6661;
+      SalesCrMemoHdr@1240020005 : Record 114;
+      SalesInvHdr@1240020006 : Record 112;
+      ReturnReceiptLine2@1240020004 : Record 6661;
+      ReturnReceiptHdr@1240020003 : Record 6660;
+      ReceiptFound@1240020001 : Boolean;
+    BEGIN
+      // sales journals, other old conversions, other documents
+      CASE CurrItemLedgEntry."Document Type" OF
+        CurrItemLedgEntry."Document Type"::"Sales Invoice":
+          BEGIN
+            // postings done without "shipment on invoice" but using the invoice to releive item ledger
+            IF SalesInvHdr.GET(CurrItemLedgEntry."Document No.") THEN
+              CurrItemLedgEntry."Ship-to Code" := SalesCrMemoHdr."Ship-to Code";
+          END;
+        CurrItemLedgEntry."Document Type"::"Sales Return Receipt":
+          BEGIN
+            IF ReturnReceiptHdr.GET(ReturnReceiptLine."Document No.") THEN
+              CurrItemLedgEntry."Ship-to Code" := ReturnReceiptHdr."Ship-to Code";
+          END;
+        CurrItemLedgEntry."Document Type"::"Sales Credit Memo":
+          BEGIN
+            IF SalesCrMemoHdr.GET(CurrItemLedgEntry."Document No.") THEN
+              CurrItemLedgEntry."Ship-to Code" := SalesCrMemoHdr."Ship-to Code";
+          END;
+      END;
+      CurrItemLedgEntry."First Shipment" := FALSE;
+      CurrItemLedgEntry."Usage Hit" := 0;
+      CurrItemLedgEntry."Requested Delivery Date" := CurrItemLedgEntry."Posting Date";
+      CurrItemLedgEntry."Shipment Date" := CurrItemLedgEntry."Posting Date";
+      CurrItemLedgEntry."Posted at Date" := CurrItemLedgEntry."Posting Date";
+      CurrItemLedgEntry.MODIFY;
+    END;
+
+    LOCAL PROCEDURE InsertSalesUsageFromService@1240020042(VAR CurrItemLedgEntry@1240020000 : Record 32);
+    VAR
+      ShipmentFound@1240020001 : Boolean;
+      ServiceShipmentLine@1240020002 : Record 5991;
+      ServiceShipmentLine2@1240020004 : Record 5991;
+      ServiceShipmentHdr@1240020003 : Record 5990;
+    BEGIN
+
+      IF ((CurrItemLedgEntry."Lot No." <> '') OR (CurrItemLedgEntry."Serial No." <> '')) THEN BEGIN
+        ServiceShipmentLine.SETCURRENTKEY("Document No.","Line No.");
+        ServiceShipmentLine.SETRANGE("Document No.",CurrItemLedgEntry."Document No.");
+        ServiceShipmentLine.SETRANGE("Line No.",CurrItemLedgEntry."Document Line No.");
+        ServiceShipmentLine.SETRANGE(Type,ServiceShipmentLine.Type::Item);
+        ServiceShipmentLine.SETRANGE("No.",CurrItemLedgEntry."Item No.");
+        ServiceShipmentLine.SETRANGE("Variant Code",CurrItemLedgEntry."Variant Code");
+        ServiceShipmentLine.SETRANGE("Location Code",CurrItemLedgEntry."Location Code");
+        ServiceShipmentLine.SETFILTER("Quantity (Base)",'<>%1',0);
+      END ELSE BEGIN
+        ServiceShipmentLine.SETCURRENTKEY("Item Shpt. Entry No.");
+        ServiceShipmentLine.SETRANGE("Item Shpt. Entry No.",CurrItemLedgEntry."Entry No.");
+      END;
+      IF ServiceShipmentLine.FINDFIRST THEN BEGIN
+        ShipmentFound := TRUE;
+      END;
+      IF ShipmentFound THEN BEGIN
+        IF ServiceShipmentHdr.GET(ServiceShipmentLine."Document No.") THEN
+          CurrItemLedgEntry."Ship-to Code" := ServiceShipmentHdr."Ship-to Code";
+        ServiceShipmentLine2.SETCURRENTKEY("Order No.","Order Line No.");
+        ServiceShipmentLine2.SETRANGE("Order No.",ServiceShipmentLine."Order No.");
+        ServiceShipmentLine2.SETRANGE("Order Line No.",ServiceShipmentLine."Order Line No.");
+        ServiceShipmentLine2.SETFILTER("Quantity (Base)",'<>%1',0);
+        ServiceShipmentLine2.FINDFIRST;
+        IF ServiceShipmentLine2."Document No." = ServiceShipmentLine."Document No." THEN
+          CurrItemLedgEntry."First Shipment" := TRUE
+        ELSE
+          CurrItemLedgEntry."First Shipment" := FALSE;
+      END ELSE BEGIN
+        CurrItemLedgEntry."First Shipment" := TRUE;
+        CurrItemLedgEntry."Usage Hit" := 1;
+      END;
+      IF CurrItemLedgEntry."First Shipment" THEN
+        CurrItemLedgEntry."Usage Hit" := 1;
+      IF ServiceShipmentLine."Needed by Date" <> 0D THEN
+        CurrItemLedgEntry."Requested Delivery Date" := ServiceShipmentLine."Needed by Date"
+      ELSE
+        CurrItemLedgEntry."Requested Delivery Date" := CurrItemLedgEntry."Posting Date";
+      CurrItemLedgEntry."Shipment Date" := CurrItemLedgEntry."Posting Date";;
+      CurrItemLedgEntry."Posted at Date" := CurrItemLedgEntry."Posting Date";
+      IF ((CurrItemLedgEntry."Lot No." <> '') OR (CurrItemLedgEntry."Serial No." <> '')) OR (CurrItemLedgEntry."Usage Hit" >= 0) THEN BEGIN
+        IF UsageHitIsADuplicateFromItemTracking(CurrItemLedgEntry) THEN
+          CurrItemLedgEntry."Usage Hit" := 0;
+      END;
+      CurrItemLedgEntry.MODIFY;
+    END;
+
+    LOCAL PROCEDURE InsertSalesUsageFromNegAdj@1240020003(VAR CurrItemLedgEntry@1240020000 : Record 32);
+    BEGIN
+
+      CurrItemLedgEntry."Requested Delivery Date" := CurrItemLedgEntry."Posting Date";
+      CurrItemLedgEntry."Shipment Date" := CurrItemLedgEntry."Posting Date";;
+      CurrItemLedgEntry."Posted at Date" := CurrItemLedgEntry."Posting Date";
+      CurrItemLedgEntry."First Shipment" := TRUE;
+      CurrItemLedgEntry."Include in Sales Usage" := TRUE;
+      CurrItemLedgEntry."Usage Hit" := 1;
+      IF ((CurrItemLedgEntry."Lot No." <> '') OR (CurrItemLedgEntry."Serial No." <> '')) THEN BEGIN
+        IF UsageHitIsADuplicateFromItemTracking(CurrItemLedgEntry) THEN
+          CurrItemLedgEntry."Usage Hit" := 0;
+      END;
+      CurrItemLedgEntry.MODIFY;
+    END;
+
+    LOCAL PROCEDURE InsertSalesUsageFromConsumption@1240020004(VAR CurrItemLedgEntry@1240020000 : Record 32);
+    BEGIN
+      CurrItemLedgEntry."Requested Delivery Date" := CurrItemLedgEntry."Posting Date";
+      CurrItemLedgEntry."Shipment Date" := CurrItemLedgEntry."Posting Date";;
+      CurrItemLedgEntry."Posted at Date" := CurrItemLedgEntry."Posting Date";
+      CurrItemLedgEntry."First Shipment" := TRUE;
+      CurrItemLedgEntry."Include in Sales Usage" := TRUE;
+      CurrItemLedgEntry."Usage Hit" := 1;
+      IF ((CurrItemLedgEntry."Lot No." <> '') OR (CurrItemLedgEntry."Serial No." <> '')) THEN BEGIN
+        IF UsageHitIsADuplicateFromItemTracking(CurrItemLedgEntry) THEN
+          CurrItemLedgEntry."Usage Hit" := 0;
+      END;
+      CurrItemLedgEntry.MODIFY;
+    END;
+
+    PROCEDURE UsageHitIsADuplicateFromItemTracking@1240020000(VAR CurrItemLedgEntry@1000 : Record 32) : Boolean;
+    VAR
+      LocItemLedgEntry@1001 : Record 32;
+    BEGIN
+      LocItemLedgEntry.SETRANGE("Entry Type", CurrItemLedgEntry."Entry Type");
+      LocItemLedgEntry.SETRANGE("Document Type", CurrItemLedgEntry."Document Type");
+      LocItemLedgEntry.SETRANGE("Document No.", CurrItemLedgEntry."Document No.");
+      LocItemLedgEntry.SETRANGE("Document Line No.",  CurrItemLedgEntry."Document Line No.");
+      LocItemLedgEntry.SETRANGE("Posting Date", CurrItemLedgEntry."Posting Date");
+      LocItemLedgEntry.SETRANGE(Correction, FALSE);
+      IF LocItemLedgEntry.FINDFIRST THEN BEGIN
+        IF LocItemLedgEntry."Entry No." = CurrItemLedgEntry."Entry No." THEN
+          EXIT(FALSE)
+      ELSE
+          EXIT(TRUE);
+      END;
+        EXIT(FALSE);
+    END;
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+    <?xml version="1.0" encoding="utf-8"?>
+<Report xmlns="http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition" xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner">
+  <AutoRefresh>0</AutoRefresh>
+  <DataSources>
+    <DataSource Name="DataSource">
+      <ConnectionProperties>
+        <DataProvider>SQL</DataProvider>
+        <ConnectString />
+      </ConnectionProperties>
+      <rd:SecurityType>None</rd:SecurityType>
+    </DataSource>
+  </DataSources>
+  <DataSets>
+    <DataSet Name="DataSet_Result">
+      <Query>
+        <DataSourceName>DataSource</DataSourceName>
+        <CommandText />
+      </Query>
+      <Fields>
+        <Field Name="Item_Ledger_Entry__Entry_No__">
+          <DataField>Item_Ledger_Entry__Entry_No__</DataField>
+        </Field>
+        <Field Name="Item_Ledger_Entry__Posting_Date_">
+          <DataField>Item_Ledger_Entry__Posting_Date_</DataField>
+        </Field>
+        <Field Name="Item_Ledger_Entry__Document_Date_">
+          <DataField>Item_Ledger_Entry__Document_Date_</DataField>
+        </Field>
+        <Field Name="Item_Ledger_Entry__Requested_Delivery_Date_">
+          <DataField>Item_Ledger_Entry__Requested_Delivery_Date_</DataField>
+        </Field>
+        <Field Name="Item_Ledger_Entry__Shipment_Date_">
+          <DataField>Item_Ledger_Entry__Shipment_Date_</DataField>
+        </Field>
+        <Field Name="Item_Ledger_Entry__First_Shipment_">
+          <DataField>Item_Ledger_Entry__First_Shipment_</DataField>
+        </Field>
+        <Field Name="Item_Ledger_Entry__Entry_No__Caption">
+          <DataField>Item_Ledger_Entry__Entry_No__Caption</DataField>
+        </Field>
+        <Field Name="Item_Ledger_Entry__Posting_Date_Caption">
+          <DataField>Item_Ledger_Entry__Posting_Date_Caption</DataField>
+        </Field>
+        <Field Name="Item_Ledger_Entry__Document_Date_Caption">
+          <DataField>Item_Ledger_Entry__Document_Date_Caption</DataField>
+        </Field>
+        <Field Name="Item_Ledger_Entry__Requested_Delivery_Date_Caption">
+          <DataField>Item_Ledger_Entry__Requested_Delivery_Date_Caption</DataField>
+        </Field>
+        <Field Name="Item_Ledger_Entry__Shipment_Date_Caption">
+          <DataField>Item_Ledger_Entry__Shipment_Date_Caption</DataField>
+        </Field>
+        <Field Name="Item_Ledger_Entry__First_Shipment_Caption">
+          <DataField>Item_Ledger_Entry__First_Shipment_Caption</DataField>
+        </Field>
+      </Fields>
+    </DataSet>
+  </DataSets>
+  <ReportSections>
+    <ReportSection>
+      <Body>
+        <ReportItems>
+          <Tablix Name="Table1">
+            <TablixBody>
+              <TablixColumns>
+                <TablixColumn>
+                  <Width>1.21038in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.15477in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.1218in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.04159in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.052in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.10409in</Width>
+                </TablixColumn>
+              </TablixColumns>
+              <TablixRows>
+                <TablixRow>
+                  <Height>0.33307in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Item_Ledger_Entry__Entry_No__Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!Item_Ledger_Entry__Entry_No__Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Right</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>17</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Item_Ledger_Entry__Posting_Date_Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!Item_Ledger_Entry__Posting_Date_Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Right</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>16</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.15cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Item_Ledger_Entry__Document_Date_Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!Item_Ledger_Entry__Document_Date_Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Right</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>15</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.15cm</PaddingLeft>
+                            <PaddingRight>0.15cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Item_Ledger_Entry__Requested_Delivery_Date_Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!Item_Ledger_Entry__Requested_Delivery_Date_Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Right</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>14</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.15cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Item_Ledger_Entry__Shipment_Date_Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!Item_Ledger_Entry__Shipment_Date_Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Right</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>13</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Item_Ledger_Entry__First_Shipment_Caption">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=First(Fields!Item_Ledger_Entry__First_Shipment_Caption.Value)</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>12</ZIndex>
+                          <Style>
+                            <VerticalAlign>Bottom</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.16654in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Item_Ledger_Entry__Entry_No__">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Item_Ledger_Entry__Entry_No__.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>8</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Item_Ledger_Entry__Posting_Date_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Item_Ledger_Entry__Posting_Date_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>7</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.15cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Item_Ledger_Entry__Document_Date_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Item_Ledger_Entry__Document_Date_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>6</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.15cm</PaddingLeft>
+                            <PaddingRight>0.15cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Item_Ledger_Entry__Requested_Delivery_Date_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Item_Ledger_Entry__Requested_Delivery_Date_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>5</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.15cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Item_Ledger_Entry__Shipment_Date_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Item_Ledger_Entry__Shipment_Date_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>4</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Item_Ledger_Entry__First_Shipment_">
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Item_Ledger_Entry__First_Shipment_.Value</Value>
+                                  <Style>
+                                    <FontSize>7pt</FontSize>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <ZIndex>3</ZIndex>
+                          <Style>
+                            <VerticalAlign>Middle</VerticalAlign>
+                            <PaddingLeft>0.075cm</PaddingLeft>
+                            <PaddingRight>0.075cm</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+              </TablixRows>
+            </TablixBody>
+            <TablixColumnHierarchy>
+              <TablixMembers>
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+              </TablixMembers>
+            </TablixColumnHierarchy>
+            <TablixRowHierarchy>
+              <TablixMembers>
+                <TablixMember>
+                  <KeepWithGroup>After</KeepWithGroup>
+                  <RepeatOnNewPage>true</RepeatOnNewPage>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+                <TablixMember>
+                  <Group Name="Table1_Details_Group">
+                    <DataElementName>Detail</DataElementName>
+                  </Group>
+                  <TablixMembers>
+                    <TablixMember />
+                  </TablixMembers>
+                  <DataElementName>Detail_Collection</DataElementName>
+                  <DataElementOutput>Output</DataElementOutput>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+              </TablixMembers>
+            </TablixRowHierarchy>
+            <DataSetName>DataSet_Result</DataSetName>
+            <Height>1.269cm</Height>
+            <Width>16.97898cm</Width>
+            <Style />
+          </Tablix>
+        </ReportItems>
+        <Height>1.269cm</Height>
+        <Style />
+      </Body>
+      <Width>16.97898cm</Width>
+      <Page>
+        <InteractiveHeight>29.7cm</InteractiveHeight>
+        <InteractiveWidth>16.15cm</InteractiveWidth>
+        <LeftMargin>2.1cm</LeftMargin>
+        <RightMargin>0cm</RightMargin>
+        <TopMargin>2cm</TopMargin>
+        <BottomMargin>2cm</BottomMargin>
+        <Style />
+      </Page>
+    </ReportSection>
+  </ReportSections>
+  <Code>Public Function BlankZero(ByVal Value As Decimal)
+    if Value = 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankPos(ByVal Value As Decimal)
+    if Value &gt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankZeroAndPos(ByVal Value As Decimal)
+    if Value &gt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNeg(ByVal Value As Decimal)
+    if Value &lt; 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+
+Public Function BlankNegAndZero(ByVal Value As Decimal)
+    if Value &lt;= 0 then
+        Return ""
+    end if
+    Return Value
+End Function
+</Code>
+  <Language>=User!Language</Language>
+  <ConsumeContainerWhitespace>true</ConsumeContainerWhitespace>
+  <rd:ReportUnitType>Inch</rd:ReportUnitType>
+</Report>
+    END_OF_RDLDATA
+  }
+}
+

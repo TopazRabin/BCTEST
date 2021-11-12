@@ -1,0 +1,863 @@
+OBJECT Codeunit 11123321 SC - Filter Helper
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/01/20;
+    Time=12:00:00 AM;
+    Modified=Yes;
+    Version List=SCW19.2.0;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text11123302@11123302 : TextConst 'ENU=Filter for field %1 cannot be applied.';
+      CurrentFilterGroup@11123304 : Integer;
+      Text11123304@11123305 : TextConst 'ENU=Filter for field %1 is invalid. Filter length cannot contain more then 250 symbols.';
+
+    PROCEDURE ParseFilters@11123316(VAR FilterNodeBuff@11123302 : Record 11123303;VAR FilterList@11123303 : Record 11123330;VAR IdList@11123310 : Record 11123330;VAR RecRef@11123307 : RecordRef);
+    VAR
+      ResultNodeBuff@11123304 : TEMPORARY Record 11123303;
+      CommonFunc@11123308 : Codeunit 11123309;
+      FieldName@11123305 : Text[1024];
+      FilterExpression@11123306 : Text[1024];
+      TableNo@11123309 : Integer;
+      IdListExists@11123311 : Boolean;
+    BEGIN
+      IF NOT FilterNodeBuff.ChildNodes(ResultNodeBuff) THEN
+        EXIT;
+
+      TableNo := CommonFunc.GetCorrectTableNoFromRecRef(RecRef);
+
+      WHILE ResultNodeBuff.NextNode DO BEGIN
+        IdListExists := FALSE;
+
+        FieldName := ResultNodeBuff.SelectSingleNodeText('@field');
+        IF FieldName <> ''  THEN BEGIN
+          IF FieldName = 'Id' THEN
+            IdListExists := TryParseIdListFromFilter(ResultNodeBuff,IdList);
+
+          IF NOT IdListExists THEN BEGIN
+            FieldName := CommonFunc.FieldNameMapping(TableNo,FieldName);
+            FilterExpression := ParseFilterCriterias(ResultNodeBuff);
+            IF FilterExpression <> '' THEN
+              FilterList.Add(FieldName,FilterExpression);
+          END;
+        END;
+      END;
+
+      IF FilterList.FINDFIRST THEN;
+      IF IdList.FINDFIRST THEN;
+    END;
+
+    LOCAL PROCEDURE ParseFilterCriterias@11123345(VAR XMLNodeBuff@11123302 : Record 11123303) : Text[1024];
+    VAR
+      ResultNodeBuff@11123304 : TEMPORARY Record 11123303;
+      LengthExpression@11123309 : Integer;
+      NodeName@11123305 : Text[1024];
+      FilterExpression@11123306 : Text[1024];
+      FieldName@11123310 : Text[1024];
+      Criteria@11123303 : Text[1024];
+      MinValue@11123307 : Text[1024];
+      MaxValue@11123308 : Text[1024];
+    BEGIN
+      IF NOT XMLNodeBuff.ChildNodes(ResultNodeBuff) THEN
+        EXIT;
+
+      FieldName := XMLNodeBuff.SelectSingleNodeText('@field');
+
+      WHILE ResultNodeBuff.NextNode DO BEGIN
+        NodeName := ResultNodeBuff.NodeName;
+        CASE NodeName OF
+          'Greater' :
+            BEGIN
+              Criteria := ResultNodeBuff.InnerText;
+              // AdaptCriterionForFilter(Criteria); <TPZ2181>
+              IF Criteria <> '' THEN
+                Criteria := STRSUBSTNO('>%1',Criteria);
+            END;
+          'GreaterOrEqual' :
+            BEGIN
+              Criteria := ResultNodeBuff.InnerText;
+             // AdaptCriterionForFilter(Criteria); <TPZ2181>
+              IF Criteria <> '' THEN
+                Criteria := STRSUBSTNO('>=%1',Criteria);
+            END;
+          'Less' :
+            BEGIN
+              Criteria := ResultNodeBuff.InnerText;
+              //AdaptCriterionForFilter(Criteria); <TPZ2181>
+              IF Criteria <> '' THEN
+                Criteria := STRSUBSTNO('<%1',Criteria);
+            END;
+          'LessOrEqual' :
+            BEGIN
+              Criteria := ResultNodeBuff.InnerText;
+              //AdaptCriterionForFilter(Criteria); <TPZ2181>
+              IF Criteria <> '' THEN
+                Criteria := STRSUBSTNO('<=%1',Criteria);
+            END;
+          'Equal' :
+            BEGIN
+              Criteria := ResultNodeBuff.InnerText;
+             AdaptCriterionForFilter(Criteria);
+              IF Criteria <> '' THEN
+                Criteria := STRSUBSTNO('%1',Criteria);
+            END;
+          'NotEqual' :
+            BEGIN
+              Criteria := ResultNodeBuff.InnerText;
+              //AdaptCriterionForFilter(Criteria); <TPZ2181>
+              IF Criteria <> '' THEN
+                Criteria := STRSUBSTNO('<>%1',Criteria);
+            END;
+          'Between' :
+            BEGIN
+              MinValue := ResultNodeBuff.SelectSingleNodeText('min');
+              MaxValue := ResultNodeBuff.SelectSingleNodeText('max');
+              //AdaptCriterionForFilter(MinValue); <TPZ2181>
+              //AdaptCriterionForFilter(MaxValue); <TPZ2181>
+              IF (MinValue <> '') OR (MaxValue <> '') THEN
+                Criteria := STRSUBSTNO('%1..%2',MinValue,MaxValue);
+            END;
+          'Contains' :
+            BEGIN
+              Criteria := ResultNodeBuff.InnerText;
+              //AdaptCriterionForFilter(Criteria); <TPZ2181>
+              IF Criteria <> '' THEN
+                Criteria := STRSUBSTNO('@*%1*',Criteria);
+            END;
+          'NotContains' :
+            BEGIN
+              Criteria := ResultNodeBuff.InnerText;
+              //AdaptCriterionForFilter(Criteria); <TPZ2181>
+              IF Criteria <> '' THEN
+                Criteria := STRSUBSTNO('<>@*%1*',Criteria);
+            END;
+        END;
+
+        IF FilterExpression <> '' THEN BEGIN
+          LengthExpression := 250;
+          IF LengthExpression >= (STRLEN(FilterExpression)+STRLEN(Criteria)) THEN
+            FilterExpression := STRSUBSTNO('%1|%2',FilterExpression,Criteria)
+          ELSE
+            ERROR(Text11123304,FieldName);
+        END ELSE
+          FilterExpression := Criteria;
+      END;
+      EXIT(FilterExpression);
+    END;
+
+    LOCAL PROCEDURE TryParseIdListFromFilter@11123313(VAR XMLNodeBuff@11123302 : Record 11123303;VAR IdList@11123306 : Record 11123330) : Boolean;
+    VAR
+      ResultNodeBuff@11123304 : TEMPORARY Record 11123303;
+      TempIdList@11123307 : TEMPORARY Record 11123330;
+      NodeName@11123305 : Text[1024];
+      Id@11123303 : Text[250];
+      FieldNoText@11123308 : Text[50];
+      IdListExists@11123309 : Boolean;
+    BEGIN
+      FieldNoText := '0000000000';
+      IF IdList.FINDLAST THEN
+        FieldNoText := IdList.Key;
+
+      IF NOT XMLNodeBuff.ChildNodes(ResultNodeBuff) THEN
+        EXIT(FALSE);
+
+      WHILE ResultNodeBuff.NextNode DO BEGIN
+        NodeName := ResultNodeBuff.NodeName;
+        CASE NodeName OF
+          'Equal' :
+            BEGIN
+              Id := ResultNodeBuff.InnerText;
+              IF Id <> '' THEN BEGIN
+                IdList.SETRANGE(Value,Id);
+                TempIdList.SETRANGE(Value,Id);
+                IF IdList.ISEMPTY AND TempIdList.ISEMPTY THEN BEGIN
+                  FieldNoText := INCSTR(FieldNoText);
+                  TempIdList.Add(FieldNoText,Id);
+                END;
+              END;
+            END;
+          ELSE BEGIN
+            IdList.RESET;
+            EXIT(FALSE);
+          END;
+        END;
+      END;
+
+      IdList.RESET;
+      TempIdList.RESET;
+      IdListExists := TempIdList.FINDSET;
+
+      IF IdListExists THEN
+        REPEAT
+          IdList.Add(TempIdList.Key,TempIdList.Value);
+        UNTIL TempIdList.NEXT = 0;
+
+      EXIT(IdListExists);
+    END;
+
+    PROCEDURE ParseIdList@11123311(VAR IdListNodeBuff@11123302 : Record 11123303;VAR IdList@11123303 : Record 11123330);
+    VAR
+      Id@11123305 : Text[250];
+      FieldNoText@11123308 : Text[50];
+    BEGIN
+      FieldNoText := '0000000000';
+
+      WHILE IdListNodeBuff.NextNode DO BEGIN
+        Id := IdListNodeBuff.InnerText;
+        IF Id <> '' THEN BEGIN
+          FieldNoText := INCSTR(FieldNoText);
+          IdList.Add(FieldNoText,Id);
+        END;
+      END;
+    END;
+
+    PROCEDURE ParseProductIdList@11123312(VAR IdListNodeBuff@11123302 : Record 11123303;VAR IdList@11123303 : Record 11123330);
+    VAR
+      Id@11123305 : Text[250];
+      UnitOfMeasureId@11123304 : Text[250];
+      FieldNoText@11123308 : Text[50];
+    BEGIN
+      FieldNoText := '0000000000';
+
+      WHILE IdListNodeBuff.NextNode DO BEGIN
+        Id := IdListNodeBuff.SelectSingleNodeText('Id');
+        UnitOfMeasureId := IdListNodeBuff.SelectSingleNodeText('UnitOfMeasureId');
+        IF Id <> '' THEN BEGIN
+          FieldNoText := INCSTR(FieldNoText);
+          IdList.AddExtra(FieldNoText,Id,UnitOfMeasureId);
+        END;
+      END;
+    END;
+
+    PROCEDURE ParseExtraFields@11123329(VAR ExtraFieldsNodeBuff@11123302 : Record 11123303;VAR FieldList@11123303 : Record 11123330;VAR RecRef@11123305 : RecordRef);
+    VAR
+      ResultNodeBuff@11123304 : TEMPORARY Record 11123303;
+      CommonFunc@11123307 : Codeunit 11123309;
+      FieldName@11123310 : Text[250];
+      FieldNoText@11123308 : Text[50];
+    BEGIN
+      FieldNoText := '0000000000';
+
+      IF NOT ExtraFieldsNodeBuff.ChildNodes(ResultNodeBuff) THEN
+        EXIT;
+
+      WHILE ResultNodeBuff.NextNode DO BEGIN
+        FieldName := ResultNodeBuff.SelectSingleNodeText('@name');
+        FieldName := DELCHR(FieldName,'>',';');
+        IF FieldName <> '' THEN BEGIN
+          FieldName := CommonFunc.FieldNameMapping(RecRef.NUMBER,FieldName);
+          FieldNoText := INCSTR(FieldNoText);
+          FieldList.Add(FieldNoText,FieldName);
+        END;
+      END;
+    END;
+
+    PROCEDURE SetRecordFilter@11123303(VAR Record@11123302 : RecordRef;VAR FilterList@11123303 : Record 11123330) : Boolean;
+    VAR
+      FieldName@11123304 : Text[1024];
+    BEGIN
+      IF FilterList.FINDSET THEN
+        REPEAT
+          FieldName := FilterList.Key;
+          IF FieldName <> '' THEN BEGIN
+            IF NOT SetFieldFilter(Record,FieldName,FilterList.Value) THEN
+              ERROR(Text11123302,FieldName);
+          END;
+        UNTIL FilterList.NEXT = 0;
+      EXIT(TRUE);
+    END;
+
+    PROCEDURE SetFieldFilter@11123304(VAR Record@11123302 : RecordRef;FieldName@11123303 : Text[1024];Expression@11123304 : Text[1024]) : Boolean;
+    VAR
+      Field@11123305 : FieldRef;
+    BEGIN
+      GetFieldByName(Record,FieldName,Field);
+      IF Field.ACTIVE THEN BEGIN
+        IF Field.GETFILTER = '' THEN BEGIN
+          ValidateExpression(Expression,Field);
+          Field.SETFILTER(Expression);
+        END;
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE SetItemFilter@11123307(VAR Item@11123302 : Record 27;VAR FilterList@11123303 : Record 11123330;VAR Params@11123305 : Record 11123310) : Boolean;
+    VAR
+      RecRef@11123304 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(Item);
+
+      HandleLastDateModifyFilter(RecRef,FilterList,Params);
+
+      IF SetRecordFilter(RecRef,FilterList) THEN BEGIN
+        Item.SETVIEW(RecRef.GETVIEW(FALSE));
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE SetCategoryFilter@11123308(VAR Category@11123302 : Record 5722;VAR FilterList@11123303 : Record 11123330) : Boolean;
+    VAR
+      RecRef@11123304 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(Category);
+      IF SetRecordFilter(RecRef,FilterList) THEN BEGIN
+        Category.SETVIEW(RecRef.GETVIEW(FALSE));
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE SetProductGroupFilter@11123309(VAR ProductGroup@11123302 : Record 5723;VAR FilterList@11123303 : Record 11123330) : Boolean;
+    VAR
+      RecRef@11123304 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(ProductGroup);
+      IF SetRecordFilter(RecRef,FilterList) THEN BEGIN
+        ProductGroup.SETVIEW(RecRef.GETVIEW(FALSE));
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE SetProductVariantsFilter@11123310(VAR Variant@11123302 : Record 5401;VAR FilterList@11123303 : Record 11123330) : Boolean;
+    VAR
+      RecRef@11123304 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(Variant);
+      IF SetRecordFilter(RecRef,FilterList) THEN BEGIN
+        Variant.SETVIEW(RecRef.GETVIEW(FALSE));
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE SetCustomerFilter@11123318(VAR Customer@11123302 : Record 18;VAR FilterList@11123303 : Record 11123330;VAR Params@11123305 : Record 11123310) : Boolean;
+    VAR
+      RecRef@11123304 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(Customer);
+
+      HandleLastDateModifyFilter(RecRef,FilterList,Params);
+
+      IF SetRecordFilter(RecRef,FilterList) THEN BEGIN
+        Customer.SETVIEW(RecRef.GETVIEW(FALSE));
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE SetSalesPersonFilter@11123319(VAR SalesPerson@11123302 : Record 50027;VAR FilterList@11123303 : Record 11123330;VAR Params@11123305 : Record 11123310) : Boolean;
+    VAR
+      RecRef@11123304 : RecordRef;
+    BEGIN
+      //<TPZ2027> - change in Function Parameters
+      RecRef.GETTABLE(SalesPerson);
+
+      HandleLastDateModifyFilter(RecRef,FilterList,Params);
+
+      IF SetRecordFilter(RecRef,FilterList) THEN BEGIN
+        SalesPerson.SETVIEW(RecRef.GETVIEW(FALSE));
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE SetContactFilter@11123328(VAR Contact@11123302 : Record 5050;VAR FilterList@11123303 : Record 11123330;VAR Params@11123305 : Record 11123310) : Boolean;
+    VAR
+      RecRef@11123304 : RecordRef;
+    BEGIN
+      RecRef.GETTABLE(Contact);
+
+      HandleLastDateModifyFilter(RecRef,FilterList,Params);
+
+      IF SetRecordFilter(RecRef,FilterList) THEN BEGIN
+        Contact.SETVIEW(RecRef.GETVIEW(FALSE));
+        EXIT(TRUE);
+      END;
+    END;
+
+    PROCEDURE SetItemWebshopFilter@11123325(VAR Item@11123303 : Record 27;VAR Params@11123302 : Record 11123310) : Boolean;
+    VAR
+      RecordRef@11123304 : RecordRef;
+      Result@11123305 : Boolean;
+    BEGIN
+      RecordRef.GETTABLE(Item);
+      Result := SetWebshopFilter(RecordRef,Params);
+      Item.FILTERGROUP(CurrentFilterGroup);
+      Item.SETVIEW(RecordRef.GETVIEW(FALSE));
+      Item.FILTERGROUP(0);
+
+      EXIT(Result);
+    END;
+
+    PROCEDURE SetCustomerWebshopFilter@11123332(VAR Customer@11123303 : Record 18;VAR Params@11123302 : Record 11123310) : Boolean;
+    VAR
+      RecordRef@11123304 : RecordRef;
+      Result@11123305 : Boolean;
+    BEGIN
+      RecordRef.GETTABLE(Customer);
+      Result := SetWebshopFilter(RecordRef,Params);
+      Customer.FILTERGROUP(CurrentFilterGroup);
+      Customer.SETVIEW(RecordRef.GETVIEW(FALSE));
+      Customer.FILTERGROUP(0);
+
+      EXIT(Result);
+    END;
+
+    PROCEDURE SetContactWebshopFilter@11123327(VAR Contact@11123303 : Record 5050;VAR Params@11123302 : Record 11123310) : Boolean;
+    VAR
+      RecordRef@11123304 : RecordRef;
+      Result@11123305 : Boolean;
+    BEGIN
+      RecordRef.GETTABLE(Contact);
+      Result := SetWebshopFilter(RecordRef,Params);
+      Contact.FILTERGROUP(CurrentFilterGroup);
+      Contact.SETVIEW(RecordRef.GETVIEW(FALSE));
+      Contact.FILTERGROUP(0);
+
+      EXIT(Result);
+    END;
+
+    PROCEDURE SetSalesPersonWebshopFilter@11123326(VAR SalesPerson@11123303 : Record 50027;VAR Params@11123302 : Record 11123310) : Boolean;
+    VAR
+      RecordRef@11123304 : RecordRef;
+      Result@11123305 : Boolean;
+    BEGIN
+      //<TPZ2027> - change in Function Parameters
+      RecordRef.GETTABLE(SalesPerson);
+      Result := SetWebshopFilter(RecordRef,Params);
+      SalesPerson.FILTERGROUP(CurrentFilterGroup);
+      SalesPerson.SETVIEW(RecordRef.GETVIEW(FALSE));
+      SalesPerson.FILTERGROUP(0);
+
+      EXIT(Result);
+    END;
+
+    PROCEDURE SetWebshopFilter@11123330(VAR RecordRef@11123302 : RecordRef;VAR Params@11123305 : Record 11123310) : Boolean;
+    VAR
+      WebshopFilter@11123306 : Record 11123309;
+      CommonFunc@11123307 : Codeunit 11123309;
+      Result@11123308 : Boolean;
+      Expression@11123303 : Text[1024];
+      TableNumber@11123304 : Integer;
+    BEGIN
+      TableNumber := CommonFunc.GetCorrectTableNoFromRecRef(RecordRef);
+
+      WebshopFilter.SETRANGE(Code,Params.WebsiteId);
+      WebshopFilter.SETRANGE("Table No.",TableNumber);
+      IF WebshopFilter.FINDSET THEN
+        REPEAT
+          Expression := WebshopFilter.Filter;
+          IF SetFieldFilter(RecordRef,WebshopFilter."Field Name",Expression) THEN
+            Result := TRUE
+          ELSE
+            ERROR(Text11123302,WebshopFilter.Filter,WebshopFilter."Field No.",WebshopFilter."Field Name",GETLASTERRORTEXT);
+        UNTIL WebshopFilter.NEXT = 0;
+
+      IF CurrentFilterGroup = 0 THEN
+        CurrentFilterGroup := 40
+      ELSE
+        CurrentFilterGroup := CurrentFilterGroup + 1;
+
+      EXIT(Result);
+    END;
+
+    PROCEDURE ValidateExpression@11123302(VAR Expression@11123302 : Text[1024];VAR FieldRef@11123303 : FieldRef) : Boolean;
+    VAR
+      Settings@11123314 : Codeunit 11123311;
+      CommonFunc@11123315 : Codeunit 11123309;
+      ExprBuff@11123304 : ARRAY [250] OF Text[1024];
+      FieldType@11123305 : Text[30];
+      Expr@11123313 : Text[1024];
+      TextDateTime@11123318 : Text[50];
+      DateTimeFilter@11123316 : Text[50];
+      DateTimeVar@11123306 : DateTime;
+      DateVar@11123307 : Date;
+      ClientTier@11123317 : 'RTC,WEBSERVICE,CLASSIC,NAS';
+      Pos@11123308 : Integer;
+      Index@11123309 : Integer;
+      i@11123310 : Integer;
+      ExprLen@11123311 : Integer;
+      Validated@11123312 : Boolean;
+    BEGIN
+      Pos := 1;
+      Index := 1;
+      ExprLen := STRLEN(Expression);
+      FieldType := FORMAT(FieldRef.TYPE);
+      Validated := ExprLen > 0;
+
+      WHILE NOT IsOutOfArray(Pos,ExprLen) DO BEGIN
+        IF IsCriterion(Expression[Pos]) OR IsInterval(Expression,Pos) THEN BEGIN
+          ExprBuff[Index] := ExprBuff[Index] + COPYSTR(Expression,Pos,1);
+          WHILE (IsCriterion(Expression[Pos + 1]) OR IsInterval(Expression,Pos + 1)) AND
+                NOT IsOutOfArray(Pos + 1,ExprLen)
+          DO BEGIN
+            Pos += 1;
+            ExprBuff[Index] := ExprBuff[Index] + COPYSTR(Expression,Pos,1);
+          END;
+          Index += 1;
+        END ELSE BEGIN
+          ExprBuff[Index] := ExprBuff[Index] + COPYSTR(Expression,Pos,1);
+          WHILE NOT IsCriterion(Expression[Pos + 1]) AND
+                NOT IsInterval(Expression,Pos + 1) AND
+                NOT IsOutOfArray(Pos + 1,ExprLen)
+          DO BEGIN
+            Pos += 1;
+            ExprBuff[Index] := ExprBuff[Index] + COPYSTR(Expression,Pos,1);
+          END;
+          Index += 1;
+        END;
+        Pos += 1;
+      END;
+
+      Expression := '';
+
+      FOR i := 1 TO COMPRESSARRAY(ExprBuff) DO BEGIN
+        Expr := ExprBuff[i];
+        IF NOT (IsCriterion(Expr[1]) OR IsInterval(ExprBuff[i],1)) THEN BEGIN
+          CASE FieldType OF
+            'Text','Code' :
+              BEGIN
+                IF FieldRef.LENGTH < STRLEN(ExprBuff[i]) THEN BEGIN
+                  Expression := '=''&<>''';
+                  Validated := FALSE;
+                END;
+              END;
+            'Date' :
+              BEGIN
+                Validated := EVALUATE(DateTimeVar,ExprBuff[i]);
+                IF Validated THEN
+                  DateVar := DT2DATE(DateTimeVar)
+                ELSE
+                  Validated := EVALUATE(DateVar,ExprBuff[i]);
+
+                IF Validated THEN
+                  ExprBuff[i] := FORMAT(DateVar)
+                ELSE
+                  ExprBuff[i] := '=0D&<>0D';
+              END;
+            'DateTime' :
+              BEGIN
+                Validated := EVALUATE(DateTimeVar,ExprBuff[i]);
+                IF Validated THEN BEGIN
+      // ---------------------------------------------------------------------------------
+      // Comment two lines below if You going to use webservice setting "Server Time Zone"
+      // ---------------------------------------------------------------------------------
+                  ClientTier := CommonFunc.DefineClientTier;
+                  IF ClientTier IN [ClientTier::RTC,ClientTier::CLASSIC,ClientTier::NAS] THEN
+      // ---------------------------------------------------------------------------------
+                  DateTimeVar := Settings.UtcToDate(DateTimeVar);
+                  ExprBuff[i] := FORMAT(DateTimeVar,0,3);
+                END ELSE BEGIN
+                  TextDateTime := FORMAT(CREATEDATETIME(01019999D,0T));
+                  DateTimeFilter :=  '=' + TextDateTime + '&<>' + TextDateTime;
+                  ExprBuff[i] := DateTimeFilter;
+                END;
+              END;
+          END;
+        END ELSE
+          Validated := TRUE;
+
+        IF Validated THEN
+          Expression += ExprBuff[i]
+        ELSE BEGIN
+          Expression := ExprBuff[i];
+          EXIT(FALSE);
+        END;
+      END;
+
+      EXIT(Validated);
+    END;
+
+    LOCAL PROCEDURE IsCriterion@11123321(Symbol@11123302 : Char) : Boolean;
+    BEGIN
+      EXIT(Symbol IN ['=','|','&','<','>','*','?','@','(',')']);
+    END;
+
+    LOCAL PROCEDURE IsInterval@11123322(Expression@11123302 : Text[1024];Pos@11123303 : Integer) : Boolean;
+    VAR
+      PrevPos@11123305 : Integer;
+      NextPos@11123306 : Integer;
+      ExprLen@11123307 : Integer;
+      Interval@11123304 : Boolean;
+    BEGIN
+      IF Pos > 0 THEN BEGIN
+        ExprLen := MAXSTRLEN(Expression);
+        PrevPos := Pos - 1;
+        NextPos := Pos + 1;
+        CASE TRUE OF
+          (PrevPos <> 0) AND (NextPos < ExprLen) :
+           Interval := (Expression[Pos] = '.') AND ((Expression[PrevPos] = '.') OR (Expression[NextPos] = '.'));
+          (PrevPos = 0) AND (NextPos < ExprLen) :
+           Interval := (Expression[Pos] = '.') AND ((Expression[NextPos] = '.'));
+          (PrevPos <> 0) AND (NextPos > ExprLen) :
+           Interval := (Expression[Pos] = '.') AND ((Expression[PrevPos] = '.'));
+        END;
+      END;
+      EXIT(Interval);
+    END;
+
+    LOCAL PROCEDURE IsOutOfArray@11123331(Pos@11123302 : Integer;ExprLen@11123303 : Integer) : Boolean;
+    BEGIN
+      EXIT(Pos > ExprLen);
+    END;
+
+    PROCEDURE GetFieldByName@11123305(VAR RecRef@11123302 : RecordRef;Name@11123303 : Text[1024];VAR OutField@11123304 : FieldRef);
+    VAR
+      FieldLookup@11123305 : Record 2000000041;
+    BEGIN
+      FieldLookup.RESET;
+      FieldLookup.SETRANGE(TableNo,RecRef.NUMBER);
+      FieldLookup.SETRANGE(FieldName,Name);
+      IF FieldLookup.FINDFIRST THEN
+        OutField := RecRef.FIELD(FieldLookup."No.");
+    END;
+
+    LOCAL PROCEDURE GetFieldValue@11123306(VAR RecRef@11123302 : RecordRef;Name@11123303 : Text[1024]) : Text[1024];
+    VAR
+      Field@11123304 : FieldRef;
+    BEGIN
+      GetFieldByName(RecRef,Name,Field);
+      EXIT(FORMAT(Field.VALUE));
+    END;
+
+    PROCEDURE AdaptCriterionForFilter@11123324(VAR Criteria@11123302 : Text[1024]);
+    VAR
+      Pos@11123308 : Integer;
+      ExprLen@11123311 : Integer;
+      HasSpecSymbol@11123303 : Boolean;
+    BEGIN
+      IF Criteria = '' THEN
+        EXIT;
+
+      Pos := 1;
+      ExprLen := STRLEN(Criteria);
+
+      WHILE NOT IsOutOfArray(Pos,ExprLen) DO BEGIN
+        IF IsCriterion(Criteria[Pos]) OR IsInterval(Criteria,Pos) THEN
+          HasSpecSymbol := TRUE;
+        IF Criteria[Pos] = '''' THEN
+          Criteria := CONVERTSTR(Criteria,'''','?');
+
+         Pos += 1;
+      END;
+
+      IF HasSpecSymbol THEN
+        Criteria := '''' + Criteria + '''';
+    END;
+
+    PROCEDURE HandleLastDateModifyFilter@11123315(VAR RecRef@11123302 : RecordRef;VAR FilterList@11123303 : Record 11123330;VAR Params@11123304 : Record 11123310);
+    VAR
+      RecInfo@11123305 : Record 11123331;
+    BEGIN
+      IF NOT IsModifiedDateFilter(FilterList) THEN
+        EXIT;
+
+      IF IsRebuildIndexFilter(FilterList) THEN
+        EXIT;
+
+      SetRecInfoFilters(RecRef,RecInfo,FilterList,Params);
+      SetRecInfoWebshopFilter(RecRef,RecInfo,Params);
+
+      SetRecInfoIdList(RecInfo,Params);
+      IF RecInfo.ISEMPTY THEN
+        SetNotExistingIdlist(RecRef,RecInfo,Params);
+    END;
+
+    PROCEDURE SetRecInfoIdList@11123394(VAR RecInfo@11123303 : Record 11123331;VAR Params@11123304 : Record 11123310);
+    VAR
+      FieldNoText@11123305 : Text[1024];
+      Position@11123306 : Integer;
+      Counter@11123307 : Integer;
+      CountOfRecords@11123302 : Integer;
+      RecordAvailable@11123309 : Boolean;
+    BEGIN
+      IF (Params.PageIndex <> 0) AND (Params.PageSize <> 0) THEN
+        Position := Params.PageIndex * Params.PageSize;
+
+      CountOfRecords := RecInfo.COUNT;
+      Params.IndexRecords := CountOfRecords;
+
+      RecInfo.SETCURRENTKEY("Code ID");
+      IF NOT Params.SortAscending THEN
+        RecInfo.ASCENDING(FALSE);
+
+      IF (CountOfRecords > 0) AND (CountOfRecords >= Position) THEN BEGIN
+        IF Params.SortAscending THEN
+          RecordAvailable := RecInfo.FINDSET
+        ELSE
+          RecordAvailable := RecInfo.FIND('-');
+
+        FieldNoText := '0000000000';
+
+        IF Position > 0 THEN
+          RecordAvailable := RecInfo.NEXT(Position) <> 0;
+
+        WHILE RecordAvailable AND ((Params.PageSize = 0) OR (Counter < Params.PageSize)) DO BEGIN
+          FieldNoText := INCSTR(FieldNoText);
+          Params.SetIdListValue(FieldNoText,RecInfo."Code ID");
+
+          Counter := Counter + 1;
+          RecordAvailable := RecInfo.NEXT <> 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE SetRecInfoFilters@11123399(VAR RecRef@11123303 : RecordRef;VAR RecInfo@11123304 : Record 11123331;VAR FilterList@11123305 : Record 11123330;VAR Params@11123306 : Record 11123310);
+    VAR
+      RecRef2@11123307 : RecordRef;
+      CommonFunc@11123308 : Codeunit 11123309;
+      FieldName@11123309 : Text[1024];
+      TableId@11123310 : Integer;
+    BEGIN
+      TableId := CommonFunc.GetCorrectTableNoFromRecRef(RecRef);
+      FieldName := RecInfo.FIELDNAME("Table ID");
+
+      RecRef2.GETTABLE(RecInfo);
+      IF (NOT SetFieldFilter(RecRef2,FieldName,FORMAT(TableId))) OR
+         (NOT SetFieldFilter(RecRef2,FilterList.Key,FilterList.Value))
+      THEN
+        ERROR(Text11123302,FieldName);
+
+      FilterList.DELETE;
+
+      IF CodeIdFilterExist(RecRef,FilterList) THEN BEGIN
+        FieldName := RecInfo.FIELDNAME("Code ID");
+        IF (NOT SetFieldFilter(RecRef2,FieldName,FilterList.Value)) THEN
+          ERROR(Text11123302,FieldName);
+        FilterList.DELETE;
+      END;
+
+      RecInfo.SETVIEW(RecRef2.GETVIEW(FALSE));
+      RecRef2.CLOSE;
+    END;
+
+    PROCEDURE SetRecInfoWebshopFilter@11123320(VAR RecRef@11123304 : RecordRef;VAR RecInfo@11123302 : Record 11123331;VAR Params@11123305 : Record 11123310);
+    VAR
+      FieldRef@11123308 : FieldRef;
+      Item@11123303 : Record 27;
+      CommonFunc@11123307 : Codeunit 11123309;
+      TableNumber@11123306 : Integer;
+    BEGIN
+      TableNumber := CommonFunc.GetCorrectTableNoFromRecRef(RecRef);
+      IF NOT (TableNumber IN
+        [DATABASE::Item,
+        DATABASE::Customer,
+        DATABASE::Contact,
+        DATABASE::"Salesperson/Purchaser"])
+      THEN
+        EXIT;
+
+      IF NOT SetWebshopFilter(RecRef,Params) THEN
+        EXIT;
+
+      RecInfo.SETCURRENTKEY("Code ID");
+      IF RecInfo.FINDSET THEN
+        REPEAT
+          FieldRef := RecRef.FIELD(1);         // No.; Code;
+          FieldRef.SETRANGE(RecInfo."Code ID");
+          IF NOT RecRef.ISEMPTY THEN
+          RecInfo.MARK(TRUE);
+      UNTIL RecInfo.NEXT = 0;
+      RecInfo.MARKEDONLY(TRUE);
+    END;
+
+    PROCEDURE SetNotExistingIdlist@11123395(VAR RecRef@11123303 : RecordRef;VAR RecInfo@11123304 : Record 11123331;VAR Params@11123305 : Record 11123310);
+    VAR
+      FieldRef@11123306 : FieldRef;
+      Length@11123307 : Integer;
+      NotExistingValue@11123308 : Text[1024];
+    BEGIN
+      FieldRef := RecRef.FIELD(1);
+      Length := FieldRef.LENGTH;
+      NotExistingValue := COPYSTR(FORMAT(CREATEGUID),1,Length);
+      Params.SetIdListValue(NotExistingValue,NotExistingValue);
+    END;
+
+    PROCEDURE IsModifiedDateFilter@11123396(VAR FilterList@11123304 : Record 11123330) : Boolean;
+    VAR
+      RecRef@11123302 : RecordRef;
+      FieldRef@11123305 : FieldRef;
+    BEGIN
+      RecRef.OPEN(DATABASE::"SC - Record Info");
+      FieldRef := RecRef.FIELD(5); // "Last Date/Time Modified"
+      IF FilterList.GET(FieldRef.NAME) THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE IsRebuildIndexFilter@11123398(FilterList@11123303 : Record 11123330) : Boolean;
+    VAR
+      Position@11123304 : Integer;
+    BEGIN
+      Position := STRPOS(FilterList.Value,'<=');
+      IF Position <> 0 THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE CodeIdFilterExist@11123317(VAR RecRef@11123303 : RecordRef;VAR FilterList@11123302 : Record 11123330) : Boolean;
+    VAR
+      FieldRef@11123304 : FieldRef;
+    BEGIN
+      FieldRef := RecRef.FIELD(1); // "No.","Code"
+      IF FilterList.GET(FieldRef.NAME) THEN
+        EXIT(TRUE);
+    END;
+
+    PROCEDURE FilterSalesHeaderByDocState@11123314(VAR SalesHeader@11123302 : Record 36);
+    VAR
+      SCSetup@11123303 : Record 11123305;
+      RecMgt@11123304 : Codeunit 11123326;
+      Context@11123305 : Codeunit 11123305;
+      DocState@11123306 : 'Normal,Basket,Wish List,Edit Order';
+    BEGIN
+      IF SCSetup.GET THEN
+        IF SCSetup."Enable Sana Commerce" THEN BEGIN
+          DocState := Context.GetDocStateFilter;
+          SalesHeader.SETRANGE("Webshop Document State",DocState);
+        END;
+    END;
+
+    PROCEDURE LookupField@11123323(TableNumber@11123303 : Integer;CurrentFieldNo@11123304 : Integer) : Integer;
+    VAR
+      FieldRec@11123302 : Record 2000000041;
+    BEGIN
+      IF TableNumber <> 0 THEN BEGIN
+        FieldRec.FILTERGROUP(2);
+        FieldRec.SETRANGE(TableNo,TableNumber);
+        FieldRec.FILTERGROUP(0);
+        IF CurrentFieldNo <> 0 THEN
+          FieldRec.GET(TableNumber,CurrentFieldNo);
+        IF PAGE.RUNMODAL(PAGE::"SC - Field List",FieldRec) = ACTION::LookupOK THEN
+          EXIT(FieldRec."No.");
+      END;
+    END;
+
+    PROCEDURE LookupFieldName@11123333(TableNumber@11123303 : Integer;CurrentFieldNo@11123304 : Integer) : Text[30];
+    VAR
+      FieldRec@11123302 : Record 2000000041;
+    BEGIN
+      IF TableNumber <> 0 THEN BEGIN
+        FieldRec.FILTERGROUP(2);
+        FieldRec.SETRANGE(TableNo,TableNumber);
+        FieldRec.FILTERGROUP(0);
+        IF CurrentFieldNo <> 0 THEN
+          FieldRec.GET(TableNumber,CurrentFieldNo);
+        IF PAGE.RUNMODAL(PAGE::"SC - Field List",FieldRec) = ACTION::LookupOK THEN
+          EXIT(FieldRec.FieldName);
+      END;
+    END;
+
+    BEGIN
+    {
+      2017-10-13 TPZ2027 EBAGIM
+        Swaping Salesperon with MfrRep table
+      2018-0130 TPZ2181 EBAGIM
+        Bug fix for indexing job
+    }
+    END.
+  }
+}
+

@@ -1,0 +1,410 @@
+OBJECT Codeunit 14099300 E.D.I. Send XML Document
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/13/20;
+    Time=12:00:00 PM;
+    Version List=SE0.62;
+  }
+  PROPERTIES
+  {
+    TableNo=14002369;
+    OnRun=BEGIN
+            ExportDoc(EDIDocument,Rec);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      Text001@1240020017 : TextConst 'ENU=EDI Template %1 not found for %2 %3.';
+      EDISetup@1240020005 : Record 14002367;
+      EDIDocument@1240020002 : Record 14002353;
+      EDITemplate@1240020003 : Record 14002350;
+      EDITradePartner@1240020004 : Record 14002360;
+      EDISendDocHdr@1240020013 : Record 14002369;
+      EDISendDocField@1240020012 : Record 14002370;
+      EDIXMLMgmt@1240020014 : Codeunit 14099302;
+      EDIFile@1240020006 : File;
+      EDIFileName@1240020007 : Text[250];
+      FileName@1240020008 : Text[250];
+      EDICopyToFileName@1240020011 : Text[250];
+      Batch@1240020001 : Boolean;
+      ParentNodeSet@1240020015 : Boolean;
+      Text002@1240020016 : TextConst 'ENU=%1 Interface File Type on Template %2 is invalid for an XML file export.';
+      NewChildName@1240020018 : Text[250];
+      cXMLDoc@1240020019 : Boolean;
+      ExportSequence@1240020020 : Code[10];
+      CreateDeclaration@1240020021 : Boolean;
+      DocElementCreated@1240020022 : Boolean;
+
+    PROCEDURE SetValues@1240020002(CurrEDIDocument@1240020000 : Record 14002353;MultipleDocuments@1240020001 : Boolean);
+    BEGIN
+      Batch := MultipleDocuments;
+      EDIDocument := CurrEDIDocument;
+    END;
+
+    PROCEDURE ExportDoc@1240020003(VAR EDIDocument@1240020006 : Record 14002353;VAR CurrentEDISendDocHdr@1240020003 : Record 14002369) : Boolean;
+    VAR
+      EDISegment@1240020000 : Record 14002354;
+      EDISendDocHdrTmp@1240020005 : TEMPORARY Record 14002369;
+      XMLDocOut@1240020022 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      CurrNode@1240020021 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      NewChild@1240020007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      MultipleDocuments@1240020002 : Boolean;
+      Declaration@1240020014 : Text[100];
+      Text001@1240020016 : TextConst 'ENU=%1';
+      k@1240020009 : Integer;
+      DocNameSpace@1240020023 : Text[200];
+      CurrNodeName@1240020024 : Text[50];
+      PreviousDepth@1240020001 : Integer;
+      DepthChange@1240020015 : Integer;
+      CleanString@1240020017 : Text[250];
+      Finished@1240020027 : Boolean;
+    BEGIN
+      WITH EDIDocument DO BEGIN
+        EDITradePartner.GET("Trade Partner No.");
+        IF NOT EDITemplate.GET("EDI Template Code") THEN
+          ERROR(
+            Text001,
+            "EDI Template Code","Trade Partner No.","Navision Document");
+      END;
+      IF EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::cXML THEN
+        cXMLDoc := TRUE
+      ELSE
+        cXMLDoc := FALSE;
+
+      EDISendDocHdrTmp.RESET;
+      EDISendDocHdrTmp.DELETEALL;
+      CLEAR(XMLDocOut);
+      DocNameSpace := '';
+      Finished := FALSE;
+      EDIDocument."Documents Found" := 0;
+      EDIDocument."Documents Exported" := 0;
+
+
+      MultipleDocuments := Batch;
+      IF MultipleDocuments THEN BEGIN
+        EDISendDocHdr.RESET;
+        EDISendDocHdr.SETCURRENTKEY("Trade Partner No.","Navision Document","Sent Date");
+        EDISendDocHdr.SETRANGE("Trade Partner No.",EDIDocument."Trade Partner No.");
+        EDISendDocHdr.SETRANGE("Navision Document",EDIDocument."Navision Document");
+        EDISendDocHdr.SETRANGE("EDI Document No.",EDIDocument."EDI Document No.");
+        EDISendDocHdr.SETRANGE("Sent Date",0D);
+      END ELSE BEGIN
+        EDISendDocHdr.RESET;
+        EDISendDocHdr.SETRANGE("No.",CurrentEDISendDocHdr."No.");
+      END;
+      IF EDISendDocHdr.FIND('-') THEN BEGIN
+        IF NOT MultipleDocuments THEN
+          Finished := TRUE;
+        LoadXMLDocument(XMLDocOut);
+        AddDeclaration(XMLDocOut);
+        GetDocType(XMLDocOut);
+        REPEAT
+          EDISendDocHdrTmp.RESET;
+          EDISendDocHdrTmp.DELETEALL;
+
+          EDISendDocHdr."File Name" := FileName;
+          EDIDocument."Documents Found" := EDIDocument."Documents Found"  + 1;
+          EDISendDocHdr.CALCFIELDS("Data Error");
+          IF NOT EDISendDocHdr."Data Error" THEN BEGIN
+            EDISendDocField.RESET;
+            EDISendDocField.SETRANGE("No.",EDISendDocHdr."No.");
+            IF EDISendDocField.FIND('-') THEN
+              WITH EDISendDocField DO BEGIN
+                REPEAT
+                  IF EDISendDocField."Line No." = 10000 THEN BEGIN
+                    CreateDocElement(XMLDocOut,CurrNode,NewChild,DocNameSpace);
+                    NewChildName := FORMAT(NewChild.Name);
+                    CurrNodeName := FORMAT(CurrNode.Name);
+                  END ELSE BEGIN
+                    NewChildName := FORMAT(NewChild.Name);
+                    CurrNodeName := FORMAT(CurrNode.Name);
+                    IF (PreviousDepth > Depth) AND
+                       (PreviousDepth <> 0)
+                    THEN BEGIN
+                      DepthChange := PreviousDepth - Depth;
+                      WHILE DepthChange > 0 DO BEGIN
+                        DepthChange := DepthChange - 1;
+                        ParentNodeSet := EDIXMLMgmt.SetParentNode(CurrNode);
+                        NewChildName := FORMAT(NewChild.Name);
+                        CurrNodeName := FORMAT(CurrNode.Name);
+                      END;
+                    END;
+                    NewChildName := FORMAT(NewChild.Name);
+                    CurrNodeName := FORMAT(CurrNode.Name);
+                    CASE TRUE OF
+                      Attribute:
+                        BEGIN
+                          IF "Reverse Cross Reference" THEN BEGIN
+                            CleanString := '';
+                            CleanString :=
+                              EDIXMLMgmt.CheckCleanString(
+                              "General Cross Ref. Value",TRUE,EDIDocument);
+                            EDIXMLMgmt.AddAttribute(NewChild,"Attribute Name",CleanString)
+                          END ELSE BEGIN
+                            CleanString := '';
+                            CleanString :=
+                              EDIXMLMgmt.CheckCleanString(
+                              "Field Text Value",TRUE,EDIDocument);
+                            EDIXMLMgmt.AddAttribute(NewChild,"Attribute Name",CleanString);
+                          END;
+                        END;
+                      ELSE BEGIN
+                        IF STRPOS("Node Name",':') = 0 THEN
+                          DocNameSpace := EDISendDocField.Namespace
+                        ELSE
+                          IF ("Is Parent") AND (Namespace <> '') THEN
+                            DocNameSpace := EDISendDocField.Namespace;
+                        IF "Reverse Cross Reference" THEN BEGIN
+                           CleanString := '';
+                           CleanString :=
+                             EDIXMLMgmt.CheckCleanString(
+                             "General Cross Ref. Value",FALSE,EDIDocument);
+                           EDIXMLMgmt.AddElement(
+                             CurrNode,"Node Name",CleanString,DocNameSpace,NewChild)
+                        END ELSE BEGIN
+                          CleanString := '';
+                          CleanString :=
+                            EDIXMLMgmt.CheckCleanString(
+                            "Field Text Value",FALSE,EDIDocument);
+                          EDIXMLMgmt.AddElement(
+                            CurrNode,"Node Name",CleanString,DocNameSpace,NewChild);
+                        END;
+                        IF "Is Parent" THEN
+                          CurrNode := NewChild;
+                      END;
+                    END;
+                  END;
+                  NewChildName := FORMAT(NewChild.Name);
+                  CurrNodeName := FORMAT(CurrNode.Name);
+                  IF Attribute = FALSE THEN
+                    PreviousDepth := Depth;
+                UNTIL NEXT = 0;
+              END;
+
+            EDISendDocHdrTmp.COPY(EDISendDocHdr);
+            EDISendDocHdrTmp."Document Sent" := TRUE;
+            EDISendDocHdrTmp."Sent Date" := TODAY;
+            EDISendDocHdrTmp."Sent Time" := TIME;
+            EDISendDocHdrTmp.INSERT;
+          END ELSE
+            IF EDISetup."Abort Exp. if Send Doc. Error" THEN BEGIN
+              CurrentEDISendDocHdr.COPY(EDISendDocHdr);
+              EXIT(FALSE);
+          END;
+
+          EDISendDocHdrTmp.RESET;
+          IF EDISendDocHdrTmp.FIND('-') THEN BEGIN
+            CreateFileName(EDISetup,EDITemplate,EDITradePartner,EDIDocument);
+            IF (EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::XML) OR
+             (EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::cXML)
+            THEN BEGIN
+              EDICopyToFileName := EDIFileName;
+              EDICopyToFileName := DELSTR(EDICopyToFileName,STRPOS(EDICopyToFileName,'\Temp'),5);
+            END;
+            REPEAT
+              EDISendDocHdr.COPY(EDISendDocHdrTmp);
+              IF (EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::cXML) OR
+                 (EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::XML)
+              THEN
+                EDISendDocHdr."Interface File Name" := EDICopyToFileName
+              ELSE
+                EDISendDocHdr."Interface File Name" := EDIFileName;
+              EDISendDocHdr."File Name" := FileName;
+              EDISendDocHdr.MODIFY;
+              EDIDocument."Documents Exported" := EDIDocument."Documents Exported" + 1;
+            UNTIL EDISendDocHdrTmp.NEXT = 0;
+            EDIDocument.MODIFY;
+            EDITemplate.MODIFY;
+            CASE EDITemplate."Interface File Type" OF
+              EDITemplate."Interface File Type"::cXML,EDITemplate."Interface File Type"::XML:
+                XMLDocOut.Save(EDICopyToFileName);
+              EDITemplate."Interface File Type"::None:
+                XMLDocOut.Save(EDIFileName);
+              ELSE
+                ERROR(Text002,EDITemplate."Interface File Type",EDITemplate.Code);
+            END;
+            EDISendDocHdrTmp.RESET;
+            EDISendDocHdrTmp.DELETEALL;
+            CreateDeclaration := FALSE;
+
+            COMMIT;
+          END;
+        UNTIL (EDISendDocHdr.NEXT = 0) OR (Finished);
+      END;
+      COMMIT;
+
+      EXIT(TRUE);
+    END;
+
+    LOCAL PROCEDURE LoadXMLDocument@1240020004(VAR XMLDocOut@1240020002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument");
+    VAR
+      EDIRecDocHdr@1240020018 : Record 14002358;
+      DocType@1240020007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocumentType";
+    BEGIN
+      CLEAR(XMLDocOut);
+      IF ISNULL(XMLDocOut) THEN
+        XMLDocOut := XMLDocOut.XmlDocument;
+      EDIXMLMgmt.SetNormalCase;
+    END;
+
+    PROCEDURE CloseOutputFile@3(VAR EDISetup@1240030000 : Record 14002367;VAR EDITemplate@1240030001 : Record 14002350;VAR EDITradePartner@1240030002 : Record 14002360;VAR EDIDocument@1240030003 : Record 14002353);
+    BEGIN
+      IF (EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::cXML) OR
+         (EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::XML)
+      THEN BEGIN
+        COPY(EDIFileName,EDICopyToFileName);
+        ERASE(EDIFileName);
+      END;
+    END;
+
+    PROCEDURE CreateFileName@1240020007(VAR EDISetup@1240030001 : Record 14002367;VAR EDITemplate@1240030002 : Record 14002350;VAR EDITradePartner@1240030003 : Record 14002360;VAR EDIDocument@1240030004 : Record 14002353) Response@1240030000 : Boolean;
+    VAR
+      EDISend@1240020000 : Codeunit 14002356;
+    BEGIN
+      EDIFileName := '';
+      FileName := '';
+
+      IF (EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::XML) OR
+         (EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::cXML)
+      THEN BEGIN
+        EDISetup.GET;
+        EDISetup.LOCKTABLE;
+        EDISetup."Last Export Sequence No." := INCSTR(EDISetup."Last Export Sequence No.");
+        EDISetup.MODIFY;
+        ExportSequence := EDISetup."Last Export Sequence No.";
+        COMMIT;
+        IF EDIDocument."File Name Template" = '' THEN BEGIN
+          EDIFileName :=
+            EDITemplate."Interface File Path" + 'Outbox\Temp\' + EDIDocument."Interface File" + '-' +
+            DELCHR(EDIDocument."EDI Document No.",'=',':') + '-' + ExportSequence + '.xml';
+          FileName :=
+            EDIDocument."Interface File" + '-' + DELCHR(EDIDocument."EDI Document No.",'=',':') + '-' +
+            ExportSequence + '.xml';
+        END ELSE BEGIN
+          EDISend.CreateCustomFileName(
+            ExportSequence,EDITradePartner,EDIDocument,EDITemplate,EDIFileName,FileName,EDISendDocHdr);
+        END;
+        IF EXISTS(EDIFileName) THEN
+          ERASE(EDIFileName);
+      END ELSE BEGIN
+        EDIDocument.TESTFIELD("Interface File");
+        IF EDIDocument."File Name Template" = '' THEN BEGIN
+          EDIFileName := EDIDocument."Interface File";
+        END ELSE BEGIN
+          EDISetup.GET;
+          EDISetup.LOCKTABLE;
+          EDISetup."Last Export Sequence No." := INCSTR(EDISetup."Last Export Sequence No.");
+          EDISetup.MODIFY;
+          ExportSequence := EDISetup."Last Export Sequence No.";
+          COMMIT;
+          EDISend.CreateCustomFileName(
+            ExportSequence,EDITradePartner,EDIDocument,EDITemplate,EDIFileName,FileName,EDISendDocHdr);
+        END;
+      END;
+    END;
+
+    PROCEDURE DeleteTempFile@1240020006(VAR EDISetup@1240030000 : Record 14002367;VAR EDITemplate@1240030001 : Record 14002350;VAR EDITradePartner@1240030002 : Record 14002360;VAR EDIDocument@1240030003 : Record 14002353);
+    BEGIN
+      IF (EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::cXML) OR
+         (EDITemplate."Interface File Type" = EDITemplate."Interface File Type"::XML)
+      THEN BEGIN
+        COPY(EDIFileName,EDICopyToFileName);
+        ERASE(EDIFileName);
+      END;
+    END;
+
+    PROCEDURE AddDeclaration@11(VAR XMLDocOut@1001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument");
+    VAR
+      XMLDeclaration@1000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDeclaration";
+      XMLVersion@1240020002 : Code[10];
+      XMLEncode@1240020001 : Code[20];
+      Standalone@1240020000 : Text[5];
+    BEGIN
+      XMLVersion := EDIXMLMgmt.GetVersion(EDIDocument);
+      XMLEncode := FORMAT(EDIDocument."Declaration Encoding");
+      Standalone := FORMAT(EDIDocument."Declaration Standalone Status");
+      IF (Standalone = 'yes') OR (Standalone = 'no') THEN
+        XMLDeclaration := XMLDocOut.CreateXmlDeclaration(XMLVersion,XMLEncode,Standalone)
+      ELSE
+        XMLDeclaration := XMLDocOut.CreateXmlDeclaration(XMLVersion,XMLEncode,'');
+      XMLDocOut.AppendChild(XMLDeclaration);
+    END;
+
+    LOCAL PROCEDURE GetDocType@1240020001(VAR XMLDocOut@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument");
+    VAR
+      EDIRecDocHdr2@1240020002 : Record 14002358;
+      EDIDocument2@1240020003 : Record 14002353;
+      DocType@1240020001 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocumentType";
+      DocTypeName@1240020008 : Text[30];
+      DocTypePublicID@1240020007 : Text[30];
+      DoctypeDTDSubset@1240020006 : Text[100];
+      DoctypeDTDURL@1240020005 : Text[250];
+      CreateDocType@1240020004 : Boolean;
+    BEGIN
+      CreateDocType := FALSE;
+      IF EDIDocument."Navision Document" = 'E_FUNCTACK' THEN BEGIN
+        EDIRecDocHdr2.GET(EDISendDocHdr."Internal Doc No.");
+        WITH EDIRecDocHdr2 DO
+          EDIDocument2.GET(
+            "Trade Partner No.","Navision Document","EDI Document No.","EDI Version",EDIDocument.Type::Import);
+        EDIRecDocHdr2.GET(EDISendDocHdr."Internal Doc No.");
+        WITH EDIRecDocHdr2 DO
+          EDIDocument2.GET(
+            "Trade Partner No.","Navision Document","EDI Document No.","EDI Version",EDIDocument.Type::Import);
+        DocTypeName := EDIDocument2."Doctype Name";
+        IF DocTypeName <> '' THEN BEGIN
+          CreateDocType := TRUE;
+          EDIDocument2.TESTFIELD("Doctype DTD URL");
+        END;
+        DoctypeDTDURL :=  EDIDocument2."Doctype DTD URL";
+        DocTypePublicID := EDIDocument2."Doctype PublicID";
+        DoctypeDTDSubset := EDIDocument2."Doctype DTD Internal Subset";
+
+      END ELSE BEGIN
+        DocTypeName := EDIDocument."Doctype Name";
+        IF (cXMLDoc) AND (DocTypeName = '') THEN
+          DocTypeName := 'cXML';
+        IF DocTypeName <> '' THEN
+          CreateDocType := TRUE;
+        IF cXMLDoc OR CreateDocType THEN
+          EDIDocument.TESTFIELD("Doctype DTD URL");
+        DoctypeDTDURL :=  EDIDocument."Doctype DTD URL";
+        DocTypePublicID := EDIDocument."Doctype PublicID";
+        DoctypeDTDSubset := EDIDocument."Doctype DTD Internal Subset";
+      END;
+      IF CreateDocType THEN BEGIN
+        DocType := XMLDocOut.CreateDocumentType(DocTypeName,DocTypePublicID,DoctypeDTDURL,DoctypeDTDSubset);
+        XMLDocOut.AppendChild(DocType);
+      END;
+    END;
+
+    LOCAL PROCEDURE CreateDocElement@1240020000(VAR XMLDocOut@1240020004 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";VAR CurrNode@1240020003 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";VAR NewChild@1240020002 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";VAR DocNameSpace@1240020001 : Text[200]);
+    VAR
+      CurrNodeName@1240020000 : Text[80];
+    BEGIN
+      IF DocElementCreated THEN BEGIN
+        CurrNode := XMLDocOut.DocumentElement;
+        XMLDocOut.DocumentElement.RemoveAll;
+        NewChild := XMLDocOut.AppendChild(CurrNode);
+        CurrNode := NewChild;
+        CurrNodeName := FORMAT(CurrNode.Name);
+        EXIT;
+      END;
+      DocNameSpace := EDISendDocField.Namespace;
+      XMLDocOut.AppendChild(XMLDocOut.CreateElement(EDISendDocField."Node Name",DocNameSpace));
+      CurrNode := XMLDocOut.DocumentElement;
+      CurrNodeName := FORMAT(CurrNode.Name);
+      NewChild := XMLDocOut.AppendChild(CurrNode);
+      CurrNode := NewChild;
+      CurrNodeName := FORMAT(CurrNode.Name);
+      DocElementCreated := TRUE;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

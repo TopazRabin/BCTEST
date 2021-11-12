@@ -1,0 +1,191 @@
+OBJECT Codeunit 5323 Exchange Add-in Setup
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/22/17;
+    Time=12:00:00 PM;
+    Version List=NAVW111.00;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ExchangeWebServicesServer@1000 : Codeunit 5321;
+      AddinManifestManagement@1001 : Codeunit 1652;
+      Initialized@1002 : Boolean;
+      InvalidCredentialsErr@1005 : TextConst 'ENU=The provided email address and password are not valid Office 365 or Exchange credentials.;ESM=La direcci¢n de correo electr¢nico y la contrase¤a proporcionadas no son credenciales de Office 365 o Exchange v lidas.;FRC=L''adresse ‚lectronique et le mot de passe fournis ne constituent pas des informations d''identification Office 365 ou Exchange valides.;ENC=The provided email address and password are not valid Office 365 or Exchange credentials.';
+      NoMailboxErr@1006 : TextConst 'ENU=An Office 365 or Exchange mailbox could not be found for this account.;ESM=No se pudo encontrar el buz¢n de correo de Office 365 o Exchange de esta cuenta.;FRC=Impossible de trouver de boŒte de r‚ception Office 365 ou Exchange pour ce compte.;ENC=An Office 365 or Exchange mailbox could not be found for this account.';
+      AutodiscoverMsg@1008 : TextConst 'ENU=Searching for your mailbox.;ESM=Buscando su buz¢n de correo.;FRC=Recherche de votre boŒte de r‚ception.;ENC=Searching for your mailbox.';
+      WelcomeSubjectTxt@1016 : TextConst '@@@=%1 - Application name;ENU=Welcome to %1 - your Business Inbox in Outlook is ready!;ESM=Esto es %1, Su bandeja de entrada de empresa en Outlook est  lista.;FRC=Bienvenue dans %1, votre boŒte de r‚ception professionnelle dans Outlook est prˆteÿ!;ENC=Welcome to %1 - your Business Inbox in Outlook is ready!';
+      WelcomeEmailFromNameTxt@1014 : TextConst '@@@=%1 - Application Name;ENU=%1 Admin;ESM=Admin de %1;FRC=Admin %1;ENC=%1 Admin';
+      SalesEmailAddrTxt@1012 : TextConst '@@@={Locked};ENU=jim.glynn@contoso.com;ESM=jim.glynn@contoso.com;FRC=jim.glynn@contoso.com;ENC=jim.glynn@contoso.com';
+
+    [TryFunction]
+    LOCAL PROCEDURE Initialize@1003(AuthenticationEmail@1003 : Text[80]);
+    VAR
+      ExchangeServiceSetup@1000 : Record 5324;
+      AzureADMgt@1001 : Codeunit 6300;
+      AccessToken@1002 : Text;
+    BEGIN
+      AccessToken := AzureADMgt.GetAccessToken(AzureADMgt.GetO365Resource,AzureADMgt.GetO365ResourceName,FALSE);
+
+      IF AccessToken <> '' THEN BEGIN
+        ExchangeWebServicesServer.InitializeWithOAuthToken(AccessToken,ExchangeWebServicesServer.GetEndpoint);
+        IF ValidateCredentials THEN
+          EXIT;
+      END;
+
+      ExchangeServiceSetup.GET;
+      WITH ExchangeServiceSetup DO
+        ExchangeWebServicesServer.InitializeWithCertificate("Azure AD App. ID","Azure AD App. Cert. Thumbprint",
+          "Azure AD Auth. Endpoint","Exchange Service Endpoint","Exchange Resource Uri");
+
+      ExchangeWebServicesServer.SetImpersonatedIdentity(AuthenticationEmail);
+      Initialized := TRUE;
+    END;
+
+    [TryFunction]
+    [Internal]
+    PROCEDURE InitializeServiceWithCredentials@1002(Email@1000 : Text[80];Password@1001 : Text);
+    VAR
+      WebCredentials@1002 : DotNet "'Microsoft.Exchange.WebServices, Version=15.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'.Microsoft.Exchange.WebServices.Data.WebCredentials";
+      ProgressWindow@1004 : Dialog;
+      ErrorText@1005 : Text;
+    BEGIN
+      WebCredentials := WebCredentials.WebCredentials(Email,Password);
+
+      ProgressWindow.OPEN('#1');
+      ProgressWindow.UPDATE(1,AutodiscoverMsg);
+
+      // Production O365 endpoint
+      Initialized := ExchangeWebServicesServer.Initialize(Email,ExchangeWebServicesServer.GetEndpoint,WebCredentials,FALSE) AND
+        ValidateCredentials;
+      ErrorText := GETLASTERRORTEXT;
+
+      // Autodiscover endpoint (can be slow)
+      IF NOT Initialized THEN BEGIN
+        Initialized := ExchangeWebServicesServer.Initialize(Email,'',WebCredentials,TRUE) AND ValidateCredentials;
+        ErrorText := GETLASTERRORTEXT;
+      END;
+
+      ProgressWindow.CLOSE;
+
+      IF NOT Initialized THEN
+        ERROR(ErrorText);
+    END;
+
+    [Internal]
+    PROCEDURE CredentialsRequired@1008(AuthenticationEmail@1000 : Text[80]) Required : Boolean;
+    BEGIN
+      Required := NOT Initialize(AuthenticationEmail);
+    END;
+
+    [Internal]
+    PROCEDURE PromptForCredentials@1014() : Boolean;
+    VAR
+      User@1000 : Record 2000000120;
+      TempOfficeAdminCredentials@1001 : TEMPORARY Record 1612;
+    BEGIN
+      TempOfficeAdminCredentials.INIT;
+      TempOfficeAdminCredentials.INSERT;
+
+      User.SETRANGE("User Name",USERID);
+      IF User.FINDFIRST THEN BEGIN
+        TempOfficeAdminCredentials.Email := User."Authentication Email";
+        TempOfficeAdminCredentials.MODIFY;
+      END;
+
+      IF CredentialsRequired(TempOfficeAdminCredentials.Email) OR (TempOfficeAdminCredentials.Email = '') THEN BEGIN
+        CLEARLASTERROR;
+        REPEAT
+          IF PAGE.RUNMODAL(PAGE::"Office 365 Credentials",TempOfficeAdminCredentials) <> ACTION::LookupOK THEN
+            EXIT(FALSE);
+        UNTIL InitializeServiceWithCredentials(TempOfficeAdminCredentials.Email,TempOfficeAdminCredentials.GetPassword);
+      END;
+
+      EXIT(TRUE);
+    END;
+
+    [Internal]
+    PROCEDURE ImpersonateUser@1006(Email@1000 : Text[80]);
+    BEGIN
+      IF NOT Initialized THEN
+        Initialize(Email);
+
+      ExchangeWebServicesServer.SetImpersonatedIdentity(Email);
+    END;
+
+    [External]
+    PROCEDURE SampleEmailsAvailable@1007() : Boolean;
+    VAR
+      CompanyInformationMgt@1001 : Codeunit 1306;
+      PermissionManager@1002 : Codeunit 9002;
+    BEGIN
+      EXIT(CompanyInformationMgt.IsDemoCompany AND PermissionManager.SoftwareAsAService);
+    END;
+
+    [Internal]
+    PROCEDURE DeployAddin@1013(OfficeAddin@1000 : Record 1610);
+    VAR
+      UserPreference@1004 : Record 1306;
+      InstructionMgt@1005 : Codeunit 1330;
+      Stream@1001 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.IO.MemoryStream";
+      Encoding@1006 : DotNet "'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Text.UTF8Encoding";
+      ManifestText@1002 : Text;
+    BEGIN
+      AddinManifestManagement.GenerateManifest(OfficeAddin,ManifestText);
+      Encoding := Encoding.UTF8Encoding;
+      Stream := Stream.MemoryStream(Encoding.GetBytes(ManifestText));
+      ExchangeWebServicesServer.InstallApp(Stream);
+
+      UserPreference.SETRANGE("Instruction Code",InstructionMgt.OfficeUpdateNotificationCode);
+      UserPreference.SETRANGE("User ID",USERID);
+      UserPreference.DELETEALL;
+    END;
+
+    [Internal]
+    PROCEDURE DeployAddins@1004(VAR OfficeAddin@1000 : Record 1610);
+    BEGIN
+      IF OfficeAddin.GetAddins THEN
+        REPEAT
+          DeployAddin(OfficeAddin);
+        UNTIL OfficeAddin.NEXT = 0;
+    END;
+
+    [Internal]
+    PROCEDURE DeploySampleEmails@1005();
+    VAR
+      User@1003 : Record 2000000120;
+      OfficeAddinSampleEmails@1001 : Codeunit 1655;
+      RecipientEmail@1002 : Text;
+      HTMlBody@1000 : Text;
+    BEGIN
+      User.SETRANGE("User Name",USERID);
+      IF User.FINDFIRST THEN
+        RecipientEmail := User."Authentication Email";
+
+      HTMlBody := OfficeAddinSampleEmails.GetHTMLSampleMsg;
+      ExchangeWebServicesServer.SaveHTMLEmailToInbox(STRSUBSTNO(WelcomeSubjectTxt,PRODUCTNAME.MARKETING),HTMlBody,
+        SalesEmailAddrTxt,STRSUBSTNO(WelcomeEmailFromNameTxt,PRODUCTNAME.FULL),RecipientEmail);
+    END;
+
+    [TryFunction]
+    LOCAL PROCEDURE ValidateCredentials@1012();
+    BEGIN
+      IF NOT ExchangeWebServicesServer.ValidCredentials THEN BEGIN
+        IF STRPOS(GETLASTERRORTEXT,'401') > 0 THEN
+          ERROR(InvalidCredentialsErr);
+        ERROR(NoMailboxErr);
+      END;
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

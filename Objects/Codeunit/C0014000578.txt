@@ -1,0 +1,998 @@
+OBJECT Codeunit 14000578 Forecast Summary
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/01/21;
+    Time=12:00:00 PM;
+    Version List=UBP3.03.02;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+            CreateViaJobQueue();
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      ForSummaryEntry@1240030004 : Record 14000587;
+      ForSummary@1240030003 : Record 14000586;
+      ForSummaryView@1240030016 : Record 14000585;
+      ForSummaryOrig@1240030036 : Record 14000588;
+      ForInvPeriod@1240030010 : Record 14000552;
+      InvMgtSetup@1240030024 : Record 14000551;
+      Item@1240030006 : Record 27;
+      ItemUsage@1240030035 : Record 14000557;
+      Location@1240030000 : Record 14;
+      LocInvRollUp@1240030029 : TEMPORARY Record 14000583;
+      ProcUnit@1240030001 : Record 14000555;
+      ProcUnit2@1240030030 : Record 14000555;
+      StockkeepingUnit@1240030015 : Record 5700;
+      ForecastAdjust@1240030053 : Record 14002707;
+      ForecastEntry@1240030054 : Record 14002603;
+      Forecast@1240030002 : Codeunit 14000567;
+      CreLocInvRollUp@1240030025 : Codeunit 14000574;
+      InvMgt@1240030037 : Codeunit 14000553;
+      UBP@1240020002 : Codeunit 14000564;
+      ProgWindow@1240030017 : Dialog;
+      First@1240030028 : Boolean;
+      ForInvPerArray@1240030011 : ARRAY [15] OF Date;
+      ForInvPerEndArray@1240030026 : ARRAY [15] OF Date;
+      i@1240030007 : Integer;
+      j@1240030012 : Integer;
+      k@1240030027 : Integer;
+      LevelCode@1240030008 : Code[50];
+      LocArray@1240030032 : ARRAY [200] OF Code[10];
+      LocQtyArray@1240030033 : ARRAY [200] OF Decimal;
+      LocIdx@1240030034 : Integer;
+      PeriodEndDate@1240030009 : Date;
+      SingleLocExpInv@1240030013 : Boolean;
+      TypeArray@1240030005 : ARRAY [6] OF ' ,Company,Location,Item,Item Category,Product Group,Item Class,Item Ranking,Gen. Prod. Posting Group,Inv. Posting Group,Item Summary Code 1,Item Summary Code 2,Item Summary Code 3';
+      UnitCost@1240030014 : Decimal;
+      TotalLocCount@1240030018 : Decimal;
+      ProgLocCount@1240030019 : Decimal;
+      TotalProcCount@1240030020 : Decimal;
+      ProgProcCount@1240030021 : Decimal;
+      TotalSumCount@1240030022 : Decimal;
+      ProgSumCount@1240030023 : Decimal;
+      UBPLogEntryNo@1240030038 : Integer;
+      Text001@1240030048 : TextConst 'ENU=Create New Forecast Summary?';
+      Text002@1240030047 : TextConst 'ENU=Are you summarizing forecast for %1 location(s)?';
+      Text003@1240030046 : TextConst 'ENU=All locations must have the same period end date.';
+      Text005@1240030044 : TextConst 'ENU=Creating Forecast Summary';
+      Text006@1240030043 : TextConst 'ENU=Locations';
+      Text007@1240030042 : TextConst 'ENU=Procurement Units';
+      Text009@1240030040 : TextConst 'ENU=Forecast Summary Create';
+      Text010@1240030039 : TextConst 'ENU=Update Forecast Summary';
+      Text011@1240030049 : TextConst 'ENU=Summary Lines';
+      EntryNo@1240030050 : Integer;
+      Finished@1240030051 : Boolean;
+      NotFound@1240030052 : Boolean;
+      LocationTypePointer@1240030031 : Integer;
+      AccumFCUnits@1240020000 : Decimal;
+      IsSporadic@1240020001 : Boolean;
+      ForUnits@1240020003 : Decimal;
+      Text012@1240020004 : TextConst 'ENU=Product Group is obsolete and is now no longer an option.';
+
+    PROCEDURE CreateViaJobQueue@1240020000();
+    BEGIN
+      ForSummaryView.RESET;
+      ForSummaryView.SETRANGE("Process Via Job Queue",TRUE);
+      ForSummaryView.SETFILTER("Job Queue Start Date", '%1..', TODAY);
+      IF ForSummaryView.FINDSET THEN BEGIN
+        IF (ForSummaryView."Summary Status" = ForSummaryView."Summary Status"::Pending) AND
+           (TIME >= ForSummaryView."Job Queue Start Time")
+        THEN BEGIN
+          ForSummaryView."Summary Status" := ForSummaryView."Summary Status"::Processing;
+          ForSummaryView.MODIFY;
+          COMMIT;
+          CreateSummary(ForSummaryView);
+          ForSummaryView."Summary Status" := ForSummaryView."Summary Status"::Complete;
+          ForSummaryView."Process Via Job Queue" := FALSE;
+          ForSummaryView.MODIFY;
+        END;
+      END;
+    END;
+
+    PROCEDURE CreateSummary@1240030000(CurrForSummaryView@1240030000 : Record 14000585);
+    BEGIN
+      CurrForSummaryView.TESTFIELD("Forecast Periods");
+
+      IF GUIALLOWED THEN
+        IF NOT CONFIRM(STRSUBSTNO(Text001),FALSE) THEN
+          EXIT;
+
+      InvMgt.CreateLogEntry(
+        '',STRSUBSTNO(Text009,TODAY,0D),UBPLogEntryNo);
+
+      InvMgtSetup.GET;
+
+      CLEAR(TypeArray);
+      i := 0;
+      REPEAT
+        i := i + 1;
+        CASE i OF
+          1:
+            TypeArray[i] := CurrForSummaryView."Summary Code 1 Type";
+          2:
+            TypeArray[i] := CurrForSummaryView."Summary Code 2 Type";
+          3:
+            TypeArray[i] := CurrForSummaryView."Summary Code 3 Type";
+          4:
+            TypeArray[i] := CurrForSummaryView."Summary Code 4 Type";
+          5:
+            TypeArray[i] := CurrForSummaryView."Summary Code 5 Type";
+          6:
+            TypeArray[i] := CurrForSummaryView."Summary Code 6 Type";
+        END;
+        IF TypeArray[i] = CurrForSummaryView."Summary Code 6 Type"::Location THEN
+          LocationTypePointer := i;
+      UNTIL i = 6;
+
+      IF GUIALLOWED THEN BEGIN
+        Location.RESET;
+        Location.SETRANGE("Enable Adv. Forecasting",TRUE);
+        IF LocationTypePointer <> 0 THEN
+          Location.SETFILTER(
+            Code,GetTypeFilter(
+              CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::Location));
+        IF NOT InvMgtSetup."Roll Up Via Repl. Path" THEN
+          Location.SETFILTER(
+            Code,GetTypeFilter(CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::Location));
+        TotalLocCount := Location.COUNT;
+        IF NOT CONFIRM(STRSUBSTNO(Text002,TotalLocCount),FALSE) THEN
+          EXIT;
+        Location.FIND('-');
+        PeriodEndDate := Location."Last Closed Period Date";
+        REPEAT
+          IF PeriodEndDate <> Location."Last Closed Period Date" THEN
+            ERROR(Text003);
+        UNTIL Location.NEXT = 0;
+        Location.FIND('-');
+      END ELSE BEGIN
+        Location.RESET;
+        Location.SETRANGE("Auto Process Period End",TRUE);
+        IF LocationTypePointer <> 0 THEN
+          Location.SETFILTER(
+            Code,GetTypeFilter(
+              CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::Location));
+        IF NOT InvMgtSetup."Roll Up Via Repl. Path" THEN
+          Location.SETFILTER(
+            Code,GetTypeFilter(CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::Location));
+        TotalLocCount := Location.COUNT;
+        IF Location.FIND('-') THEN;
+        PeriodEndDate := Location."Last Closed Period Date";
+        REPEAT
+          IF PeriodEndDate <> Location."Last Closed Period Date" THEN
+            EXIT;
+        UNTIL Location.NEXT = 0;
+        IF Location.FIND('-') THEN;
+      END;
+
+      SetupInvPeriodArray(CurrForSummaryView);
+
+      IF GUIALLOWED THEN
+        ProgWindow.OPEN(
+          Text005 + '\' +
+          PADSTR(Text006,20,' ') + ' @1@@@@@@@@@@@@@@@@@@\' +
+          PADSTR(Text007,20,' ') + ' @2@@@@@@@@@@@@@@@@@@');
+
+      ForSummary.RESET;
+      ForSummary.SETRANGE("Forecast View Code",CurrForSummaryView."Forecast Summary Code");
+      ForSummary.DELETEALL;
+
+      ForSummaryEntry.RESET;
+      ForSummaryEntry.SETRANGE("Forecast View Code",CurrForSummaryView."Forecast Summary Code");
+      ForSummaryEntry.DELETEALL;
+
+      ForSummaryOrig.RESET;
+      ForSummaryOrig.SETRANGE("Forecast View Code",CurrForSummaryView."Forecast Summary Code");
+      ForSummaryOrig.DELETEALL;
+      COMMIT;
+
+      // Setup Date Header
+      ForSummary.RESET;
+      ForSummary.INIT;
+      ForSummary."Forecast View Code" := CurrForSummaryView."Forecast Summary Code";
+      ForSummary.Summary := FALSE;
+      ForSummary."Summary Code 1" := '';
+      ForSummary."Summary Code 2" := '';
+      ForSummary."Summary Code 3" := '';
+      ForSummary."Summary Code 4" := '';
+      ForSummary."Summary Code 5" := '';
+      ForSummary."Summary Code 6" := '';
+
+      i := 0;
+      REPEAT
+        i := i + 1;
+        CASE i OF
+          1:
+            ForSummary."Period 1" := FORMAT(ForInvPerArray[i]);
+          2:
+            ForSummary."Period 2" := FORMAT(ForInvPerArray[i]);
+          3:
+            ForSummary."Period 3" := FORMAT(ForInvPerArray[i]);
+          4:
+            ForSummary."Period 4" := FORMAT(ForInvPerArray[i]);
+          5:
+            ForSummary."Period 5" := FORMAT(ForInvPerArray[i]);
+          6:
+            ForSummary."Period 6" := FORMAT(ForInvPerArray[i]);
+          7:
+            ForSummary."Period 7" := FORMAT(ForInvPerArray[i]);
+          8:
+            ForSummary."Period 8" := FORMAT(ForInvPerArray[i]);
+          9:
+            ForSummary."Period 9" := FORMAT(ForInvPerArray[i]);
+          10:
+            ForSummary."Period 10" := FORMAT(ForInvPerArray[i]);
+          11:
+            ForSummary."Period 11" := FORMAT(ForInvPerArray[i]);
+          12:
+            ForSummary."Period 12" := FORMAT(ForInvPerArray[i]);
+          13:
+            ForSummary."Period 13" := FORMAT(ForInvPerArray[i]);
+          14:
+            ForSummary."Period 14" := FORMAT(ForInvPerArray[i]);
+          15:
+            ForSummary."Period 15" := FORMAT(ForInvPerArray[i]);
+        END;
+      UNTIL i >= CurrForSummaryView."Forecast Periods";
+
+      ForSummary."Period 1 Starting Date" := ForInvPerArray[1];
+      ForSummary.INSERT;
+
+      ItemUsage.RESET;
+      ItemUsage.SETCURRENTKEY(
+        "Location Code","Item No.","Variant Code","Starting Date","Ending Date");
+
+      REPEAT
+        IF GUIALLOWED THEN BEGIN
+          ProgLocCount := ProgLocCount + 1;
+          ProgWindow.UPDATE(1,ROUND(10000 * (ProgLocCount / TotalLocCount),1.0));
+        END;
+
+        IF InvMgtSetup."Roll Up Via Repl. Path" THEN BEGIN
+          ProcUnit.RESET;
+          ProcUnit.SETRANGE("Location Code",Location.Code);
+          ProcUnit.SETFILTER("Replenishment Source Type",'<>%1',ProcUnit."Replenishment Source Type"::Location);
+          ProcUnit.SETFILTER(
+            "Item No.",GetTypeFilter(CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::Item));
+          ProcUnit.SETFILTER(
+            "Item Class Ranking",GetTypeFilter(CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Class"));
+          ProcUnit.SETFILTER(
+            "Ranking Code",GetTypeFilter(CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Ranking"));
+          TotalProcCount := ProcUnit.COUNT;
+          ProgProcCount := 0;
+          IF ProcUnit.FIND('-') THEN BEGIN
+            REPEAT
+              ProgProcCount := ProgProcCount + 1;
+              IF GUIALLOWED THEN
+                IF ProgProcCount MOD 10 = 0 THEN
+                  ProgWindow.UPDATE(2,ROUND(10000 * (ProgProcCount / TotalProcCount),1.0));
+              IF ProgProcCount MOD 500 = 0 THEN
+                COMMIT;
+
+              Item.RESET;
+              Item.SETRANGE("No.",ProcUnit."Item No.");
+              Item.SETFILTER(
+                "Item Category Code",GetTypeFilter(
+                  CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Category"));
+              Item.SETFILTER(
+                "Gen. Prod. Posting Group",GetTypeFilter(
+                  CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Gen. Prod. Posting Group"));
+              Item.SETFILTER(
+                "Inventory Posting Group",GetTypeFilter(
+                  CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Inv. Posting Group"));
+              Item.SETFILTER(
+                "Summary Code 1",GetTypeFilter(
+                  CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Summary Code 1"));
+              Item.SETFILTER(
+                "Summary Code 1",GetTypeFilter(
+                  CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Summary Code 2"));
+              Item.SETFILTER(
+                "Summary Code 1",GetTypeFilter(
+                  CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Summary Code 3"));
+              IF Item.FIND('-') THEN BEGIN
+                ForSummaryEntry.INIT;
+                ForSummaryEntry."Forecast View Code" := CurrForSummaryView."Forecast Summary Code";
+                ForSummaryEntry."Summary Code 1" := '';
+                ForSummaryEntry."Summary Code 2" := '';
+                ForSummaryEntry."Summary Code 3" := '';
+                ForSummaryEntry."Summary Code 4" := '';
+                ForSummaryEntry."Summary Code 5" := '';
+                ForSummaryEntry."Summary Code 6" := '';
+
+                // Check for Sporadic
+                IsSporadic := FALSE;
+                ItemUsage.SETRANGE("Location Code",ProcUnit."Location Code");
+                ItemUsage.SETRANGE("Item No.",ProcUnit."Item No.");
+                ItemUsage.SETRANGE("Variant Code",ProcUnit."Variant Code");
+                ItemUsage.SETRANGE("Ending Date",PeriodEndDate);
+                IF NOT ItemUsage.FINDFIRST THEN BEGIN
+                  ItemUsage.INIT;
+                  IsSporadic := TRUE;
+                END ELSE BEGIN
+                  IF ItemUsage.Status <> ItemUsage.Status::Reoccuring THEN
+                    IsSporadic := TRUE;
+                END;
+
+                ForecastEntry.RESET;
+                ForecastEntry.SETCURRENTKEY("Location Code","Item No.","Variant Code","Starting Date",Released);
+                IF InvMgtSetup."Roll Up Via Repl. Path" THEN
+                  ForecastEntry.SETFILTER(
+                    "Location Code",UBP.GetUsageLocationFilter(
+                      ProcUnit."Location Code",ProcUnit."Item No.",ProcUnit."Variant Code",FALSE))
+                ELSE
+                  ForecastEntry.SETFILTER(
+                    "Location Code",UBP.GetUsageLocationFilter(
+                      ProcUnit."Location Code",ProcUnit."Item No.",ProcUnit."Variant Code",TRUE));
+                ForecastEntry.SETRANGE("Item No.",ProcUnit."Item No.");
+                ForecastEntry.SETRANGE("Variant Code",ProcUnit."Variant Code");
+                ForecastEntry.SETRANGE(Released,TRUE);
+                ForecastEntry.SETFILTER("Starting Date",'%1..',PeriodEndDate + 1);
+                IF ForecastEntry.FIND('-') THEN
+                  IsSporadic := FALSE;
+
+                ForecastAdjust.RESET;
+                ForecastAdjust.SETCURRENTKEY(
+                  "Item No.","Variant Code","Location Code","Starting Date");
+                ForecastAdjust.SETRANGE("Item No.",ProcUnit."Item No.");
+                ForecastAdjust.SETRANGE("Variant Code",ProcUnit."Variant Code");
+                ForecastAdjust.SETFILTER(
+                  "Location Code",UBP.GetUsageLocationFilter(
+                    ProcUnit."Location Code",ProcUnit."Item No.",ProcUnit."Variant Code",TRUE));
+                ForecastAdjust.SETFILTER("Starting Date",'%1..',PeriodEndDate + 1);
+                IF ForecastAdjust.FIND('-') THEN BEGIN
+                  ForecastAdjust.CALCSUMS(Quantity);
+                  IF ForecastAdjust.Quantity <> 0 THEN
+                    IsSporadic := FALSE;
+                END;
+
+                CLEAR(LocArray);
+                CLEAR(LocQtyArray);
+                k := 0;
+                REPEAT
+                  k := k + 1;
+                  IF IsSporadic THEN BEGIN
+                    IF k = 1 THEN BEGIN
+                      CLEAR(CreLocInvRollUp);
+                      CreLocInvRollUp.CalcRollUp(ProcUnit,FALSE,0,ForInvPerEndArray[k]);
+                    END;
+                  END ELSE BEGIN
+                    CLEAR(CreLocInvRollUp);
+                    CreLocInvRollUp.CalcRollUp(ProcUnit,FALSE,0,ForInvPerEndArray[k]);
+                  END;
+                  First := TRUE;
+                  CreLocInvRollUp.GetNextRollUpLine(LocInvRollUp,First);
+                  First := FALSE;
+                    ProcUnit2.RESET;
+                    ProcUnit2.SETRANGE("Item No.",LocInvRollUp."Item No.");
+                    ProcUnit2.SETRANGE("Variant Code",LocInvRollUp."Variant Code");
+                    ProcUnit2.SETFILTER(
+                      "Location Code",GetTypeFilter(CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::Location));
+                    ProcUnit2.SETFILTER(
+                      "Item Class Ranking",GetTypeFilter(CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Class"));
+                    ProcUnit2.SETFILTER(
+                      "Ranking Code",GetTypeFilter(CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Ranking"));
+                    Finished := FALSE;
+                    NotFound := FALSE;
+                    IF ProcUnit2.FIND('-') THEN
+                      REPEAT
+                        IF ProcUnit2."Location Code" = LocInvRollUp."Individual Location Code" THEN
+                          Finished := TRUE
+                        ELSE
+                          IF ProcUnit2.NEXT = 0 THEN
+                            NotFound := TRUE;
+                      UNTIL (Finished OR NotFound);
+                    IF Finished THEN BEGIN
+                      First := FALSE;
+                      i := 0;
+                      REPEAT
+                        LevelCode := '';
+                        i := i + 1;
+                        CASE TypeArray[i] OF
+                          TypeArray::Company:
+                            LevelCode := 'Company';
+                          TypeArray::Location:
+                            LevelCode := ProcUnit2."Location Code";
+                          TypeArray::Item:
+                            LevelCode := ProcUnit2."Item No.";
+                          TypeArray::"Item Category":
+                            LevelCode := Item."Item Category Code";
+                          TypeArray::"Item Class":
+                            LevelCode := FORMAT(ProcUnit2."Item Class Ranking");
+                          TypeArray::"Item Ranking":
+                            LevelCode := ProcUnit2."Ranking Code";
+                          TypeArray::"Gen. Prod. Posting Group":
+                            LevelCode := Item."Gen. Prod. Posting Group";
+                          TypeArray::"Inv. Posting Group":
+                            LevelCode := Item."Inventory Posting Group";
+                          TypeArray::"Item Summary Code 1":
+                            LevelCode := Item."Summary Code 1";
+                          TypeArray::"Item Summary Code 2":
+                            LevelCode := Item."Summary Code 2";
+                          TypeArray::"Item Summary Code 3":
+                            LevelCode := Item."Summary Code 3";
+                        END;
+                        IF (TypeArray[i] <> 0) AND (LevelCode = '') THEN
+                          LevelCode := '---';
+                        CASE i OF
+                          1:
+                            BEGIN
+                              ForSummaryEntry."Summary Code 1" := LevelCode;
+                              ForSummaryEntry."Summary Code 2" := '';
+                              ForSummaryEntry."Summary Code 3" := '';
+                              ForSummaryEntry."Summary Code 4" := '';
+                              ForSummaryEntry."Summary Code 5" := '';
+                              ForSummaryEntry."Summary Code 6" := '';
+                            END;
+                          2:
+                            ForSummaryEntry."Summary Code 2" := LevelCode;
+                          3:
+                            ForSummaryEntry."Summary Code 3" := LevelCode;
+                          4:
+                            ForSummaryEntry."Summary Code 4" := LevelCode;
+                          5:
+                            ForSummaryEntry."Summary Code 5" := LevelCode;
+                          6:
+                            ForSummaryEntry."Summary Code 6" := LevelCode;
+                        END;
+                        IF NOT ForSummary.GET(
+                          ForSummaryEntry."Forecast View Code",
+                          ForSummaryEntry."Summary Code 1",ForSummaryEntry."Summary Code 2",
+                          ForSummaryEntry."Summary Code 3",ForSummaryEntry."Summary Code 4",
+                          ForSummaryEntry."Summary Code 5",ForSummaryEntry."Summary Code 6",
+                          TRUE)
+                        THEN BEGIN
+                          ForSummary.INIT;
+                          ForSummary."Forecast View Code" := ForSummaryEntry."Forecast View Code";
+                          ForSummary."Summary Code 1" := ForSummaryEntry."Summary Code 1";
+                          ForSummary."Summary Code 2" := ForSummaryEntry."Summary Code 2";
+                          ForSummary."Summary Code 3" := ForSummaryEntry."Summary Code 3";
+                          ForSummary."Summary Code 4" := ForSummaryEntry."Summary Code 4";
+                          ForSummary."Summary Code 5" := ForSummaryEntry."Summary Code 5";
+                          ForSummary."Summary Code 6" := ForSummaryEntry."Summary Code 6";
+                          ForSummary.Summary := TRUE;
+                          ForSummary."Period 1 Starting Date" := ForInvPerArray[1];
+                          ForSummary.INSERT;
+                        END;
+                        LevelCode := '';
+                      UNTIL i = 6;
+
+                      LocInvRollUp."Loc. Forecast" := LocInvRollUp."Rolled Up Forecast";
+
+                      // Units
+                      IF IsSporadic THEN BEGIN
+                        IF CurrForSummaryView."Sporadic Forecast Method" =
+                          CurrForSummaryView."Sporadic Forecast Method"::"Average Usage"
+                        THEN
+                          ForUnits := ROUND(ItemUsage."Average Usage",1.0)
+                        ELSE
+                          ForUnits := 0;
+                      END ELSE BEGIN
+                        IF k = 1 THEN
+                          ForUnits := ROUND(LocInvRollUp."Loc. Forecast",1.0)
+                        ELSE BEGIN
+                          ForUnits :=
+                            ROUND(LocInvRollUp."Loc. Forecast" - GetPrevLocQty(LocInvRollUp."Individual Location Code"),1.0);
+                          IF ForUnits < 0 THEN
+                            ForUnits := 0;
+                        END;
+                      END;
+
+                      ForSummaryEntry.Units := ForUnits;
+                      IF IsSporadic THEN
+                        SaveLocQty(LocInvRollUp."Individual Location Code",ForUnits)
+                      ELSE
+                        SaveLocQty(LocInvRollUp."Individual Location Code",LocInvRollUp."Loc. Forecast");
+
+                      UnitCost := UBP.GetUnitCost(LocInvRollUp."Individual Location Code", LocInvRollUp."Item No.", LocInvRollUp."Variant Code");
+
+                      ForSummaryEntry."Unit Cost (LCY)" := UnitCost;
+                      ForSummaryEntry."Unit Price (LCY)" := Item."Unit Price";
+                      ForSummaryEntry."Cost (LCY)" := ROUND(ForSummaryEntry.Units * UnitCost,1.0);
+                      ForSummaryEntry."Price (LCY)" := ROUND(ForSummaryEntry.Units * Item."Unit Price",1.0);
+                      ForSummaryEntry."Original Units" := ForSummaryEntry.Units;
+                      ForSummaryEntry."Original Cost (LCY)" := ForSummaryEntry."Cost (LCY)";
+                      ForSummaryEntry."Original Price (LCY)" := ForSummaryEntry."Price (LCY)";
+
+                      // Others
+                      //ForSummaryEntry.Weight
+                      //ForSummaryEntry.Volume
+
+                      ForSummaryEntry."Starting Date" := ForInvPerArray[k];
+                      ForSummaryEntry."Entry No." := CurrForSummaryView."Last Version No.";
+                      ForSummaryEntry."Location Code" := ProcUnit2."Location Code";
+                      ForSummaryEntry."Item No." := ProcUnit2."Item No.";
+                      ForSummaryEntry."Variant Code" := ProcUnit2."Variant Code";
+                      ForSummaryEntry.Status := ItemUsage.Status;
+                      EntryNo := EntryNo + 1;
+                      ForSummaryEntry."Entry No." := EntryNo;
+                      ForSummaryEntry.INSERT;
+                    END;
+                UNTIL k >= CurrForSummaryView."Forecast Periods";
+              END;
+            UNTIL ProcUnit.NEXT = 0;
+          END;
+        END ELSE BEGIN  // Non Roll Up
+          ProcUnit.RESET;
+          ProcUnit.SETRANGE("Location Code",Location.Code);
+          ProcUnit.SETFILTER(
+            "Item No.",GetTypeFilter(CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::Item));
+          ProcUnit.SETFILTER(
+            "Item Class Ranking",GetTypeFilter(CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Class"));
+          ProcUnit.SETFILTER(
+            "Ranking Code",GetTypeFilter(CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Ranking"));
+          TotalProcCount := ProcUnit.COUNT;
+          ProgProcCount := 0;
+          IF ProcUnit.FIND('-') THEN BEGIN
+            REPEAT
+              ProgProcCount := ProgProcCount + 1;
+              IF GUIALLOWED THEN BEGIN
+                IF ProgProcCount MOD 10 = 0 THEN
+                  ProgWindow.UPDATE(2,ROUND(10000 * (ProgProcCount / TotalProcCount),1.0));
+              END;
+              IF ProgProcCount MOD 500 = 0 THEN
+                COMMIT;
+              Item.RESET;
+              Item.SETRANGE("No.",ProcUnit."Item No.");
+              Item.SETFILTER(
+                "Item Category Code",GetTypeFilter(
+                  CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Category"));
+              Item.SETFILTER(
+                "Gen. Prod. Posting Group",GetTypeFilter(
+                  CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Gen. Prod. Posting Group"));
+              Item.SETFILTER(
+                "Inventory Posting Group",GetTypeFilter(
+                  CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Inv. Posting Group"));
+              Item.SETFILTER(
+                "Summary Code 1",GetTypeFilter(
+                  CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Summary Code 1"));
+              Item.SETFILTER(
+                "Summary Code 2",GetTypeFilter(
+                  CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Summary Code 2"));
+              Item.SETFILTER(
+                "Summary Code 3",GetTypeFilter(
+                  CurrForSummaryView,CurrForSummaryView."Summary Code 1 Type"::"Item Summary Code 2"));
+              IF Item.FINDFIRST THEN BEGIN
+                ItemUsage.SETRANGE("Location Code",ProcUnit."Location Code");
+                ItemUsage.SETRANGE("Item No.",ProcUnit."Item No.");
+                ItemUsage.SETRANGE("Variant Code",ProcUnit."Variant Code");
+                ItemUsage.SETRANGE("Ending Date",PeriodEndDate);
+                IF NOT ItemUsage.FINDFIRST THEN
+                  ItemUsage.INIT;
+                ForSummaryEntry.INIT;
+                ForSummaryEntry."Forecast View Code" := CurrForSummaryView."Forecast Summary Code";
+                ForSummaryEntry."Summary Code 1" := '';
+                ForSummaryEntry."Summary Code 2" := '';
+                ForSummaryEntry."Summary Code 3" := '';
+                ForSummaryEntry."Summary Code 4" := '';
+                ForSummaryEntry."Summary Code 5" := '';
+                ForSummaryEntry."Summary Code 6" := '';
+                i := 0;
+                REPEAT
+                  LevelCode := '';
+                  i := i + 1;
+                  CASE TypeArray[i] OF
+                    TypeArray::Company:
+                      LevelCode := 'Company';
+                    TypeArray::Location:
+                      LevelCode := ProcUnit."Location Code";
+                    TypeArray::Item:
+                      LevelCode := ProcUnit."Item No.";
+                    TypeArray::"Item Category":
+                      LevelCode := Item."Item Category Code";
+                    TypeArray::"Product Group":
+                        ERROR(Text012);
+                    TypeArray::"Item Class":
+                      LevelCode := FORMAT(ProcUnit."Item Class Ranking");
+                    TypeArray::"Item Ranking":
+                      LevelCode := ProcUnit."Ranking Code";
+                    TypeArray::"Gen. Prod. Posting Group":
+                      LevelCode := Item."Gen. Prod. Posting Group";
+                    TypeArray::"Inv. Posting Group":
+                      LevelCode := Item."Inventory Posting Group";
+                    TypeArray::"Item Summary Code 1":
+                      LevelCode := Item."Summary Code 1";
+                    TypeArray::"Item Summary Code 2":
+                      LevelCode := Item."Summary Code 2";
+                    TypeArray::"Item Summary Code 3":
+                      LevelCode := Item."Summary Code 3";
+                  END;
+                  IF (TypeArray[i] <> 0) AND (LevelCode = '') THEN
+                    LevelCode := '---';
+                  CASE i OF
+                    1:
+                      ForSummaryEntry."Summary Code 1" := LevelCode;
+                    2:
+                      ForSummaryEntry."Summary Code 2" := LevelCode;
+                    3:
+                      ForSummaryEntry."Summary Code 3" := LevelCode;
+                    4:
+                      ForSummaryEntry."Summary Code 4" := LevelCode;
+                    5:
+                      ForSummaryEntry."Summary Code 5" := LevelCode;
+                    6:
+                      ForSummaryEntry."Summary Code 6" := LevelCode;
+                  END;
+                  IF NOT ForSummary.GET(
+                    ForSummaryEntry."Forecast View Code",
+                    ForSummaryEntry."Summary Code 1",ForSummaryEntry."Summary Code 2",
+                    ForSummaryEntry."Summary Code 3",ForSummaryEntry."Summary Code 4",
+                    ForSummaryEntry."Summary Code 5",ForSummaryEntry."Summary Code 6",
+                    TRUE)
+                  THEN BEGIN
+                    ForSummary.INIT;
+                    ForSummary."Forecast View Code" := ForSummaryEntry."Forecast View Code";
+                    ForSummary."Summary Code 1" := ForSummaryEntry."Summary Code 1";
+                    ForSummary."Summary Code 2" := ForSummaryEntry."Summary Code 2";
+                    ForSummary."Summary Code 3" := ForSummaryEntry."Summary Code 3";
+                    ForSummary."Summary Code 4" := ForSummaryEntry."Summary Code 4";
+                    ForSummary."Summary Code 5" := ForSummaryEntry."Summary Code 5";
+                    ForSummary."Summary Code 6" := ForSummaryEntry."Summary Code 6";
+                    ForSummary.Summary := TRUE;
+                    ForSummary."Period 1 Starting Date" := ForInvPerArray[1];
+                    ForSummary.INSERT;
+                  END;
+                  LevelCode := '';
+                UNTIL i = 6;
+
+                CLEAR(Forecast);
+                SingleLocExpInv := TRUE;
+                Forecast.CalcPeriodStartingDates(Location,CurrForSummaryView."Forecast Periods");
+                Forecast.CalcForecast(ProcUnit,CurrForSummaryView."Forecast Periods",'',SingleLocExpInv,FALSE);
+                Forecast.CalcForecastAdj(ProcUnit,CurrForSummaryView."Forecast Periods");
+                Forecast.CalcCustForecast(ProcUnit,CurrForSummaryView."Forecast Periods");
+                Forecast.CalcInvPlusExpRec(ProcUnit,CurrForSummaryView."Forecast Periods");
+                Forecast.CalcDemand(ProcUnit,CurrForSummaryView."Forecast Periods");
+                Forecast.CalcConsumed(ProcUnit,CurrForSummaryView."Forecast Periods");
+                Forecast.CalcInventory(ProcUnit,CurrForSummaryView."Forecast Periods");
+                Forecast.CalcNetTransfers(ProcUnit,CurrForSummaryView."Forecast Periods");
+                Forecast.CalcPurchOrders(ProcUnit,CurrForSummaryView."Forecast Periods");
+                Forecast.CalcPriorYear(ProcUnit,CurrForSummaryView."Forecast Periods");
+                Forecast.GetComp(CurrForSummaryView."Forecast Periods");
+                Forecast.CalcProdOrders(ProcUnit,CurrForSummaryView."Forecast Periods");
+                Forecast.CalcComp(ProcUnit,CurrForSummaryView."Forecast Periods");
+
+                i := 0;
+                REPEAT
+                  i := i + 1;
+                  // Units
+                  ForSummaryEntry.Units := Forecast.GetPeriodForecastUsage(i);
+                  ForSummaryEntry.Units := ROUND(ForSummaryEntry.Units,1.0);
+                  IF ForSummaryEntry.Units = 0 THEN
+                    CASE CurrForSummaryView."Sporadic Forecast Method" OF
+                      CurrForSummaryView."Sporadic Forecast Method"::"Average Usage":
+                        BEGIN
+                          ForSummaryEntry.Units := ROUND(ItemUsage."Net Average Usage",1.0);
+                          ForSummaryEntry."Average Usage" := TRUE;
+                        END;
+                      CurrForSummaryView."Sporadic Forecast Method"::Zero:
+                        ForSummaryEntry.Units := 0;
+                    END;
+
+                  ForecastAdjust.RESET;
+                  ForecastAdjust.SETCURRENTKEY(
+                    "Item No.","Variant Code","Location Code","Starting Date",
+                    "Promotion Code","Forecast Summary Code");
+                  ForecastAdjust.SETRANGE("Item No.",ProcUnit."Item No.");
+                  ForecastAdjust.SETRANGE("Variant Code",ProcUnit."Variant Code");
+                  ForecastAdjust.SETRANGE("Location Code",ProcUnit."Location Code");
+                  ForecastAdjust.SETFILTER("Starting Date",'%1..%2',ForInvPerArray[i],ForInvPerEndArray[i]);
+                  ForecastAdjust.CALCSUMS(Quantity);
+                  IF (ForSummaryEntry."Average Usage" AND
+                      (ForecastAdjust.Quantity <> 0))
+                  THEN
+                    ForSummaryEntry.Units := ForecastAdjust.Quantity
+                  ELSE
+                    ForSummaryEntry.Units := ROUND(ForSummaryEntry.Units + ForecastAdjust.Quantity,1.0);
+                  ForecastEntry.RESET;
+                  ForecastEntry.SETCURRENTKEY(
+                    "Location Code","Item No.","Variant Code","Starting Date",Released);
+                  ForecastEntry.SETRANGE("Location Code",ProcUnit."Location Code");
+                  ForecastEntry.SETRANGE("Item No.",ProcUnit."Item No.");
+                  ForecastEntry.SETRANGE("Variant Code",ProcUnit."Variant Code");
+                  ForecastEntry.SETFILTER("Starting Date",'%1..%2',ForInvPerArray[i],ForInvPerEndArray[i]);
+                  ForecastEntry.SETRANGE(Released,TRUE);
+                  ForecastEntry.CALCSUMS(ForecastEntry.Quantity);
+                  ForSummaryEntry.Units := ROUND(ForSummaryEntry.Units + ForecastEntry.Quantity,1.0);
+
+                  UnitCost := UBP.GetUnitCost(ProcUnit."Location Code",ProcUnit."Item No.",ProcUnit."Variant Code");
+
+                  ForSummaryEntry."Unit Cost (LCY)" := UnitCost;
+                  ForSummaryEntry."Unit Price (LCY)" := Item."Unit Price";
+                  ForSummaryEntry."Cost (LCY)" := ROUND(ForSummaryEntry.Units * UnitCost,1.0);
+                  ForSummaryEntry."Price (LCY)" := ROUND(ForSummaryEntry.Units * Item."Unit Price",1.0);
+                  ForSummaryEntry."Original Units" := ForSummaryEntry.Units;
+                  ForSummaryEntry."Original Cost (LCY)" := ForSummaryEntry."Cost (LCY)";
+                  ForSummaryEntry."Original Price (LCY)" := ForSummaryEntry."Price (LCY)";
+
+                  // Others
+                  //ForSummaryEntry.Weight
+                  //ForSummaryEntry.Volume
+
+                  ForSummaryEntry."Starting Date" := ForInvPerArray[i];
+                  ForSummaryEntry."Entry No." := CurrForSummaryView."Last Version No.";
+
+                  ForSummaryEntry."Location Code" := ProcUnit."Location Code";
+                  ForSummaryEntry."Item No." := ProcUnit."Item No.";
+                  ForSummaryEntry."Variant Code" := ProcUnit."Variant Code";
+                  EntryNo := EntryNo + 1;
+                  ForSummaryEntry."Entry No." := EntryNo;
+                  ForSummaryEntry.INSERT;
+                UNTIL (ForInvPerArray[i] = 0D) OR
+                      (i = CurrForSummaryView."Forecast Periods");
+              END;
+            UNTIL ProcUnit.NEXT = 0;
+          END;
+        END;
+      UNTIL Location.NEXT = 0;
+
+      InvMgt.CloseLogEntry(UBPLogEntryNo,'');
+      InvMgt.CreateLogEntry(
+        '',STRSUBSTNO(Text010,TODAY,0D),UBPLogEntryNo);
+
+      COMMIT;
+      IF GUIALLOWED THEN
+        ProgWindow.CLOSE;
+
+      Update(CurrForSummaryView);
+
+      ForSummaryView.GET(CurrForSummaryView."Forecast Summary Code");
+      ForSummaryView."Last Date Updated" := TODAY;
+      ForSummaryView."Forecast Adj. Pending" := FALSE;
+      ForSummaryView."Re-Calculate Required" := FALSE;
+      ForSummaryView.MODIFY;
+
+      InvMgt.CloseLogEntry(UBPLogEntryNo,'');
+    END;
+
+    PROCEDURE SaveLocQty@1240030001(CurrLocCode@1240030000 : Code[10];CurrQty@1240030001 : Decimal);
+    BEGIN
+      LocIdx := 0;
+      REPEAT
+        LocIdx := LocIdx + 1;
+        IF LocArray[LocIdx] = '' THEN BEGIN
+          LocArray[LocIdx] := CurrLocCode;
+          LocQtyArray[LocIdx] := CurrQty;
+          EXIT;
+        END;
+        IF LocArray[LocIdx] = CurrLocCode THEN BEGIN
+          LocQtyArray[LocIdx] := CurrQty;
+          EXIT;
+        END;
+      UNTIL LocIdx = 200;
+    END;
+
+    PROCEDURE GetPrevLocQty@1240030002(CurrLocCode@1240030000 : Code[10]) PrevQty : Decimal;
+    BEGIN
+      LocIdx := 0;
+      REPEAT
+        LocIdx := LocIdx + 1;
+      UNTIL LocArray[LocIdx] = CurrLocCode;
+      EXIT(LocQtyArray[LocIdx]);
+    END;
+
+    PROCEDURE Update@1240030003(CurrForSummaryView@1240030000 : Record 14000585);
+    BEGIN
+      IF GUIALLOWED THEN
+        ProgWindow.OPEN(
+          Text010 + '\' +
+          PADSTR(Text011,20,' ') + '@1@@@@@@@@@@@@@@@@@@');
+
+      SetupInvPeriodArray(CurrForSummaryView);
+
+      ForSummary.RESET;
+      ForSummary.SETRANGE("Forecast View Code",CurrForSummaryView."Forecast Summary Code");
+      ForSummary.SETRANGE(Summary,TRUE);
+      TotalSumCount := ForSummary.COUNT;
+      IF ForSummary.FIND('-') THEN BEGIN
+        REPEAT
+          IF GUIALLOWED THEN BEGIN
+            ProgSumCount := ProgSumCount + 1;
+            IF ProgSumCount MOD 10 = 0 THEN
+              ProgWindow.UPDATE(1,ROUND(10000 * (ProgSumCount / TotalSumCount),1.0));
+          END;
+          IF ForSummary."Summary Code 1" <> '' THEN BEGIN
+            ForSummary.SETFILTER("Summary Code 1 Filter",ForSummary."Summary Code 1");
+            ForSummary."Summary Code" := ForSummary."Summary Code 1";
+            ForSummary.Level := 1;
+          END ELSE
+            ForSummary.SETFILTER("Summary Code 2 Filter",'');
+          IF ForSummary."Summary Code 2" <> '' THEN BEGIN
+            ForSummary.SETFILTER("Summary Code 2 Filter",ForSummary."Summary Code 2");
+            ForSummary."Summary Code" := ForSummary."Summary Code 2";
+            ForSummary.Level := 2;
+          END ELSE
+            ForSummary.SETFILTER("Summary Code 2 Filter",'');
+          IF ForSummary."Summary Code 3" <> '' THEN BEGIN
+            ForSummary.SETFILTER("Summary Code 3 Filter",ForSummary."Summary Code 3");
+            ForSummary."Summary Code" := ForSummary."Summary Code 3";
+            ForSummary.Level := 3;
+          END ELSE
+            ForSummary.SETFILTER("Summary Code 3 Filter",'');
+          IF ForSummary."Summary Code 4" <> '' THEN BEGIN
+            ForSummary.SETFILTER("Summary Code 4 Filter",ForSummary."Summary Code 4");
+            ForSummary."Summary Code" := ForSummary."Summary Code 4";
+            ForSummary.Level := 4;
+          END ELSE
+            ForSummary.SETFILTER("Summary Code 4 Filter",'');
+          IF ForSummary."Summary Code 5" <> '' THEN BEGIN
+            ForSummary.SETFILTER("Summary Code 5 Filter",ForSummary."Summary Code 5");
+            ForSummary."Summary Code" := ForSummary."Summary Code 5";
+            ForSummary.Level := 5;
+          END ELSE
+            ForSummary.SETFILTER("Summary Code 5 Filter",'');
+          IF ForSummary."Summary Code 6" <> '' THEN BEGIN
+            ForSummary.SETFILTER("Summary Code 6 Filter",ForSummary."Summary Code 6");
+            ForSummary."Summary Code" := ForSummary."Summary Code 6";
+            ForSummary.Level := 6;
+          END ELSE
+            ForSummary.SETFILTER("Summary Code 6 Filter",'');
+
+          i := 0;
+          REPEAT
+           i := i + 1;
+           IF i > 1 THEN
+             ForSummary."Summary Code" := '   ' + ForSummary."Summary Code";
+          UNTIL i >= ForSummary.Level;
+
+          i := 0;
+          REPEAT
+            i := i + 1;
+            ForSummary.SETFILTER("Date Filter",'=%1',ForInvPerArray[i]);
+            ForSummary.CALCFIELDS("FF Units","FF Cost (LCY)","FF Price (LCY)");
+            CASE i OF
+              1:
+                BEGIN
+                  ForSummary."Period 1 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 1 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 1 Price" := ForSummary."FF Price (LCY)";
+                END;
+              2:
+                BEGIN
+                  ForSummary."Period 2 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 2 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 2 Price" := ForSummary."FF Price (LCY)";
+                END;
+              3:
+                 BEGIN
+                  ForSummary."Period 3 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 3 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 3 Price" := ForSummary."FF Price (LCY)";
+                END;
+              4:
+                BEGIN
+                  ForSummary."Period 4 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 4 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 4 Price" := ForSummary."FF Price (LCY)";
+                END;
+              5:
+                BEGIN
+                  ForSummary."Period 5 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 5 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 5 Price" := ForSummary."FF Price (LCY)";
+                END;
+              6:
+                BEGIN
+                  ForSummary."Period 6 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 6 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 6 Price" := ForSummary."FF Price (LCY)";
+                END;
+              7:
+                BEGIN
+                  ForSummary."Period 7 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 7 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 7 Price" := ForSummary."FF Price (LCY)";
+                END;
+              8:
+                BEGIN
+                  ForSummary."Period 8 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 8 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 8 Price" := ForSummary."FF Price (LCY)";
+                END;
+              9:
+                BEGIN
+                  ForSummary."Period 9 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 9 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 9 Price" := ForSummary."FF Price (LCY)";
+                END;
+              10:
+                BEGIN
+                  ForSummary."Period 10 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 10 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 10 Price" := ForSummary."FF Price (LCY)";
+                END;
+              11:
+                BEGIN
+                  ForSummary."Period 11 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 11 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 11 Price" := ForSummary."FF Price (LCY)";
+                END;
+              12:
+                BEGIN
+                  ForSummary."Period 12 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 12 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 12 Price" := ForSummary."FF Price (LCY)";
+                END;
+              13:
+                BEGIN
+                  ForSummary."Period 13 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 13 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 13 Price" := ForSummary."FF Price (LCY)";
+                END;
+              14:
+                BEGIN
+                  ForSummary."Period 14 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 14 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 14 Price" := ForSummary."FF Price (LCY)";
+                END;
+              15:
+                BEGIN
+                  ForSummary."Period 15 Qty." := ForSummary."FF Units";
+                  ForSummary."Period 15 Cost" := ForSummary."FF Cost (LCY)";
+                  ForSummary."Period 15 Price" := ForSummary."FF Price (LCY)";
+                END;
+            END;
+          UNTIL i = CurrForSummaryView."Forecast Periods";
+          ForSummary.MODIFY;
+        UNTIL ForSummary.NEXT = 0;
+      END;
+
+      ForSummaryView.GET(CurrForSummaryView."Forecast Summary Code");
+      ForSummaryView."Last Date Updated" := TODAY;
+      ForSummaryView."Last Version No." := CurrForSummaryView."Last Version No.";
+      ForSummaryView.VALIDATE("Forecast Unit",ForSummaryView."Forecast Unit");
+      ForSummaryView.MODIFY;
+
+      IF GUIALLOWED THEN
+        ProgWindow.CLOSE;
+    END;
+
+    PROCEDURE SetupInvPeriodArray@1240030007(CurrForSummaryView@1240030000 : Record 14000585);
+    VAR
+      LocLocation@1240030001 : Record 14;
+    BEGIN
+      LocLocation.RESET;
+      LocLocation.SETRANGE("Enable Adv. Forecasting",TRUE);
+      LocLocation.FIND('-');
+
+      j := 0;
+      CLEAR(ForInvPerArray);
+      CLEAR(ForInvPerEndArray);
+      ForInvPeriod.RESET;
+      ForInvPeriod.SETFILTER("Starting Date",'>%1',LocLocation."Last Closed Period Date");
+      IF ForInvPeriod.FIND('-') THEN
+        REPEAT
+          j := j + 1;
+          ForInvPerArray[j] := ForInvPeriod."Starting Date";
+          ForInvPerEndArray[j] := ForInvPeriod."Ending Date";
+        UNTIL (ForInvPeriod.NEXT = 0) OR
+              (j = CurrForSummaryView."Forecast Periods") OR
+              (j = 15);
+    END;
+
+    PROCEDURE GetTypeFilter@1240030004(CurrForSumView@1240030001 : Record 14000585;CurrType@1240030000 : ' ,Company,Location,Item,Item Category,Product Group,Item Class,Item Ranking,Gen. Prod. Posting Group,Inv. Posting Group,Item Summary Code 1,Item Summary Code 2, Item Summary Code 3') Resp : Code[250];
+    BEGIN
+      IF CurrForSumView."Summary Code 1 Type" = CurrType THEN
+        EXIT(CurrForSumView."Summary Code 1 Filter");
+      IF CurrForSumView."Summary Code 2 Type" = CurrType THEN
+        EXIT(CurrForSumView."Summary Code 2 Filter");
+      IF CurrForSumView."Summary Code 3 Type" = CurrType THEN
+        EXIT(CurrForSumView."Summary Code 3 Filter");
+      IF CurrForSumView."Summary Code 4 Type" = CurrType THEN
+        EXIT(CurrForSumView."Summary Code 4 Filter");
+      IF CurrForSumView."Summary Code 5 Type" = CurrType THEN
+        EXIT(CurrForSumView."Summary Code 5 Filter");
+      IF CurrForSumView."Summary Code 6 Type" = CurrType THEN
+        EXIT(CurrForSumView."Summary Code 6 Filter");
+      EXIT('');
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

@@ -1,0 +1,1955 @@
+OBJECT Codeunit 14000380 E.D.I. Evaluate Cross Ref.
+{
+  OBJECT-PROPERTIES
+  {
+    Date=11/06/20;
+    Time=[ 8:17:59 AM];
+    Modified=Yes;
+    Version List=SE0.61,TPZEDI,TPZ1965,LS;
+  }
+  PROPERTIES
+  {
+    SingleInstance=No;
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      BillOfLading@1240030003 : Record 14000822;
+      EDICustCrossRef@1240030014 : Record 14002362;
+      EDICustCrossRef2@1240030038 : Record 14002362;
+      EDIRecDocHdr2@1240030046 : Record 14002358;
+      EDIRecDocField@1240030000 : Record 14002359;
+      EDIRecDocField2@1240020005 : Record 14002359;
+      EDIRecDocField3@1240020010 : Record 14002359;
+      EDITradePartner@1240030016 : Record 14002360;
+      EDITradePartnerUOM@1240030036 : Record 14002365;
+      GeneralCrossReference@1240030004 : Record 14000377;
+      Item@1240030006 : Record 27;
+      PurchaseHeader@1240030002 : Record 38;
+      SalesHeader@1240030001 : Record 36;
+      SalesLine@1240030035 : Record 37;
+      TradePtnrItem@1240030048 : Record 14002364;
+      EDIInventoryAdviceHeader@1240020001 : Record 14002413;
+      PurchaseLine@1240020006 : Record 39;
+      TransferHeader@1240020007 : Record 5740;
+      TransferLine@1240020008 : Record 5741;
+      EDIPaymentRemitAdvice@1240020020 : Record 14050902;
+      EDIPaymentRemitAdviceLine@1240020017 : Record 14050903;
+      ReasonCode@1240020018 : Record 231;
+      EDIGenCrossRefTmp@1240020019 : TEMPORARY Record 14000377;
+      CrossRefValue@1240030020 : Code[40];
+      CrossRefValue2@1240020002 : Code[40];
+      TradePartnerNo@1240030019 : Code[20];
+      AssocCrossRefValue@1240030010 : Code[40];
+      Type@1240030013 : Text[20];
+      EDISellToCode@1240030029 : Code[20];
+      EDIShipToCode@1240030028 : Code[20];
+      OverrideShipToCode@1240030027 : Code[20];
+      NAVItemNo@1240030034 : Code[40];
+      EDIUOM@1240030039 : Code[10];
+      EDIShipforCode@1240030040 : Code[20];
+      ShipForCode@1240030041 : Code[20];
+      LastEDISellToCode@1240030043 : Code[20];
+      OverrideEDIShipToCode@1240030044 : Code[20];
+      SDQCode@1240030025 : Code[20];
+      AssocCrossRef@1240030011 : Boolean;
+      MultipleSellTo@1240030023 : Boolean;
+      CrossRefError@1240030031 : Boolean;
+      CustomerCrossRefError@1240030012 : Boolean;
+      UOMCrossRefError@1240030037 : Boolean;
+      SDQFound@1240030042 : Boolean;
+      ShipToFound@1240030021 : Boolean;
+      ExternalNoMatchReq@1240030047 : Boolean;
+      CrossRefError2@1240030009 : Boolean;
+      AllowBlankNAVShipTo@1240020000 : Boolean;
+      ExpectedOrder@1240020003 : Boolean;
+      BypassCrossRefEvaluation@1240020009 : Boolean;
+      CrossReference@1240030015 : Integer;
+      LineNo@1240030045 : Integer;
+      i@1240030026 : Integer;
+      Text001@1240030007 : TextConst 'ENU=When EDI Sell to in not mapped, if the External No. field has a value it should match the T.P. Customer No. or be blank';
+      Text002@1240030008 : TextConst 'ENU=NAV cross reference field(s) have null values.';
+      Text003@1240030018 : TextConst 'ENU=Trade Partner card should not have a customer no. when EDI Sell to is mapped';
+      RecDocFieldLineNo@1240020004 : Integer;
+      BlankCrossRef@1240020011 : Boolean;
+      PartnerVariantCode@1240020012 : Code[40];
+      NAVVariantCode@1240020013 : Code[10];
+      EDIItemCrossRef@1240020014 : Code[250];
+      SLNFound@1240020016 : Boolean;
+      SLNSegmentID@1240020015 : Code[15];
+      GlobCust_TPID@1000000000 : Code[20];
+      ShippingAgent@1240020021 : Boolean;
+      ShippingAgentService@1240020022 : Boolean;
+      BOLShippingAgent@1240020025 : Boolean;
+      BOLShippingAgentSet@1240020026 : Boolean;
+      BOLShippingAgentService@1240020024 : Boolean;
+      BOLShippingAgentServiceSet@1240020023 : Boolean;
+      ExpectedOrderBOL@1240020027 : Boolean;
+      GenCrossRefValue@1240020030 : Code[40];
+      GenCrossRefValue2@1240020031 : Code[40];
+      GenRefOneLineNo@1240020032 : Integer;
+      GenRefTwoLineNo@1240020033 : Integer;
+      Blank@1240020034 : Boolean;
+
+    PROCEDURE AssignNAVCrossReference@1240030002(VAR EDIRecDocHdr@1240030000 : Record 14002358);
+    VAR
+      InternalDocNo@1240030002 : Code[10];
+    BEGIN
+      InternalDocNo := EDIRecDocHdr."Internal Doc. No.";
+      EDIRecDocHdr.GET(InternalDocNo);
+
+      TradePartnerNo := EDIRecDocHdr."Trade Partner No.";
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+      EDIRecDocField.MODIFYALL("General Cross Reference Error",FALSE);
+      EDIRecDocField.MODIFYALL("General EDI Cross Reference",FALSE);
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+      IF EDIRecDocField.FIND('-') THEN
+        REPEAT
+          IF (EDIRecDocField."NAV Cross Ref. Value-1" <> '') OR
+             (EDIRecDocField."NAV Cross Ref. Value-2" <> '')
+          THEN BEGIN
+            EDIRecDocField."NAV Cross Ref. Value-1" := '';
+            EDIRecDocField."NAV Cross Ref. Value-2" := '';
+            EDIRecDocField."NAV Sub Cross Ref. Value-1" := '';
+            EDIRecDocField."NAV Sub Cross Ref. Value-2" := '';
+            EDIRecDocField.MODIFY;
+          END;
+        UNTIL EDIRecDocField.NEXT = 0;
+
+      EDIGenCrossRefTmp.RESET;
+      EDIGenCrossRefTmp.DELETEALL;
+
+      CrossRefValue2 := '';
+      RecDocFieldLineNo :=0;
+      ExpectedOrder := FALSE;
+      ExpectedOrderBOL := FALSE;
+      BlankCrossRef := FALSE;
+      CrossReference := 0;
+      GenCrossRefValue := '';
+      GenCrossRefValue2 := '';
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+      IF EDIRecDocField.FIND('-') THEN
+        REPEAT
+          AssocCrossRef := FALSE;
+          CrossReference := 0;
+          BypassCrossRefEvaluation := FALSE;
+          CASE EDIRecDocField."NAV Table No." OF
+            DATABASE::"Sales Header":
+              BEGIN
+                CASE EDIRecDocField."Nav Field No." OF
+                  SalesHeader.FIELDNO("Payment Terms Code"):
+                    CrossReference := 2;
+                  SalesHeader.FIELDNO("Shipment Method Code"):
+                    CrossReference := 3;
+                  SalesHeader.FIELDNO("Shipping Agent Code"):
+                    BEGIN
+                      ShippingAgent := TRUE;
+                      EDIRecDocField3.RESET;
+                      EDIRecDocField3.SETCURRENTKEY(
+                        "Internal Doc. No.","NAV Table No.","Nav Field No.");
+                      EDIRecDocField3.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+                      EDIRecDocField3.SETRANGE("NAV Table No.",36);
+                      EDIRecDocField3.SETRANGE(
+                        "Nav Field No.",SalesHeader.FIELDNO("Shipping Agent Service Code"));
+                      IF EDIRecDocField3.FIND('-') THEN
+                        CrossReference := 29
+                      ELSE BEGIN
+                        EDIRecDocField3.SETRANGE(
+                          "Nav Field No.",SalesHeader.FIELDNO("E-Ship Agent Service"));
+                        IF EDIRecDocField3.FIND('-') THEN
+                          CrossReference := 1
+                        ELSE
+                          CrossReference := 1
+                      END;
+                      AssocCrossRef := TRUE;
+                    END;
+                  SalesHeader.FIELDNO("E-Ship Agent Service"):
+                    BEGIN
+                      ShippingAgentService := TRUE;
+                      CrossReference := 1;
+                    END;
+                  SalesHeader.FIELDNO("Shipping Payment Type"):
+                    CrossReference := 4;
+                  SalesHeader.FIELDNO("Shipping Advice"):
+                    CrossReference := 13;
+                  SalesHeader.FIELDNO("Applies-to Doc. Type"):
+                    CrossReference := 23;
+                  SalesHeader.FIELDNO("Shipping Agent Service Code"):
+                    CrossReference := 29;
+                  SalesHeader.FIELDNO("Sell-to Country/Region Code"):
+                    CrossReference := 36;
+                  SalesHeader.FIELDNO("Bill-to Country/Region Code"):
+                    CrossReference := 36;
+                  SalesHeader.FIELDNO("Ship-to Country/Region Code"):
+                    CrossReference := 36;
+                  SalesHeader.FIELDNO("Location Code"):
+                    CrossReference := 38;
+                END;
+              END;
+            DATABASE::"Sales Line":
+              BEGIN
+                CASE EDIRecDocField."Nav Field No." OF
+                  SalesLine.FIELDNO("Return Reason Code"):
+                    CrossReference := 14;
+                  SalesLine.FIELDNO("No."):
+                    BEGIN
+                    IF EDIRecDocField."Line Type" <> EDIRecDocField."Line Type"::" " THEN
+                      CASE EDIRecDocField."Line Type" OF
+                        EDIRecDocField."Line Type"::"G/L Account":
+                          CrossReference := 24;
+                        EDIRecDocField."Line Type"::Resource:
+                          CrossReference := 25;
+                      END;
+                    END;
+                END;
+              END;
+            DATABASE::"Purchase Header":
+              BEGIN
+                CASE EDIRecDocField."Nav Field No." OF
+                  PurchaseHeader.FIELDNO("Payment Terms Code"):
+                    CrossReference := 7;
+                  PurchaseHeader.FIELDNO("Shipment Method Code"):
+                    CrossReference := 8;
+                  PurchaseHeader.FIELDNO("E-Ship Agent Code"):
+                    BEGIN
+                      CrossReference := 6;
+                      AssocCrossRef := TRUE;
+                    END;
+                  PurchaseHeader.FIELDNO("E-Ship Agent Service"):
+                    CrossReference := 6;
+                  PurchaseHeader.FIELDNO("Shipping Payment Type"):
+                    CrossReference := 9;
+                  PurchaseHeader.FIELDNO("Location Code"):
+                    CrossReference := 18;
+                  PurchaseHeader.FIELDNO("Applies-to Doc. Type"):
+                    CrossReference := 27;
+                  PurchaseHeader.FIELDNO("Buy-from Country/Region Code"):
+                    CrossReference := 37;
+                  PurchaseHeader.FIELDNO("Pay-to Country/Region Code"):
+                    CrossReference := 37;
+                  PurchaseHeader.FIELDNO("Ship-to Country/Region Code"):
+                    CrossReference := 37;
+                END;
+              END;
+            DATABASE::"Purchase Line":
+              BEGIN
+                CASE EDIRecDocField."Nav Field No." OF
+                  PurchaseLine.FIELDNO("Return Reason Code"):
+                    CrossReference := 15;
+                  PurchaseLine.FIELDNO("No."):
+                    BEGIN
+                      IF EDIRecDocField."Line Type" <> EDIRecDocField."Line Type"::" " THEN
+                        CASE EDIRecDocField."Line Type" OF
+                          EDIRecDocField."Line Type"::"G/L Account":
+                            CrossReference := 26;
+                        END;
+                    END;
+                    //<TPZ1965>
+                    PurchaseLine.FIELDNO("Shipping Agent Code"):
+                      BEGIN
+                        CrossReference := 50000;
+                        AssocCrossRef := TRUE;
+                      END;
+                    //</TPZ1965>
+                END;
+              END;
+            DATABASE::"Bill of Lading":
+              BEGIN
+                CASE EDIRecDocField."Nav Field No." OF
+                  BillOfLading.FIELDNO("Shipping Agent Code"):
+                    BEGIN
+                      BOLShippingAgent := TRUE;
+                      CrossReference := 11;
+                      AssocCrossRef := TRUE;
+                    END;
+                  BillOfLading.FIELDNO("Shipping Agent Service"):
+                    BEGIN
+                      BOLShippingAgentService := TRUE;
+                      CrossReference := 11;
+                    END;
+                  BillOfLading.FIELDNO("Shipping Payment Type"):
+                    CrossReference := 12;
+                END;
+              END;
+            DATABASE::"E.D.I. Inventory Advice Header":
+              BEGIN
+                CASE EDIRecDocField."Nav Field No." OF
+                  EDIInventoryAdviceHeader.FIELDNO("Transaction Purpose Code"):
+                    CrossReference := 19;
+                END;
+              END;
+            DATABASE::"Transfer Header":
+              BEGIN
+                CASE EDIRecDocField."Nav Field No." OF
+                  TransferHeader.FIELDNO("Transfer-from Code"):
+                    CrossReference := 16;
+                  TransferHeader.FIELDNO("Transfer-to Code"):
+                    CrossReference := 17;
+                  TransferHeader.FIELDNO("In-Transit Code"):
+                    CrossReference := 20;
+                  TransferHeader.FIELDNO("Shipping Agent Code"):
+                    BEGIN
+                      EDIRecDocField3.RESET;
+                      EDIRecDocField3.SETCURRENTKEY(
+                        "Internal Doc. No.","NAV Table No.","Nav Field No.");
+                      EDIRecDocField3.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+                      EDIRecDocField3.SETRANGE("NAV Table No.",DATABASE::"Transfer Header");
+                      EDIRecDocField3.SETRANGE(
+                        "Nav Field No.",TransferHeader.FIELDNO("Shipping Agent Service Code"));
+                      IF EDIRecDocField3.FIND('-') THEN
+                        CrossReference := 30
+                      ELSE BEGIN
+                        EDIRecDocField3.SETRANGE(
+                          "Nav Field No.",TransferHeader.FIELDNO("E-Ship Agent Service"));
+                        IF EDIRecDocField3.FIND('-') THEN
+                          CrossReference := 21
+                        ELSE
+                          CrossReference := 21
+                      END;
+                      AssocCrossRef := TRUE;
+                    END;
+                  TransferHeader.FIELDNO("E-Ship Agent Service"):
+                    CrossReference := 21;
+                  TransferHeader.FIELDNO("Shipping Payment Type"):
+                    CrossReference := 22;
+                  TransferHeader.FIELDNO("Shipping Agent Service Code"):
+                    CrossReference := 30;
+                END;
+              END;
+            DATABASE::"E.D.I. Payment Remit Advice":
+              BEGIN
+                CASE EDIRecDocField."Nav Field No." OF
+                  EDIPaymentRemitAdvice.FIELDNO("Currency Code"):
+                    CrossReference := 31;
+                  EDIPaymentRemitAdvice.FIELDNO("Bank Account No."):
+                    CrossReference := 32;
+                END;
+              END;
+            DATABASE::"E.D.I. Pmt. Remit Advice Line":
+              BEGIN
+                CASE EDIRecDocField."Nav Field No." OF
+                  EDIPaymentRemitAdviceLine.FIELDNO("Journal Account No."):
+                    BEGIN
+                      IF EDIRecDocField."Line Type" <> EDIRecDocField."Line Type"::" " THEN
+                        CASE EDIRecDocField."Line Type" OF
+                          EDIRecDocField."Line Type"::"G/L Account":
+                            CrossReference := 33;
+                        END;
+                    END;
+                  EDIPaymentRemitAdviceLine.FIELDNO("Journal Applies-to Doc. Type"):
+                    CrossReference := 34;
+                  EDIPaymentRemitAdviceLine.FIELDNO("Reason Code"):
+                    CrossReference := 35;
+                END;
+              END;
+          END;
+          IF CrossReference <> 0 THEN BEGIN
+            SetCrossRefValue(EDIRecDocField);
+            CrossReference := 0;
+            ShippingAgent := FALSE;
+            ShippingAgentService := FALSE;
+            BOLShippingAgent := FALSE;
+            BOLShippingAgentService := FALSE;
+          END;
+        UNTIL EDIRecDocField.NEXT = 0;
+
+      IF EDIRecDocHdr."Navision Document" IN ['I_PURINV','U_PURORD','I_PURDOC'] THEN BEGIN
+        EDIRecDocField.RESET;
+        EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+        EDIRecDocField.SETRANGE(Segment,'SAC');
+        IF EDIRecDocField.FIND('-') THEN
+          EvaluatePurchInvoiceSAC(EDIRecDocHdr);
+      END;
+
+      EDIRecDocHdr.CALCFIELDS("General Cross Reference Error");
+
+      COMMIT;
+    END;
+
+    PROCEDURE SetCrossRefValue@1240020002(EDIRecDocField@1240020000 : Record 14002359);
+    VAR
+      EDIRecDocFld@1240020001 : Record 14002359;
+      EDILoadTextFields@1240020002 : Codeunit 14002390;
+      EntryNo@1240020003 : Integer;
+      EDIValue@1240020004 : Code[250];
+      ShippingAgentSet@1240020005 : Boolean;
+      ShippingAgentServiceSet@1240020006 : Boolean;
+      SegmentGroup@1240020007 : Integer;
+      LoadTextFields@1240020008 : Boolean;
+    BEGIN
+      IF CrossReference = 0 THEN
+        EXIT;
+
+      CrossRefValue := '';
+      SegmentGroup := EDIRecDocField."Segment Group";
+      EDIGenCrossRefTmp.RESET;
+      EDIGenCrossRefTmp.SETRANGE("Cross Reference",CrossReference);
+      EDIGenCrossRefTmp.SETRANGE("Segment Group",SegmentGroup);
+      IF EDIGenCrossRefTmp.FIND('-') THEN
+        CASE CrossReference OF
+          1,6,21,29,30,50000:  //TPZ1965
+            CASE TRUE OF
+              ShippingAgent:
+                IF ShippingAgentSet THEN
+                  EXIT;
+              ShippingAgentService:
+                IF ShippingAgentServiceSet THEN
+                  EXIT;
+            END;
+          11:
+            CASE TRUE OF
+              BOLShippingAgent:
+                IF BOLShippingAgentSet THEN
+                  EXIT;
+              BOLShippingAgentService:
+                IF BOLShippingAgentServiceSet THEN
+                  EXIT;
+            END;
+        END;
+
+      LoadTextFields := FALSE;
+      EDIRecDocFld.RESET;
+      EDIRecDocFld.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocFld.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+      EDIRecDocFld.SETRANGE("NAV Table No.",EDIRecDocField."NAV Table No.");
+      EDIRecDocFld.SETRANGE("Nav Field No.",EDIRecDocField."Nav Field No.");
+      EDIRecDocFld.SETRANGE("Segment Group",EDIRecDocField."Segment Group");
+      IF EDIRecDocFld.FIND('-') THEN
+        REPEAT
+          IF (EDIRecDocFld."Append to Field Contents") OR (EDIRecDocFld."Insert into Field Contents") OR
+             (EDIRecDocFld."Copy String Position" > 0)
+          THEN
+            LoadTextFields := TRUE;
+        UNTIL EDIRecDocFld.NEXT = 0;
+
+      EDIRecDocFld.RESET;
+      EDIRecDocFld.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocFld.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+      EDIRecDocFld.SETRANGE("NAV Table No.",EDIRecDocField."NAV Table No.");
+      EDIRecDocFld.SETRANGE("Nav Field No.",EDIRecDocField."Nav Field No.");
+      EDIRecDocFld.SETRANGE("Segment Group",EDIRecDocField."Segment Group");
+      IF NOT LoadTextFields THEN
+        EDIRecDocFld.SETRANGE("Line No.",EDIRecDocField."Line No.");
+      IF EDIRecDocFld.FIND('-') THEN BEGIN
+        IF LoadTextFields THEN
+          REPEAT
+            IF EDIRecDocFld."Segment Group" = EDIRecDocField."Segment Group" THEN
+              EDIValue := EDILoadTextFields.LoadTextFields(EDIValue,EDIRecDocFld);
+          UNTIL EDIRecDocFld.NEXT = 0
+        ELSE
+          EDIValue := EDIRecDocFld."Field Text Value";
+        CrossRefValue := COPYSTR(EDIValue,1,40);
+
+        EDIGenCrossRefTmp.RESET;
+        IF EDIGenCrossRefTmp.FIND('+') THEN
+          EntryNo := EDIGenCrossRefTmp."Entry No." + 1
+        ELSE
+          EntryNo := 1;
+        EDIGenCrossRefTmp.RESET;
+        EDIGenCrossRefTmp."Cross Reference" := CrossReference;
+        EDIGenCrossRefTmp."Entry No." := EntryNo;
+        EDIGenCrossRefTmp."Segment Group" := SegmentGroup;
+        EDIGenCrossRefTmp.INSERT;
+
+        CASE CrossReference OF
+          1,6,11,21,29,30:
+            CASE TRUE OF
+              AssocCrossRef:
+                BEGIN
+                  IF (GenCrossRefValue2 <> '') OR (BlankCrossRef) THEN BEGIN
+                    GenCrossRefValue := CrossRefValue;
+                    GenRefOneLineNo := EDIRecDocField."Line No.";
+                    EvaluateGeneralCrossReference(EDIRecDocField);
+                    GenCrossRefValue2 := '';
+                    GenRefOneLineNo := 0;
+                    GenRefTwoLineNo := 0;
+                  END ELSE BEGIN
+                    ExpectedOrder := TRUE;
+                    GenCrossRefValue := CrossRefValue;
+                    GenRefOneLineNo := EDIRecDocField."Line No.";
+                  END;
+                END
+              ELSE BEGIN
+                IF ExpectedOrder THEN BEGIN
+                  GenCrossRefValue2 := CrossRefValue;
+                  GenRefTwoLineNo := EDIRecDocField."Line No.";
+                  EvaluateGeneralCrossReference(EDIRecDocField);
+                  ExpectedOrder := FALSE;
+                  GenRefOneLineNo := 0;
+                  GenRefTwoLineNo := 0;
+                  GenCrossRefValue2 := '';
+                END ELSE BEGIN
+                  GenCrossRefValue2 := CrossRefValue;
+                  IF GenCrossRefValue2 = '' THEN
+                    BlankCrossRef := TRUE;
+                  GenRefTwoLineNo := EDIRecDocField."Line No.";
+                END;
+              END;
+              ShippingAgentSet := ShippingAgent;
+              ShippingAgentServiceSet := ShippingAgentService;
+              BOLShippingAgentSet := BOLShippingAgent;
+              BOLShippingAgentServiceSet := BOLShippingAgentService;
+            END
+          ELSE BEGIN
+            CASE CrossReference OF
+              16,17,20:
+                PreEvaluateValue(CrossReference);
+            END;
+            IF NOT BypassCrossRefEvaluation THEN
+              EvaluateGeneralCrossReference(EDIRecDocField);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE EvaluateGeneralCrossReference@1240030007(VAR EDIRecDocField@1240030000 : Record 14002359) : Code[20];
+    VAR
+      CrossReferenceFound@1240020000 : Boolean;
+    BEGIN
+      Type := 'GENERAL';
+      CrossReferenceFound := FALSE;
+
+      IF CrossReference IN [1,6,11,21,29,30 ]THEN BEGIN
+        GeneralCrossReference.RESET;
+        GeneralCrossReference.SETCURRENTKEY("Trade Partner","Cross Reference");
+        GeneralCrossReference.SETRANGE("Trade Partner",TradePartnerNo);
+        GeneralCrossReference.SETRANGE("Cross Reference",CrossReference);
+        GeneralCrossReference.SETRANGE("EDI Value",GenCrossRefValue);
+        GeneralCrossReference.SETRANGE("EDI Value 2",GenCrossRefValue2);
+        IF GeneralCrossReference.FIND('-') THEN BEGIN
+          CrossReferenceFound := TRUE;
+          IF (GeneralCrossReference."NAV Value" = '') AND
+             (NOT GeneralCrossReference."Allow Blank NAV Cross Ref.")
+          THEN BEGIN
+            EDIRecDocField.GET(EDIRecDocField."Internal Doc. No.",GenRefOneLineNo);
+            EDIRecDocField."General Cross Reference Error" := TRUE;
+            EDIRecDocField.MODIFY;
+            GeneralCrossReference.Unassigned := TRUE;
+            GeneralCrossReference.MODIFY;
+            CrossReferenceFound := FALSE;
+          END;
+          IF (GeneralCrossReference."NAV Value 2" = '') AND
+             (NOT GeneralCrossReference."Allow Blank NAV Cross Ref.")
+          THEN BEGIN
+            EDIRecDocField.GET(EDIRecDocField."Internal Doc. No.",GenRefTwoLineNo);
+            EDIRecDocField."General Cross Reference Error" := TRUE;
+            EDIRecDocField.MODIFY;
+            GeneralCrossReference.Unassigned := TRUE;
+            GeneralCrossReference.MODIFY;
+            CrossReferenceFound := FALSE;
+          END;
+          IF CrossReferenceFound THEN BEGIN
+            EDIRecDocField2.RESET;
+            EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+            EDIRecDocField2.SETRANGE("Line No.",GenRefOneLineNo);
+            IF EDIRecDocField2.FIND('-') THEN BEGIN
+              EDIRecDocField2."NAV Cross Ref. Value-1" := GeneralCrossReference."NAV Value";
+              EDIRecDocField2."General EDI Cross Reference" := TRUE;
+              EDIRecDocField2."General Cross Reference Error" := FALSE;
+              EDIRecDocField2.MODIFY;
+            END;
+            EDIRecDocField2.RESET;
+            EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+            EDIRecDocField2.SETRANGE("Line No.",GenRefTwoLineNo);
+            IF EDIRecDocField2.FIND('-') THEN BEGIN
+              EDIRecDocField2."NAV Cross Ref. Value-2" := GeneralCrossReference."NAV Value 2";
+              EDIRecDocField2."General EDI Cross Reference" := TRUE;
+              EDIRecDocField2."General Cross Reference Error" := FALSE;
+              EDIRecDocField2.MODIFY;
+            END;
+          END;
+        END ELSE BEGIN
+          GeneralCrossReference.RESET;
+          GeneralCrossReference.SETCURRENTKEY("Trade Partner","Cross Reference");
+          GeneralCrossReference.SETRANGE("Trade Partner",'');
+          GeneralCrossReference.SETRANGE("Cross Reference",CrossReference);
+          GeneralCrossReference.SETRANGE("EDI Value",GenCrossRefValue);
+          GeneralCrossReference.SETRANGE("EDI Value 2",GenCrossRefValue2);
+          IF GeneralCrossReference.FIND('-') THEN BEGIN
+            CrossReferenceFound := TRUE;
+            IF (GeneralCrossReference."NAV Value" = '') AND
+               (NOT GeneralCrossReference."Allow Blank NAV Cross Ref.")
+            THEN BEGIN
+              EDIRecDocField.GET(EDIRecDocField."Internal Doc. No.",GenRefOneLineNo);
+              EDIRecDocField."General Cross Reference Error" := TRUE;
+              EDIRecDocField.MODIFY;
+              GeneralCrossReference.Unassigned := TRUE;
+              GeneralCrossReference.MODIFY;
+              CrossReferenceFound := FALSE;
+            END;
+            IF (GeneralCrossReference."NAV Value 2" = '') AND
+               (NOT GeneralCrossReference."Allow Blank NAV Cross Ref.")
+            THEN BEGIN
+              EDIRecDocField.GET(EDIRecDocField."Internal Doc. No.",GenRefTwoLineNo);
+              EDIRecDocField."General Cross Reference Error" := TRUE;
+              EDIRecDocField.MODIFY;
+              GeneralCrossReference.Unassigned := TRUE;
+              GeneralCrossReference.MODIFY;
+              CrossReferenceFound := FALSE;
+            END;
+            IF CrossReferenceFound THEN BEGIN
+              EDIRecDocField2.RESET;
+              EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+              EDIRecDocField2.SETRANGE("Line No.",GenRefOneLineNo);
+              IF EDIRecDocField2.FIND('-') THEN BEGIN
+                EDIRecDocField2."NAV Cross Ref. Value-1" := GeneralCrossReference."NAV Value";
+                EDIRecDocField2."General EDI Cross Reference" := TRUE;
+                EDIRecDocField2."General Cross Reference Error" := FALSE;
+                EDIRecDocField2.MODIFY;
+              END;
+              EDIRecDocField2.RESET;
+              EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+              EDIRecDocField2.SETRANGE("Line No.",GenRefTwoLineNo);
+              IF EDIRecDocField2.FIND('-') THEN BEGIN
+                EDIRecDocField2."NAV Cross Ref. Value-2" := GeneralCrossReference."NAV Value 2";
+                EDIRecDocField2."General EDI Cross Reference" := TRUE;
+                EDIRecDocField2."General Cross Reference Error" := FALSE;
+                EDIRecDocField2.MODIFY;
+              END;
+            END ELSE BEGIN
+              IF GenRefOneLineNo > 0 THEN BEGIN
+                EDIRecDocField.GET(EDIRecDocField."Internal Doc. No.",GenRefOneLineNo);
+                EDIRecDocField."General Cross Reference Error" := TRUE;
+                EDIRecDocField.MODIFY;
+                AssocCrossRefValue := '';
+                Blank := FALSE;
+                InsertCrossReference(Type);
+                AssocCrossRefValue := CrossRefValue;
+                IF AssocCrossRefValue = '' THEN
+                  Blank := TRUE;
+              END;
+              IF GenRefTwoLineNo > 0 THEN BEGIN
+                EDIRecDocField.GET(EDIRecDocField."Internal Doc. No.",GenRefTwoLineNo);
+                EDIRecDocField."General Cross Reference Error" := TRUE;
+                EDIRecDocField.MODIFY;
+                InsertCrossReference(Type);
+              END;
+              AssocCrossRefValue := '';
+              Blank := FALSE;
+            END;
+          END ELSE BEGIN
+            IF GenRefOneLineNo > 0 THEN BEGIN
+              EDIRecDocField.GET(EDIRecDocField."Internal Doc. No.",GenRefOneLineNo);
+              EDIRecDocField."General Cross Reference Error" := TRUE;
+              EDIRecDocField.MODIFY;
+              AssocCrossRefValue := '';
+              Blank := FALSE;
+              InsertCrossReference(Type);
+              AssocCrossRefValue := CrossRefValue;
+              IF AssocCrossRefValue = '' THEN
+                Blank := TRUE
+            END;
+            IF GenRefTwoLineNo > 0 THEN BEGIN
+              EDIRecDocField.GET(EDIRecDocField."Internal Doc. No.",GenRefTwoLineNo);
+              EDIRecDocField."General Cross Reference Error" := TRUE;
+              EDIRecDocField.MODIFY;
+              InsertCrossReference(Type);
+            END;
+            AssocCrossRefValue := '';
+            Blank := FALSE;
+          END;
+        END;
+        COMMIT;
+        EXIT;
+      END;
+
+      GeneralCrossReference.RESET;
+      GeneralCrossReference.SETCURRENTKEY("Trade Partner","Cross Reference");
+      GeneralCrossReference.SETRANGE("Trade Partner",TradePartnerNo);
+      GeneralCrossReference.SETRANGE("Cross Reference",CrossReference);
+      GeneralCrossReference.SETRANGE("EDI Value",CrossRefValue);
+      IF GeneralCrossReference.FIND('-') THEN BEGIN
+        CrossReferenceFound := TRUE;
+        IF (GeneralCrossReference."NAV Value" = '') AND
+           (NOT GeneralCrossReference."Allow Blank NAV Cross Ref.")
+        THEN BEGIN
+          EDIRecDocField."General Cross Reference Error" := TRUE;
+          GeneralCrossReference.Unassigned := TRUE;
+          GeneralCrossReference.MODIFY;
+          InsertCrossReference(Type);
+          CrossReferenceFound := FALSE;
+        END ELSE BEGIN
+        END;
+      END ELSE BEGIN
+        GeneralCrossReference.RESET;
+        GeneralCrossReference.SETCURRENTKEY("Trade Partner","Cross Reference");
+        GeneralCrossReference.SETRANGE("Trade Partner",'');
+        GeneralCrossReference.SETRANGE("Cross Reference",CrossReference);
+        GeneralCrossReference.SETRANGE("EDI Value",CrossRefValue);
+        IF GeneralCrossReference.FIND('-') THEN BEGIN
+          CrossReferenceFound := TRUE;
+          IF (GeneralCrossReference."NAV Value" = '') AND
+             (NOT GeneralCrossReference."Allow Blank NAV Cross Ref.")
+          THEN BEGIN
+            EDIRecDocField."General Cross Reference Error" := TRUE;
+            GeneralCrossReference.Unassigned := TRUE;
+            GeneralCrossReference.MODIFY;
+            InsertCrossReference(Type);
+            CrossReferenceFound := FALSE;
+          END
+        END ELSE BEGIN
+          EDIRecDocField."General Cross Reference Error" := TRUE;
+          InsertCrossReference(Type);
+        END;
+      END;
+      IF CrossReferenceFound THEN BEGIN
+        EDIRecDocField."NAV Cross Ref. Value-1" := GeneralCrossReference."NAV Value";
+        EDIRecDocField."General EDI Cross Reference" := TRUE;
+        EDIRecDocField."General Cross Reference Error" := FALSE;
+      END;
+      EDIRecDocField.MODIFY;
+
+      COMMIT;
+    END;
+
+    PROCEDURE EvaluateCustomerCrossReference@1240030005(VAR EDIRecDocHdr2@1240030000 : Record 14002358);
+    VAR
+      EDIDocument@1240020000 : Record 14002353;
+      EDILoadTextFields@1240020002 : Codeunit 14002390;
+      LastSellTo@1240020001 : Code[250];
+      LastOverrideShipTo@1240020003 : Code[250];
+    BEGIN
+      EDIRecDocHdr2.GET(EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocHdr2."Customer Cross Ref. Error" := FALSE;
+      EDITradePartner.GET(EDIRecDocHdr2."Trade Partner No.");
+      EDIDocument.GET(
+        EDIRecDocHdr2."Trade Partner No.",EDIRecDocHdr2."Navision Document",
+        EDIRecDocHdr2."EDI Document No.",EDIRecDocHdr2."EDI Version",
+        EDIDocument.Type::Import);
+      IF EDIDocument."Pre-Eval. w. Blank NAV Ship-to" THEN
+        AllowBlankNAVShipTo := TRUE
+      ELSE
+        AllowBlankNAVShipTo := FALSE;
+      CrossRefError := FALSE;
+      ExternalNoMatchReq := FALSE;
+
+      EDIShipforCode := '';
+      ShipForCode := '';
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Field Name");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField.SETRANGE("Field Name",'SDQ SHIP TO');
+      IF EDIRecDocField.FIND('-') THEN BEGIN
+        SDQFound := TRUE;
+        IF EDITradePartner."Customer No." <> '' THEN BEGIN
+          LastEDISellToCode := EDITradePartner."Customer No.";
+          ExternalNoMatchReq := TRUE;
+        END ELSE BEGIN
+          ExternalNoMatchReq := FALSE;
+          EDIRecDocField.RESET;
+          EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+          EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+          EDIRecDocField.SETRANGE("NAV Table No.",36);
+          EDIRecDocField.SETRANGE("Nav Field No.",SalesHeader.FIELDNO("Sell-to Customer No."));
+          IF EDIRecDocField.FIND('-') THEN BEGIN
+            REPEAT
+              LastSellTo := EDILoadTextFields.LoadTextFields(LastSellTo,EDIRecDocField);
+            UNTIL EDIRecDocField.NEXT = 0;
+            LastEDISellToCode := COPYSTR(LastSellTo,1,20);
+          END;
+        END;
+        EDIRecDocField.RESET;
+        EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+        EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+        EDIRecDocField.SETRANGE("NAV Table No.",36);
+        EDIRecDocField.SETRANGE("Nav Field No.",SalesHeader.FIELDNO("Ship-to Code"));
+        IF EDIRecDocField.FIND('-') THEN BEGIN
+          REPEAT
+            LastOverrideShipTo := EDILoadTextFields.LoadTextFields(LastOverrideShipTo,EDIRecDocField);
+          UNTIL EDIRecDocField.NEXT = 0;
+          OverrideEDIShipToCode := COPYSTR(LastOverrideShipTo,1,20);
+          EDICustCrossRef.RESET;
+          EDICustCrossRef.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+          EDICustCrossRef.SETRANGE("EDI Sell To Code",LastEDISellToCode);
+          EDICustCrossRef.SETRANGE("EDI Ship To Code",OverrideEDIShipToCode);
+          IF NOT EDICustCrossRef.FIND('-') THEN BEGIN
+            CrossRefError := TRUE;
+            EDICustCrossRef2.RESET;
+            EDICustCrossRef2.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+            IF EDICustCrossRef2.FIND('+') THEN
+              LineNo := EDICustCrossRef2."Line No." + 10000
+            ELSE
+              LineNo := 10000;
+            CLEAR(EDICustCrossRef2);
+            EDICustCrossRef2."Line No." := LineNo;
+            EDICustCrossRef2."Trade Partner No." := EDIRecDocField."Trade Partner No.";
+            EDICustCrossRef2."EDI Sell To Code" := LastEDISellToCode;
+            EDICustCrossRef2."EDI Ship To Code" := OverrideEDIShipToCode;
+            EDICustCrossRef2."Ship-to Type" := EDICustCrossRef2."Ship-to Type"::"Dist. Center";
+            EDICustCrossRef2.Unassigned := TRUE;
+            EDICustCrossRef2.Comment := '';
+            IF  ExternalNoMatchReq THEN
+              EDICustCrossRef2.Comment := Text001;
+            EDICustCrossRef2."EDI Cross Ref. Identifiers" :=
+              GetCrossRefIdentifiers(1,CrossReference,EDIRecDocField."Segment Group");
+            EDICustCrossRef2.INSERT;
+          END ELSE BEGIN
+            EDICustCrossRef.Comment := '';
+            IF ((EDICustCrossRef."Navision Sell To Code" = '') OR
+                ((EDICustCrossRef."Navision Ship To Code" = '') AND (AllowBlankNAVShipTo = FALSE)))
+            THEN BEGIN
+              CrossRefError := TRUE;
+              EDICustCrossRef.Unassigned := TRUE;
+              EDICustCrossRef.Comment := Text002;
+            END;
+            EDICustCrossRef.MODIFY;
+          END;
+        END ELSE BEGIN
+          OverrideShipToCode := '';
+          OverrideEDIShipToCode := '';
+        END;
+      END ELSE
+        SDQFound := FALSE;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Field Name");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField.SETRANGE("Field Name",'SDQ SELL TO');
+      IF EDIRecDocField.FIND('-') THEN BEGIN
+        MultipleSellTo := TRUE;
+        BuildSellToArray(EDIRecDocHdr2);
+      END ELSE
+        MultipleSellTo := FALSE;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocField.SETRANGE(
+        EDIRecDocField."Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField.SETRANGE(EDIRecDocField."NAV Table No.",36);
+      IF EDIRecDocField.FIND('-') THEN BEGIN
+        IF NOT MultipleSellTo THEN
+          ValidateSellToCode(EDIRecDocHdr2."Internal Doc. No.");
+        IF (NOT MultipleSellTo) AND (NOT SDQFound) THEN
+          ValidateShipToCode(EDIRecDocHdr2."Internal Doc. No.");
+        IF NOT MultipleSellTo THEN
+          BuildShipToArray(EDIRecDocHdr2);
+      END;
+
+      IF CrossRefError THEN BEGIN
+        CustomerCrossRefError := TRUE;
+        EDIRecDocHdr2."Customer Cross Ref. Error" := TRUE;
+      END;
+
+      EDIRecDocHdr2.MODIFY;
+
+      COMMIT;
+    END;
+
+    PROCEDURE ValidateSellToCode@11(InternalDocNo@1240030000 : Code[20]);
+    VAR
+      EDILoadTextFields@1240020001 : Codeunit 14002390;
+      LastEDISellTo@1240020000 : Code[250];
+      LastEDIShipTo@1240020002 : Code[250];
+      LSCustomer@1000000000 : Record 18;
+    BEGIN
+      EDIShipToCode := '';
+      ShipToFound := FALSE;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",InternalDocNo);
+      EDIRecDocField.SETRANGE("NAV Table No.",36);
+      EDIRecDocField.SETRANGE("Nav Field No.",SalesHeader.FIELDNO("Ship-to Code"));
+      IF EDIRecDocField.FIND('-') THEN BEGIN
+        ShipToFound := TRUE;
+        REPEAT
+          LastEDIShipTo := EDILoadTextFields.LoadTextFields(LastEDIShipTo,EDIRecDocField);
+        UNTIL EDIRecDocField.NEXT = 0;
+        EDIShipToCode := COPYSTR(LastEDIShipTo,1,20);
+      END;
+
+      IF (SDQFound) AND (ShipToFound = FALSE) THEN
+        EXIT;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",InternalDocNo);
+      EDIRecDocField.SETRANGE("NAV Table No.",36);
+      EDIRecDocField.SETRANGE("Nav Field No.",SalesHeader.FIELDNO("Sell-to Customer No."));
+      IF EDIRecDocField.FIND('-') THEN BEGIN
+        REPEAT
+          LastEDISellTo :=  EDILoadTextFields.LoadTextFields(LastEDISellTo,EDIRecDocField);
+        UNTIL EDIRecDocField.NEXT = 0;
+          EDISellToCode := COPYSTR(LastEDISellTo,1,20);
+          EDICustCrossRef.RESET;
+          EDICustCrossRef.SETCURRENTKEY("Trade Partner No.","EDI Sell To Code","EDI Ship To Code");
+          EDICustCrossRef.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+          EDICustCrossRef.SETRANGE("EDI Sell To Code",EDISellToCode);
+          IF ShipToFound THEN
+            EDICustCrossRef.SETRANGE("EDI Ship To Code",EDIShipToCode);
+          IF NOT EDICustCrossRef.FIND('-') THEN BEGIN
+            CrossRefError := TRUE;
+            EDICustCrossRef2.RESET;
+            EDICustCrossRef2.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+            IF EDICustCrossRef2.FIND('+') THEN
+             LineNo := EDICustCrossRef2."Line No." + 10000
+            ELSE
+             LineNo := 10000;
+            CLEAR(EDICustCrossRef2);
+            EDICustCrossRef2."Line No." := LineNo;
+            EDICustCrossRef2."Trade Partner No." := EDITradePartner."No.";
+            EDICustCrossRef2."EDI Sell To Code" := EDISellToCode;
+            EDICustCrossRef2."EDI Ship To Code" := EDIShipToCode;
+            EDICustCrossRef2.Unassigned := TRUE;
+            IF EDITradePartner."Customer No." <> '' THEN BEGIN
+              EDICustCrossRef2.Comment := Text003;
+            END;
+            EDICustCrossRef2."EDI Cross Ref. Identifiers" :=
+              GetCrossRefIdentifiers(1,CrossReference,EDIRecDocField."Segment Group");
+            EDICustCrossRef2.INSERT;
+          END ELSE BEGIN
+            EDICustCrossRef.Comment := '';
+            IF ((ShipToFound = FALSE) AND (EDICustCrossRef."Navision Sell To Code" = '')) OR
+               ((ShipToFound) AND ((EDICustCrossRef."Navision Sell To Code" = '') OR
+                ((EDICustCrossRef."Navision Ship To Code" = '') AND (AllowBlankNAVShipTo = FALSE))))
+            THEN BEGIN
+              CrossRefError := TRUE;
+              EDICustCrossRef.Unassigned := TRUE;
+              EDICustCrossRef.Comment := Text002;
+            END;
+            EDICustCrossRef.MODIFY;
+          END;
+      END ELSE BEGIN
+        IF (EDITradePartner."Customer No." = '') AND
+           (NOT SDQFound) AND
+           (NOT MultipleSellTo)
+        THEN BEGIN
+          EDIRecDocField.SETRANGE("NAV Table No.",36);
+          EDIRecDocField.SETRANGE("Nav Field No.",SalesHeader.FIELDNO("Ship-to Code"));
+          IF EDIRecDocField.FIND('-') THEN BEGIN
+            REPEAT
+              LastEDIShipTo := EDILoadTextFields.LoadTextFields(LastEDIShipTo,EDIRecDocField);
+            UNTIL EDIRecDocField.NEXT = 0;
+            EDISellToCode := EDICustCrossRef."EDI Sell To Code";
+            EDICustCrossRef.SETCURRENTKEY("EDI Ship To Code");
+            EDICustCrossRef.SETRANGE("EDI Ship To Code",COPYSTR(LastEDIShipTo,1,20));
+            EDICustCrossRef.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+            IF NOT EDICustCrossRef.FIND('-') THEN BEGIN
+              CrossRefError := TRUE;
+              EDICustCrossRef2.RESET;
+              EDICustCrossRef2.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+              IF EDICustCrossRef2.FIND('+') THEN
+               LineNo := EDICustCrossRef2."Line No." + 10000
+              ELSE
+                LineNo := 10000;
+              CLEAR(EDICustCrossRef2);
+              EDICustCrossRef2."Line No." := LineNo;
+              EDICustCrossRef2."Trade Partner No." := EDITradePartner."No.";
+              EDICustCrossRef2."EDI Sell To Code" := '';
+              EDICustCrossRef2."EDI Ship To Code" := COPYSTR(LastEDIShipTo,1,20);
+              EDICustCrossRef2.Unassigned := TRUE;
+              EDICustCrossRef2."EDI Cross Ref. Identifiers" :=
+                GetCrossRefIdentifiers(1,CrossReference,EDIRecDocField."Segment Group");
+              EDICustCrossRef2.INSERT;
+            END ELSE BEGIN;
+              EDICustCrossRef.Comment := '';
+              IF ((ShipToFound = FALSE) AND (EDICustCrossRef."Navision Sell To Code" = '')) OR
+                 ((ShipToFound) AND ((EDICustCrossRef."Navision Sell To Code" = '') OR
+                  ((EDICustCrossRef."Navision Ship To Code" = '') AND (AllowBlankNAVShipTo = FALSE))))
+              THEN BEGIN
+                CrossRefError := TRUE;
+                EDICustCrossRef.Unassigned := TRUE;
+                EDICustCrossRef.Comment := Text002;
+              END;
+              EDICustCrossRef.MODIFY;
+            END;
+          END;
+        END ELSE BEGIN
+          IF SDQFound THEN
+            EDISellToCode := LastEDISellToCode
+          ELSE
+             EDISellToCode := EDITradePartner."Customer No.";
+          EDICustCrossRef.RESET;
+          EDICustCrossRef.SETCURRENTKEY("Trade Partner No.","EDI Sell To Code","EDI Ship To Code");
+          EDICustCrossRef.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+          EDICustCrossRef.SETRANGE("EDI Sell To Code",EDISellToCode);
+          IF ShipToFound THEN
+            EDICustCrossRef.SETRANGE("EDI Ship To Code",EDIShipToCode);
+          IF NOT EDICustCrossRef.FIND('-') THEN BEGIN
+            CrossRefError := TRUE;
+            EDICustCrossRef2.RESET;
+            EDICustCrossRef2.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+            IF EDICustCrossRef2.FIND('+') THEN
+             LineNo := EDICustCrossRef2."Line No." + 10000
+            ELSE
+             LineNo := 10000;
+            CLEAR(EDICustCrossRef2);
+            EDICustCrossRef2."Line No." := LineNo;
+            EDICustCrossRef2."Trade Partner No." := EDITradePartner."No.";
+            EDICustCrossRef2."EDI Sell To Code" := EDISellToCode;
+            EDICustCrossRef2."EDI Ship To Code" := EDIShipToCode;
+            EDICustCrossRef2.Unassigned := TRUE;
+            IF EDITradePartner."Customer No." <> '' THEN BEGIN
+              EDICustCrossRef2.Comment := Text003;
+            END;
+            EDICustCrossRef2.INSERT;
+          END ELSE BEGIN
+            EDICustCrossRef.Comment := '';
+            IF ((ShipToFound = FALSE) AND (EDICustCrossRef."Navision Sell To Code" = '')) OR
+               ((ShipToFound) AND ((EDICustCrossRef."Navision Sell To Code" = '') OR
+                ((EDICustCrossRef."Navision Ship To Code" = '') AND (AllowBlankNAVShipTo = FALSE))))
+            THEN BEGIN
+              CrossRefError := TRUE;
+              EDICustCrossRef.Unassigned := TRUE;
+              EDICustCrossRef.Comment := Text002;
+            END;
+            EDICustCrossRef.MODIFY;
+          END;
+        END;
+      END;
+      // >> LS001
+      IF (EDITradePartner."No." = 'DA') OR
+         (EDITradePartner."No." = 'GA') OR
+         (EDITradePartner."No." = 'CA') OR //<TPZ2977>
+         (EDITradePartner."No." = 'HE') OR
+         (EDITradePartner."No." = 'TP') OR
+         (EDITradePartner."No." = 'TO') THEN BEGIN
+          EDICustCrossRef.RESET;
+          EDICustCrossRef.SETCURRENTKEY("Trade Partner No.","EDI Sell To Code","EDI Ship To Code");
+          EDICustCrossRef.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+          EDICustCrossRef.SETRANGE("EDI Sell To Code",EDISellToCode);
+          EDICustCrossRef.SETRANGE(Unassigned, TRUE);
+          IF EDICustCrossRef.FIND('-') THEN BEGIN
+               IF LSCustomer.GET(EDISellToCode) THEN BEGIN
+                  EDICustCrossRef."Navision Sell To Code" := EDISellToCode;
+                  EDICustCrossRef.Unassigned := FALSE;
+                  EDICustCrossRef.MODIFY;
+               END;
+           END;
+      END;
+      // << LS001
+    END;
+
+    PROCEDURE ValidateShipToCode@16(InternalDocNo@1240030000 : Code[20]);
+    VAR
+      EDILoadTextFields@1240020000 : Codeunit 14002390;
+      LastEDIShipTo@1240020001 : Code[250];
+      LastEDIShipFor@1240020002 : Code[250];
+    BEGIN
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",InternalDocNo);
+      EDIRecDocField.SETRANGE("NAV Table No.",36);
+      EDIRecDocField.SETRANGE("Nav Field No.",SalesHeader.FIELDNO("Ship-to Code"));
+      IF EDIRecDocField.FIND('-') THEN BEGIN
+        REPEAT
+          LastEDIShipTo := EDILoadTextFields.LoadTextFields(LastEDIShipTo,EDIRecDocField);
+        UNTIL EDIRecDocField.NEXT = 0;
+          EDICustCrossRef.RESET;
+          EDICustCrossRef.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+          EDICustCrossRef.SETRANGE("EDI Sell To Code",EDISellToCode);
+          EDICustCrossRef.SETRANGE("EDI Ship To Code",COPYSTR(LastEDIShipTo,1,20));
+          IF NOT EDICustCrossRef.FIND('-') THEN BEGIN
+            CrossRefError := TRUE;
+            EDICustCrossRef2.RESET;
+            EDICustCrossRef2.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+            IF EDICustCrossRef2.FIND('+') THEN
+             LineNo := EDICustCrossRef2."Line No." + 10000
+            ELSE
+             LineNo := 10000;
+            CLEAR(EDICustCrossRef2);
+            EDICustCrossRef2."Line No." := LineNo;
+            EDICustCrossRef2."Trade Partner No." := EDITradePartner."No.";
+            EDICustCrossRef2."EDI Sell To Code" := EDISellToCode;
+            EDICustCrossRef2."EDI Ship To Code" := COPYSTR(LastEDIShipTo,1,20);
+            EDICustCrossRef2.Unassigned := TRUE;
+            EDICustCrossRef2."EDI Cross Ref. Identifiers" :=
+              GetCrossRefIdentifiers(1,CrossReference,EDIRecDocField."Segment Group");
+            EDICustCrossRef2.INSERT;
+          END ELSE BEGIN
+            EDICustCrossRef.RESET;
+            EDICustCrossRef.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+            EDICustCrossRef.SETRANGE("EDI Sell To Code",EDISellToCode);
+            EDICustCrossRef.SETRANGE("EDI Ship To Code",LastEDIShipTo);
+            IF EDICustCrossRef.FIND('-') THEN BEGIN
+              EDICustCrossRef.Comment := '';
+                IF ((EDICustCrossRef."Navision Sell To Code" = '') OR
+                    ((EDICustCrossRef."Navision Ship To Code" = '') AND (AllowBlankNAVShipTo = FALSE)))
+                THEN BEGIN
+                  CrossRefError := TRUE;
+                  EDICustCrossRef.Unassigned := TRUE;
+                  EDICustCrossRef.Comment := Text002;
+                END;
+              EDICustCrossRef.MODIFY;
+            END;
+          END;
+      END;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",InternalDocNo);
+      EDIRecDocField.SETRANGE("NAV Table No.",36);
+      EDIRecDocField.SETRANGE("Nav Field No.",SalesHeader.FIELDNO("Ship-for Code"));
+      IF EDIRecDocField.FIND('-') THEN BEGIN
+        REPEAT
+          LastEDIShipFor := EDILoadTextFields.LoadTextFields(LastEDIShipFor,EDIRecDocField);
+        UNTIL EDIRecDocField.NEXT = 0;
+        EDIShipforCode := COPYSTR(LastEDIShipFor,1,20);
+        EDICustCrossRef.RESET;
+        EDICustCrossRef.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+        EDICustCrossRef.SETRANGE("EDI Sell To Code",EDISellToCode);
+        EDICustCrossRef.SETRANGE("EDI Ship To Code",EDIShipforCode);
+        IF EDICustCrossRef.FIND('-') THEN BEGIN
+          EDIShipforCode := EDICustCrossRef."EDI Ship To Code";
+          ShipForCode := EDICustCrossRef."Navision Ship To Code";
+          EDICustCrossRef.Comment := '';
+            IF ((EDICustCrossRef."Navision Sell To Code" = '') OR
+                ((EDICustCrossRef."Navision Ship To Code" = '') AND (AllowBlankNAVShipTo = FALSE)))
+            THEN BEGIN
+              CrossRefError := TRUE;
+              EDICustCrossRef.Unassigned := TRUE;
+              EDICustCrossRef.Comment := Text002;
+            END;
+          EDICustCrossRef.MODIFY;
+        END ELSE BEGIN
+          CrossRefError := TRUE;
+          EDICustCrossRef2.RESET;
+          EDICustCrossRef2.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+          IF EDICustCrossRef2.FIND('+') THEN
+            LineNo := EDICustCrossRef2."Line No." + 10000
+          ELSE
+            LineNo := 10000;
+          CLEAR(EDICustCrossRef2);
+          EDICustCrossRef2."Line No." := LineNo;
+          EDICustCrossRef2."Trade Partner No." := EDITradePartner."No.";
+          EDICustCrossRef2."EDI Sell To Code" := EDISellToCode;
+          EDICustCrossRef2."EDI Ship To Code" := EDIShipforCode;
+          EDICustCrossRef2.Unassigned := TRUE;
+          EDICustCrossRef2."EDI Cross Ref. Identifiers" :=
+            GetCrossRefIdentifiers(1,CrossReference,EDIRecDocField."Segment Group");
+          EDICustCrossRef2.INSERT;
+       END;
+      END;
+    END;
+
+    PROCEDURE BuildShipToArray@7(EDIRecDocHdr@1240030000 : Record 14002358);
+    BEGIN
+      EDIRecDocHdr.GET(EDIRecDocHdr."Internal Doc. No.");
+
+      i := 1;
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+      IF EDIRecDocField.FIND('-') THEN
+        REPEAT
+          IF (COPYSTR(EDIRecDocField."Field Name",1,11) = 'SDQ SHIP TO') OR
+            (COPYSTR(EDIRecDocField."Field Name",1,11) = 'SDQ STORE NO') THEN
+              InsertShipToCode(COPYSTR(EDIRecDocField."Field Text Value",1,20));
+        UNTIL EDIRecDocField.NEXT = 0;
+    END;
+
+    PROCEDURE InsertShipToCode@10(SDQCode@1240030000 : Code[20]);
+    BEGIN
+      IF (SDQCode = '') OR
+        (SDQCode = ' ') THEN
+        EXIT;
+      EDICustCrossRef.RESET;
+      EDICustCrossRef.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+      IF LastEDISellToCode <> '' THEN
+        EDICustCrossRef.SETRANGE("EDI Sell To Code",LastEDISellToCode);
+      EDICustCrossRef.SETRANGE("EDI Ship To Code",SDQCode);
+      IF EDICustCrossRef.FIND('-') THEN BEGIN
+        EDICustCrossRef.Comment := '';
+        EDICustCrossRef.MODIFY;
+        IF ((EDICustCrossRef."Navision Sell To Code" = '') OR
+            (EDICustCrossRef."Navision Ship To Code" = '')) THEN BEGIN
+              CrossRefError := TRUE;
+              EDICustCrossRef.Unassigned := TRUE;
+              EDICustCrossRef.Comment := Text002;
+            END;
+        EDICustCrossRef.MODIFY;
+      END ELSE BEGIN
+        CrossRefError := TRUE;
+        EDICustCrossRef2.RESET;
+         EDICustCrossRef2.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+        IF  EDICustCrossRef2.FIND('+') THEN
+          LineNo :=  EDICustCrossRef2."Line No." + 10000
+        ELSE
+          LineNo := 10000;
+        CLEAR(EDICustCrossRef2);
+        EDICustCrossRef2."Line No." := LineNo;
+        EDICustCrossRef2."Trade Partner No." := EDIRecDocField."Trade Partner No.";
+        EDICustCrossRef2."EDI Sell To Code" := LastEDISellToCode;
+        EDICustCrossRef2."EDI Ship To Code" := SDQCode;
+        EDICustCrossRef2.Unassigned := TRUE;
+        IF ExternalNoMatchReq THEN
+          EDICustCrossRef2.Comment := Text001;
+        EDICustCrossRef2."EDI Cross Ref. Identifiers" :=
+          GetCrossRefIdentifiers(1,CrossReference,EDIRecDocField."Segment Group");
+        EDICustCrossRef2.INSERT;
+       END;
+    END;
+
+    PROCEDURE BuildSellToArray@3(VAR EDIRecDocHdr@1240030000 : Record 14002358);
+    BEGIN
+      EDIRecDocHdr.GET(EDIRecDocHdr."Internal Doc. No.");
+
+      i := 1;
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Field Name");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+      EDIRecDocField.SETRANGE("Field Name",'SDQ SELL TO');
+      IF EDIRecDocField.FIND('-') THEN
+        REPEAT
+          InsertSellToCode(COPYSTR(EDIRecDocField."Field Text Value",1,20));
+        UNTIL EDIRecDocField.NEXT = 0;
+    END;
+
+    PROCEDURE InsertSellToCode@1(SDQCode@1240030000 : Code[20]);
+    BEGIN
+      IF (SDQCode = '') OR
+        (SDQCode = ' ') THEN
+        EXIT;
+      EDICustCrossRef.RESET;
+      EDICustCrossRef.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+      EDICustCrossRef.SETRANGE("EDI Sell To Code",SDQCode);
+      IF EDICustCrossRef.FIND('-') THEN
+        IF EDICustCrossRef."Navision Sell To Code" = '' THEN BEGIN
+          CrossRefError := TRUE;
+          EDICustCrossRef.Unassigned := TRUE;
+          EDICustCrossRef.MODIFY;
+        END
+      ELSE BEGIN
+        CrossRefError := TRUE;
+        EDICustCrossRef2.RESET;
+        EDICustCrossRef2.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+        IF EDICustCrossRef2.FIND('+') THEN
+          LineNo := EDICustCrossRef2."Line No." + 10000
+        ELSE
+          LineNo := 10000;
+        CLEAR(EDICustCrossRef2);
+        EDICustCrossRef2."Line No." := LineNo;
+        EDICustCrossRef2."Trade Partner No." := EDIRecDocField."Trade Partner No.";
+        EDICustCrossRef2."EDI Sell To Code" := SDQCode;
+        EDICustCrossRef2.Unassigned := TRUE;
+        EDICustCrossRef2."EDI Cross Ref. Identifiers" :=
+          GetCrossRefIdentifiers(1,CrossReference,EDIRecDocField."Segment Group");
+        EDICustCrossRef2.INSERT;
+      END;
+    END;
+
+    PROCEDURE EvaluateItemCrossReference@1240030003(VAR EDIRecDocHdr@1240030000 : Record 14002358;NAVTableNo@1240020000 : Integer);
+    VAR
+      EDIRecDocField2@1240020001 : Record 14002359;
+      PrevEDIRecDocField@1240020004 : Record 14002359;
+      Item@1240020008 : Record 27;
+      EDILoadTextFields@1240020003 : Codeunit 14002390;
+      PrevSegmentGroup@1240020002 : Integer;
+      SDQFound@1240020005 : Boolean;
+      MultiLocation@1240020007 : Boolean;
+      MultipleSellTo@1240020006 : Boolean;
+      CrossRefFound@1240020009 : Boolean;
+      Concatenate@1240020010 : Boolean;
+      PrefixValue@1240020011 : Text[250];
+    BEGIN
+      EDIRecDocHdr.GET(EDIRecDocHdr."Internal Doc. No.");
+      TradePartnerNo :=  EDIRecDocHdr."Trade Partner No.";
+
+      CrossRefError := FALSE;
+      CrossRefError2 := FALSE;
+      UOMCrossRefError := FALSE;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocField.SETRANGE("Internal Doc. No.", EDIRecDocHdr."Internal Doc. No.");
+      EDIRecDocField.SETRANGE("NAV Table No.",DATABASE::"Transfer Line");
+      EDIRecDocField.SETRANGE("Nav Field No.",TransferLine.FIELDNO("Item No."));
+      IF EDIRecDocField.FIND('-') THEN BEGIN
+        REPEAT
+          Type := 'TRADEPARTNERITEM';
+          NAVItemNo := '';
+          NAVVariantCode := '';
+          PartnerVariantCode := '';
+          EDIItemCrossRef := '';
+
+          Item.RESET;
+          Item.SETRANGE("No.",EDIRecDocField."Field Text Value");
+          IF NOT Item.FIND('-') THEN BEGIN
+            EDIItemCrossRef := COPYSTR(EDIRecDocField."Field Text Value",1,40);
+            EDIRecDocField2.RESET;
+            EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+            EDIRecDocField2.SETRANGE("Segment Group",EDIRecDocField."Segment Group");
+            EDIRecDocField2.SETRANGE("NAV Table No.",DATABASE::"Transfer Line");
+            EDIRecDocField2.SETRANGE("Nav Field No.",TransferLine.FIELDNO("Variant Code"));
+            IF EDIRecDocField2.FIND('-') THEN
+              PartnerVariantCode := EDIRecDocField2."Field Text Value";
+
+            IF NOT TradePtnrItem.GET(
+              TradePartnerNo,COPYSTR(EDIRecDocField."Field Text Value",1,40),PartnerVariantCode) THEN BEGIN
+                CrossRefError := TRUE;
+                InsertCrossReference(Type);
+            END ELSE
+              IF TradePtnrItem."Navision Item No." <> '' THEN BEGIN
+                NAVItemNo := TradePtnrItem."Navision Item No.";
+                NAVVariantCode := TradePtnrItem."Navision Variant Code";
+                EvaluateUOMCrossReference(EDIRecDocField,NAVTableNo);
+              END ELSE BEGIN
+                CrossRefError := TRUE;
+                TradePtnrItem.Unassigned := TRUE;
+                TradePtnrItem.MODIFY;
+              END;
+          END;
+        UNTIL EDIRecDocField.NEXT = 0;
+      END ELSE BEGIN
+        Concatenate := FALSE;
+        EDIRecDocField.RESET;
+        EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Field Name");
+        EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+        EDIRecDocField.SETRANGE("NAV Table No.",DATABASE::"Sales Line");
+        EDIRecDocField.SETRANGE("Nav Field No.",SalesLine.FIELDNO("EDI Item Cross Ref."));
+        IF EDIRecDocField.FIND('-') THEN
+          REPEAT
+            CASE TRUE OF
+              EDIRecDocField."Append to Field Contents":
+                Concatenate := TRUE;
+              EDIRecDocField."Insert into Field Contents":
+                Concatenate := TRUE;
+              EDIRecDocField."Copy String Position" <> 0:
+                Concatenate := TRUE;
+              EDIRecDocField."Separator Type" = EDIRecDocField."Separator Type"::Space,
+              EDIRecDocField."Separator Type" = EDIRecDocField."Separator Type"::Hyphen:
+                Concatenate := TRUE;
+            END;
+          UNTIL (EDIRecDocField.NEXT = 0) OR (Concatenate = TRUE)
+        ELSE
+          EXIT;
+        IF Concatenate THEN BEGIN
+          GetSLNSegment(EDIRecDocHdr);
+
+          EDIRecDocField.RESET;
+          EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Field Name");
+          EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+          EDIRecDocField.SETFILTER(Segment,'%1','SDQ');
+          EDIRecDocField.SETFILTER("Field Name",'%1|%2','SDQ SHIP TO','SDQ SELL TO');
+          IF EDIRecDocField.FIND('-') THEN
+            SDQFound := TRUE;
+
+          EDIRecDocField.RESET;
+          EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Field Name");
+          EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+          EDIRecDocField.SETFILTER(Segment,'<>%1','SDQ');
+          EDIRecDocField.SETRANGE("Field Name",'SDQ SHIP TO');
+          IF EDIRecDocField.FIND('-') THEN BEGIN
+            SDQFound := TRUE;
+            MultiLocation := TRUE;
+          END;
+
+          EDIRecDocField.RESET;
+          EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Field Name");
+          EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+          EDIRecDocField.SETRANGE("Field Name",'SDQ SELL TO');
+          IF EDIRecDocField.FIND('-') THEN
+            MultipleSellTo := TRUE;
+
+          NAVItemNo := '';
+          NAVVariantCode := '';
+          PartnerVariantCode := '';
+          EDIItemCrossRef := '';
+          PrefixValue := '';
+          CrossRefFound := FALSE;
+          PrevSegmentGroup := 0;
+
+          EDIRecDocField.RESET;
+          EDIRecDocField.SETRANGE("Internal Doc. No.", EDIRecDocHdr."Internal Doc. No.");
+          IF EDIRecDocField.FIND('-') THEN
+            REPEAT
+                IF MultipleSellTo OR SDQFound THEN BEGIN
+                  IF PrevSegmentGroup <> 0 THEN
+                    IF PrevSegmentGroup <> EDIRecDocField."Segment Group" THEN BEGIN
+                      NAVItemNo := '';
+                      NAVVariantCode := '';
+                      PartnerVariantCode := '';
+                      EDIItemCrossRef := '';
+                    END;
+                END;
+
+              IF (EDIRecDocField."NAV Table No." = DATABASE::"Sales Line") AND
+                 (EDIRecDocField."Nav Field No." = SalesLine.FIELDNO("EDI Item Cross Ref."))
+              THEN BEGIN
+                Type := 'TRADEPARTNERITEM';
+                EDIItemCrossRef :=
+                  EDILoadTextFields.LoadTextFields(EDIItemCrossRef,EDIRecDocField);
+                IF (EDIRecDocField."Segment Group" = 0) AND (EDIItemCrossRef <> '') THEN
+                  PrefixValue := EDIItemCrossRef;
+
+                EDIRecDocField2.RESET;
+                EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+                EDIRecDocField2.SETRANGE("Segment Group",EDIRecDocField."Segment Group");
+                EDIRecDocField2.SETRANGE("NAV Table No.",DATABASE::"Sales Line");
+                EDIRecDocField2.SETRANGE("Nav Field No.",SalesLine.FIELDNO("EDI Variant Code"));
+                IF EDIRecDocField2.FIND('-') THEN
+                  PartnerVariantCode :=
+                    EDILoadTextFields.LoadTextFields(PartnerVariantCode,EDIRecDocField2);
+                CrossRefFound := TRUE;
+              END;
+              IF (EDIRecDocField.Trigger) AND (CrossRefFound = TRUE) AND
+                 (EDIRecDocField."NAV Table No." <> DATABASE::"Sales Comment Line")
+              THEN BEGIN
+                IF ((SDQFound = TRUE) AND
+                    (EDIRecDocField.Segment = 'SDQ') AND
+                    (MultiLocation = FALSE) AND
+                    (SLNFound = FALSE)) OR
+                   ((SDQFound = TRUE) AND
+                    (EDIRecDocField.Segment <> 'SDQ') AND
+                    (MultiLocation = TRUE) AND
+                    (SLNFound = FALSE)) OR
+                   ((SDQFound = TRUE) AND
+                    (SLNFound = TRUE) AND
+                    (EDIRecDocField.Segment = SLNSegmentID)) OR
+                   ((MultipleSellTo = TRUE) AND (EDIRecDocField.Segment = 'SDQ')) OR
+                   (SDQFound = FALSE)
+                THEN BEGIN
+                  CrossRefFound := FALSE;
+                  IF PrefixValue <> '' THEN BEGIN
+                    IF EDIRecDocField."Segment Group" <> 0 THEN
+                      EDIItemCrossRef := PrefixValue + EDIItemCrossRef;
+                  END;
+                  IF NOT TradePtnrItem.GET(
+                    TradePartnerNo,COPYSTR(EDIItemCrossRef,1,40),PartnerVariantCode) THEN BEGIN
+                      CrossRefError := TRUE;
+                      InsertCrossReference(Type);
+                  END ELSE
+                    IF TradePtnrItem."Navision Item No." <> '' THEN BEGIN
+                      NAVItemNo := TradePtnrItem."Navision Item No.";
+                      NAVVariantCode := TradePtnrItem."Navision Variant Code";
+                      EvaluateUOMCrossReference(EDIRecDocField,NAVTableNo);
+                    END ELSE BEGIN
+                      CrossRefError := TRUE;
+                      TradePtnrItem.Unassigned := TRUE;
+                      TradePtnrItem.MODIFY;
+                    END;
+                  IF (MultipleSellTo = FALSE) AND (SDQFound = FALSE) THEN BEGIN
+                    NAVItemNo := '';
+                    NAVVariantCode := '';
+                    PartnerVariantCode := '';
+                    EDIItemCrossRef := '';
+                  END;
+                END;
+              END;
+              PrevSegmentGroup := EDIRecDocField."Segment Group";
+            UNTIL EDIRecDocField.NEXT = 0;
+        END ELSE BEGIN
+          EDIRecDocField.RESET;
+          EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+          EDIRecDocField.SETRANGE("Internal Doc. No.", EDIRecDocHdr."Internal Doc. No.");
+          EDIRecDocField.SETRANGE("NAV Table No.",37);
+          EDIRecDocField.SETRANGE("Nav Field No.",SalesLine.FIELDNO("EDI Item Cross Ref."));
+          IF EDIRecDocField.FIND('-') THEN
+            REPEAT
+              Type := 'TRADEPARTNERITEM';
+              NAVItemNo := '';
+              NAVVariantCode := '';
+              PartnerVariantCode := '';
+              EDIItemCrossRef := '';
+
+              EDIItemCrossRef := EDIRecDocField."Field Text Value";
+
+              EDIRecDocField2.RESET;
+              EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+              EDIRecDocField2.SETRANGE("Segment Group",EDIRecDocField."Segment Group");
+              EDIRecDocField2.SETRANGE("NAV Table No.",DATABASE::"Sales Line");
+              EDIRecDocField2.SETRANGE("Nav Field No.",SalesLine.FIELDNO("EDI Variant Code"));
+              IF EDIRecDocField2.FIND('-') THEN
+                PartnerVariantCode := EDIRecDocField2."Field Text Value";
+
+              IF NOT TradePtnrItem.GET(
+                TradePartnerNo,COPYSTR(EDIItemCrossRef,1,40),PartnerVariantCode) THEN BEGIN
+                  CrossRefError := TRUE;
+                  InsertCrossReference(Type);
+              END ELSE
+                IF TradePtnrItem."Navision Item No." <> '' THEN BEGIN
+                  NAVItemNo := TradePtnrItem."Navision Item No.";
+                  NAVVariantCode := TradePtnrItem."Navision Variant Code";
+                  EvaluateUOMCrossReference(EDIRecDocField,NAVTableNo);
+                END ELSE BEGIN
+                  CrossRefError := TRUE;
+                  TradePtnrItem.Unassigned := TRUE;
+                  TradePtnrItem.MODIFY;
+                END;
+            UNTIL EDIRecDocField.NEXT = 0;
+        END;
+      END;
+
+      IF CrossRefError THEN
+        EDIRecDocHdr."Item Cross Ref. Error" := TRUE
+      ELSE
+        EDIRecDocHdr."Item Cross Ref. Error" := FALSE;
+      IF CrossRefError2 THEN
+        EDIRecDocHdr."UOM Cross Ref. Error" := TRUE
+      ELSE
+        EDIRecDocHdr."UOM Cross Ref. Error" := FALSE;
+      EDIRecDocHdr.MODIFY;
+
+      COMMIT;
+    END;
+
+    PROCEDURE EvaluateUOMCrossReference@1240030004(EDIRecDocField@1240030000 : Record 14002359;NAVTableNo@1240020000 : Integer);
+    VAR
+      EDIRecDocField2@1240030001 : Record 14002359;
+      ItemUOM@1240030004 : Record 5404;
+      Item@1240020001 : Record 27;
+      EDILoadTextFields@1240020003 : Codeunit 14002390;
+      EDIUOMFound@1240030002 : Boolean;
+      UOMCrossRefFound@1240030003 : Boolean;
+      LastEDIUOM@1240020002 : Code[250];
+      Finished@1240020004 : Boolean;
+    BEGIN
+      EDIUOM := '';
+      LastEDIUOM := '';
+      EDIUOMFound := FALSE;
+      Type := 'EDI UOM';
+      UOMCrossRefError := FALSE;
+      Finished := FALSE;
+
+      EDIRecDocField2.RESET;
+      EDIRecDocField2.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+      EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+      EDIRecDocField2.SETRANGE("Segment Group",EDIRecDocField."Segment Group");
+      IF EDIRecDocField2.FIND('-') THEN
+        REPEAT
+          CASE NAVTableNo OF
+            DATABASE::"Sales Line":
+              BEGIN
+                IF (EDIRecDocField2."NAV Table No." = DATABASE::"Sales Line") AND
+                   (EDIRecDocField2."Nav Field No." = SalesLine.FIELDNO("EDI Unit of Measure"))
+                THEN BEGIN
+                  LastEDIUOM := EDILoadTextFields.LoadTextFields(LastEDIUOM,EDIRecDocField2);
+                  EDIUOMFound := TRUE;
+                END;
+              END;
+            DATABASE::"Transfer Line":
+              BEGIN
+                IF (EDIRecDocField2."NAV Table No." = DATABASE::"Transfer Line") AND
+                   (EDIRecDocField2."Nav Field No." = TransferLine.FIELDNO("Unit of Measure Code"))
+                THEN BEGIN
+                  EDIUOM := COPYSTR(EDIRecDocField2."Field Text Value",1,10);
+                  Item.RESET;
+                  Item.SETRANGE("No.",NAVItemNo);
+                  Item.SETRANGE("Base Unit of Measure",EDIUOM);
+                  IF Item.FIND('-') THEN
+                    EDIUOMFound := FALSE
+                  ELSE BEGIN
+                    EDIUOMFound := TRUE;
+                    Finished := TRUE;
+                  END;
+                END;
+              END;
+          END;
+        UNTIL (EDIRecDocField2.NEXT = 0) OR Finished;
+      EDIUOM := COPYSTR(LastEDIUOM,1,10);
+      IF (EDIUOMFound) AND (EDIUOM <> '') THEN BEGIN
+        EDITradePartnerUOM.RESET;
+        EDITradePartnerUOM.SETCURRENTKEY("Trade Partner No.","EDI Unit of Measure");
+        EDITradePartnerUOM.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+        EDITradePartnerUOM.SETRANGE("EDI Unit of Measure",EDIUOM);
+        EDITradePartnerUOM.SETRANGE("Navision Item No.",NAVItemNo);
+        EDITradePartnerUOM.SETRANGE("Navision Variant Code",NAVVariantCode);
+        IF EDITradePartnerUOM.FIND('-') THEN BEGIN
+          UOMCrossRefFound := TRUE;
+          IF NOT ItemUOM.GET(NAVItemNo,EDITradePartnerUOM."Navision Unit of Measure") THEN
+            UOMCrossRefError := TRUE;
+          IF NOT ItemUOM.GET(NAVItemNo,EDITradePartnerUOM."Order Unit of Measure") THEN
+            UOMCrossRefError := TRUE;
+          IF UOMCrossRefError THEN BEGIN
+              CrossRefError2 := TRUE;
+              EDITradePartnerUOM.Unassigned := TRUE;
+              EDITradePartnerUOM.MODIFY;
+          END;
+        END;
+        IF NOT UOMCrossRefFound THEN BEGIN
+          EDITradePartnerUOM.RESET;
+          EDITradePartnerUOM.SETCURRENTKEY("Trade Partner No.","EDI Unit of Measure");
+          EDITradePartnerUOM.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+          EDITradePartnerUOM.SETRANGE("EDI Unit of Measure",EDIUOM);
+          EDITradePartnerUOM.SETRANGE("Navision Item No.",'');
+          EDITradePartnerUOM.SETRANGE("Navision Variant Code",'');
+          IF EDITradePartnerUOM.FIND('-') THEN BEGIN
+            UOMCrossRefFound := TRUE;
+            IF NOT ItemUOM.GET(NAVItemNo,EDITradePartnerUOM."Navision Unit of Measure") THEN
+              UOMCrossRefError := TRUE;
+            IF NOT ItemUOM.GET(NAVItemNo,EDITradePartnerUOM."Order Unit of Measure") THEN
+              UOMCrossRefError := TRUE;
+            IF UOMCrossRefError THEN BEGIN
+              CrossRefError2 := TRUE;
+              EDITradePartnerUOM.Unassigned := TRUE;
+              InsertCrossReference(Type);
+            END;
+          END ELSE BEGIN
+            CrossRefError2 := TRUE;
+            InsertCrossReference(Type);
+          END;
+        END;
+      END;
+    END;
+
+    PROCEDURE InsertCrossReference@1240030001(CrossRefType@1240030007 : Text[20]);
+    BEGIN
+      {EDIGenCrossRefTmp.RESET;
+      EDIGenCrossRefTmp.SETRANGE("Cross Reference",CrossReference);
+      IF EDIGenCrossRefTmp.FIND('-') THEN
+        AssocCrossRefValue := EDIGenCrossRefTmp."Sub NAV Value"; }
+
+      CASE CrossRefType OF
+        'GENERAL':
+          BEGIN
+            IF CrossReference IN [1,6,11,21,29,30,50000 ]THEN BEGIN
+              IF (AssocCrossRefValue = '') AND (Blank = FALSE) THEN BEGIN
+                CLEAR(GeneralCrossReference);
+                GeneralCrossReference.VALIDATE("Trade Partner",TradePartnerNo);
+                GeneralCrossReference.VALIDATE("Cross Reference",CrossReference);
+                GeneralCrossReference.VALIDATE("EDI Value 2",'');
+                GeneralCrossReference.VALIDATE("EDI Value",GenCrossRefValue);
+                GeneralCrossReference.Unassigned := TRUE;
+                GeneralCrossReference."EDI Cross Ref. Identifiers" :=
+                  GetCrossRefIdentifiers(0,CrossReference,EDIRecDocField."Segment Group");
+                IF GeneralCrossReference.INSERT(TRUE) THEN;
+              END ELSE BEGIN
+                GeneralCrossReference.RESET;
+                GeneralCrossReference.SETRANGE("Trade Partner",TradePartnerNo);
+                GeneralCrossReference.SETRANGE("Cross Reference",CrossReference);
+                GeneralCrossReference.SETRANGE("EDI Value 2",'');
+                GeneralCrossReference.SETRANGE("EDI Value",GenCrossRefValue);
+                GeneralCrossReference.SETRANGE(Unassigned,TRUE);
+                IF GeneralCrossReference.FIND('-') THEN BEGIN
+                  GeneralCrossReference.VALIDATE("EDI Value 2",GenCrossRefValue2);
+                  GeneralCrossReference."EDI Cross Ref. Identifiers" :=
+                    GetCrossRefIdentifiers(0,CrossReference,EDIRecDocField."Segment Group");
+                  IF GeneralCrossReference.MODIFY(TRUE) THEN;
+                END ELSE BEGIN
+                  CLEAR(GeneralCrossReference);
+                  GeneralCrossReference.VALIDATE("Trade Partner",TradePartnerNo);
+                  GeneralCrossReference.VALIDATE("Cross Reference",CrossReference);
+                  GeneralCrossReference.VALIDATE("EDI Value",AssocCrossRefValue);
+                  GeneralCrossReference.VALIDATE("EDI Value 2",GenCrossRefValue2);
+                  GeneralCrossReference.Unassigned := TRUE;
+                  GeneralCrossReference."EDI Cross Ref. Identifiers" :=
+                    GetCrossRefIdentifiers(0,CrossReference,EDIRecDocField."Segment Group");
+                  IF GeneralCrossReference.INSERT(TRUE) THEN;
+                END;
+              END;
+              EXIT;
+            END ELSE BEGIN
+              CLEAR(GeneralCrossReference);
+              GeneralCrossReference.VALIDATE("Trade Partner",TradePartnerNo);
+              GeneralCrossReference.VALIDATE("Cross Reference",CrossReference);
+              GeneralCrossReference.VALIDATE("EDI Value 2",'');
+              GeneralCrossReference.VALIDATE("EDI Value",CrossRefValue);
+              GeneralCrossReference.Unassigned := TRUE;
+              GeneralCrossReference."EDI Cross Ref. Identifiers" :=
+                GetCrossRefIdentifiers(0,CrossReference,EDIRecDocField."Segment Group");
+              IF GeneralCrossReference.INSERT(TRUE) THEN;
+            END;
+        END;
+        'CUSTOMER(STANDARD)':
+          BEGIN
+          CLEAR(EDICustCrossRef);
+          EDICustCrossRef."Trade Partner No." := EDITradePartner."No.";
+          EDICustCrossRef."EDI Sell To Code" := EDISellToCode;
+          EDICustCrossRef."EDI Ship To Code" := EDIShipToCode;
+          EDICustCrossRef.Unassigned := TRUE;
+          EDICustCrossRef."EDI Cross Ref. Identifiers" :=
+            GetCrossRefIdentifiers(1,CrossReference,EDIRecDocField."Segment Group");
+          IF EDICustCrossRef.INSERT(TRUE) THEN;
+          END;
+        'TRADEPARTNERITEM':
+          BEGIN
+            CLEAR(TradePtnrItem);
+            TradePtnrItem."Trade Partner No." := TradePartnerNo;
+            TradePtnrItem."Partner Item No." := COPYSTR(EDIItemCrossRef,1,40);
+            TradePtnrItem."Partner Variant Code" := PartnerVariantCode;
+            TradePtnrItem.Unassigned := TRUE;
+            TradePtnrItem."EDI Cross Ref. Identfiers" :=
+              GetCrossRefIdentifiers(2,CrossReference,EDIRecDocField."Segment Group");
+            IF TradePtnrItem.INSERT THEN;
+          END;
+        'EDI UOM':
+          BEGIN
+            CLEAR(EDITradePartnerUOM);
+            EDITradePartnerUOM."Trade Partner No." := EDIRecDocField."Trade Partner No.";
+            EDITradePartnerUOM."EDI Unit of Measure" := EDIUOM;
+            EDITradePartnerUOM."Navision Item No." := NAVItemNo;
+            EDITradePartnerUOM."Navision Variant Code" := NAVVariantCode;
+            EDITradePartnerUOM.Unassigned := TRUE;
+            EDITradePartnerUOM."EDI Cross Ref. Identifiers" :=
+              GetCrossRefIdentifiers(3,CrossReference,EDIRecDocField."Segment Group");
+            IF EDITradePartnerUOM.INSERT THEN;
+          END;
+      END;
+    END;
+
+    PROCEDURE ShowGeneralCrossReference@1240030000(TradePartnerNo@1240030000 : Code[20]);
+    BEGIN
+      GeneralCrossReference.RESET;
+      GeneralCrossReference.SETCURRENTKEY("Trade Partner","Cross Reference");
+      GeneralCrossReference.SETFILTER("Trade Partner",'%1|%2',TradePartnerNo,'');
+      IF GeneralCrossReference.FIND('-') THEN
+        PAGE.RUNMODAL(PAGE::"E.D.I. General Cross Refs.",GeneralCrossReference)
+      ELSE BEGIN
+        GeneralCrossReference.INIT;
+        PAGE.RUNMODAL(PAGE::"E.D.I. General Cross Refs.",GeneralCrossReference);
+      END;
+    END;
+
+    PROCEDURE EvaluatePurchInvoiceSAC@1000000004(EDIRecDocHdr@1240030000 : Record 14002358) : Boolean;
+    VAR
+      EDIRecDocFld@1000000001 : Record 14002359;
+      CurrentLineNo@1000000004 : Integer;
+      SACFound@1000000003 : Boolean;
+      NewSegment@1000000002 : Boolean;
+      IsAscending@1240020000 : Boolean;
+    BEGIN
+      SACFound := FALSE;
+      NewSegment := FALSE;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+      EDIRecDocField.SETRANGE("Segment Group",0);
+      EDIRecDocField.SETRANGE(Segment,'SAC');
+      EDIRecDocField.SETRANGE("New Segment",TRUE);
+      IF EDIRecDocField.FIND('-') THEN
+        REPEAT
+          SACFound := FALSE;
+          NewSegment := FALSE;
+          CurrentLineNo := EDIRecDocField."Line No.";
+          EDIRecDocFld.RESET;
+          EDIRecDocFld.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+          EDIRecDocFld.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+          EDIRecDocFld.SETRANGE("Segment Group",0);
+          IsAscending := EDIRecDocFld.ASCENDING;
+          IF EDIRecDocFld.FIND('-') THEN
+            REPEAT
+              IF (EDIRecDocFld."Line No." > CurrentLineNo) AND
+                 (EDIRecDocFld."New Segment" = FALSE) THEN
+                   IF (EDIRecDocFld.Segment = 'SAC') AND (EDIRecDocFld.Element = '01') THEN
+                     CASE EDIRecDocFld."Field Text Value" OF
+                       'A','C':
+                         SACFound := TRUE;
+                     ELSE
+                       SACFound := FALSE;
+                     END;
+              IF (EDIRecDocFld."Line No." > CurrentLineNo) AND
+                 (EDIRecDocFld."New Segment") THEN
+                   NewSegment := TRUE;
+            UNTIL (EDIRecDocFld.NEXT = 0) OR (NewSegment = TRUE);
+          IF SACFound THEN BEGIN
+            NewSegment := FALSE;
+            EDIRecDocFld.RESET;
+            EDIRecDocFld.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+            EDIRecDocFld.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+            EDIRecDocFld.SETRANGE("Segment Group",0);
+            IsAscending := EDIRecDocFld.ASCENDING;
+            IF EDIRecDocFld.FIND('-') THEN
+              REPEAT
+                IF (EDIRecDocFld."Line No." > CurrentLineNo) AND
+                   (EDIRecDocFld."New Segment" = FALSE) THEN
+                     IF (EDIRecDocFld.Segment = 'SAC') AND (EDIRecDocFld.Element = '02') THEN BEGIN
+                       CrossRefValue := EDIRecDocFld."Field Text Value";
+                       CrossReference := 10;
+                       EvaluateGeneralCrossReference(EDIRecDocFld);
+                     END;
+                IF (EDIRecDocFld."Line No." > CurrentLineNo) AND
+                   (EDIRecDocFld."New Segment") THEN
+                     NewSegment := TRUE;
+              UNTIL (EDIRecDocFld.NEXT = 0) OR (NewSegment = TRUE);
+          END;
+        UNTIL EDIRecDocField.NEXT = 0;
+    END;
+
+    PROCEDURE PreEvaluateValue@1240020001(CrossReferenceNo@1240020000 : Integer);
+    VAR
+      Location@1240020001 : Record 14;
+    BEGIN
+      CASE CrossReferenceNo OF
+        16,17:
+          BEGIN
+            Location.RESET;
+            Location.SETRANGE(Code,CrossRefValue);
+            Location.SETRANGE("Use As In-Transit",FALSE);
+            IF Location.FIND('-') THEN
+              BypassCrossRefEvaluation := TRUE;
+         END;
+        20:
+          BEGIN
+            Location.RESET;
+            Location.SETRANGE(Code,CrossRefValue);
+            Location.SETRANGE("Use As In-Transit",TRUE);
+            IF Location.FIND('-') THEN
+              BypassCrossRefEvaluation := TRUE;
+          END;
+      END;
+    END;
+
+    PROCEDURE GetSLNSegment@1240020004(LocEDIRecDocHdr@1240020001 : Record 14002358);
+    VAR
+      EDIDocument@1240020004 : Record 14002353;
+      EDISegment@1240020000 : Record 14002354;
+      LocEDIRecDocField@1240020006 : Record 14002359;
+      LocEDIRecDocField2@1240020005 : Record 14002359;
+      Finished@1240020002 : Boolean;
+      ProcessingSubLine@1240020003 : Boolean;
+      SLNGroup@1240020007 : Integer;
+    BEGIN
+      SLNFound := FALSE;
+
+      LocEDIRecDocField.RESET;
+      LocEDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Field Name");
+      LocEDIRecDocField.SETRANGE("Internal Doc. No.",LocEDIRecDocHdr."Internal Doc. No.");
+      LocEDIRecDocField.SETFILTER(Segment,'%1','SLN');
+      IF LocEDIRecDocField.FIND('-') THEN
+      REPEAT
+        IF (LocEDIRecDocField.Trigger) AND
+           (LocEDIRecDocField."NAV Table No." <> DATABASE::"Sales Comment Line")
+        THEN BEGIN
+          SLNFound := TRUE;
+          SLNSegmentID := 'SLN'
+        END;
+      UNTIL (LocEDIRecDocField.NEXT = 0) OR (SLNFound = TRUE);
+      IF SLNFound = FALSE THEN BEGIN
+        Finished := FALSE;
+        EDISegment.SETRANGE("Trade Partner No.",LocEDIRecDocHdr."Trade Partner No.");
+        EDISegment.SETRANGE("Navision Document",LocEDIRecDocHdr."Navision Document");
+        EDISegment.SETRANGE("EDI Document No.",LocEDIRecDocHdr."EDI Document No.");
+        EDISegment.SETRANGE(Version,LocEDIRecDocHdr."EDI Version");
+        EDISegment.SETRANGE(Type,EDIDocument.Type::Import);
+        IF EDISegment.FIND('-') THEN BEGIN
+          REPEAT
+            CASE EDISegment."Segment Type" OF
+              EDISegment."Segment Type"::Command:
+                BEGIN
+                  IF EDISegment.Segment = 'SUB LINE BEGIN' THEN
+                    ProcessingSubLine := TRUE;
+                  IF EDISegment.Segment = 'SUB LINE END' THEN
+                    Finished := TRUE;
+                END;
+              EDISegment."Segment Type"::Segment:
+                BEGIN
+                  IF ProcessingSubLine THEN BEGIN
+                    LocEDIRecDocField.RESET;
+                    LocEDIRecDocField.SETCURRENTKEY("Internal Doc. No.","Field Name");
+                    LocEDIRecDocField.SETRANGE("Internal Doc. No.",LocEDIRecDocHdr."Internal Doc. No.");
+                    LocEDIRecDocField.SETRANGE(Segment,EDISegment.Segment);
+                    IF LocEDIRecDocField.FIND('-') THEN
+                      REPEAT
+                        IF (LocEDIRecDocField.Trigger) AND
+                           (LocEDIRecDocField."NAV Table No." <> DATABASE::"Sales Comment Line")
+                        THEN BEGIN
+                          SLNFound := TRUE;
+                          SLNSegmentID := EDISegment.Segment;
+                        END;
+                      UNTIL (LocEDIRecDocField.NEXT = 0) OR (SLNFound = TRUE);
+                  END;
+                END;
+            END;
+          UNTIL (EDISegment.NEXT= 0) OR (Finished);
+        END;
+      END;
+      IF SLNFound THEN BEGIN
+        LocEDIRecDocField2.RESET;
+        LocEDIRecDocField2.SETCURRENTKEY("Internal Doc. No.","Segment Group");
+        LocEDIRecDocField2.SETRANGE("Internal Doc. No.",LocEDIRecDocHdr."Internal Doc. No.");
+        LocEDIRecDocField2.SETRANGE("Segment Group",LocEDIRecDocField."Segment Group");
+        LocEDIRecDocField2.SETRANGE(Segment,SLNSegmentID);
+        IF LocEDIRecDocField2.FIND('-') THEN BEGIN
+          SLNGroup := 0;
+          REPEAT
+            IF (LocEDIRecDocField2."New Segment") AND
+               (LocEDIRecDocField2.Segment = SLNSegmentID)
+            THEN
+              SLNGroup := SLNGroup + 1;
+            LocEDIRecDocField2."SLN Group" := SLNGroup;
+            LocEDIRecDocField2.MODIFY;
+          UNTIL LocEDIRecDocField2.NEXT = 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE SetMfrRep@1000000000(pCustTPID@1000000000 : Code[20]);
+    BEGIN
+      GlobCust_TPID := pCustTPID; //TPZ1947
+    END;
+
+    PROCEDURE GetCrossRefIdentifiers@1240020000(IdentifierType@1240020000 : ' ,Cust,Item,UOM,Shipping Agent,Payment Terms,Shipping Payment Type,Shipment Method,Shipping Advice,Return Reason';CrossReferenceNo@1240020002 : Integer;SegmentGroup@1240020005 : Integer) Identifiers : Text[250];
+    VAR
+      EDIRecDocField2@1240020001 : Record 14002359;
+      EDIRecDocField3@1240020003 : Record 14002359;
+      Separator@1240020004 : Code[3];
+      SDQCodes@1240020006 : ARRAY [100] OF Code[20];
+      SetIdentifier@1240020007 : Boolean;
+    BEGIN
+      CLEAR(Identifiers);
+
+      CASE IdentifierType OF
+        0:
+          BEGIN
+            CASE CrossReferenceNo OF
+              1,29:
+                IdentifierType := IdentifierType::"Shipping Agent";
+              2,7:
+                IdentifierType := IdentifierType::"Payment Terms";
+              3,5:
+                IdentifierType := IdentifierType::"Shipment Method";
+              4,9,22:
+                IdentifierType := IdentifierType::"Shipping Payment Type";
+              13:
+                IdentifierType := IdentifierType::"Shipping Advice";
+              14,15:
+                IdentifierType := IdentifierType::"Return Reason";
+            END;
+          END;
+      END;
+      IF IdentifierType <> 0 THEN BEGIN
+        EDIRecDocField2.RESET;
+        EDIRecDocField2.SETRANGE("Internal Doc. No.",EDIRecDocField."Internal Doc. No.");
+        EDIRecDocField2.SETRANGE("Cross Reference ID Type",IdentifierType);
+        EDIRecDocField2.SETFILTER("Segment Group",'%1|%2',0,SegmentGroup);
+        IF EDIRecDocField2.FIND('-') THEN BEGIN
+          REPEAT
+            SetIdentifier := FALSE;
+            IF (STRPOS(Identifiers,EDIRecDocField2."Field Text Value") <> 0) OR
+               (EDIRecDocField2."Field Text Value" = '')
+            THEN
+              SetIdentifier := FALSE
+            ELSE
+              SetIdentifier := TRUE;
+            IF SetIdentifier THEN BEGIN
+              CASE EDIRecDocField2."Separator Type" OF
+                EDIRecDocField2."Separator Type"::" ",EDIRecDocField2."Separator Type"::Space:
+                  Identifiers := Identifiers + EDIRecDocField2."Field Text Value" + ' ';
+                EDIRecDocField2."Separator Type"::Hyphen:
+                  Identifiers := Identifiers + EDIRecDocField2."Field Text Value" + '-';
+              END;
+            END;
+          UNTIL EDIRecDocField2.NEXT = 0;
+          Identifiers := DELCHR(Identifiers,'>',' ');
+          Identifiers := DELCHR(Identifiers,'>','-');
+          IF STRLEN(Identifiers) > 250 THEN
+            Identifiers := COPYSTR(Identifiers,1,250);
+        END;
+      END;
+
+      EXIT(Identifiers);
+    END;
+
+    BEGIN
+    {
+      TPZ1965 20170718 SDESAI - Correction for Gen. Cross Ref. for Shipping Agent Code
+                                at Purchase Line Level.
+            //
+      LS001 JH 12/13/17 - Add logic to create EDI Cust Cross Ref for fixed file trade partners if possible
+      TPZ1965 20170718 SDESAI - Correction for Gen. Cross Ref. for Shipping Agent Code at Purchase Line Level.
+      TPZ2977 20200611 UCHOUHAN - Added code for Casey (CA) Trade Partner.
+    }
+    END.
+  }
+}
+

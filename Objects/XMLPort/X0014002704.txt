@@ -1,0 +1,188 @@
+OBJECT XMLport 14002704 Export Usage Led. Entry
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/27/19;
+    Time=12:00:00 PM;
+    Version List=UBP3.00;
+  }
+  PROPERTIES
+  {
+    Direction=Export;
+    Encoding=UTF-8;
+    OnPreXMLport=BEGIN
+                   ProcessStart := CURRENTDATETIME;
+                   InvMgt.CreateLogEntry('', ImportText,LogEntryNo);
+
+                   UsageLedgerEntry.SETFILTER("Entry No.",'<%1',0);
+                   IF UsageLedgerEntry.FIND('+') THEN
+                     EntryNo := UsageLedgerEntry."Entry No."
+                   ELSE
+                     EntryNo := -1000000000;
+                   UsageLedgerEntry.RESET;
+
+                   UBPLog.RESET;
+                   IF UBPLog.FIND('+') THEN
+                     LastEntryNo := UBPLog."Entry No.";
+                 END;
+
+    OnPostXMLport=BEGIN
+                    ProcessStop := CURRENTDATETIME;
+                    ProcessDuration := ROUND((ProcessStop - ProcessStart), 1000);
+                    InvMgt.CloseLogEntry(LogEntryNo, STRSUBSTNO(CloseLogText, ProcessDuration));
+                    IF SkippedEntries > 0 THEN BEGIN
+                      COMMIT;
+                      MESSAGE('See Processing Log - Entries Skipped - No Item No. #1#######',SkippedEntries);
+                    END;
+                  END;
+
+    Format=Variable Text;
+    UseRequestPage=No;
+  }
+  ELEMENTS
+  {
+    { [{5E7A0905-D9C2-426B-9752-99DADF249B85}];  ;Root                ;Element ;Text     }
+
+    { [{78F5D5DB-0026-4157-A330-D1E4E3F74C25}];1 ;UsageLedgerEntryImp ;Element ;Table   ;
+                                                  SourceTable=Table14000556;
+                                                  AutoSave=No;
+                                                  Import::OnBeforeInsertRecord=VAR
+                                                                                 Location@1240020000 : Record 14;
+                                                                               BEGIN
+                                                                                 IF Location.Code <> "Usage Ledger Entry"."Location Code" THEN
+                                                                                   IF Location.GET("Usage Ledger Entry"."Location Code") THEN
+                                                                                     IF NOT Location."Enable Adv. Forecasting" THEN
+                                                                                       currXMLport.SKIP;
+
+                                                                                 // Commit every 10,000 records
+                                                                                 RecCounter := RecCounter + 1;
+                                                                                 IF RecCounter MOD 10000 = 0 THEN
+                                                                                   COMMIT;
+                                                                                 // Remove remarks to exclude entries where an Item does not exist
+                                                                                 IF NOT Item.GET("Usage Ledger Entry"."Item No.") THEN BEGIN
+                                                                                   IF "Usage Ledger Entry"."Item No." <> UBPLog."Log Description" THEN BEGIN
+                                                                                     LastEntryNo := LastEntryNo + 1;
+                                                                                     UBPLog."Entry No." := LastEntryNo;
+                                                                                     UBPLog."Log Date" := TODAY;
+                                                                                     UBPLog."Start Time" := TIME;
+                                                                                     UBPLog."Log Description" := "Usage Ledger Entry"."Item No." + ' -- ' + FORMAT("Usage Ledger Entry"."Usage Date");
+                                                                                     UBPLog."Location Code" := "Usage Ledger Entry"."Location Code";
+                                                                                     UBPLog.Error := TRUE;
+                                                                                     UBPLog.INSERT;
+                                                                                   END;
+                                                                                   SkippedEntries := SkippedEntries + 1;
+                                                                                   currXMLport.SKIP;
+                                                                                 END;
+                                                                                 //
+
+                                                                                 EntryNo := EntryNo + 1;
+                                                                                 "Usage Ledger Entry"."Entry No." := EntryNo;
+                                                                                 "Usage Ledger Entry"."Entry Type" := "Usage Ledger Entry"."Entry Type"::Sale;
+                                                                                 "Usage Ledger Entry"."Posting Date" := "Usage Ledger Entry"."Usage Date";
+                                                                                 "Usage Ledger Entry"."Posted at Date" := "Usage Ledger Entry"."Usage Date";
+                                                                                 "Usage Ledger Entry"."Document No." := 'IMP' + FORMAT(EntryNo);
+                                                                                 "Usage Ledger Entry".Description := "Usage Ledger Entry"."Item No." + ' Item';
+                                                                                 "Usage Ledger Entry"."Document Date" := "Usage Ledger Entry"."Usage Date";
+                                                                                 "Usage Ledger Entry"."Qty. per Unit of Measure" := 1;
+                                                                                 "Usage Ledger Entry"."Unit of Measure Code" := Item."Base Unit of Measure";;
+                                                                                 "Usage Ledger Entry"."First Shipment" := TRUE;
+                                                                                 "Usage Ledger Entry"."Requested Delivery Date" := "Usage Ledger Entry"."Usage Date";
+                                                                                 "Usage Ledger Entry"."Usage Hit" := 1;
+                                                                                 "Usage Ledger Entry"."Original Source No." := "Usage Ledger Entry"."Source No.";
+                                                                                 "Usage Ledger Entry"."Original Location Code" := "Usage Ledger Entry"."Location Code";
+                                                                                 "Usage Ledger Entry"."Original Item No." := "Usage Ledger Entry"."Item No.";
+                                                                                 "Usage Ledger Entry"."Original Variant Code" := "Usage Ledger Entry"."Variant Code";
+                                                                                 //
+                                                                                 // Sales Entries should be a negative quantity.  If the data being imported is positive then the
+                                                                                 // following line should be used to set quantity to a negative.
+                                                                                 //
+                                                                                 //"Usage Ledger Entry".Quantity := "Usage Ledger Entry".Quantity * -1;
+                                                                                 //
+                                                                                 "Usage Ledger Entry".INSERT;
+
+                                                                                 IF NOT ProcUnit.GET(
+                                                                                          "Usage Ledger Entry"."Location Code",
+                                                                                          "Usage Ledger Entry"."Item No.",
+                                                                                          "Usage Ledger Entry"."Variant Code") THEN BEGIN
+                                                                                   ProcUnit.INIT;
+                                                                                   ProcUnit."Location Code" := "Usage Ledger Entry"."Location Code";
+                                                                                   ProcUnit."Item No." := "Usage Ledger Entry"."Item No.";
+                                                                                   ProcUnit."Variant Code" := "Usage Ledger Entry"."Variant Code";
+                                                                                   ProcUnit.INSERT(TRUE);
+                                                                                 END;
+                                                                               END;
+                                                                                }
+
+    { [{06132236-173B-441B-BCB0-582A54E8FC8E}];2 ;LocationCode        ;Element ;Field   ;
+                                                  DataType=Code;
+                                                  FieldValidate=No;
+                                                  AutoCalcField=No;
+                                                  SourceField=Usage Ledger Entry::Location Code }
+
+    { [{0A1E907A-DAC0-4EA6-9177-5A5757D094A7}];2 ;SourceNo            ;Element ;Field   ;
+                                                  DataType=Code;
+                                                  FieldValidate=No;
+                                                  AutoCalcField=No;
+                                                  SourceField=Usage Ledger Entry::Source No. }
+
+    { [{703D853A-B94C-4B9E-BDE3-3D80D092DC18}];2 ;ItemNo              ;Element ;Field   ;
+                                                  DataType=Code;
+                                                  FieldValidate=No;
+                                                  AutoCalcField=No;
+                                                  SourceField=Usage Ledger Entry::Item No. }
+
+    { [{C76BA06B-20EC-4706-9155-4F15E8B20158}];2 ;VariantCode         ;Element ;Field   ;
+                                                  DataType=Code;
+                                                  FieldValidate=No;
+                                                  AutoCalcField=No;
+                                                  SourceField=Usage Ledger Entry::Variant Code }
+
+    { [{EB97F39C-02FA-4281-8AA9-95E44E105C5B}];2 ;Quantity            ;Element ;Field   ;
+                                                  DataType=Decimal;
+                                                  FieldValidate=No;
+                                                  AutoCalcField=No;
+                                                  SourceField=Usage Ledger Entry::Quantity }
+
+    { [{4DD2C209-1034-4508-8D3D-8763F187E1AC}];2 ;UsageDate           ;Element ;Field   ;
+                                                  DataType=Date;
+                                                  FieldValidate=No;
+                                                  AutoCalcField=No;
+                                                  SourceField=Usage Ledger Entry::Usage Date }
+
+  }
+  EVENTS
+  {
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  CODE
+  {
+    VAR
+      Item@1006 : Record 27;
+      ProcUnit@1007 : Record 14000555;
+      UsageLedgerEntry@1000 : Record 14000556;
+      UBPLog@1002 : Record 14000574;
+      EntryNo@1001 : Integer;
+      LastEntryNo@1003 : Integer;
+      RecCounter@1005 : Integer;
+      SkippedEntries@1004 : Integer;
+      ProcessStart@1240020004 : DateTime;
+      InvMgt@1240020003 : Codeunit 14000553;
+      LogEntryNo@1240020002 : Integer;
+      ProcessStop@1240020001 : DateTime;
+      ProcessDuration@1240020000 : Duration;
+      ImportText@1240020005 : TextConst 'ENU=Import Historical data';
+      CloseLogText@1240020006 : TextConst 'ENU=%1';
+
+    BEGIN
+    END.
+  }
+}
+

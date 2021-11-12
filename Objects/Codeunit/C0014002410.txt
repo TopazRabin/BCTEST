@@ -1,0 +1,1200 @@
+OBJECT Codeunit 14002410 E.D.I. Receive Invt. Advice
+{
+  OBJECT-PROPERTIES
+  {
+    Date=07/13/20;
+    Time=12:00:00 PM;
+    Version List=SE0.62;
+  }
+  PROPERTIES
+  {
+    TableNo=14002358;
+    OnRun=VAR
+            Item@1240020000 : Record 27;
+            LineNo@1240020001 : Integer;
+            JournalQty@1240020003 : Decimal;
+            ItemBaseUOM@1240020004 : Code[10];
+            NoSeries@1240020005 : Code[10];
+            PositiveAdj@1240020006 : Boolean;
+          BEGIN
+            IF ("Navision Document" <> 'I_INVRPT') AND
+               ("Navision Document" <> 'I_INVADJ')
+            THEN
+              ERROR(Text001,"Navision Document");
+
+            IF "Company Name" <> COMPANYNAME THEN
+              ERROR(
+                Text002,
+                "Internal Doc. No.","Company Name",COMPANYNAME);
+
+            EDIRecDocHdr2.GET("Internal Doc. No.");
+
+            IF "Inventory Advice Processed" THEN BEGIN
+              IF GUIALLOWED THEN BEGIN
+                IF NOT CONFIRM(
+                  Text003 +
+                  Text004)
+                THEN
+                  ERROR(Text005)
+              END ELSE
+                ERROR(Text005);
+            END;
+
+            EDIRecDocHdr2."Suggested Journal Created" := FALSE;
+
+            EDITradePartner.GET("Trade Partner No.");
+            EDITemplate.GET(EDIRecDocHdr2."EDI Template Code");
+            EDISetup.GET;
+
+            EDIDocument.GET(
+              EDIRecDocHdr2."Trade Partner No.",EDIRecDocHdr2."Navision Document",
+              EDIRecDocHdr2."EDI Document No.",EDIRecDocHdr2."EDI Version",EDIDocument.Type::Import);
+
+            GetLocation(EDIRecDocHdr2);
+
+            IF EDIRecDocHdr2."Navision Document" = 'I_INVADJ' THEN BEGIN
+              AdjustmentAdvice := TRUE;
+              InventoryAdvice := FALSE;
+            END ELSE BEGIN
+              AdjustmentAdvice := FALSE;
+              InventoryAdvice := TRUE;
+            END;
+
+            MapGenCrossRef := FALSE;
+            EvaluateGenCrossRef := FALSE;
+
+            IF (EDISetup."Enable General Cross Ref.") THEN BEGIN
+              IF (EDITradePartner."Disable General Cross Ref.") THEN
+                EvaluateGenCrossRef := FALSE
+              ELSE BEGIN
+                MapGenCrossRef := TRUE;
+                IF (EDISetup."Eval. XRef at Doc. Import") THEN BEGIN
+                  IF EDIRecDocHdr2."Gen. XRef Processed On Import" = FALSE THEN
+                    EvaluateGenCrossRef := TRUE
+                END ELSE
+                  EvaluateGenCrossRef := TRUE;
+                IF EvaluateGenCrossRef THEN BEGIN
+                  CLEAR(EvaluateCrossReference);
+                  EvaluateCrossReference.AssignNAVCrossReference(EDIRecDocHdr2);
+                END;
+              END;
+            END ELSE
+                EvaluateGenCrossRef := FALSE;
+
+            CrossReferenceError := FALSE;
+            IF EvaluateGenCrossRef THEN BEGIN
+              EDIRecDocHdr2.CALCFIELDS("General Cross Reference Error");
+              IF (EDIRecDocHdr2."General Cross Reference Error") THEN
+                CrossReferenceError := TRUE;
+            END;
+            IF CrossReferenceError THEN
+              ERROR(Text007);
+
+            LINAndTriggerCheck(EDIRecDocHdr2);
+
+            SegmentGroup := 0;
+            PrevSegmentGroup := 0;
+
+            NoSeriesLine.LOCKTABLE;
+            EDIInventoryAdviceHdr.LOCKTABLE;
+            EDIInventoryAdviceLine.LOCKTABLE;
+
+            EDIInventoryAdviceHdr.INIT;
+            CLEAR(EDIInventoryAdviceHdr);
+
+            EDIInventoryAdviceHdr."No." := '';
+            IF InventoryAdvice THEN
+              EDIInventoryAdviceHdr.VALIDATE(Type,EDIInventoryAdviceHdr.Type::Location)
+            ELSE
+              EDIInventoryAdviceHdr.VALIDATE(Type,EDIInventoryAdviceHdr.Type::Adjustment);
+            EDIInventoryAdviceHdr.VALIDATE("Location Code",Location.Code);
+            EDIInventoryAdviceHdr."EDI Internal Doc. No." := EDIRecDocHdr2."Internal Doc. No.";
+            EDIInventoryAdviceHdr."Trade Partner No." := EDIRecDocHdr2."Trade Partner No.";
+            EDIInventoryAdviceHdr.INSERT(TRUE);
+
+            EDIRecDocField.RESET;
+            EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+            EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            EDIRecDocField.SETRANGE("NAV Table No.",DATABASE::"E.D.I. Inventory Advice Header");
+            EDIRecDocField.SETRANGE("Nav Field No.",EDIInventoryAdviceHdr.FIELDNO("Buy-from Vendor No."));
+            IF EDIRecDocField.FIND('-') THEN
+              EDIInventoryAdviceHdr.VALIDATE("Buy-from Vendor No.",EDIRecDocField."Field Text Value");
+
+            MapInventoryAdviceHdrFields;
+            EDIInventoryAdviceHdr.MODIFY;
+
+            LastItemNo := '';
+            LastQty := 0;
+            LastQtyAvailForSale := 0;
+            LastCommittedQty := 0;
+            LastDamagedQty := 0;
+            LastQtyOnHold := 0;
+            LastEDIUOM := '';
+            DocumentNo := '';
+            LastLotNo := '';
+            LastSerialNo := '';
+            LastEDICode := '';
+            LastExpirationDate := 0D;
+            LastWarrantyDate:= 0D;
+            DocumentDate := 0D;
+            PostingDate := 0D;
+            ItemJnlLineFound := FALSE;
+            ZeroAvailableQty := FALSE;
+            ZeroOnHoldQty := FALSE;
+            ZeroDamagedQty := FALSE;
+
+            EDIRecDocField.RESET;
+            EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+            EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            EDIRecDocField.SETRANGE(EDIRecDocField."NAV Table No.",DATABASE::"Item Journal Line");
+            EDIRecDocField.SETRANGE(EDIRecDocField."Nav Field No.",ItemJnlLine.FIELDNO("Document Date"));
+            IF EDIRecDocField.FIND('-') THEN
+              DocumentDate := EDIRecDocField."Field Date Value"
+            ELSE
+              DocumentDate := TODAY;
+
+            LastDetailSeg := FALSE;
+
+            EDIRecDocField.RESET;
+            EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            EDIRecDocField.SETFILTER("Segment Group",'<>0');
+            IF EDIRecDocField.FIND('-') THEN BEGIN
+              IF EDIRecDocField."Segment Group" <> PrevSegmentGroup THEN
+                PrevSegmentGroup := EDIRecDocField."Segment Group";
+              REPEAT
+                EDIRecDocField2.COPY(EDIRecDocField);
+                IF EDIRecDocField2.NEXT = 0 THEN
+                  LastDetailSeg := TRUE
+                ELSE
+                  LastDetailSeg := FALSE;
+                SegmentGroup := EDIRecDocField."Segment Group";
+                IF (LINFound AND TriggerFound AND EDIRecDocField.Trigger) = FALSE THEN BEGIN
+                  IF EDIRecDocField."Segment Group" <> PrevSegmentGroup THEN BEGIN
+                    PrevSegmentGroup := EDIRecDocField."Segment Group";
+                    IF NOT LastDetailSeg THEN
+                      CreateInventoryAdvice;
+                  END;
+                END;
+                IF EDIRecDocField."Nav Field No." = EDIInventoryAdviceLine.FIELDNO("No.") THEN
+                  LastItemNo := EDIRecDocField."Field Text Value";
+                IF EDIRecDocField."Nav Field No." = EDIInventoryAdviceLine.FIELDNO("Quantity On Hand") THEN BEGIN
+                   LastQty := EDIRecDocField."Field Dec. Value";
+                   IF LastQty = 0 THEN
+                     ZeroAvailableQty := TRUE
+                   ELSE
+                     ZeroAvailableQty := FALSE;
+                END;
+                IF EDIRecDocField."Nav Field No." = EDIInventoryAdviceLine.FIELDNO("Quantity On Hold") THEN BEGIN
+                  LastQtyOnHold := EDIRecDocField."Field Dec. Value";
+                  IF LastQtyOnHold = 0 THEN
+                    ZeroOnHoldQty := TRUE
+                  ELSE
+                    ZeroOnHoldQty := FALSE;
+                END;
+                IF EDIRecDocField."Nav Field No." =
+                  EDIInventoryAdviceLine.FIELDNO("Unit of Measure Code") THEN
+                  LastEDIUOM := EDIRecDocField."Field Text Value";
+                IF EDIRecDocField."Nav Field No." =
+                  EDIInventoryAdviceLine.FIELDNO("Quantity Available for Sale")
+                THEN
+                  LastQtyAvailForSale := EDIRecDocField."Field Dec. Value";
+                IF EDIRecDocField."Nav Field No." =
+                  EDIInventoryAdviceLine.FIELDNO("Committed Quantity")
+                THEN
+                  LastCommittedQty := EDIRecDocField."Field Dec. Value";
+                IF EDIRecDocField."Nav Field No." = EDIInventoryAdviceLine.FIELDNO("Damaged Quantity") THEN BEGIN
+                  LastDamagedQty := EDIRecDocField."Field Dec. Value";
+                  IF LastDamagedQty = 0 THEN
+                    ZeroDamagedQty := TRUE
+                  ELSE
+                    ZeroDamagedQty := FALSE;
+                END;
+                IF EDIRecDocField."Nav Field No." =
+                  EDIInventoryAdviceLine.FIELDNO("Adjustment Quantity") THEN
+                    LastAdjustmentQty := EDIRecDocField."Field Dec. Value";
+                IF EDIRecDocField."Nav Field No." = EDIInventoryAdviceLine.FIELDNO("Lot No.") THEN
+                  LastLotNo := EDIRecDocField."Field Text Value";
+                IF EDIRecDocField."Nav Field No." = EDIInventoryAdviceLine.FIELDNO("Serial No.") THEN
+                  LastSerialNo := EDIRecDocField."Field Text Value";
+                IF EDIRecDocField."Nav Field No." = EDIInventoryAdviceLine.FIELDNO("Expiration Date") THEN
+                  LastExpirationDate := EDIRecDocField."Field Date Value";
+                IF EDIRecDocField."Nav Field No." = EDIInventoryAdviceLine.FIELDNO("Warranty Date") THEN
+                  LastWarrantyDate := EDIRecDocField."Field Date Value";
+                IF EDIRecDocField."Nav Field No." = EDIInventoryAdviceLine.FIELDNO("EDI Reason Code") THEN
+                  LastEDICode := EDIRecDocField."Field Text Value";
+                IF LastDetailSeg THEN BEGIN
+                  IF LINFound AND TriggerFound AND EDIRecDocField.Trigger THEN
+                    CreateInventoryAdvice
+                  ELSE
+                    IF ((EDIRecDocField."Segment Group" = PrevSegmentGroup) AND (LastDetailSeg)) THEN
+                      CreateInventoryAdvice;
+                END ELSE BEGIN
+                  IF LINFound AND TriggerFound AND EDIRecDocField.Trigger THEN
+                    CreateInventoryAdvice;
+                END;
+              UNTIL EDIRecDocField.NEXT = 0;
+            END;
+
+            CreateSuggestedJnl := EDITemplate."Create Suggested Item Journal";
+            IF CreateSuggestedJnl THEN
+              CreateItemJournal(EDIInventoryAdviceHdr,FALSE);
+
+            EDIRecDocHdr2."Inventory Advice Posting Date" := PostingDate;
+            EDIRecDocHdr2."Inventory Advice Document No." := DocumentNo;
+            EDIRecDocHdr2."Inventory Advice Processed" := TRUE;
+            EDIRecDocHdr2."Inventory Advice Process Date" := TODAY;
+            EDIRecDocHdr2."Inventory Advice Process Time" := TIME;
+            EDIRecDocHdr2."Data Error" := FALSE;
+            IF SuggestedJournalCreated THEN
+              EDIRecDocHdr2."Suggested Journal Created" := TRUE;
+            EDIRecDocHdr2."Document Processed" := TRUE;
+            EDIRecDocHdr2.MODIFY;
+
+            COMMIT;
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      EDIRecDocHdr2@1240020000 : Record 14002358;
+      EDIRecDocField@1240020001 : Record 14002359;
+      EDIRecDocField2@1240020002 : Record 14002359;
+      EDIDocument@1240020003 : Record 14002353;
+      EDISetup@1240020004 : Record 14002367;
+      EDITemplate@1240020005 : Record 14002350;
+      EDITradePartner@1240020006 : Record 14002360;
+      EDIInventoryAdviceHdr@1240020038 : Record 14002413;
+      EDIInventoryAdviceLine@1240020039 : Record 14002414;
+      Location@1240020007 : Record 14;
+      ItemJnlTemplate@1240020008 : Record 82;
+      ItemJnlBatch@1240020009 : Record 233;
+      ItemJnlLine@1240020037 : Record 83;
+      TradePartnerUnitOfMeasure@1240020010 : Record 14002365;
+      ItemUnitOfMeasure@1240020011 : Record 5404;
+      NoSeriesLine@1240020040 : Record 309;
+      EDIStatusCode@1240020069 : Record 14002406;
+      ReservationEntry@1240020076 : Record 337;
+      NoSeriesMgt@1240020012 : Codeunit 396;
+      EvaluateCrossReference@1240020047 : Codeunit 14000380;
+      LastEDICode@1240020068 : Code[10];
+      LastItemNo@1240020013 : Code[20];
+      LastEDIUOM@1240020014 : Code[10];
+      DocumentNo@1240020015 : Code[30];
+      LastLotNo@1240020057 : Code[20];
+      LastSerialNo@1240020058 : Code[20];
+      DamagedLocation@1240020066 : Code[10];
+      OnHoldLocation@1240020067 : Code[10];
+      LastQty@1240020016 : Decimal;
+      LastQtyAvailForSale@1240020042 : Decimal;
+      LastDamagedQty@1240020043 : Decimal;
+      NAVDamagedQty@1240020062 : Decimal;
+      LastQtyOnHold@1240020044 : Decimal;
+      NAVOnHoldQty@1240020064 : Decimal;
+      JournalOnHoldQty@1240020065 : Decimal;
+      LastCommittedQty@1240020045 : Decimal;
+      LastAdjustmentQty@1240020029 : Decimal;
+      JournalDamagedQty@1240020063 : Decimal;
+      DocumentDate@1240020017 : Date;
+      EDIUOMCrossRefFound@1240020022 : Boolean;
+      ItemJnlLineFound@1240020021 : Boolean;
+      SuggestedJournalCreated@1240020020 : Boolean;
+      EvaluateGenCrossRef@1240020046 : Boolean;
+      CrossReferenceError@1240020048 : Boolean;
+      LastDetailSeg@1240020051 : Boolean;
+      CreateSuggestedJnl@1240020052 : Boolean;
+      IncrementSegGroup@1240020061 : Boolean;
+      PostingDate@1240020018 : Date;
+      LastExpirationDate@1240020059 : Date;
+      LastWarrantyDate@1240020060 : Date;
+      PrevSegmentGroup@1240020049 : Integer;
+      SegmentGroup@1240020050 : Integer;
+      DispWindow@1240020019 : Dialog;
+      Text001@1240020023 : TextConst 'ENU=EDI Navision Document %1 does not match this function.';
+      Text002@1240020024 : TextConst 'ENU=The receive document %1 is for company %2. You are currently in company %3.';
+      Text003@1240020025 : TextConst 'ENU=Item Journal entry has been created.\';
+      Text004@1240020026 : TextConst 'ENU=Do you want to create again?';
+      Text005@1240020027 : TextConst 'ENU=Item Journal not created.';
+      Text006@1240020028 : TextConst 'ENU=Location for Trade Partner %1 not found.';
+      Text007@1240020031 : TextConst 'ENU=EDI Cross references are not setup. \Check Receive Document for details.';
+      Text009@1240020030 : TextConst 'ENU=Navision Unit of Measure %1 can not be found for item %2.';
+      Text010@1240020032 : TextConst 'ENU=Creating Item Journal Line';
+      Text011@1240020033 : TextConst 'ENU="Trading Partner      "';
+      Text012@1240020034 : TextConst 'ENU="Internal Doc No.    "';
+      Text013@1240020041 : TextConst 'ENU=Location';
+      Text014@1240020035 : TextConst 'ENU="Item No.              "';
+      Text015@1240020036 : TextConst 'ENU="Quantity  "';
+      Text016@1240020053 : TextConst 'ENU=Suggested Item Journal has been created.';
+      Text017@1240020054 : TextConst 'ENU=Do you want to create again? Current Suggested Item Journal will be deleted.';
+      Text018@1240020055 : TextConst 'ENU=Suggested Item Journal not created.';
+      Text019@1001 : TextConst 'ENU=Suggested Item Journal not available';
+      LastAdjustmentDesc@1240020056 : Text[50];
+      ItemJnlBatchName@1240020070 : Code[10];
+      AdjustmentAdvice@1240020071 : Boolean;
+      InventoryAdvice@1240020072 : Boolean;
+      Text020@1240020073 : TextConst 'ENU=Item Journal for Receive Document %1 has been posted. Create suggested journal request cancelled.';
+      MapGenCrossRef@1240020074 : Boolean;
+      ZeroAvailableQty@1240020075 : Boolean;
+      ZeroOnHoldQty@1240020077 : Boolean;
+      ZeroDamagedQty@1240020078 : Boolean;
+      LINFound@1240020079 : Boolean;
+      TriggerFound@1240020080 : Boolean;
+
+    PROCEDURE CreateInventoryAdvice@1240020002();
+    VAR
+      Item@1240020002 : Record 27;
+      ItemBaseUOM@1240020003 : Code[10];
+      LineNo@1240020001 : Integer;
+      AdviceLineNo@1240020000 : Integer;
+    BEGIN
+      AdviceLineNo := 0;
+      EDIUOMCrossRefFound := FALSE;
+
+      Item.GET(LastItemNo);
+
+      IF LastEDIUOM <> '' THEN BEGIN
+        TradePartnerUnitOfMeasure.RESET;
+        TradePartnerUnitOfMeasure.SETCURRENTKEY("Trade Partner No.","EDI Unit of Measure");
+        TradePartnerUnitOfMeasure.SETRANGE("Trade Partner No.",EDIRecDocField."Trade Partner No.");
+        TradePartnerUnitOfMeasure.SETRANGE("EDI Unit of Measure",LastEDIUOM);
+        TradePartnerUnitOfMeasure.SETRANGE("Navision Item No.",Item."No.");
+        IF NOT TradePartnerUnitOfMeasure.FIND('-') THEN
+          TradePartnerUnitOfMeasure.SETRANGE("Navision Item No.",'');
+        IF TradePartnerUnitOfMeasure.FIND('-') THEN BEGIN
+          EDIUOMCrossRefFound := TRUE;
+          IF NOT ItemUnitOfMeasure.GET(
+                   Item."No.",TradePartnerUnitOfMeasure."Navision Unit of Measure")
+          THEN
+            ERROR(
+              Text009,
+              TradePartnerUnitOfMeasure."Navision Unit of Measure",
+              Item."No.")
+        END ELSE BEGIN
+          EDIUOMCrossRefFound := FALSE;
+          ItemUnitOfMeasure.GET(Item."No.",Item."Base Unit of Measure");
+          ItemBaseUOM := Item."Base Unit of Measure";
+        END;
+      END ELSE BEGIN
+        EDIUOMCrossRefFound := FALSE;
+        ItemUnitOfMeasure.GET(Item."No.",Item."Base Unit of Measure");
+        ItemBaseUOM := Item."Base Unit of Measure";
+      END;
+
+      EDIStatusCode.RESET;
+      EDIStatusCode.SETRANGE("Trade Partner No.",EDIRecDocHdr2."Trade Partner No.");
+      EDIStatusCode.SETRANGE(Line,TRUE);
+      EDIStatusCode.SETFILTER(Code,LastEDICode);
+      EDIStatusCode.SETRANGE("EDI Document No.",EDIRecDocHdr2."EDI Document No.");
+      IF EDIStatusCode.FIND('-') THEN
+        LastAdjustmentDesc := EDIStatusCode.Description;
+
+      EDIInventoryAdviceLine.RESET;
+      EDIInventoryAdviceLine.SETRANGE(Type,EDIInventoryAdviceHdr.Type);
+      EDIInventoryAdviceLine.SETRANGE("Inventory Advice No.",EDIInventoryAdviceHdr."No.");
+      IF EDIInventoryAdviceLine.FIND('+') THEN
+        AdviceLineNo := 10000 + EDIInventoryAdviceLine."Line No."
+      ELSE
+        AdviceLineNo := 10000;
+
+      EDIInventoryAdviceLine."Line No." := AdviceLineNo;
+      EDIInventoryAdviceLine.VALIDATE("Inventory Advice No.",EDIInventoryAdviceHdr."No.");
+      EDIInventoryAdviceLine.VALIDATE(Type,EDIInventoryAdviceHdr.Type);
+      EDIInventoryAdviceLine.VALIDATE("No.",Item."No.");
+      IF LastSerialNo <> '' THEN
+        EDIInventoryAdviceLine.VALIDATE("Quantity On Hand",1)
+      ELSE
+        EDIInventoryAdviceLine.VALIDATE("Quantity On Hand",LastQty);
+      IF EDIUOMCrossRefFound THEN
+        EDIInventoryAdviceLine.VALIDATE(
+          "Unit of Measure Code",TradePartnerUnitOfMeasure."Navision Unit of Measure")
+      ELSE
+        EDIInventoryAdviceLine.VALIDATE("Unit of Measure Code",Item."Base Unit of Measure");
+      EDIInventoryAdviceLine."Quantity Available for Sale" := LastQtyAvailForSale;
+      EDIInventoryAdviceLine."Damaged Quantity" := LastDamagedQty;
+      EDIInventoryAdviceLine."Committed Quantity" := LastCommittedQty;
+      EDIInventoryAdviceLine."Quantity On Hold" := LastQtyOnHold;
+      EDIInventoryAdviceLine."Lot No." := LastLotNo;
+      EDIInventoryAdviceLine."Serial No." := LastSerialNo;
+      EDIInventoryAdviceLine."Expiration Date" := LastExpirationDate;
+      EDIInventoryAdviceLine."Warranty Date" := LastWarrantyDate;
+      EDIInventoryAdviceLine."Adjustment Quantity" := LastAdjustmentQty;
+      EDIInventoryAdviceLine."Adjustment Description" := LastAdjustmentDesc;
+      EDIInventoryAdviceLine."EDI Reason Code" := LastEDICode;
+      EDIInventoryAdviceLine."Trade Partner No." := EDIInventoryAdviceHdr."Trade Partner No.";
+      IF ZeroAvailableQty THEN
+        EDIInventoryAdviceLine."Zero Available Qty." := TRUE
+      ELSE
+        EDIInventoryAdviceLine."Zero Available Qty." := FALSE;
+      IF ZeroOnHoldQty THEN
+        EDIInventoryAdviceLine."Zero On Hold Qty." := TRUE
+      ELSE
+        EDIInventoryAdviceLine."Zero On Hold Qty." := FALSE;
+      IF ZeroDamagedQty THEN
+        EDIInventoryAdviceLine."Zero Damaged Qty." := TRUE
+      ELSE
+        EDIInventoryAdviceLine."Zero Damaged Qty." := FALSE;
+      IF AdjustmentAdvice THEN BEGIN
+        IF (LastDamagedQty <> 0) AND (DamagedLocation <> '') THEN BEGIN
+          EDIInventoryAdviceLine.VALIDATE("Location Code",DamagedLocation);
+        END ELSE BEGIN
+          IF (LastQtyOnHold <> 0) AND (OnHoldLocation <> '') THEN BEGIN
+            EDIInventoryAdviceLine.VALIDATE("Location Code",OnHoldLocation);
+          END ELSE BEGIN
+            IF LastAdjustmentQty <> 0 THEN BEGIN
+              EDIInventoryAdviceLine.VALIDATE("Location Code",Location.Code);
+            END;
+          END;
+        END;
+      END;
+      EDIInventoryAdviceLine.INSERT(TRUE);
+      EDIInventoryAdviceLine.MODIFY;
+
+      LastEDIUOM := '';
+      IF (LINFound AND TriggerFound) = FALSE THEN
+        LastItemNo := '';
+      ItemBaseUOM := '';
+      IF (LINFound AND TriggerFound) = FALSE THEN
+        LastLotNo := '';
+      LastSerialNo := '';
+      LastEDICode := '';
+      LastAdjustmentDesc := '';
+      LastExpirationDate := 0D;
+      LastWarrantyDate := 0D;
+      LastQty := 0;
+      LastQtyAvailForSale := 0;
+      LastCommittedQty := 0;
+      LastDamagedQty := 0;
+      LastQtyOnHold := 0;
+      LastAdjustmentQty := 0;
+      ZeroAvailableQty := FALSE;
+      ZeroOnHoldQty := FALSE;
+      ZeroDamagedQty := FALSE;
+    END;
+
+    PROCEDURE CreateItemJournal@1240020000(VAR EDIInvtAdviceHdr@1240020008 : Record 14002413;Manual@1240020009 : Boolean);
+    VAR
+      Item@1240020004 : Record 27;
+      ItemJournalBatch2@1240020013 : Record 233;
+      ItemJnlLine2@1240020012 : Record 83;
+      ItemLedgerEntry@1240020015 : Record 32;
+      LineNo@1240020005 : Integer;
+      AdviceLineNo@1240020007 : Integer;
+      NAVItemQty@1240020000 : Decimal;
+      JournalQty@1240020001 : Decimal;
+      ItemBaseUOM@1240020002 : Code[10];
+      NoSeries@1240020006 : Code[10];
+      PositiveAdj@1240020003 : Boolean;
+      DamagedPositiveAdj@1240020016 : Boolean;
+      OnHoldPositiveAdj@1240020017 : Boolean;
+      OpenBatchFound@1240020011 : Boolean;
+      BatchSequence@1240020010 : Code[10];
+      LotNo@1240020014 : Code[20];
+      SerialNo@1240020018 : Code[20];
+      VariantCode@1240020019 : Code[10];
+    BEGIN
+      EDIRecDocHdr2.GET(EDIInvtAdviceHdr."EDI Internal Doc. No.");
+
+      IF EDIRecDocHdr2."Navision Document" = 'I_INVADJ' THEN BEGIN
+        AdjustmentAdvice := TRUE;
+        InventoryAdvice := FALSE;
+      END ELSE BEGIN
+        AdjustmentAdvice := FALSE;
+        InventoryAdvice := TRUE;
+      END;
+
+      IF ItemLedgerEntry.READPERMISSION THEN BEGIN
+        ItemLedgerEntry.SETCURRENTKEY("External Document No.");
+        ItemLedgerEntry.SETRANGE("External Document No.",EDIRecDocHdr2."Internal Doc. No.");
+        IF ItemLedgerEntry.FIND('-') THEN
+          ERROR(Text020,EDIInvtAdviceHdr."EDI Internal Doc. No.");
+      END;
+
+      NAVItemQty := 0;
+      NAVDamagedQty := 0;
+      NAVOnHoldQty := 0;
+      JournalQty := 0;
+      JournalDamagedQty := 0;
+      JournalOnHoldQty := 0;
+      ItemBaseUOM := '';
+      ItemJnlBatchName := '';
+      PositiveAdj := FALSE;
+      DamagedPositiveAdj := FALSE;
+      OnHoldPositiveAdj := FALSE;
+      EDIUOMCrossRefFound := FALSE;
+      AdviceLineNo := 0;
+      ZeroAvailableQty := FALSE;
+      ZeroOnHoldQty := FALSE;
+      ZeroDamagedQty := FALSE;
+
+      EDIInventoryAdviceHdr.GET(EDIInvtAdviceHdr."No.",EDIInvtAdviceHdr.Type);
+
+      IF EDIInventoryAdviceHdr."Suggested Item Journal Created" THEN
+        IF GUIALLOWED THEN BEGIN
+          IF NOT CONFIRM(
+            Text016 +
+            Text017)
+          THEN
+            ERROR(Text018)
+        END ELSE
+          ERROR(Text018);
+
+      IF GUIALLOWED THEN BEGIN
+        DispWindow.OPEN(
+          Text010 + '\' +
+          PADSTR(Text011,25,' ') + '#1###########################\' +
+          PADSTR(Text012,25,' ') + '#2###########################\' +
+          PADSTR(Text013,25,' ') + '#3###########################\' +
+          PADSTR(Text014,25,' ') + '#4###########################\' +
+          PADSTR(Text015,25,' ') + '#5###########################');
+        DispWindow.UPDATE(1,EDIRecDocHdr2."Trade Partner No.");
+        DispWindow.UPDATE(2,EDIRecDocHdr2."Internal Doc. No.");
+        DispWindow.UPDATE(3,Location.Code);
+      END;
+
+      EDIDocument.GET(
+        EDIRecDocHdr2."Trade Partner No.",EDIRecDocHdr2."Navision Document",
+        EDIRecDocHdr2."EDI Document No.",EDIRecDocHdr2."EDI Version",EDIDocument.Type::Import);
+
+      Location.RESET;
+      Location.SETRANGE("EDI Invt. Advice Trade Partner",EDITradePartner."No.");
+      IF NOT Location.FIND('-') THEN
+        ERROR(Text006,EDITradePartner."No.");
+      OnHoldLocation := EDIDocument."On Hold Location";
+      DamagedLocation := EDIDocument."Damaged Location";
+
+      ItemJnlTemplate.GET(EDIDocument."Item Journal Template Name");
+      ItemJnlBatch.GET(
+        EDIDocument."Item Journal Template Name",EDIDocument."Item Journal Batch Name");
+      ItemJnlBatchName := ItemJnlBatch.Name;
+
+      ItemJnlLine.RESET;
+      ItemJnlLine.SETCURRENTKEY("EDI Internal Doc. No.");
+      ItemJnlLine.SETRANGE("EDI Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      IF ItemJnlLine.FIND('-') THEN
+        ItemJnlLine.DELETEALL(TRUE);
+
+      ItemJnlLine.RESET;
+      ItemJnlLine.SETRANGE(
+        "Journal Template Name",EDIDocument."Item Journal Template Name");
+      ItemJnlLine.SETRANGE("Journal Batch Name",ItemJnlBatchName);
+      IF ItemJnlLine.FIND('-') THEN BEGIN
+        OpenBatchFound := FALSE;
+        BatchSequence := '00';
+        REPEAT
+          BatchSequence := INCSTR(BatchSequence);
+          ItemJnlBatchName := EDIDocument."Item Journal Batch Name" + BatchSequence;
+          ItemJnlLine2.RESET;
+          ItemJnlLine2.SETRANGE(
+            "Journal Template Name",EDIDocument."Item Journal Template Name");
+          ItemJnlLine2.SETRANGE("Journal Batch Name",ItemJnlBatchName);
+          IF NOT ItemJnlLine2.FIND('-') THEN BEGIN
+            ItemJournalBatch2.RESET;
+            ItemJournalBatch2.SETRANGE(
+              "Journal Template Name",EDIDocument."Item Journal Template Name");
+            ItemJournalBatch2.SETRANGE(Name,ItemJnlBatchName);
+            IF ItemJournalBatch2.FIND('-') THEN
+              OpenBatchFound := TRUE
+            ELSE BEGIN
+              ItemJournalBatch2.INIT;
+              ItemJournalBatch2.COPY(ItemJnlBatch);
+              ItemJournalBatch2.Name := ItemJnlBatchName;
+              ItemJournalBatch2.INSERT(TRUE);
+              OpenBatchFound := TRUE;
+            END;
+          END;
+        UNTIL OpenBatchFound = TRUE;
+      END;
+
+      Location.GET(EDIInvtAdviceHdr."Location Code");
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField.SETRANGE(EDIRecDocField."NAV Table No.",DATABASE::"Item Journal Line");
+      EDIRecDocField.SETRANGE(EDIRecDocField."Nav Field No.",ItemJnlLine.FIELDNO("Posting Date"));
+      IF EDIRecDocField.FIND('-') THEN
+        PostingDate := EDIRecDocField."Field Date Value"
+      ELSE
+        PostingDate := TODAY;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField.SETRANGE(EDIRecDocField."NAV Table No.",DATABASE::"Item Journal Line");
+      EDIRecDocField.SETRANGE(EDIRecDocField."Nav Field No.",ItemJnlLine.FIELDNO("Document No."));
+      IF EDIRecDocField.FIND('-') THEN
+        DocumentNo := EDIRecDocField."Field Text Value";
+
+      EDIInventoryAdviceLine.RESET;
+      EDIInventoryAdviceLine.SETRANGE(Type,EDIInvtAdviceHdr.Type);
+      EDIInventoryAdviceLine.SETRANGE("Inventory Advice No.",EDIInvtAdviceHdr."No.");
+      IF EDIInventoryAdviceLine.FIND('-') THEN
+        REPEAT
+          LastQty := EDIInventoryAdviceLine."Quantity On Hand";
+          IF (LastQty = 0) AND (EDIInventoryAdviceLine."Zero Available Qty.") THEN
+            ZeroAvailableQty := TRUE
+          ELSE
+            ZeroAvailableQty := FALSE;
+          LastDamagedQty := EDIInventoryAdviceLine."Damaged Quantity";
+          IF (LastDamagedQty = 0) AND (EDIInventoryAdviceLine."Zero Damaged Qty.") THEN
+            ZeroDamagedQty := TRUE
+          ELSE
+            ZeroDamagedQty := FALSE;
+          LastQtyOnHold := EDIInventoryAdviceLine."Quantity On Hold";
+          IF (LastQtyOnHold = 0) AND (EDIInventoryAdviceLine."Zero On Hold Qty.") THEN
+            ZeroOnHoldQty := TRUE
+          ELSE
+            ZeroOnHoldQty := FALSE;
+          LotNo := EDIInventoryAdviceLine."Lot No.";
+          SerialNo := EDIInventoryAdviceLine."Serial No.";
+          VariantCode := EDIInventoryAdviceLine."Variant Code";
+          IF ItemJnlLineFound = FALSE THEN BEGIN
+            ItemJnlLine.RESET;
+            ItemJnlLine.SETRANGE(
+              "Journal Template Name",EDIDocument."Item Journal Template Name");
+            ItemJnlLine.SETRANGE("Journal Batch Name",ItemJnlBatchName);
+            ItemJnlLine.SETRANGE("EDI Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+            IF ItemJnlLine.FIND('-') THEN BEGIN
+              ItemJnlLineFound := TRUE;
+              DocumentNo := ItemJnlLine."Document No.";
+              PostingDate := ItemJnlLine."Posting Date";
+            END;
+          END;
+
+          IF (DocumentNo = '') AND (ItemJnlLineFound = FALSE) THEN BEGIN
+            ItemJnlBatch.GET(
+              EDIDocument."Item Journal Template Name",ItemJnlBatchName);
+            IF ItemJnlBatch."No. Series" <> '' THEN BEGIN
+              NoSeries := ItemJnlBatch."No. Series";
+              CLEAR(NoSeriesMgt);
+              DocumentNo := GetNoSeries(NoSeries);
+            END;
+          END;
+
+          Item.GET(EDIInventoryAdviceLine."No.");
+          IF GUIALLOWED THEN
+            DispWindow.UPDATE(4,Item."No.");
+
+          NAVItemQty :=
+            GetLedgerQuantity(Item."No.",Location.Code,LotNo,SerialNo,VariantCode);
+
+          IF OnHoldLocation <> '' THEN
+            NAVOnHoldQty :=GetLedgerQuantity(Item."No.",OnHoldLocation,LotNo,SerialNo,VariantCode);
+
+          IF DamagedLocation <> '' THEN
+            NAVDamagedQty :=GetLedgerQuantity(Item."No.",DamagedLocation,LotNo,SerialNo,VariantCode);
+
+          IF InventoryAdvice THEN BEGIN
+            CASE TRUE OF
+              NAVItemQty > LastQty:
+                BEGIN
+                  IF (LastQty <> 0) OR ((LastQty = 0) AND (ZeroAvailableQty)) THEN BEGIN
+                    PositiveAdj := FALSE;
+                    JournalQty := NAVItemQty - LastQty;
+                    IF JournalQty < 0 THEN
+                      JournalQty := -1 * JournalQty;
+                  END;
+                END;
+              NAVItemQty < LastQty:
+                BEGIN
+                  IF (LastQty <> 0) OR ((LastQty = 0) AND (ZeroAvailableQty)) THEN BEGIN
+                    PositiveAdj := TRUE;
+                    JournalQty := LastQty - NAVItemQty;
+                    IF JournalQty < 0 THEN
+                      JournalQty := -1 * JournalQty;
+                  END;
+                END;
+            END;
+            CASE TRUE OF
+              NAVDamagedQty < LastDamagedQty:
+                BEGIN
+                  IF (LastDamagedQty <> 0) OR ((LastDamagedQty = 0) AND (ZeroDamagedQty)) THEN BEGIN
+                    DamagedPositiveAdj := TRUE;
+                    JournalDamagedQty := LastDamagedQty - NAVDamagedQty;
+                    IF JournalDamagedQty < 0 THEN
+                      JournalDamagedQty := -1 * JournalDamagedQty;
+                  END;
+                END;
+              NAVDamagedQty > LastDamagedQty:
+                BEGIN
+                  IF (LastDamagedQty <> 0) OR ((LastDamagedQty = 0) AND (ZeroDamagedQty)) THEN BEGIN
+                    DamagedPositiveAdj := FALSE;
+                    JournalDamagedQty := NAVDamagedQty - LastDamagedQty;
+                    IF JournalDamagedQty < 0 THEN
+                      JournalDamagedQty := -1 * JournalDamagedQty;
+                  END;
+                END;
+            END;
+            CASE TRUE OF
+              NAVOnHoldQty < LastQtyOnHold:
+                BEGIN
+                  IF (LastQtyOnHold <> 0) OR ((LastQtyOnHold = 0) AND (ZeroOnHoldQty)) THEN BEGIN
+                    OnHoldPositiveAdj := TRUE;
+                    JournalOnHoldQty := LastQtyOnHold - NAVOnHoldQty;
+                    IF JournalOnHoldQty < 0 THEN
+                      JournalOnHoldQty := -1 * JournalOnHoldQty;
+                  END;
+                END;
+              NAVOnHoldQty > LastQtyOnHold:
+                BEGIN
+                  IF (LastQtyOnHold <> 0) OR ((LastQtyOnHold = 0) AND (ZeroOnHoldQty)) THEN BEGIN
+                    OnHoldPositiveAdj := FALSE;
+                    JournalOnHoldQty := NAVOnHoldQty - LastQtyOnHold;
+                    IF JournalOnHoldQty < 0 THEN
+                      JournalOnHoldQty := -1 * JournalOnHoldQty;
+                  END;
+                END;
+            END;
+            IF (JournalQty <> 0) OR
+               ((JournalQty = 0) AND (ZeroAvailableQty OR ZeroDamagedQty OR ZeroOnHoldQty))
+            THEN BEGIN
+              IF GUIALLOWED THEN BEGIN
+                DispWindow.UPDATE(5,JournalQty);
+                DispWindow.UPDATE(3,Location.Code);
+              END;
+              CreateJournalLine(JournalQty,PositiveAdj,Location.Code);
+            END;
+            IF (JournalDamagedQty <> 0) AND (DamagedLocation <> '') THEN BEGIN
+              IF GUIALLOWED THEN BEGIN
+                DispWindow.UPDATE(5,JournalDamagedQty);
+                DispWindow.UPDATE(3,DamagedLocation);
+              END;
+              CreateJournalLine(JournalDamagedQty,DamagedPositiveAdj,DamagedLocation);
+            END;
+            IF (JournalOnHoldQty <> 0) AND (OnHoldLocation <> '') THEN BEGIN
+              IF GUIALLOWED THEN BEGIN
+                DispWindow.UPDATE(5,JournalOnHoldQty);
+                DispWindow.UPDATE(3,OnHoldLocation);
+              END;
+              CreateJournalLine(JournalOnHoldQty,OnHoldPositiveAdj,OnHoldLocation);
+            END;
+          END ELSE BEGIN
+            JournalQty := EDIInventoryAdviceLine."Adjustment Quantity";
+            IF JournalQty > 0 THEN
+              PositiveAdj := TRUE;
+            IF JournalQty < 0 THEN
+              JournalQty := -1 * JournalQty;
+            IF (LastDamagedQty <> 0) AND (DamagedLocation <> '') THEN BEGIN
+              IF GUIALLOWED THEN BEGIN
+                DispWindow.UPDATE(5,LastDamagedQty);
+                DispWindow.UPDATE(3,DamagedLocation);
+              END;
+              CreateJournalLine(LastDamagedQty,DamagedPositiveAdj,DamagedLocation);
+            END ELSE BEGIN
+              IF (LastQtyOnHold <> 0) AND (OnHoldLocation <> '') THEN BEGIN
+                IF GUIALLOWED THEN BEGIN
+                  DispWindow.UPDATE(5,LastQtyOnHold);
+                  DispWindow.UPDATE(3,OnHoldLocation);
+                END;
+                CreateJournalLine(LastQtyOnHold,OnHoldPositiveAdj,OnHoldLocation);
+              END ELSE BEGIN
+                IF JournalQty <> 0 THEN BEGIN
+                  IF GUIALLOWED THEN BEGIN
+                    DispWindow.UPDATE(5,JournalQty);
+                    DispWindow.UPDATE(3,Location.Code);
+                  END;
+                  CreateJournalLine(JournalQty,PositiveAdj,Location.Code);
+                END;
+              END;
+            END;
+          END;
+
+          NAVItemQty := 0;
+          NAVDamagedQty := 0;
+          NAVOnHoldQty := 0;
+          JournalQty := 0;
+          JournalDamagedQty := 0;
+          JournalOnHoldQty := 0;
+          LastEDIUOM := '';
+          LastItemNo := '';
+          ItemBaseUOM := '';
+          PositiveAdj := FALSE;
+          DamagedPositiveAdj := FALSE;
+          OnHoldPositiveAdj := FALSE;
+          LastQty := 0;
+          LastDamagedQty := 0;
+          LastQtyOnHold := 0;
+          ZeroAvailableQty := FALSE;
+          ZeroOnHoldQty := FALSE;
+          ZeroDamagedQty := FALSE;
+        UNTIL EDIInventoryAdviceLine.NEXT = 0;
+
+      IF GUIALLOWED THEN
+        DispWindow.CLOSE;
+
+      ItemJnlLine.RESET;
+      ItemJnlLine.SETRANGE(
+        "Journal Template Name",EDIDocument."Item Journal Template Name");
+      ItemJnlLine.SETRANGE("Journal Batch Name",ItemJnlBatchName);
+      ItemJnlLine.SETRANGE("EDI Internal Doc. No.",EDIInvtAdviceHdr."EDI Internal Doc. No.");
+      IF ItemJnlLine.FIND('-') THEN
+        EDIInvtAdviceHdr."Suggested Item Journal Created" := TRUE
+      ELSE BEGIN
+        EDIInvtAdviceHdr."Suggested Item Journal Created" := FALSE;
+        IF Manual THEN
+          MESSAGE(Text019);
+      END;
+      EDIInvtAdviceHdr.MODIFY;
+    END;
+
+    PROCEDURE CreateJournalLine@1240020012(Quantity@1240020001 : Decimal;PositiveAdj@1240020002 : Boolean;Location@1240020003 : Code[10]);
+    VAR
+      LineNo@1240020000 : Integer;
+      ReasonCode@1240020004 : Code[10];
+    BEGIN
+      ReasonCode := '';
+
+      EDIStatusCode.RESET;
+      EDIStatusCode.SETRANGE("Trade Partner No.",EDIRecDocHdr2."Trade Partner No.");
+      EDIStatusCode.SETRANGE(Line,TRUE);
+      EDIStatusCode.SETFILTER(Code,LastEDICode);
+      EDIStatusCode.SETRANGE("EDI Document No.",EDIRecDocHdr2."EDI Document No.");
+      IF EDIStatusCode.FIND('-') THEN
+        ReasonCode := EDIStatusCode.Code;
+
+      ItemJnlLine.RESET;
+      ItemJnlLine.SETRANGE(
+        "Journal Template Name",EDIDocument."Item Journal Template Name");
+      ItemJnlLine.SETRANGE("Journal Batch Name",ItemJnlBatchName);
+      IF ItemJnlLine.FIND('+') THEN
+        LineNo := ItemJnlLine."Line No." + 10000
+      ELSE
+        LineNo := 10000;
+
+      ItemJnlLine.INIT;
+      ItemJnlLine."Journal Template Name" := EDIDocument."Item Journal Template Name";
+      ItemJnlLine."Journal Batch Name" := ItemJnlBatchName;
+      ItemJnlLine."Line No." := LineNo;
+      ItemJnlLine.INSERT(TRUE);
+      ItemJnlLine.VALIDATE("Item No.",EDIInventoryAdviceLine."No.");
+      ItemJnlLine.VALIDATE(
+        "Unit of Measure Code",EDIInventoryAdviceLine."Unit of Measure Code");
+      ItemJnlLine.VALIDATE(Quantity,Quantity);
+      ItemJnlLine."Posting Date" := PostingDate ;
+      IF PositiveAdj THEN
+        ItemJnlLine."Entry Type" := ItemJnlLine."Entry Type"::"Positive Adjmt."
+      ELSE
+        ItemJnlLine."Entry Type" := ItemJnlLine."Entry Type"::"Negative Adjmt.";
+      ItemJnlLine.VALIDATE("Location Code",Location);
+      ItemJnlLine."External Document No." := EDIRecDocHdr2."Internal Doc. No.";
+      ItemJnlLine."EDI Internal Doc. No." := EDIRecDocHdr2."Internal Doc. No.";
+      ItemJnlLine."Document No." := DocumentNo;
+      ItemJnlLine."Expiration Date" := EDIInventoryAdviceLine."Expiration Date";
+      ItemJnlLine."Warranty Date" := EDIInventoryAdviceLine."Warranty Date";
+      ItemJnlLine."Reason Code" := ReasonCode;
+      ItemJnlLine.Type := ItemJnlLine.Type::" ";
+      ItemJnlLine.MODIFY(TRUE);
+
+      ReasonCode := '';
+
+      IF (EDIInventoryAdviceLine."Lot No." <> '') OR (EDIInventoryAdviceLine."Serial No." <> '') THEN
+        InsertReservEntry(ItemJnlLine,EDIInventoryAdviceLine);
+    END;
+
+    PROCEDURE GetNoSeries@1240020001(NoSeries@1240020000 : Code[10]) NoSeriesCode : Code[20];
+    BEGIN
+      NoSeriesCode := NoSeriesMgt.GetNextNo(NoSeries,PostingDate,FALSE);
+      EXIT(NoSeriesCode);
+    END;
+
+    PROCEDURE MapInventoryAdviceHdrFields@1240020003();
+    VAR
+      EDIRecDocField@1240020000 : Record 14002359;
+    BEGIN
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField.SETRANGE("NAV Table No.",DATABASE::"E.D.I. Inventory Advice Header");
+      IF EDIRecDocField.FIND('-') THEN BEGIN
+        REPEAT
+          CASE EDIRecDocField."Nav Field No." OF
+            EDIInventoryAdviceHdr.FIELDNO("Advice Begin Date"):
+              EDIInventoryAdviceHdr."Advice Begin Date" := EDIRecDocField."Field Date Value";
+            EDIInventoryAdviceHdr.FIELDNO("Advice End Date"):
+              EDIInventoryAdviceHdr."Advice End Date" := EDIRecDocField."Field Date Value";
+            EDIInventoryAdviceHdr.FIELDNO("Report Type Code"):
+              EDIInventoryAdviceHdr."Report Type Code" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Location Name"):
+              EDIInventoryAdviceHdr."Location Name" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Location Name 2"):
+              EDIInventoryAdviceHdr."Location Name 2" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Location Address"):
+              EDIInventoryAdviceHdr."Location Address" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Location Address 2"):
+              EDIInventoryAdviceHdr."Location Address 2" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Location City"):
+              EDIInventoryAdviceHdr."Location City" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Location County"):
+              EDIInventoryAdviceHdr."Location County" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Location Post Code"):
+              EDIInventoryAdviceHdr."Location Post Code" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Location Country Code"):
+              EDIInventoryAdviceHdr."Location Country Code" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Buy-from Vendor Name"):
+              EDIInventoryAdviceHdr."Buy-from Vendor Name" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Buy-from Vendor Name 2"):
+              EDIInventoryAdviceHdr."Buy-from Vendor Name 2" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Buy-from Address"):
+              EDIInventoryAdviceHdr."Buy-from Address" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Buy-from Address 2"):
+              EDIInventoryAdviceHdr."Buy-from Address 2" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Buy-from County"):
+              EDIInventoryAdviceHdr."Buy-from County" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Buy-from Post Code"):
+              EDIInventoryAdviceHdr."Buy-from Post Code" := EDIRecDocField."Field Text Value";
+            EDIInventoryAdviceHdr.FIELDNO("Buy-from Country Code"):
+              EDIInventoryAdviceHdr."Buy-from Country Code" := EDIRecDocField."Field Text Value";
+
+            //
+            // Add custom Inventory Advice Header fields here
+            //
+
+          END;
+        UNTIL EDIRecDocField.NEXT = 0;
+      END;
+
+      IF MapGenCrossRef THEN
+        MapGeneralEDICrossRef(TRUE);
+    END;
+
+    PROCEDURE MapInventoryAdviceLineFields@1240020004();
+    VAR
+      EDIRecDocField@1240020000 : Record 14002359;
+    BEGIN
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField.SETRANGE("NAV Table No.",DATABASE::"E.D.I. Inventory Advice Line");
+      EDIRecDocField.SETRANGE("Segment Group",SegmentGroup);
+      IF EDIRecDocField.FIND('-') THEN BEGIN
+        REPEAT
+          CASE EDIRecDocField."Nav Field No." OF
+            EDIInventoryAdviceLine.FIELDNO("Quantity Available for Sale"):
+              EDIInventoryAdviceLine."Quantity Available for Sale" := EDIRecDocField."Field Dec. Value";
+            EDIInventoryAdviceLine.FIELDNO("Damaged Quantity"):
+              EDIInventoryAdviceLine."Damaged Quantity" := EDIRecDocField."Field Dec. Value";
+            EDIInventoryAdviceLine.FIELDNO("Committed Quantity"):
+              EDIInventoryAdviceLine."Committed Quantity" := EDIRecDocField."Field Dec. Value";
+            EDIInventoryAdviceLine.FIELDNO("Quantity On Hold"):
+              EDIInventoryAdviceLine."Quantity On Hold" := EDIRecDocField."Field Dec. Value";
+
+            //
+            // Add custom Inventory Advice Line fields here
+            //
+
+          END;
+        UNTIL EDIRecDocField.NEXT = 0;
+      END;
+    END;
+
+    PROCEDURE MapGeneralEDICrossRef@1240030004(HeaderLevel@1240020001 : Boolean);
+    VAR
+      EDIRecDocField@1240020000 : Record 14002359;
+      TransactionPurposeCode@1240030000 : 'Original,Duplicate,Status';
+    BEGIN
+      IF HeaderLevel THEN BEGIN
+        EDIRecDocField.RESET;
+        EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+        EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+        EDIRecDocField.SETRANGE(
+          EDIRecDocField."NAV Table No.",DATABASE::"E.D.I. Inventory Advice Header");
+        EDIRecDocField.SETRANGE(EDIRecDocField."General EDI Cross Reference",TRUE);
+        IF EDIRecDocField.FIND('-') THEN BEGIN
+          REPEAT
+            CASE EDIRecDocField."Nav Field No." OF
+              EDIInventoryAdviceHdr.FIELDNO("Transaction Purpose Code"):
+                BEGIN
+                  EVALUATE(TransactionPurposeCode,EDIRecDocField."NAV Cross Ref. Value-1");
+                  EDIInventoryAdviceHdr.VALIDATE("Transaction Purpose Code",TransactionPurposeCode);
+                END;
+
+              //
+              // Add custom Inventory Advice Header fields here
+              //
+
+            END;
+          UNTIL EDIRecDocField.NEXT = 0;
+        END;
+      END;
+    END;
+
+    PROCEDURE ReleaseInventoryAdvice@1(VAR CurrentInventoryAdvice@1240030000 : Record 14002413);
+    BEGIN
+      WITH CurrentInventoryAdvice DO BEGIN
+        TESTFIELD(Released,FALSE);
+        TESTFIELD("Trade Partner No.");
+        TESTFIELD("Inventory Advice Created");
+        TESTFIELD("Document Date");
+        Released := TRUE;
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE ReopenInventoryAdvice@1240030002(VAR CurrentInventoryAdvice@1240030000 : Record 14002413);
+    BEGIN
+      WITH CurrentInventoryAdvice DO BEGIN
+        TESTFIELD(Released,TRUE);
+        Released := FALSE;
+        IF Posted THEN
+          Posted := FALSE;
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE PostInventoryAdvice@1240030009(VAR CurrentInventoryAdvice@1240030000 : Record 14002413);
+    BEGIN
+      WITH CurrentInventoryAdvice DO BEGIN
+        TESTFIELD(Released,TRUE);
+        TESTFIELD("Inventory Advice Created",TRUE);
+        Posted := TRUE;
+        MODIFY;
+      END;
+    END;
+
+    PROCEDURE GetLedgerQuantity@1240020005(ItemNo@1240020005 : Code[20];LocationCode@1240020002 : Code[10];LotNo@1240020000 : Code[20];SerialNo@1240020001 : Code[20];VariantCode@1240020004 : Code[10]) LedgerQty : Decimal;
+    VAR
+      ItemLedgerEntry@1240020003 : Record 32;
+    BEGIN
+      LedgerQty := 0;
+
+      ItemLedgerEntry.RESET;
+      ItemLedgerEntry.SETRANGE("Item No.",ItemNo);
+      ItemLedgerEntry.SETRANGE("Location Code",LocationCode);
+      ItemLedgerEntry.SETRANGE("Lot No.",LotNo);
+      ItemLedgerEntry.SETRANGE("Serial No.",SerialNo);
+      ItemLedgerEntry.SETRANGE("Variant Code",VariantCode);
+      IF ItemLedgerEntry.FIND('-') THEN
+        REPEAT
+          LedgerQty := LedgerQty + ItemLedgerEntry.Quantity;
+        UNTIL ItemLedgerEntry.NEXT = 0;
+      EXIT(LedgerQty);
+    END;
+
+    PROCEDURE InsertReservEntry@1240020007(ItemJnlLine@1240020000 : Record 83;EDIInventoryAdviceLine@1240020007 : Record 14002414);
+    VAR
+      ReservationEntryNo@1240020002 : Integer;
+      LotNo@1240020004 : Code[20];
+      SerialNo@1240020003 : Code[20];
+      ExpirationDate@1240020005 : Date;
+      WarrantyDate@1240020006 : Date;
+      QtyBase@1240020001 : Decimal;
+    BEGIN
+      LotNo := EDIInventoryAdviceLine."Lot No.";
+      SerialNo := EDIInventoryAdviceLine."Serial No.";
+      ExpirationDate := ItemJnlLine."Expiration Date";
+      WarrantyDate := ItemJnlLine."Warranty Date";
+      QtyBase := ItemJnlLine."Quantity (Base)";
+      IF ItemJnlLine."Entry Type"  = ItemJnlLine."Entry Type"::"Negative Adjmt." THEN
+        QtyBase := -1 * QtyBase;
+
+      WITH ItemJnlLine DO BEGIN
+        ReservationEntry.LOCKTABLE;
+        IF ReservationEntry.FINDLAST THEN
+          ReservationEntryNo := ReservationEntry."Entry No.";
+        ReservationEntryNo += 1;
+        ReservationEntry.INIT;
+        ReservationEntry."Entry No." := ReservationEntryNo;
+        ReservationEntry."Item No." := "Item No.";
+        ReservationEntry.Description := Description;
+        ReservationEntry."Location Code" := "Location Code";
+        ReservationEntry."Reservation Status" := (ReservationEntry."Reservation Status"::Prospect);
+        ReservationEntry."Creation Date" := ItemJnlLine."Posting Date";
+        ReservationEntry."Created By" := USERID;
+        ReservationEntry."Source Type" := DATABASE::"Item Journal Line";
+        ReservationEntry."Source Subtype" := ItemJnlLine."Entry Type";
+        ReservationEntry."Source ID" := ItemJnlLine."Journal Template Name";
+        ReservationEntry."Source Batch Name" := ItemJnlLine."Journal Batch Name";
+        ReservationEntry."Source Ref. No." := ItemJnlLine."Line No.";
+        CASE TRUE OF
+          (LotNo <> '') AND (SerialNo <> ''):
+            ReservationEntry."Item Tracking" := ReservationEntry."Item Tracking"::"Lot and Serial No.";
+          SerialNo <> '':
+            ReservationEntry."Item Tracking" := ReservationEntry."Item Tracking"::"Serial No.";
+          LotNo <> '':
+            ReservationEntry."Item Tracking" := ReservationEntry."Item Tracking"::"Lot No.";
+          ELSE
+            ReservationEntry."Item Tracking" := ReservationEntry."Item Tracking"::None;
+        END;
+        ReservationEntry."Serial No." := SerialNo;
+        ReservationEntry."Lot No." := LotNo;
+        ReservationEntry."Expiration Date" := ExpirationDate;
+        ReservationEntry."Warranty Date" := WarrantyDate;
+        ReservationEntry."Qty. per Unit of Measure" := "Qty. per Unit of Measure";
+        ReservationEntry.VALIDATE("Quantity (Base)", ROUND(QtyBase,0.00001));
+        ReservationEntry.Positive := (ReservationEntry."Quantity (Base)" > 0);
+        IF (ReservationEntry."Quantity (Base)" <> 0) AND (ReservationEntry.Quantity = 0) THEN
+          ReservationEntry.Quantity := ROUND(ReservationEntry."Quantity (Base)" / ReservationEntry."Qty. per Unit of Measure",0.00001);
+        ReservationEntry.INSERT;
+      END;
+    END;
+
+    PROCEDURE LINAndTriggerCheck@1240020006(EDIRecDocHdr2@1240020000 : Record 14002358);
+    VAR
+      LINSegmentGroup@1240020001 : Integer;
+    BEGIN
+      LINFound := FALSE;
+      TriggerFound := FALSE;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField.SETRANGE("New Segment",TRUE);
+      EDIRecDocField.SETRANGE(Segment,'LIN');
+      IF EDIRecDocField.FIND('-') THEN
+        LINFound := TRUE;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField.SETRANGE(Trigger,TRUE);
+      IF EDIRecDocField.FIND('-') THEN
+        TriggerFound := TRUE;
+
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr2."Internal Doc. No.");
+      EDIRecDocField.FIND('-');
+      SegmentGroup := 0;
+      IncrementSegGroup := FALSE;
+      REPEAT
+        IF (EDIRecDocField."New Segment") AND (EDIRecDocField.Segment = 'LIN') THEN BEGIN
+          SegmentGroup := SegmentGroup + 1;
+          IncrementSegGroup := TRUE;
+          IF LINFound AND TriggerFound THEN
+            LINSegmentGroup := SegmentGroup;
+        END;
+        IF EDIRecDocField.Trigger THEN BEGIN
+          SegmentGroup := SegmentGroup + 1;
+          IncrementSegGroup := TRUE;
+        END;
+        IF IncrementSegGroup THEN BEGIN
+          EDIRecDocField."Segment Group" := SegmentGroup;
+          IF LINFound AND TriggerFound THEN
+            EDIRecDocField."Sub Segment Group" := LINSegmentGroup;
+          EDIRecDocField.MODIFY;
+          IncrementSegGroup := FALSE;
+        END;
+      UNTIL EDIRecDocField.NEXT = 0;
+    END;
+
+    PROCEDURE GetLocation@1240020008(EDIRecDocHdr@1240020000 : Record 14002358);
+    BEGIN
+      EDIRecDocField.RESET;
+      EDIRecDocField.SETCURRENTKEY("Internal Doc. No.","NAV Table No.","Nav Field No.");
+      EDIRecDocField.SETRANGE("Internal Doc. No.",EDIRecDocHdr."Internal Doc. No.");
+      EDIRecDocField.SETRANGE("NAV Table No.",DATABASE::"E.D.I. Inventory Advice Header");
+      EDIRecDocField.SETRANGE("Nav Field No.",EDIInventoryAdviceHdr.FIELDNO("Location Code"));
+      IF EDIRecDocField.FIND('-') THEN
+        Location.GET(EDIRecDocField."Field Text Value")
+      ELSE BEGIN
+        Location.RESET;
+        Location.SETRANGE("EDI Invt. Advice Trade Partner",EDITradePartner."No.");
+        IF NOT Location.FIND('-') THEN
+          ERROR(Text006,EDITradePartner."No.");
+      END;
+      OnHoldLocation := EDIDocument."On Hold Location";
+      DamagedLocation := EDIDocument."Damaged Location";
+    END;
+
+    BEGIN
+    END.
+  }
+}
+

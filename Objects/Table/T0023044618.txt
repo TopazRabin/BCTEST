@@ -1,0 +1,208 @@
+OBJECT Table 23044618 DSHIP Shipment Manifest Header
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/22/19;
+    Time=11:15:33 AM;
+    Version List=DSHIP2.2.2;
+  }
+  PROPERTIES
+  {
+    OnInsert=VAR
+               lrecDShipConfig@1000000000 : Record 23044600;
+               lrecWhseEmployee@1000000002 : Record 7301;
+               lrecLPSetup@1000000003 : Record 23044523;
+               lcuNoSeries@1000000001 : Codeunit 396;
+             BEGIN
+               IF ( "No." = '' ) THEN BEGIN
+                 lrecDShipConfig.GET;
+                 "No." := lcuNoSeries.GetNextNo(lrecDShipConfig."Manifest Nos.", TODAY, TRUE);
+               END;
+
+               "Created On" := TODAY;
+               "Created By" := USERID;
+
+               lrecWhseEmployee.SETRANGE("User ID", USERID);
+               lrecWhseEmployee.SETRANGE(Default, TRUE);
+               IF ( lrecWhseEmployee.FINDFIRST ) THEN
+                 "Location Code" := lrecWhseEmployee."Location Code";
+
+               lrecLPSetup.GET;
+               "Weight Unit of Measure" := lrecLPSetup."Weight Unit of Measure";
+             END;
+
+    OnDelete=VAR
+               lrecManifestLine@1000000000 : Record 23044619;
+             BEGIN
+               lrecManifestLine.SETRANGE("Manifest No.", "No.");
+               lrecManifestLine.DELETEALL(TRUE);
+             END;
+
+    LookupPageID=Page23044634;
+    DrillDownPageID=Page23044633;
+  }
+  FIELDS
+  {
+    { 1   ;   ;No.                 ;Code20        ;CaptionML=ENU=No. }
+    { 2   ;   ;Location Code       ;Code20        ;TableRelation=Location;
+                                                   OnValidate=VAR
+                                                                lrecLocation@1000000002 : Record 14;
+                                                                lcuWMSMgmt@1000000000 : Codeunit 7302;
+                                                              BEGIN
+                                                                IF ( lrecLocation.RequirePicking(Rec."Location Code") OR
+                                                                     lrecLocation.RequirePutaway(Rec."Location Code") OR
+                                                                     lrecLocation.RequireReceive(Rec."Location Code") OR
+                                                                     lrecLocation.RequireShipment(Rec."Location Code") ) THEN BEGIN
+                                                                  IF ( NOT lcuWMSMgmt.LocationIsAllowed("Location Code") ) THEN
+                                                                    ERROR('User is not configured as a warehouse employee of %1', "Location Code");
+                                                                END;
+                                                              END;
+
+                                                   OnLookup=VAR
+                                                              lrecWhseEmployee@1000000000 : Record 7301;
+                                                              lrecLocation@1000000001 : Record 14;
+                                                            BEGIN
+                                                              IF ( lrecWhseEmployee.FINDFIRST ) THEN BEGIN
+                                                                IF ( PAGE.RUNMODAL(PAGE::"Locations with Warehouse List", lrecLocation) = ACTION::LookupOK ) THEN
+                                                                  Rec.VALIDATE("Location Code", lrecLocation.Code);
+                                                              END ELSE BEGIN
+                                                                IF ( PAGE.RUNMODAL(PAGE::"Location List", lrecLocation) = ACTION::LookupOK ) THEN
+                                                                  Rec.VALIDATE("Location Code", lrecLocation.Code);
+                                                              END;
+                                                            END;
+
+                                                   CaptionML=ENU=Location Code }
+    { 3   ;   ;Created On          ;Date          ;CaptionML=ENU=Created On }
+    { 4   ;   ;Created By          ;Code80        ;TableRelation=User;
+                                                   CaptionML=ENU=Created By }
+    { 5   ;   ;Total Weight        ;Decimal       ;FieldClass=Normal;
+                                                   CaptionML=ENU=Total Weight }
+    { 6   ;   ;Weight Unit of Measure;Code20      ;TableRelation="IWX Unit Of Measure".Code WHERE (Category=CONST(Weight));
+                                                   OnValidate=VAR
+                                                                lrecUOMFrom@1000000002 : Record 23044525;
+                                                                lrecUOMTo@1000000001 : Record 23044525;
+                                                                lcuCommonBase@1000000000 : Codeunit 23044519;
+                                                              BEGIN
+                                                                IF ( (xRec."Weight Unit of Measure" = '') OR ("Weight Unit of Measure" = '') ) THEN
+                                                                  EXIT;
+
+                                                                IF ( xRec."Weight Unit of Measure" <> "Weight Unit of Measure" ) THEN BEGIN
+                                                                  lrecUOMTo.GET("Weight Unit of Measure");
+                                                                  lrecUOMFrom.GET(xRec."Weight Unit of Measure");
+                                                                  "Total Weight" := lcuCommonBase.ConvertUOMGeneric("Total Weight", lrecUOMFrom."Qty. per Unit of Measure", lrecUOMTo."Qty. per Unit of Measure");
+                                                                END;
+                                                              END;
+
+                                                   CaptionML=[ENU=Weight Unit of Measure;
+                                                              ESM=Peso de la unidad de medida;
+                                                              FRC=UnitÇ de poids de mesure;
+                                                              ENC=Weight Unit of Measure] }
+    { 7   ;   ;Total Value         ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("DSHIP Shipment Manifest Line".Value WHERE (Manifest No.=FIELD(No.)));
+                                                   CaptionML=ENU=Total Value }
+    { 8   ;   ;Shipping Agent Code ;Code20        ;TableRelation="Shipping Agent".Code;
+                                                   CaptionML=ENU=Shipping Agent Code }
+    { 9   ;   ;Total Freight Cost  ;Decimal       ;FieldClass=FlowField;
+                                                   CalcFormula=Sum("DSHIP Shipment Manifest Line"."Freight Cost" WHERE (Manifest No.=FIELD(No.)));
+                                                   CaptionML=ENU=Total Freight Cost }
+    { 10  ;   ;Status              ;Option        ;CaptionML=[ENU=Status;
+                                                              ESM=Estado;
+                                                              FRC=êtat;
+                                                              ENC=Status];
+                                                   OptionCaptionML=[ENU=Open,Released;
+                                                                    ESM=Abierto,Lanzado;
+                                                                    FRC=Ouvert,LibÇrÇ;
+                                                                    ENC=Open,Released];
+                                                   OptionString=Open,Released;
+                                                   Editable=No }
+    { 11  ;   ;ScanForm ID         ;Text100       ;CaptionML=ENU=ScanForm ID;
+                                                   Description=easypost scanform object id }
+    { 12  ;   ;Carrier Manifest URL;Text250       ;CaptionML=ENU=Carrier Manifest URL;
+                                                   Description=url for carrier generated manifest }
+  }
+  KEYS
+  {
+    {    ;No.                                     ;Clustered=Yes }
+  }
+  FIELDGROUPS
+  {
+  }
+  CODE
+  {
+
+    PROCEDURE LocationAllowedOnFindRecord@1000000015(pWhich@1000000001 : Text) : Boolean;
+    VAR
+      lrecLocation@1000000003 : Record 14;
+      lcuWMSMgmt@1000000002 : Codeunit 7302;
+    BEGIN
+      //<FUNC>
+      //  Description: Used to identify if a user can view a specific record
+      //  Called From: PAGE DSHIP Shipment Manifest Card (P23044633)
+      //  Side Effect: None
+      //</FUNC>
+
+      // If updating this function, it must be updated in T23044621 as well
+
+      // This function is called form the page's OnFindRecord.
+      // If we can find the record, then we check the location
+      // If the location requires a warehouse user, return user access permission
+      IF ( Rec.FIND(pWhich) ) THEN
+        IF ( lrecLocation.RequirePicking(Rec."Location Code") OR
+             lrecLocation.RequirePutaway(Rec."Location Code") OR
+             lrecLocation.RequireReceive(Rec."Location Code") OR
+             lrecLocation.RequireShipment(Rec."Location Code") ) THEN
+          EXIT(lcuWMSMgmt.LocationIsAllowedToView(Rec."Location Code")); // return user access
+        EXIT(TRUE); // location does not require warehouse employee
+      EXIT(FALSE); // could not find record
+    END;
+
+    PROCEDURE LocationAllowedOnNextRecord@1000000016(piSteps@1000000004 : Integer) : Integer;
+    VAR
+      lrecLocation@1000000005 : Record 14;
+      lcuWMSMgmt@1000000001 : Codeunit 7302;
+      liRealSteps@1000000002 : Integer;
+      liNextSteps@1000000003 : Integer;
+    BEGIN
+      //<FUNC>
+      //  Description: Used to identify if a user can view a specific record
+      //  Called From: PAGE DSHIP Shipment Manifest Card (P23044633)
+      //               PAGE DSHIP Shipment Manifest List (P23044634)
+      //  Side Effect: None
+      //</FUNC>
+
+      // If updating this function, it must be updated in T23044621 as well
+
+      // This function is called form the page's OnNextRecord.
+      liRealSteps := 0;
+      IF ( piSteps <> 0 ) THEN BEGIN
+        REPEAT
+          liNextSteps := Rec.NEXT(piSteps / ABS(piSteps));
+          // If the location requires a warehouse user
+          IF ( lrecLocation.RequirePicking(Rec."Location Code") OR
+               lrecLocation.RequirePutaway(Rec."Location Code") OR
+               lrecLocation.RequireReceive(Rec."Location Code") OR
+               lrecLocation.RequireShipment(Rec."Location Code") ) THEN BEGIN
+            // if user has access to location
+            IF ( lcuWMSMgmt.LocationIsAllowedToView(Rec."Location Code") ) THEN BEGIN
+              liRealSteps += liNextSteps;
+            END;
+          END ELSE BEGIN
+            liRealSteps += liNextSteps; // location does not require warehouse employee
+          END;
+        UNTIL (liNextSteps = 0) OR (liRealSteps = piSteps);
+      END;
+      EXIT(liRealSteps);
+    END;
+
+    BEGIN
+    {
+      ************************
+      Copyright Notice
+      This objects content is copyright of Insight Works 2011.  All rights reserved.
+      Any redistribution or reproduction of part or all of the contents in any form is prohibited.
+      ************************
+    }
+    END.
+  }
+}
+

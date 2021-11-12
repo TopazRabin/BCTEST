@@ -1,0 +1,167 @@
+OBJECT Report 14050304 Send Advanced Ship Notice Job
+{
+  OBJECT-PROPERTIES
+  {
+    Date=03/21/17;
+    Time=12:00:00 PM;
+    Version List=SE0.60.13;
+  }
+  PROPERTIES
+  {
+    CaptionML=ENU=Send Advanced Ship Notice Job;
+    ProcessingOnly=Yes;
+    OnPreReport=BEGIN
+                  CompanyInformation.GET;
+                END;
+
+    UseRequestPage=No;
+  }
+  DATASET
+  {
+    { 2284;    ;DataItem;                    ;
+               DataItemTable=Table14050305 }
+
+    { 2527;    ;DataItem;EDITradePartner     ;
+               DataItemTable=Table14002360;
+               PrintOnlyIfDetail=Yes;
+               OnPreDataItem=BEGIN
+                               EDITradePartner.SETFILTER("No.","E.D.I. Job Routine"."Trade Partner Filter");
+                               EDITradePartner.SETFILTER("Company Name","E.D.I. Job Routine"."Company Filter");
+                             END;
+
+               ReqFilterFields=No. }
+
+    { 6966;1   ;DataItem;                    ;
+               DataItemTable=Table14000822;
+               DataItemTableView=SORTING(EDI ASN)
+                                 ORDER(Ascending)
+                                 WHERE(EDI ASN=CONST(Yes),
+                                       Summary Released=CONST(Yes),
+                                       EDI BSN=CONST(No),
+                                       EDI ASN Generated=CONST(No));
+               OnAfterGetRecord=BEGIN
+                                  EDICustCrossRef.RESET;
+                                  EDICustCrossRef.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+                                  EDICustCrossRef.SETRANGE("Navision Sell To Code","Ship-to No.");
+                                  EDICustCrossRef.SETRANGE("Navision Ship To Code","Ship-to Code");
+                                  IF NOT EDICustCrossRef.FIND('-') THEN
+                                    CurrReport.SKIP;
+
+                                  PackingRule.GetPackingRule("Ship-to Type","Ship-to No.","Ship-to Code");
+                                  IF (PackingRule."Allow BOL Post Before ASN Send") AND (Posted = FALSE) THEN
+                                    CurrReport.SKIP;
+
+                                  NavisionDocument := '';
+                                  EDIDocument.SETRANGE("Trade Partner No.",EDITradePartner."No.");
+                                  EDIDocument.SETFILTER(
+                                    Status,'%1|%2',EDIDocument.Status::Test,EDIDocument.Status::Production);
+                                  EDIDocument.SETRANGE("Navision Document",'E_SLSASN');
+                                  EDIDocument.SETRANGE(Type,EDIDocument.Type::Export);
+                                  IF EDIDocument.FIND('-') THEN
+                                    NavisionDocument := EDIDocument."Navision Document"
+                                  ELSE BEGIN
+                                    EDIDocument.INIT;
+                                    NavisionDocument := 'E_SLSASN';
+                                  END;
+
+                                  EDIManagement.CreateOutboundLogEntry(
+                                    Text001,LogEntryNo,"Bill of Lading".TABLECAPTION,"Bill of Lading"."No.",EDITradePartner."No.",
+                                    NavisionDocument,EDIDocument."EDI Document No.");
+                                  COMMIT;
+
+                                  CLEARLASTERROR;
+                                  CLEAR(EDIASNPackLevel);
+                                  IF EDIASNPackLevel.RUN("Bill of Lading") THEN
+                                   DeleteLog := TRUE
+                                  ELSE
+                                    DeleteLog := FALSE;
+                                  COMMIT;
+
+                                  IF DeleteLog THEN
+                                    EDIManagement.DeleteOutboundLogEntry(LogEntryNo)
+                                  ELSE BEGIN
+                                    ErrorText := '';
+                                    ErrorText := COPYSTR(GETLASTERRORTEXT,1,250);
+                                    EDIManagement.CloseOutboundLogEntry(LogEntryNo,ErrorText);
+                                  END;
+                                  COMMIT;
+                                END;
+
+               ReqFilterFields=No.,Ship-to No.,Ship-to Code }
+
+    { 1534;1   ;DataItem;                    ;
+               DataItemTable=Table14002353;
+               DataItemTableView=SORTING(Trade Partner No.,Navision Document,EDI Document No.,Version,Type)
+                                 ORDER(Ascending)
+                                 WHERE(Navision Document=CONST(E_SLSASN));
+               OnPreDataItem=BEGIN
+                               EDISetup.GET;
+                               "E.D.I. Document".SETFILTER("EDI Document No.","E.D.I. Job Routine"."EDI Document No. Filter");
+                             END;
+
+               OnAfterGetRecord=BEGIN
+                                  IF EDISetup."Auto Export Send Doc." THEN BEGIN
+                                    EDIManagement.CreateOutboundLogEntry(Text002,LogEntryNo,'SEND DOCUMENT','',EDITradePartner."No.",
+                                    "E.D.I. Document"."Navision Document","E.D.I. Document"."EDI Document No.");
+                                    COMMIT;
+
+                                    CLEARLASTERROR;
+                                    IF EDISend.RUN("E.D.I. Document") THEN
+                                      DeleteLog := TRUE
+                                    ELSE
+                                      DeleteLog := FALSE;
+                                    COMMIT;
+
+                                    IF DeleteLog THEN
+                                      EDIManagement.DeleteOutboundLogEntry(LogEntryNo)
+                                    ELSE BEGIN
+                                      ErrorText := '';
+                                      ErrorText := COPYSTR(GETLASTERRORTEXT,1,250);
+                                      EDIManagement.CloseOutboundLogEntry(LogEntryNo,ErrorText);
+                                    END;
+                                    COMMIT;
+                                  END;
+                                END;
+
+               DataItemLink=Trade Partner No.=FIELD(No.) }
+
+  }
+  REQUESTPAGE
+  {
+    PROPERTIES
+    {
+    }
+    CONTROLS
+    {
+    }
+  }
+  LABELS
+  {
+  }
+  CODE
+  {
+    VAR
+      CompanyInformation@1240030000 : Record 79;
+      EDICustCrossRef@1240030001 : Record 14002362;
+      EDISetup@1240030002 : Record 14002367;
+      EDIDocument@1240020005 : Record 14002353;
+      PackingRule@1240020007 : Record 14000715;
+      EDIASNPackLevel@1240030003 : Codeunit 14002358;
+      EDISend@1240030004 : Codeunit 14002356;
+      EDIManagement@1240020003 : Codeunit 14002379;
+      ReSend@1240030011 : Boolean;
+      Text001@1001 : TextConst 'ENU=Create EDI ASN';
+      ErrorText@1240020000 : Text[250];
+      DeleteLog@1240020001 : Boolean;
+      LogEntryNo@1240020002 : Integer;
+      Text002@1240020004 : TextConst 'ENU=Send ASN';
+      NavisionDocument@1240020006 : Code[10];
+
+    BEGIN
+    END.
+  }
+  RDLDATA
+  {
+  }
+}
+

@@ -1,0 +1,246 @@
+OBJECT Codeunit 14002974 RF Pallet Select
+{
+  OBJECT-PROPERTIES
+  {
+    Date=01/20/17;
+    Time=12:00:00 PM;
+    Version List=RF1.50.06;
+  }
+  PROPERTIES
+  {
+    TableNo=7700;
+    OnRun=VAR
+            MiniformMgmt@1240020000 : Codeunit 7702;
+          BEGIN
+            MiniformMgmt.Initialize(
+              MiniformHeader,Rec,DOMxmlin,ReturnedNode,
+              RootNode,XMLDOMMgmt,ADCSCommunication,LoginID,
+              CurrentCode,StackCode,WhseEmpId,LocationFilter);
+
+            IF Code <> CurrentCode THEN
+              PrepareData
+            ELSE
+              ProcessInput;
+
+            CLEAR(DOMxmlin);
+          END;
+
+  }
+  CODE
+  {
+    VAR
+      MiniformHeader@1240020014 : Record 7700;
+      RFEmployeeSetup@1240020013 : Record 14002802;
+      XMLDOMMgmt@1240020012 : Codeunit 6224;
+      ADCSCommunication@1240020011 : Codeunit 7701;
+      ADCSNasStartup@1240020010 : Codeunit 7700;
+      DOMxmlin@1240020008 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlDocument";
+      ReturnedNode@1240020007 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      RootNode@1240020006 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNode";
+      Remark@1240020005 : Text[250];
+      LoginID@1240020009 : Text[250];
+      WhseEmpId@1240020022 : Text;
+      LocationFilter@1240020004 : Text[250];
+      CurrentCode@1240020003 : Text[250];
+      StackCode@1240020002 : Text[250];
+      ActiveInputField@1240020001 : Integer;
+      RecRef@1240020000 : RecordRef;
+      Text000@1240020021 : TextConst 'ENU=Function not Found';
+      Text001@1240020020 : TextConst 'ENU=Item not found';
+      Text002@1240020019 : TextConst 'ENU=Item not in any Bin';
+      Text003@1240020018 : TextConst 'ENU=Invalid field';
+      Text006@1240020017 : TextConst 'ENU=No input Node found';
+      Text004@1240020016 : TextConst 'ENU=Invalid %1.';
+      Text005@1240020015 : TextConst 'ENU=Pallet not in any Bin';
+
+    PROCEDURE ProcessInput@1240020000();
+    VAR
+      ItemIdentifier@1240020011 : Record 7704;
+      PalletBinContent@1240020010 : Record 14002963;
+      FuncGroup@1240020009 : Record 7702;
+      MiniformHeader2@1240020008 : Record 7700;
+      Bin@1240020007 : Record 7354;
+      RFMgt@1240020006 : Codeunit 14002801;
+      LicensePlateMgt@1240020005 : Codeunit 14002971;
+      FldNo@1240020004 : Integer;
+      TextValue@1240020003 : Text[250];
+      BinCode@1240020002 : Code[20];
+      LotNo@1240020001 : Code[20];
+      SerialNo@1240020000 : Code[20];
+    BEGIN
+      IF XMLDOMMgmt.FindNode(RootNode,'Header/Input',ReturnedNode) THEN
+        TextValue := ReturnedNode.InnerText
+      ELSE
+        ERROR(Text006);
+
+      FuncGroup.KeyDef := ADCSCommunication.GetFunctionKey(MiniformHeader.Code,TextValue);
+      ActiveInputField := 1;
+
+      CASE FuncGroup.KeyDef OF
+        FuncGroup.KeyDef::Esc:
+          ADCSCommunication.RunPreviousMiniform(DOMxmlin);
+        FuncGroup.KeyDef::Input:
+          BEGIN
+            EVALUATE(FldNo,ADCSCommunication.GetNodeAttribute(ReturnedNode,'FieldID'));
+            CASE FldNo OF
+              PalletBinContent.FIELDNO("Item No."):
+                BEGIN
+                  RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+                  IF NOT RFMgt.GetItem(
+                       TextValue,RFEmployeeSetup,ItemIdentifier."Item No.",
+                       ItemIdentifier."Variant Code",
+                       ItemIdentifier."Unit of Measure Code",LotNo,SerialNo)
+                  THEN
+                    Remark := Text001;
+
+                  IF Remark = '' THEN BEGIN
+                    PalletBinContent.RESET;
+                    PalletBinContent.SETFILTER(Location,LocationFilter);
+                    PalletBinContent.SETRANGE("Item No.",ItemIdentifier."Item No.");
+                    IF ItemIdentifier."Variant Code" <> '' THEN
+                      PalletBinContent.SETRANGE("Variant No.",ItemIdentifier."Variant Code");
+                    IF (ItemIdentifier."Unit of Measure Code" <> '') AND
+                       NOT RFEmployeeSetup."No Unit of Measure Check"
+                    THEN
+                      PalletBinContent.SETRANGE(
+                        "Unit of Measure",ItemIdentifier."Unit of Measure Code");
+                    IF NOT PalletBinContent.FIND('-') THEN
+                      Remark := Text002;
+                  END;
+
+                  IF Remark = '' THEN BEGIN
+                    ADCSCommunication.SetExtraValue('ItemNo',ItemIdentifier."Item No.");
+                    ADCSCommunication.SetExtraValue('Variant',ItemIdentifier."Variant Code");
+                    IF RFEmployeeSetup."No Unit of Measure Check" THEN
+                      ADCSCommunication.SetExtraValue('UOM','')
+                    ELSE
+                      ADCSCommunication.SetExtraValue('UOM',ItemIdentifier."Unit of Measure Code");
+                    ADCSCommunication.GetNextMiniForm(MiniformHeader,MiniformHeader2);
+                    ADCSCommunication.IncreaseStack(DOMxmlin,MiniformHeader.Code);
+                    MiniformHeader2.SaveXMLin(DOMxmlin);
+                    CODEUNIT.RUN(MiniformHeader2."Handling Codeunit",MiniformHeader2);
+                    EXIT;
+                  END;
+                END;
+              PalletBinContent.FIELDNO(Bin):
+                BEGIN
+                  RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+                  IF NOT RFMgt.GetBin(TextValue,RFEmployeeSetup,LocationFilter,TRUE,BinCode) THEN
+                    Remark := STRSUBSTNO(Text004,PalletBinContent.FIELDCAPTION(Bin))
+                  ELSE
+                    TextValue := BinCode;
+
+                  Bin.RESET;
+                  Bin.SETFILTER("Location Code",LocationFilter);
+                  Bin.SETRANGE(Code,TextValue);
+                  IF NOT Bin.FIND('-') THEN
+                    Remark := Text001;
+
+                  IF Remark = '' THEN BEGIN
+                    PalletBinContent.RESET;
+                    PalletBinContent.SETFILTER(Location,LocationFilter);
+                    PalletBinContent.SETRANGE(
+                      Bin,COPYSTR(UPPERCASE(TextValue),1,MAXSTRLEN(PalletBinContent.Bin)));
+                    IF NOT PalletBinContent.FIND('-') THEN
+                      Remark := Text002;
+                  END;
+
+                  IF Remark = '' THEN BEGIN
+                    ADCSCommunication.GetNextMiniForm(MiniformHeader,MiniformHeader2);
+                    ADCSCommunication.IncreaseStack(DOMxmlin,MiniformHeader.Code);
+                    MiniformHeader2.SaveXMLin(DOMxmlin);
+                    CODEUNIT.RUN(MiniformHeader2."Handling Codeunit",MiniformHeader2);
+                    EXIT;
+                  END;
+                END;
+              PalletBinContent.FIELDNO("Pallet No."):
+                BEGIN
+                  RFEmployeeSetup.GetRFEmployeeSetup(WhseEmpId);
+
+                  IF Remark = '' THEN BEGIN
+                    IF LicensePlateMgt.GetParentLicensePlateCode(TextValue) <> '' THEN BEGIN
+                      TextValue := LicensePlateMgt.GetParentLicensePlateCode(TextValue);
+                    END;
+                  END;
+
+                  IF Remark = '' THEN BEGIN
+                    PalletBinContent.RESET;
+                    PalletBinContent.SETRANGE(Location,LocationFilter);
+                    PalletBinContent.SETRANGE("Pallet No.",TextValue);
+                    IF NOT PalletBinContent.FIND('-') THEN
+                      Remark := Text005;
+                    END;
+
+                  IF Remark = '' THEN BEGIN
+                    ADCSCommunication.GetNextMiniForm(MiniformHeader,MiniformHeader2);
+                    ADCSCommunication.IncreaseStack(DOMxmlin,MiniformHeader.Code);
+                    MiniformHeader2.SaveXMLin(DOMxmlin);
+                    CODEUNIT.RUN(MiniformHeader2."Handling Codeunit",MiniformHeader2);
+                    EXIT;
+                  END;
+                END;
+
+              ELSE
+                Remark := Text003;
+            END;
+
+            RecRef.GETTABLE(PalletBinContent);
+            ADCSCommunication.SetRecRef(RecRef);
+            ActiveInputField := 1;
+          END;
+        ELSE
+          ERROR(Text000);
+      END;
+
+      IF NOT (FuncGroup.KeyDef IN [FuncGroup.KeyDef::Esc]) THEN
+        SendForm(ActiveInputField);
+    END;
+
+    PROCEDURE PrepareData@1240020001();
+    VAR
+      BinContent@1240020000 : Record 7302;
+    BEGIN
+      RecRef.OPEN(DATABASE::"Bin Content");
+      RecRef.GETTABLE(BinContent);
+      ADCSCommunication.SetRecRef(RecRef);
+      ActiveInputField := 1;
+      SendForm(ActiveInputField);
+    END;
+
+    PROCEDURE SendForm@1240020002(InputField@1240020000 : Integer);
+    BEGIN
+      // Prepare Miniform
+      ADCSCommunication.EncodeMiniForm(MiniformHeader,StackCode,DOMxmlin,InputField,Remark,LoginID);
+      ADCSCommunication.GetReturnXML(DOMxmlin);
+      ADCSNasStartup.SendXMLReply(DOMxmlin);
+    END;
+
+    EVENT DOMxmlin@1240020008::NodeInserting@93(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020008::NodeInserted@94(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020008::NodeRemoving@95(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020008::NodeRemoved@96(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020008::NodeChanging@97(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    EVENT DOMxmlin@1240020008::NodeChanged@98(sender@1240020001 : Variant;e@1240020000 : DotNet "'System.Xml, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'.System.Xml.XmlNodeChangedEventArgs");
+    BEGIN
+    END;
+
+    BEGIN
+    END.
+  }
+}
+
