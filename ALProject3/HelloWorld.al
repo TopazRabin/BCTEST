@@ -6,6 +6,6 @@ pageextension 50103 VendorListExt extends "Vendor List"
 {
     trigger OnOpenPage();
     begin
-        Message(' TEST 1: Topaz NAV to BC project says: Hello world');
+        Message(' TEST 1: Topaz NAV to BC project says: Hello world ----new rabin1123');
     end;
 }
