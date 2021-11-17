@@ -36,6 +36,7 @@ page 50147 "Total Contact by Job"
                 Field("Total for Month October"; Rec."DefaultInteger_10") { Caption = 'Total for Month October'; }
                 Field("Total for Month November"; Rec."DefaultInteger_11") { Caption = 'Total for Month November'; }
                 Field("Total for Month December"; Rec."DefaultInteger_12") { Caption = 'Total for Month December'; }
+                field(DefaultTime; Rec.DefaultTime) { Caption = 'Time'; }
             }
         }
     }
